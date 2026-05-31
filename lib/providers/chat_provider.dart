@@ -113,8 +113,11 @@ class ChatProvider extends ChangeNotifier {
     if (existing == null || existing.isEmpty) return;
     final oldest = existing.first;
     try {
-      final older =
-          await _api.getMessages(convID, beforeID: oldest.id, limit: 50);
+      final older = await _api.getMessages(
+        convID,
+        beforeID: oldest.id,
+        limit: 50,
+      );
       for (final msg in older) {
         _hydrateMessageSender(msg);
       }
@@ -197,7 +200,9 @@ class ChatProvider extends ChangeNotifier {
       signingPrivateKeyArmored: privateKey,
     );
     final signature = await PgpService.sign(
-        data: '$convID:$encrypted', privateKeyArmored: privateKey);
+      data: '$convID:$encrypted',
+      privateKeyArmored: privateKey,
+    );
 
     final updated = await _api.editMessage(
       convID: convID,
@@ -261,7 +266,8 @@ class ChatProvider extends ChangeNotifier {
     }
     if (userID.isEmpty) {
       throw const ChatSendException(
-          'Your session is incomplete. Sign in again.');
+        'Your session is incomplete. Sign in again.',
+      );
     }
 
     final recipientKeys = await _freshRecipientKeys(convID, conv);
@@ -283,7 +289,8 @@ class ChatProvider extends ChangeNotifier {
       ).timeout(const Duration(seconds: 30));
     } on TimeoutException {
       throw const ChatSendException(
-          'Encryption timed out. Your stored key may be corrupted — try rotating it in Settings → PGP Keys.');
+        'Encryption timed out. Your stored key may be corrupted — try rotating it in Settings → PGP Keys.',
+      );
     } catch (e) {
       throw ChatSendException('Encryption failed: $e');
     }
@@ -297,7 +304,8 @@ class ChatProvider extends ChangeNotifier {
       ).timeout(const Duration(seconds: 30));
     } on TimeoutException {
       throw const ChatSendException(
-          'Signing timed out. Your stored key may be corrupted — try rotating it in Settings → PGP Keys.');
+        'Signing timed out. Your stored key may be corrupted — try rotating it in Settings → PGP Keys.',
+      );
     } catch (e) {
       throw ChatSendException('Signing failed: $e');
     }
@@ -368,49 +376,88 @@ class ChatProvider extends ChangeNotifier {
   /// public-key rows, keyed by user ID so two members with different keys that
   /// happen to share the same key string don't silently merge into one PKESK.
   ///
-  /// Keys come from the embedded user data returned by [loadConversationMembers]
-  /// (a single server round-trip that JOINs the users table). Members whose
-  /// embedded key is absent fall back to an individual key fetch. The sender's
-  /// own key is always ensured via their local storage entry so they can
-  /// re-decrypt their sent messages from the server after a fresh login.
+  /// Sending is strict: every non-expired member must have a key available, so
+  /// we never create a sender-only envelope that other members can't decrypt.
+  /// The sender's own key is always ensured via their local storage entry so
+  /// they can re-decrypt their sent messages from the server after a fresh
+  /// login.
   Future<List<String>> _freshRecipientKeys(
     String convID,
     Conversation fallback,
   ) async {
-    await loadConversationMembers(convID);
-    final latest = _conversations[convID] ?? fallback;
-    final members =
-        latest.members.isNotEmpty ? latest.members : fallback.members;
+    final members = await _loadMembersForEncryption(convID, fallback);
     if (members.isEmpty) return const [];
+    if (fallback.isDM &&
+        members.where((m) => !(m.user?.isKeyExpired ?? false)).length < 2) {
+      throw const ChatSendException(
+        'Conversation members are not ready. Refresh the chat and try again.',
+      );
+    }
 
     // Collect keys by user ID — deduplication by identity, not by key string.
-    final keysByUser = <String, String>{};
-    final missingIds = <String>[];
-    for (final m in members) {
-      final key = m.user?.publicKey ?? '';
-      if (key.isNotEmpty && !(m.user?.isKeyExpired ?? false)) {
-        keysByUser[m.userId] = key;
-      } else {
-        missingIds.add(m.userId);
-      }
-    }
-
-    // Fetch individually for any member whose key wasn't embedded.
-    if (missingIds.isNotEmpty) {
-      final fresh = await _api.getFreshBulkPublicKeys(missingIds);
-      keysByUser.addAll(fresh);
-    }
-
-    // Always include the sender's own key so they can re-decrypt their own
-    // messages from the server after logout + login. Uses the local authoritative
-    // copy rather than relying solely on the server-side member entry.
     final selfId = await _storage.getUserID() ?? '';
     final ownPublicKey = await _storage.getPublicKey() ?? '';
+    final keysByUser = <String, String>{};
+
+    for (final member in members) {
+      if (member.user?.isKeyExpired ?? false) continue;
+
+      if (member.userId == selfId && ownPublicKey.isNotEmpty) {
+        keysByUser[member.userId] = ownPublicKey;
+        continue;
+      }
+
+      try {
+        final freshKey = await _api.getFreshUserPublicKey(member.userId);
+        if (freshKey != null && freshKey.trim().isNotEmpty) {
+          keysByUser[member.userId] = freshKey;
+          continue;
+        }
+      } catch (_) {
+        final embeddedKey = member.user?.publicKey ?? '';
+        if (embeddedKey.trim().isNotEmpty) {
+          keysByUser[member.userId] = embeddedKey;
+          continue;
+        }
+        throw const ChatSendException(
+          'Could not load every recipient key. Refresh the chat and try again.',
+        );
+      }
+
+      throw const ChatSendException(
+        'Could not load every recipient key. Refresh the chat and try again.',
+      );
+    }
+
     if (selfId.isNotEmpty && ownPublicKey.isNotEmpty) {
       keysByUser[selfId] = ownPublicKey;
     }
 
     return keysByUser.values.where((k) => k.trim().isNotEmpty).toList();
+  }
+
+  Future<List<ConversationMember>> _loadMembersForEncryption(
+    String convID,
+    Conversation fallback,
+  ) async {
+    try {
+      final members = await _api.getConversationMembers(convID);
+      if (members.isEmpty) {
+        throw const ChatSendException(
+          'Conversation members are not ready. Refresh the chat and try again.',
+        );
+      }
+      final conv = _conversations[convID] ?? fallback;
+      _conversations[convID] = conv.copyWith(members: members);
+      notifyListeners();
+      return members;
+    } on ChatSendException {
+      rethrow;
+    } catch (_) {
+      throw const ChatSendException(
+        'Could not load conversation members. Refresh the chat and try again.',
+      );
+    }
   }
 
   /// Delete a conversation. For a DM this removes it for both participants; for
@@ -426,8 +473,9 @@ class ChatProvider extends ChangeNotifier {
   Future<Conversation> openDM(String userID) async {
     final conv = await _api.openDM(userID);
     _conversations[conv.id] = conv;
+    await loadConversationMembers(conv.id);
     notifyListeners();
-    return conv;
+    return _conversations[conv.id] ?? conv;
   }
 
   Future<Conversation> createGroup({

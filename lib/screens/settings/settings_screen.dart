@@ -768,11 +768,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ListTile(
             leading: const Icon(Icons.info_outline),
             title: const Text('OpenChat'),
-            subtitle: const Text('v0.2.6 • Open Source • E2E Encrypted'),
+            subtitle: const Text('v0.2.7 • Open Source • E2E Encrypted'),
             onTap: () => showAboutDialog(
               context: context,
               applicationName: 'OpenChat',
-              applicationVersion: '0.2.6',
+              applicationVersion: '0.2.7',
               applicationIcon: Image.asset('assets/images/logo.png',
                   height: 48,
                   errorBuilder: (_, __, ___) => const SizedBox.shrink()),
