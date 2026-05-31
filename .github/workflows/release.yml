@@ -40,8 +40,6 @@ jobs:
         run: |
           echo "version=$(grep '^version:' pubspec.yaml \
             | awk '{print $2}' | tr -d '\r')" >> "$GITHUB_OUTPUT"
-          # For workflow_dispatch use the explicit tag input; otherwise the
-          # triggering ref (a v* tag or the release tag) is the right target.
           echo "release_tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
 # ── Android ───────────────────────────────────────────────────────────────────
@@ -65,6 +63,35 @@ jobs:
 
       - name: Accept Android licenses
         run: yes | flutter doctor --android-licenses || true
+
+      - name: Inject Firebase config
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          FIREBASE_OPTIONS_DART: ${{ secrets.FIREBASE_OPTIONS_DART }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            echo "$GOOGLE_SERVICES_JSON" | base64 --decode > android/app/google-services.json
+          fi
+          if [ -n "$FIREBASE_OPTIONS_DART" ]; then
+            echo "$FIREBASE_OPTIONS_DART" | base64 --decode > lib/firebase_options.dart
+          fi
+
+      - name: Inject Android signing config
+        env:
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE" ]; then
+            echo "$ANDROID_KEYSTORE" | base64 --decode > /tmp/keystore.jks
+            cat > android/key.properties <<EOF
+          storePassword=$ANDROID_STORE_PASSWORD
+          keyPassword=$ANDROID_KEY_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          storeFile=/tmp/keystore.jks
+          EOF
+          fi
 
       - name: Build APK
         run: |
@@ -199,6 +226,18 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
+
+      - name: Inject Firebase config
+        env:
+          GOOGLE_SERVICE_INFO_PLIST: ${{ secrets.GOOGLE_SERVICE_INFO_PLIST }}
+          FIREBASE_OPTIONS_DART: ${{ secrets.FIREBASE_OPTIONS_DART }}
+        run: |
+          if [ -n "$GOOGLE_SERVICE_INFO_PLIST" ]; then
+            echo "$GOOGLE_SERVICE_INFO_PLIST" | base64 --decode > ios/Runner/GoogleService-Info.plist
+          fi
+          if [ -n "$FIREBASE_OPTIONS_DART" ]; then
+            echo "$FIREBASE_OPTIONS_DART" | base64 --decode > lib/firebase_options.dart
+          fi
 
       - name: Build iOS (no codesign)
         run: |
