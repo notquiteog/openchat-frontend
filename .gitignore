@@ -1,0 +1,76 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ / Android Studio
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# VS Code (launch configs and tasks are team preference — comment out to track them)
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio build artifacts
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Android local machine config (SDK path, etc.)
+android/local.properties
+
+# Android signing — never commit your keystore
+key.properties
+**/*.keystore
+**/*.jks
+
+# NOTE: android/app/google-services.json, ios/Runner/GoogleService-Info.plist,
+# and lib/firebase_options.dart ARE tracked — they contain placeholder values
+# so the project compiles out of the box. Replace them with real Firebase
+# downloads to enable push notifications (see lib/firebase_options.dart).
+# If you add real credentials, do NOT commit them — add to your local gitignore.
+
+# AI coding assistant tool files — keep these out of public repo
+.claude/
+CLAUDE.md
+.cursorrules
+.cursor/
+.aider*
+.copilot*
+.continue/
+.windsurf/
+.tabnine*
+.codeium/
+.qodo/
+.github/copilot-instructions.md
+
+# Local clone of the openpgp package — the app pulls it from a git URL in
+# pubspec.yaml, so this directory must not be tracked as a submodule.
+/packages/

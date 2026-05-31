@@ -1,0 +1,129 @@
+class User {
+  final String id;
+  final String username;
+  final String publicKey;
+  final String keyFingerprint;
+  final String? avatarUrl;
+  final String? bio;
+  final bool isBot;
+  final String role;            // "user" | "system_admin"
+  final bool isFlaggedScammer;
+  final bool isBanned;
+  final bool allowGroupAdd;
+  final DateTime createdAt;
+  final DateTime? lastSeen;
+  final DateTime? premiumUntil;
+  /// PGP public-key expiry. null = never expires (the OpenChat default).
+  /// When this is set and in the past, the user cannot send or receive
+  /// messages until they rotate to a fresh key.
+  final DateTime? publicKeyExpiresAt;
+
+  const User({
+    required this.id,
+    required this.username,
+    required this.publicKey,
+    required this.keyFingerprint,
+    this.avatarUrl,
+    this.bio,
+    this.isBot = false,
+    this.role = 'user',
+    this.isFlaggedScammer = false,
+    this.isBanned = false,
+    this.allowGroupAdd = true,
+    required this.createdAt,
+    this.lastSeen,
+    this.premiumUntil,
+    this.publicKeyExpiresAt,
+  });
+
+  factory User.fromJson(Map<String, dynamic> json) => User(
+    id: json['id'] as String,
+    username: json['username'] as String,
+    publicKey: json['public_key'] as String? ?? '',
+    keyFingerprint: json['key_fingerprint'] as String? ?? '',
+    avatarUrl: json['avatar_url'] as String?,
+    bio: json['bio'] as String?,
+    isBot: json['is_bot'] as bool? ?? false,
+    role: json['role'] as String? ?? 'user',
+    isFlaggedScammer: json['is_flagged_scammer'] as bool? ?? false,
+    isBanned: json['is_banned'] as bool? ?? false,
+    allowGroupAdd: json['allow_group_add'] as bool? ?? true,
+    createdAt: DateTime.parse(json['created_at'] as String),
+    lastSeen: json['last_seen'] != null
+        ? DateTime.parse(json['last_seen'] as String)
+        : null,
+    premiumUntil: json['premium_until'] != null
+        ? DateTime.parse(json['premium_until'] as String)
+        : null,
+    publicKeyExpiresAt: json['public_key_expires_at'] != null
+        ? DateTime.parse(json['public_key_expires_at'] as String)
+        : null,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'username': username,
+    'public_key': publicKey,
+    'key_fingerprint': keyFingerprint,
+    if (avatarUrl != null) 'avatar_url': avatarUrl,
+    if (bio != null) 'bio': bio,
+    'is_bot': isBot,
+    'role': role,
+    'is_flagged_scammer': isFlaggedScammer,
+    'is_banned': isBanned,
+    'allow_group_add': allowGroupAdd,
+    'created_at': createdAt.toIso8601String(),
+    if (lastSeen != null) 'last_seen': lastSeen!.toIso8601String(),
+    if (premiumUntil != null) 'premium_until': premiumUntil!.toIso8601String(),
+    if (publicKeyExpiresAt != null)
+      'public_key_expires_at': publicKeyExpiresAt!.toIso8601String(),
+  };
+
+  bool get isSystemAdmin => role == 'system_admin';
+
+  /// Active premium subscription if premium_until is set and in the future.
+  bool get isPremium =>
+      premiumUntil != null && premiumUntil!.isAfter(DateTime.now());
+
+  /// True when the PGP key's lifetime has elapsed. Such users cannot send
+  /// or receive messages until they rotate.
+  bool get isKeyExpired =>
+      publicKeyExpiresAt != null &&
+      !DateTime.now().isBefore(publicKeyExpiresAt!);
+
+  bool get isOnline {
+    if (lastSeen == null) return false;
+    return DateTime.now().difference(lastSeen!).inMinutes < 5;
+  }
+
+  String get displayName => '@$username';
+
+  // Short fingerprint for display (last 8 chars)
+  String get shortFingerprint => keyFingerprint.length >= 8
+      ? keyFingerprint.substring(keyFingerprint.length - 8)
+      : keyFingerprint;
+
+  User copyWith({
+    String? avatarUrl,
+    String? bio,
+    bool? isFlaggedScammer,
+    bool? isBanned,
+    bool? allowGroupAdd,
+  }) => User(
+    id: id,
+    username: username,
+    publicKey: publicKey,
+    keyFingerprint: keyFingerprint,
+    avatarUrl: avatarUrl ?? this.avatarUrl,
+    bio: bio ?? this.bio,
+    isBot: isBot,
+    role: role,
+    isFlaggedScammer: isFlaggedScammer ?? this.isFlaggedScammer,
+    isBanned: isBanned ?? this.isBanned,
+    allowGroupAdd: allowGroupAdd ?? this.allowGroupAdd,
+    createdAt: createdAt,
+    lastSeen: lastSeen,
+    premiumUntil: premiumUntil,
+    publicKeyExpiresAt: publicKeyExpiresAt,
+  );
+}

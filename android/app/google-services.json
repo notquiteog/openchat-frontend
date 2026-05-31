@@ -1,0 +1,32 @@
+{
+  "_comment": "PLACEHOLDER — replace with the google-services.json downloaded from your Firebase project console.",
+  "_comment2": "Steps: Firebase console → Project settings → Your apps → Download google-services.json → place here.",
+  "project_info": {
+    "project_number": "000000000000",
+    "firebase_url": "https://openchat-placeholder-default-rtdb.firebaseio.com",
+    "project_id": "openchat-placeholder",
+    "storage_bucket": "openchat-placeholder.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+        "android_client_info": {
+          "package_name": "com.openchat.openchat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "REPLACE_WITH_YOUR_ANDROID_API_KEY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
