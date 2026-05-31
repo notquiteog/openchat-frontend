@@ -89,15 +89,25 @@ class PgpService {
   /// Encrypt a plaintext message for multiple recipients.
   ///
   /// [recipientPublicKeys] should include ALL conversation members (sender
-  /// included). Keys are joined into a keyring; Go's ReadArmoredKeyRing
-  /// produces one PKESK packet per key in a single PGP message.
+  /// included). Keys are joined into a keyring string; the native Go layer
+  /// loops over armor.Decode calls to parse each block, producing one PKESK
+  /// packet per key.
+  ///
+  /// Each key is normalised to LF-only line endings before joining (Windows
+  /// Credential Manager stores keys with CRLF; CRLF inside the base64 body
+  /// breaks armor.Decode on the second block and silently drops all recipients
+  /// after the first). Keys are separated by a blank line so armor.Decode can
+  /// unambiguously locate each BEGIN header even when the body reader isn't
+  /// fully drained before the next iteration.
   static Future<String> encrypt({
     required String plaintext,
     required List<String> recipientPublicKeys,
     required String signingPrivateKeyArmored,
     String signingKeyPassphrase = '',
   }) async {
-    final keyring = recipientPublicKeys.join('\n');
+    final keyring = recipientPublicKeys
+        .map((k) => k.replaceAll('\r\n', '\n').trim())
+        .join('\n\n');
     final signer = Entity()
       ..privateKey = signingPrivateKeyArmored
       ..passphrase = signingKeyPassphrase;

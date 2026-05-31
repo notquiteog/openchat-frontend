@@ -82,9 +82,10 @@ class ChatProvider extends ChangeNotifier {
       final msgs = await _api.getMessages(convID, limit: 50);
       final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
 
-      // Reuse in-memory decrypted state rather than re-decrypting from scratch.
-      // The library only encrypts for the first recipient key, so self-sent
-      // messages can't be re-decrypted from the server — preserve what we have.
+      // Reuse in-memory decrypted state for messages already decrypted this
+      // session. Self-sent messages are kept from the in-memory copy rather than
+      // re-decrypting from the server, since PGP signing doesn't guarantee the
+      // sender's copy is decryptable without the corresponding private key.
       final cachedById = Map.fromEntries(
         (_messages[convID] ?? []).map((m) => MapEntry(m.id, m)),
       );
