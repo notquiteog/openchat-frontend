@@ -402,10 +402,7 @@ class ChatProvider extends ChangeNotifier {
     for (final member in members) {
       if (member.user?.isKeyExpired ?? false) continue;
 
-      if (member.userId == selfId && ownPublicKey.isNotEmpty) {
-        keysByUser[member.userId] = ownPublicKey;
-        continue;
-      }
+      if (member.userId == selfId) continue;
 
       try {
         final freshKey = await _api.getFreshUserPublicKey(member.userId);
