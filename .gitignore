@@ -51,11 +51,12 @@ key.properties
 **/*.keystore
 **/*.jks
 
-# NOTE: android/app/google-services.json, ios/Runner/GoogleService-Info.plist,
-# and lib/firebase_options.dart ARE tracked — they contain placeholder values
-# so the project compiles out of the box. Replace them with real Firebase
-# downloads to enable push notifications (see lib/firebase_options.dart).
-# If you add real credentials, do NOT commit them — add to your local gitignore.
+# Firebase config — never commit real credentials.
+# CI injects these via repo secrets (GOOGLE_SERVICES_JSON, GOOGLE_SERVICE_INFO_PLIST,
+# FIREBASE_OPTIONS_DART). To build locally, supply your own copies.
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+lib/firebase_options.dart
 
 # AI coding assistant tool files — keep these out of public repo
 .claude/
