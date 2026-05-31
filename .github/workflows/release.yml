@@ -7,6 +7,10 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to upload artifacts to (e.g. v0.2.1)'
+        required: true
 
 permissions:
   contents: write
@@ -23,18 +27,22 @@ env:
     --dart-define=OPENCHAT_PORT=443
     --dart-define=OPENCHAT_HTTPS=true
 
-# ── Shared version extraction ─────────────────────────────────────────────────
+# ── Shared version + release tag resolution ───────────────────────────────────
 jobs:
   version:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
+      release_tag: ${{ steps.v.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v6.0.2
       - id: v
         run: |
           echo "version=$(grep '^version:' pubspec.yaml \
             | awk '{print $2}' | tr -d '\r')" >> "$GITHUB_OUTPUT"
+          # For workflow_dispatch use the explicit tag input; otherwise the
+          # triggering ref (a v* tag or the release tag) is the right target.
+          echo "release_tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
 # ── Android ───────────────────────────────────────────────────────────────────
   build-android:
@@ -67,7 +75,7 @@ jobs:
         run: |
           APK="openchat-${{ needs.version.outputs.version }}-android.apk"
           cp build/app/outputs/flutter-apk/app-release.apk "$APK"
-          gh release upload "${{ github.ref_name }}" "$APK" --clobber
+          gh release upload "${{ needs.version.outputs.release_tag }}" "$APK" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -101,7 +109,7 @@ jobs:
           echo "ZIP=$zip" >> $env:GITHUB_ENV
 
       - name: Upload to release
-        run: gh release upload "${{ github.ref_name }}" "${{ env.ZIP }}" --clobber
+        run: gh release upload "${{ needs.version.outputs.release_tag }}" "${{ env.ZIP }}" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -141,7 +149,7 @@ jobs:
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
       - name: Upload to release
-        run: gh release upload "${{ github.ref_name }}" "${{ env.ARCHIVE }}" --clobber
+        run: gh release upload "${{ needs.version.outputs.release_tag }}" "${{ env.ARCHIVE }}" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -174,7 +182,7 @@ jobs:
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
       - name: Upload to release
-        run: gh release upload "${{ github.ref_name }}" "${{ env.ARCHIVE }}" --clobber
+        run: gh release upload "${{ needs.version.outputs.release_tag }}" "${{ env.ARCHIVE }}" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -208,20 +216,20 @@ jobs:
           echo "IPA=${IPA}" >> "$GITHUB_ENV"
 
       - name: Upload to release
-        run: gh release upload "${{ github.ref_name }}" "${{ env.IPA }}" --clobber
+        run: gh release upload "${{ needs.version.outputs.release_tag }}" "${{ env.IPA }}" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 
 # ── Clear binaries from previous releases (free-tier storage) ─────────────────
   cleanup-old-assets:
     name: Clear previous release binaries
-    needs: [build-android, build-windows, build-linux, build-macos, build-ios]
+    needs: [version, build-android, build-windows, build-linux, build-macos, build-ios]
     runs-on: ubuntu-latest
     steps:
       - name: Delete assets from older releases
         env:
           GH_TOKEN: ${{ github.token }}
-          CURRENT: ${{ github.ref_name }}
+          CURRENT: ${{ needs.version.outputs.release_tag }}
         run: |
           gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
             --json tagName --jq '.[].tagName' | while read -r tag; do
