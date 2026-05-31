@@ -120,6 +120,14 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Inject Firebase config
+        env:
+          FIREBASE_OPTIONS_DART: ${{ secrets.FIREBASE_OPTIONS_DART }}
+        run: |
+          if [ -n "$FIREBASE_OPTIONS_DART" ]; then
+            echo "$FIREBASE_OPTIONS_DART" | base64 --decode > lib/firebase_options.dart
+          fi
+
       - name: Build Windows
         run: |
           flutter pub get
@@ -163,6 +171,14 @@ jobs:
             libjsoncpp-dev libunwind-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 
+      - name: Inject Firebase config
+        env:
+          FIREBASE_OPTIONS_DART: ${{ secrets.FIREBASE_OPTIONS_DART }}
+        run: |
+          if [ -n "$FIREBASE_OPTIONS_DART" ]; then
+            echo "$FIREBASE_OPTIONS_DART" | base64 --decode > lib/firebase_options.dart
+          fi
+
       - name: Build Linux
         run: |
           flutter pub get
@@ -193,6 +209,14 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
+
+      - name: Inject Firebase config
+        env:
+          FIREBASE_OPTIONS_DART: ${{ secrets.FIREBASE_OPTIONS_DART }}
+        run: |
+          if [ -n "$FIREBASE_OPTIONS_DART" ]; then
+            echo "$FIREBASE_OPTIONS_DART" | base64 --decode > lib/firebase_options.dart
+          fi
 
       - name: Build macOS (unsigned)
         run: |
