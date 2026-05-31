@@ -133,6 +133,21 @@ jobs:
           flutter pub get
           flutter build windows --release ${{ env.DART_DEFINES }}
 
+      - name: Sign Windows executables
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ($env:WINDOWS_CERTIFICATE) {
+            $pfx = "$env:RUNNER_TEMP\openchat.pfx"
+            [System.Convert]::FromBase64String($env:WINDOWS_CERTIFICATE) | Set-Content $pfx -AsByteStream
+            $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'x64' } | Select-Object -Last 1).FullName
+            Get-ChildItem "build\windows\x64\runner\Release\*.exe" | ForEach-Object {
+              & $signtool sign /f $pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD /fd sha256 /tr http://timestamp.acs.microsoft.com /td sha256 $_.FullName
+            }
+          }
+
       - name: Package zip
         shell: pwsh
         run: |
