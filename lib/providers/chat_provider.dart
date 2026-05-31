@@ -1,0 +1,615 @@
+import 'dart:async';
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import '../crypto/pgp_service.dart';
+import '../models/conversation.dart';
+import '../models/message.dart';
+import '../providers/settings_provider.dart';
+import '../services/api_service.dart';
+import '../services/attachment_service.dart';
+import '../services/notification_service.dart';
+import '../services/secure_storage_service.dart';
+import '../services/websocket_service.dart';
+
+class ChatSendException implements Exception {
+  final String message;
+  const ChatSendException(this.message);
+
+  @override
+  String toString() => message;
+}
+
+class ChatProvider extends ChangeNotifier {
+  final ApiService _api;
+  final SecureStorageService _storage;
+  final WebSocketService _ws;
+  final SettingsProvider _settings;
+
+  final Map<String, List<Message>> _messages = {};
+  final Map<String, Conversation> _conversations = {};
+  final Map<String, Set<String>> _typingUsers = {};
+  String? _selfId;
+
+  List<Conversation> get conversations => _conversations.values.toList()
+    ..sort((a, b) {
+      final aTime = a.lastMessage?.createdAt ?? a.createdAt;
+      final bTime = b.lastMessage?.createdAt ?? b.createdAt;
+      return bTime.compareTo(aTime);
+    });
+
+  List<Message> messagesFor(String convID) =>
+      List.unmodifiable(_messages[convID] ?? []);
+
+  Set<String> typingUsersFor(String convID) => _typingUsers[convID] ?? {};
+
+  bool _isLoading = false;
+  bool get isLoading => _isLoading;
+
+  StreamSubscription<WsEvent>? _wsSub;
+
+  ChatProvider(this._api, this._storage, this._ws, this._settings) {
+    _wsSub = _ws.events.listen(_handleWsEvent);
+    _ws.connect();
+    _storage.getUserID().then((id) => _selfId = id);
+  }
+
+  Future<void> connectWebSocket() => _ws.connect();
+
+  void clearState() {
+    _messages.clear();
+    _conversations.clear();
+    _typingUsers.clear();
+    _ws.disconnect();
+    notifyListeners();
+  }
+
+  Future<void> loadConversations() async {
+    _isLoading = true;
+    notifyListeners();
+    try {
+      final convs = await _api.listConversations();
+      for (final c in convs) {
+        _conversations[c.id] = c;
+      }
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> loadMessages(String convID) async {
+    try {
+      final msgs = await _api.getMessages(convID, limit: 50);
+      final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
+
+      // Reuse in-memory decrypted state rather than re-decrypting from scratch.
+      // The library only encrypts for the first recipient key, so self-sent
+      // messages can't be re-decrypted from the server — preserve what we have.
+      final cachedById = Map.fromEntries(
+        (_messages[convID] ?? []).map((m) => MapEntry(m.id, m)),
+      );
+
+      final result = <Message>[];
+      for (final msg in msgs.reversed) {
+        final cached = cachedById[msg.id];
+        if (cached != null && cached.isDecrypted) {
+          _hydrateMessageSender(cached, fresh: msg);
+          result.add(cached);
+        } else {
+          _hydrateMessageSender(msg);
+          await _tryDecrypt(msg, privateKey);
+          result.add(msg);
+        }
+      }
+
+      _messages[convID] = result;
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> loadMoreMessages(String convID) async {
+    final existing = _messages[convID];
+    if (existing == null || existing.isEmpty) return;
+    final oldest = existing.first;
+    try {
+      final older =
+          await _api.getMessages(convID, beforeID: oldest.id, limit: 50);
+      for (final msg in older) {
+        _hydrateMessageSender(msg);
+      }
+      final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
+      await Future.wait(older.map((msg) => _tryDecrypt(msg, privateKey)));
+      _messages[convID] = [...older.reversed, ...existing];
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  /// Send a plain text message, encrypted for all conversation members.
+  Future<bool> sendMessage({
+    required String convID,
+    required String plaintext,
+    String messageType = 'text',
+    String? replyTo,
+  }) async {
+    return _sendEncryptedPayload(
+      convID: convID,
+      plaintextPayload: plaintext,
+      messageType: messageType,
+      replyTo: replyTo,
+    );
+  }
+
+  /// Encrypt a local file (via [AttachmentService]) and send as a media message.
+  Future<bool> sendAttachment({
+    required String convID,
+    required PendingAttachment attachment,
+    String caption = '',
+  }) async {
+    final payloadJson = jsonEncode(attachment.toPayloadJson(caption: caption));
+    return _sendEncryptedPayload(
+      convID: convID,
+      plaintextPayload: payloadJson,
+      messageType: attachment.messageType.name,
+      attachmentId: attachment.attachmentId,
+    );
+  }
+
+  /// Records a call outcome as a `system` message in the DM. The payload is
+  /// E2E-encrypted like any other message and rendered as a centered chip
+  /// (red for missed). Posted only by the caller's client to avoid duplicates.
+  Future<void> postCallEvent({
+    required String convID,
+    required bool answered,
+    required bool isVideo,
+    int durationSecs = 0,
+  }) async {
+    final payload = jsonEncode({
+      'call_event': answered ? 'answered' : 'missed',
+      'video': isVideo,
+      'duration': durationSecs,
+    });
+    await _sendEncryptedPayload(
+      convID: convID,
+      plaintextPayload: payload,
+      messageType: 'system',
+    );
+  }
+
+  /// Re-encrypt and replace the body of a message the user sent. Encryption is
+  /// identical to sending; the server stamps edited_at and broadcasts the update.
+  Future<void> editMessage({
+    required String convID,
+    required String msgID,
+    required String newPlaintext,
+  }) async {
+    final conv = _conversations[convID];
+    if (conv == null) return;
+    final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
+    if (privateKey.isEmpty) return;
+
+    final recipientKeys = await _freshRecipientKeys(convID, conv);
+    if (recipientKeys.isEmpty) return;
+
+    final encrypted = await PgpService.encrypt(
+      plaintext: newPlaintext,
+      recipientPublicKeys: recipientKeys,
+      signingPrivateKeyArmored: privateKey,
+    );
+    final signature = await PgpService.sign(
+        data: '$convID:$encrypted', privateKeyArmored: privateKey);
+
+    final updated = await _api.editMessage(
+      convID: convID,
+      msgID: msgID,
+      encryptedPayload: encrypted,
+      signature: signature,
+    );
+    // We can't always re-decrypt our own message from the server, so set the
+    // plaintext we already know directly.
+    updated.setDecryptedContent(newPlaintext);
+
+    final list = _messages[convID] ?? [];
+    final idx = list.indexWhere((m) => m.id == msgID);
+    if (idx != -1) {
+      updated.sender ??= list[idx].sender;
+      list[idx] = updated;
+      _messages[convID] = List.from(list);
+      notifyListeners();
+    }
+  }
+
+  Future<void> _handleEditedMessage(Message msg) async {
+    final list = _messages[msg.conversationId];
+    if (list == null) return;
+    final idx = list.indexWhere((m) => m.id == msg.id);
+    if (idx == -1) return;
+    final old = list[idx];
+
+    final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
+    await _tryDecrypt(msg, privateKey);
+    // If we can't decrypt the edit (e.g. our own message), keep the text we had.
+    if (!msg.isDecrypted && old.isDecrypted) {
+      msg.setDecryptedContent(old.decryptedContent ?? '');
+    }
+    msg.sender ??= old.sender;
+    list[idx] = msg;
+    _messages[msg.conversationId] = List.from(list);
+    notifyListeners();
+  }
+
+  Future<bool> _sendEncryptedPayload({
+    required String convID,
+    required String plaintextPayload,
+    required String messageType,
+    String? replyTo,
+    String? attachmentId,
+  }) async {
+    final conv = _conversations[convID];
+    if (conv == null) {
+      throw const ChatSendException(
+        'Conversation is not ready. Reopen the chat and try again.',
+      );
+    }
+
+    final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
+    final userID = await _storage.getUserID() ?? '';
+    if (privateKey.isEmpty) {
+      throw const ChatSendException(
+        'Your PGP key is locked or missing. Unlock or import it in Settings.',
+      );
+    }
+    if (userID.isEmpty) {
+      throw const ChatSendException(
+          'Your session is incomplete. Sign in again.');
+    }
+
+    final recipientKeys = await _freshRecipientKeys(convID, conv);
+    if (recipientKeys.isEmpty) {
+      throw const ChatSendException(
+        'Could not load recipient keys. Refresh the chat and try again.',
+      );
+    }
+
+    // PGP operations go through a Go native library. On Windows the DLL can
+    // hang indefinitely if the key or keyring is malformed; a 30-second timeout
+    // surfaces the failure instead of silently swallowing the message.
+    final String encrypted;
+    try {
+      encrypted = await PgpService.encrypt(
+        plaintext: plaintextPayload,
+        recipientPublicKeys: recipientKeys,
+        signingPrivateKeyArmored: privateKey,
+      ).timeout(const Duration(seconds: 30));
+    } on TimeoutException {
+      throw const ChatSendException(
+          'Encryption timed out. Your stored key may be corrupted — try rotating it in Settings → PGP Keys.');
+    } catch (e) {
+      throw ChatSendException('Encryption failed: $e');
+    }
+
+    final sigData = '$convID:$encrypted';
+    final String signature;
+    try {
+      signature = await PgpService.sign(
+        data: sigData,
+        privateKeyArmored: privateKey,
+      ).timeout(const Duration(seconds: 30));
+    } on TimeoutException {
+      throw const ChatSendException(
+          'Signing timed out. Your stored key may be corrupted — try rotating it in Settings → PGP Keys.');
+    } catch (e) {
+      throw ChatSendException('Signing failed: $e');
+    }
+
+    final pending = PendingMessage(
+      id: 'pending-${DateTime.now().millisecondsSinceEpoch}',
+      conversationId: convID,
+      senderId: userID,
+      type: MessageType.values.firstWhere(
+        (t) => t.name == messageType,
+        orElse: () => MessageType.text,
+      ),
+      encryptedPayload: encrypted,
+      signature: signature,
+      attachmentId: attachmentId,
+      replyTo: replyTo,
+      createdAt: DateTime.now(),
+      plaintext: plaintextPayload,
+    );
+
+    _messages[convID] = [...?_messages[convID], pending];
+    notifyListeners();
+
+    try {
+      final confirmed = await _api.sendMessage(
+        convID: convID,
+        encryptedPayload: encrypted,
+        signature: signature,
+        messageType: messageType,
+        replyTo: replyTo,
+        attachmentId: attachmentId,
+      );
+      confirmed.setDecryptedContent(plaintextPayload);
+
+      // Remove the pending placeholder and any WS-delivered copy of the same
+      // real message ID. The WS new_message event can race the API response:
+      // when it arrives first it lands as a separate, undecryptable entry
+      // (the PGP library can't decrypt sender's own messages from the server).
+      // Filtering both IDs then appending confirmed leaves exactly one copy.
+      final list = _messages[convID] ?? [];
+      _messages[convID] = [
+        ...list.where((m) => m.id != pending.id && m.id != confirmed.id),
+        confirmed,
+      ];
+
+      // Keep the conversation preview pointing at our decryptable copy so the
+      // home screen never shows "🔒 Encrypted" for messages we just sent.
+      final existingConv = _conversations[convID];
+      if (existingConv != null) {
+        _conversations[convID] = existingConv.copyWith(lastMessage: confirmed);
+      }
+
+      notifyListeners();
+      return true;
+    } catch (_) {
+      final list = _messages[convID] ?? [];
+      final idx = list.indexWhere((m) => m.id == pending.id);
+      if (idx != -1) {
+        list[idx].markDecryptionFailed();
+        _messages[convID] = List.from(list);
+        notifyListeners();
+      }
+      return false;
+    }
+  }
+
+  /// Builds the recipient keyring from the server's latest membership and
+  /// public-key rows. Outbound encryption must not trust the cached
+  /// Conversation.members list: that can lag after DM creation, member changes,
+  /// or key rotation and produce messages only one side can decrypt.
+  Future<List<String>> _freshRecipientKeys(
+    String convID,
+    Conversation fallback,
+  ) async {
+    await loadConversationMembers(convID);
+    final latest = _conversations[convID] ?? fallback;
+    final memberIDs =
+        latest.memberIDs.isNotEmpty ? latest.memberIDs : fallback.memberIDs;
+    if (memberIDs.isEmpty) return const [];
+
+    final keysByUser = await _api.getFreshBulkPublicKeys(memberIDs);
+    final ownPublicKey = await _storage.getPublicKey() ?? '';
+    return {
+      ...keysByUser.values,
+      if (ownPublicKey.isNotEmpty) ownPublicKey,
+    }.where((k) => k.trim().isNotEmpty).toList();
+  }
+
+  /// Delete a conversation. For a DM this removes it for both participants; for
+  /// groups/channels the server enforces admin/owner permission (throws otherwise).
+  Future<void> deleteConversation(String convID) async {
+    await _api.deleteConversation(convID);
+    _conversations.remove(convID);
+    _messages.remove(convID);
+    _typingUsers.remove(convID);
+    notifyListeners();
+  }
+
+  Future<Conversation> openDM(String userID) async {
+    final conv = await _api.openDM(userID);
+    _conversations[conv.id] = conv;
+    notifyListeners();
+    return conv;
+  }
+
+  Future<Conversation> createGroup({
+    required String name,
+    String? description,
+    required List<String> memberIDs,
+  }) async {
+    final conv = await _api.createGroup(
+      name: name,
+      description: description,
+      memberIDs: memberIDs,
+    );
+    _conversations[conv.id] = conv;
+    notifyListeners();
+    return conv;
+  }
+
+  void sendTyping(String convID) => _ws.sendTyping(convID);
+
+  void _handleWsEvent(WsEvent event) {
+    switch (event.type) {
+      case WsEventType.newMessage:
+        final msg = Message.fromJson(event.data);
+        _handleIncomingMessage(msg);
+
+      case WsEventType.typing:
+        final convID = event.data['conversation_id'] as String?;
+        final userID = event.data['user_id'] as String?;
+        if (convID != null && userID != null) {
+          _typingUsers[convID] = {...?_typingUsers[convID], userID};
+          notifyListeners();
+          Future.delayed(const Duration(seconds: 3), () {
+            _typingUsers[convID]?.remove(userID);
+            notifyListeners();
+          });
+        }
+
+      case WsEventType.messageDeleted:
+        final convID = event.data['conversation_id'] as String?;
+        final msgID = event.data['message_id'] as String?;
+        if (convID != null && msgID != null) {
+          final list = _messages[convID];
+          if (list != null) {
+            _messages[convID] = list.where((m) => m.id != msgID).toList();
+            notifyListeners();
+          }
+        }
+
+      case WsEventType.conversationDeleted:
+        final convID = event.data['conversation_id'] as String?;
+        if (convID != null) {
+          _conversations.remove(convID);
+          _messages.remove(convID);
+          _typingUsers.remove(convID);
+          notifyListeners();
+        }
+
+      case WsEventType.messageEdited:
+        _handleEditedMessage(Message.fromJson(event.data));
+
+      case WsEventType.conversationUpdated:
+        // Name / description / avatar (and for channels, handle) changed. Pull
+        // the fresh conversation + members so it updates without a manual refresh.
+        final convID = event.data['conversation_id'] as String?;
+        if (convID != null) {
+          loadConversations();
+          if (_conversations.containsKey(convID)) {
+            loadConversationMembers(convID);
+          }
+        }
+
+      case WsEventType.readReceipt:
+        break;
+
+      case WsEventType.memberJoined:
+      case WsEventType.memberLeft:
+        final convID = event.data['conversation_id'] as String?;
+        if (convID != null) {
+          if (_conversations.containsKey(convID)) {
+            loadConversationMembers(convID);
+          } else {
+            // We were added to a new group — fetch the full list to surface it.
+            loadConversations();
+          }
+        }
+
+      // Call events are handled by CallProvider — ignore here
+      case WsEventType.callOffer:
+      case WsEventType.callAnswer:
+      case WsEventType.callIceCandidate:
+      case WsEventType.callHangup:
+      case WsEventType.callReject:
+      case WsEventType.callRinging:
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  Future<void> _handleIncomingMessage(Message msg) async {
+    final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
+    await _tryDecrypt(msg, privateKey);
+
+    // Realtime events don't carry sender profile info, so backfill from the
+    // loaded members before the message reaches the bubble/avatar UI.
+    _hydrateMessageSender(msg);
+
+    final list = _messages[msg.conversationId] ?? [];
+    if (!list.any((m) => m.id == msg.id)) {
+      _messages[msg.conversationId] = [...list, msg];
+    }
+
+    final conv = _conversations[msg.conversationId];
+    if (conv != null) {
+      _conversations[msg.conversationId] = conv.copyWith(lastMessage: msg);
+    } else if (!_isLoading) {
+      // Message from a conversation we haven't seen yet (new DM or group).
+      loadConversations();
+    }
+
+    if (_selfId != null &&
+        msg.senderId != _selfId &&
+        msg.type != MessageType.system) {
+      final senderName =
+          msg.sender?.username != null ? '@${msg.sender!.username}' : 'Someone';
+      final String title;
+      final String body;
+      if (conv != null && (conv.isGroup || conv.isChannel)) {
+        title = conv.name ?? 'Group';
+        body =
+            '$senderName: ${msg.isDecrypted ? (msg.decryptedContent ?? 'New message') : 'New message'}';
+      } else {
+        title = senderName;
+        body = msg.isDecrypted
+            ? (msg.decryptedContent ?? 'New message')
+            : 'New message';
+      }
+      NotificationService.showMessage(
+        conversationId: msg.conversationId,
+        title: title,
+        body: body,
+        showSensitive: _settings.notificationSensitiveContent,
+      );
+    }
+
+    notifyListeners();
+  }
+
+  void _hydrateMessageSender(Message msg, {Message? fresh}) {
+    final freshSender = fresh?.sender;
+    if (freshSender != null &&
+        (msg.sender == null ||
+            (msg.sender!.avatarUrl == null && freshSender.avatarUrl != null))) {
+      msg.sender = freshSender;
+    }
+
+    final members = _conversations[msg.conversationId]?.members ?? const [];
+    for (final m in members) {
+      if (m.userId == msg.senderId &&
+          m.user != null &&
+          (msg.sender == null ||
+              (msg.sender!.avatarUrl == null && m.user!.avatarUrl != null))) {
+        msg.sender = m.user;
+        break;
+      }
+    }
+  }
+
+  Future<void> _tryDecrypt(Message msg, String privateKey) async {
+    if (privateKey.isEmpty) return;
+    try {
+      final raw = await PgpService.decrypt(
+        encryptedArmor: msg.encryptedPayload,
+        privateKeyArmored: privateKey,
+      );
+      if (raw.isNotEmpty) {
+        msg.setDecryptedContent(raw);
+      } else {
+        msg.markDecryptionFailed();
+      }
+    } catch (_) {
+      msg.markDecryptionFailed();
+    }
+  }
+
+  Future<void> deleteMessage(String convID, String msgID) async {
+    try {
+      await _api.deleteMessage(convID, msgID);
+      final list = _messages[convID] ?? [];
+      _messages[convID] = list.where((m) => m.id != msgID).toList();
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> loadConversationMembers(String convID) async {
+    try {
+      final members = await _api.getConversationMembers(convID);
+      final conv = _conversations[convID];
+      if (conv != null) {
+        _conversations[convID] = conv.copyWith(members: members);
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    _wsSub?.cancel();
+    _ws.disconnect();
+    super.dispose();
+  }
+}

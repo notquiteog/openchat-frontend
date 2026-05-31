@@ -1,0 +1,117 @@
+name: openchat
+description: Open-source E2E encrypted messenger with PGP
+version: 0.2.1+1
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+  flutter: '>=3.22.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Firebase (push notifications — optional; requires flutterfire configure)
+  firebase_core: ^3.13.0
+  firebase_messaging: ^15.2.0
+
+  # PGP / cryptography
+  openpgp:
+    git:
+      url: https://github.com/notquiteog/flutter-openpgp.git
+      ref: v3.12.1
+  pointycastle: ^4.0.0
+  cryptography: ^2.9.0
+
+  # Secure storage (Keychain / Keystore / Credential Manager)
+  flutter_secure_storage: ^10.2.0
+
+  # State management
+  provider: ^6.1.5+1
+
+  # Networking
+  http: ^1.6.0
+  web_socket_channel: ^3.0.3
+  dio: ^5.9.2
+
+  # Local database (message cache)
+  sqflite: ^2.4.2+1
+  sqflite_common_ffi: ^2.3.4+4
+  drift: ^2.33.0
+
+  # Storage
+  path_provider: ^2.1.5
+  path: ^1.9.1
+  shared_preferences: ^2.5.5
+
+  # File / media
+  image_picker: ^1.2.2
+  file_picker: ^11.0.2
+  cached_network_image: ^3.4.1
+  flutter_svg: ^2.3.0
+  video_player: ^2.11.1
+  mime: ^2.0.0
+
+  # WebRTC (audio/video calls)
+  flutter_webrtc: ^1.4.1
+
+  # Call ringtone / connecting tones
+  audioplayers: ^6.1.0
+
+  # QR code generation (fingerprint verification)
+  qr_flutter: ^4.1.0
+
+  # UI utilities
+  intl: ^0.20.2
+  uuid: ^4.5.3
+  convert: ^3.1.2
+  timeago: ^3.7.1
+
+  # Biometric auth (key unlock + app lock)
+  local_auth: ^3.0.1
+
+  # Background WebSocket service — keeps the WS alive when the app is backgrounded.
+  # Android requires a foreground service entry in AndroidManifest.xml;
+  # see lib/services/background_ws_service.dart for the required native setup.
+  flutter_background_service: ^5.0.0
+
+  # Local OS notifications (missed calls). No Windows/web implementation — usage
+  # is guarded by platform in NotificationService; those fall back to in-app.
+  flutter_local_notifications: ^21.0.0
+
+  # Open Stripe checkout URLs in the system browser
+  url_launcher: ^6.3.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/stickers/
+    - assets/sounds/
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  build_runner: ^2.15.0
+  drift_dev: ^2.33.0
+  flutter_launcher_icons: ^0.14.1
+
+# App / launcher icons. Regenerate after changing the logo with:
+#   dart run flutter_launcher_icons
+flutter_launcher_icons:
+  image_path: "assets/images/logo.png"
+  android: "launcher_icon"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/images/logo.png"
+  ios: true
+  remove_alpha_ios: true
+  web:
+    generate: true
+    background_color: "#FFFFFF"
+    theme_color: "#3D5AFE"
+  windows:
+    generate: true
+    icon_size: 48
+  macos:
+    generate: true
