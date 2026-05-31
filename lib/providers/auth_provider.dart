@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import '../crypto/pgp_service.dart';
 import '../models/user.dart';
 import '../services/api_service.dart';
+import '../services/key_cache_service.dart';
 import '../services/secure_storage_service.dart';
 
 enum AuthState { unknown, unauthenticated, authenticated }
@@ -114,9 +115,23 @@ class AuthProvider extends ChangeNotifier {
         refreshToken: auth.refreshToken,
       );
 
+      // Warn when the local key doesn't match the server's registered key.
+      // This happens when a user restores an old key backup after a rotation —
+      // messages encrypted to the newer server key will be undecryptable.
+      final localFp = await _storage.getFingerprint() ?? '';
+      final serverFp = auth.user.keyFingerprint;
+      if (localFp.isNotEmpty &&
+          serverFp.isNotEmpty &&
+          localFp.toUpperCase() != serverFp.toUpperCase()) {
+        _error = 'Key mismatch: the key on this device (…${localFp.length >= 8 ? localFp.substring(localFp.length - 8) : localFp}) '
+            'does not match your account key (…${serverFp.length >= 8 ? serverFp.substring(serverFp.length - 8) : serverFp}). '
+            'Messages encrypted to your current account key will not decrypt. '
+            'Import the correct key in Settings → PGP Keys.';
+        // Still authenticate — the user may intentionally be using an old device.
+      }
+
       _currentUser = auth.user;
       _state = AuthState.authenticated;
-      _error = null;
     } catch (e) {
       _error = e.toString();
     } finally {
@@ -134,6 +149,9 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> logout() async {
     await _storage.clearSession();
+    // Clear the public-key cache so stale entries from this session can't
+    // affect the next login (different user, or same user with a new key).
+    await KeyCacheService.clear();
     _currentUser = null;
     _state = AuthState.unauthenticated;
     _error = null;

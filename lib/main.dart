@@ -14,19 +14,26 @@ import 'providers/settings_provider.dart';
 import 'services/api_service.dart';
 import 'services/background_ws_service.dart';
 import 'services/call_service.dart';
+import 'services/notification_service.dart';
 import 'services/push_notification_service.dart';
 import 'services/secure_storage_service.dart';
 import 'services/websocket_service.dart';
 
 /// Background FCM handler — runs in a separate isolate when the app is
-/// terminated. Firebase automatically shows the system notification for
-/// messages that carry a `notification` payload; nothing extra is needed here.
+/// terminated. Regular messages carry a notification payload so the system
+/// shows them automatically. Incoming-call pushes are data-only (no
+/// notification payload) so we display a local notification here.
 @pragma('vm:entry-point')
 Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
-  // No-op: the system notification is shown automatically by FCM.
-  // If you send data-only messages (no notification payload), add local
-  // notification display logic here after re-initialising Firebase and
-  // NotificationService in this isolate.
+  if (message.data['type'] == 'incoming_call') {
+    await NotificationService.init();
+    final caller = message.data['caller_username'] as String? ?? 'Unknown';
+    final isVideo = message.data['is_video'] == 'true';
+    final kind = isVideo ? 'video' : 'voice';
+    await NotificationService.showIncomingCall(
+      body: 'Incoming $kind call from @$caller',
+    );
+  }
 }
 
 void main() async {

@@ -364,25 +364,52 @@ class ChatProvider extends ChangeNotifier {
   }
 
   /// Builds the recipient keyring from the server's latest membership and
-  /// public-key rows. Outbound encryption must not trust the cached
-  /// Conversation.members list: that can lag after DM creation, member changes,
-  /// or key rotation and produce messages only one side can decrypt.
+  /// public-key rows, keyed by user ID so two members with different keys that
+  /// happen to share the same key string don't silently merge into one PKESK.
+  ///
+  /// Keys come from the embedded user data returned by [loadConversationMembers]
+  /// (a single server round-trip that JOINs the users table). Members whose
+  /// embedded key is absent fall back to an individual key fetch. The sender's
+  /// own key is always ensured via their local storage entry so they can
+  /// re-decrypt their sent messages from the server after a fresh login.
   Future<List<String>> _freshRecipientKeys(
     String convID,
     Conversation fallback,
   ) async {
     await loadConversationMembers(convID);
     final latest = _conversations[convID] ?? fallback;
-    final memberIDs =
-        latest.memberIDs.isNotEmpty ? latest.memberIDs : fallback.memberIDs;
-    if (memberIDs.isEmpty) return const [];
+    final members =
+        latest.members.isNotEmpty ? latest.members : fallback.members;
+    if (members.isEmpty) return const [];
 
-    final keysByUser = await _api.getFreshBulkPublicKeys(memberIDs);
+    // Collect keys by user ID — deduplication by identity, not by key string.
+    final keysByUser = <String, String>{};
+    final missingIds = <String>[];
+    for (final m in members) {
+      final key = m.user?.publicKey ?? '';
+      if (key.isNotEmpty && !(m.user?.isKeyExpired ?? false)) {
+        keysByUser[m.userId] = key;
+      } else {
+        missingIds.add(m.userId);
+      }
+    }
+
+    // Fetch individually for any member whose key wasn't embedded.
+    if (missingIds.isNotEmpty) {
+      final fresh = await _api.getFreshBulkPublicKeys(missingIds);
+      keysByUser.addAll(fresh);
+    }
+
+    // Always include the sender's own key so they can re-decrypt their own
+    // messages from the server after logout + login. Uses the local authoritative
+    // copy rather than relying solely on the server-side member entry.
+    final selfId = await _storage.getUserID() ?? '';
     final ownPublicKey = await _storage.getPublicKey() ?? '';
-    return {
-      ...keysByUser.values,
-      if (ownPublicKey.isNotEmpty) ownPublicKey,
-    }.where((k) => k.trim().isNotEmpty).toList();
+    if (selfId.isNotEmpty && ownPublicKey.isNotEmpty) {
+      keysByUser[selfId] = ownPublicKey;
+    }
+
+    return keysByUser.values.where((k) => k.trim().isNotEmpty).toList();
   }
 
   /// Delete a conversation. For a DM this removes it for both participants; for

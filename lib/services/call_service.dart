@@ -335,10 +335,15 @@ class CallService {
       case WsEventType.callAnswer:
         final sdp = event.data['sdp'] as String? ?? '';
         _cancelRingTimer();
-        _pc?.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
-        // Peer answered — we're negotiating media now. Actual "connected" is
-        // driven by the ICE/peer-connection state, not the answer itself.
+        // Peer answered — enter connecting phase immediately so the 30-second
+        // timeout starts ticking. setRemoteDescription is async; errors are
+        // caught and trigger a clean hangup rather than leaving the call stuck.
         _enterConnecting();
+        if (_pc != null && sdp.isNotEmpty) {
+          _pc!
+              .setRemoteDescription(RTCSessionDescription(sdp, 'answer'))
+              .catchError((_) => hangup());
+        }
 
       case WsEventType.callIceCandidate:
         final candidateMap = event.data['candidate'] as Map<String, dynamic>?;

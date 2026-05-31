@@ -73,18 +73,18 @@ class PushNotificationService {
 
     final messaging = FirebaseMessaging.instance;
 
-    // iOS requires an explicit permission request; Android 13+ is handled by
-    // the POST_NOTIFICATIONS manifest permission (no Dart prompt needed).
-    if (Platform.isIOS) {
-      final settings = await messaging.requestPermission(
-        alert: true,
-        badge: true,
-        sound: true,
-      );
-      if (settings.authorizationStatus != AuthorizationStatus.authorized &&
-          settings.authorizationStatus != AuthorizationStatus.provisional) {
-        return false;
-      }
+    // Both iOS and Android 13+ (API 33+) require a runtime permission prompt.
+    // firebase_messaging.requestPermission() handles both platforms: on iOS it
+    // shows the system alert; on Android it requests POST_NOTIFICATIONS.
+    // Without this, Android 13+ users are silently denied and never see a prompt.
+    final settings = await messaging.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+    if (settings.authorizationStatus != AuthorizationStatus.authorized &&
+        settings.authorizationStatus != AuthorizationStatus.provisional) {
+      return false;
     }
 
     // Obtain the FCM/APNs token. Fails when Firebase project ID is wrong or
@@ -116,6 +116,15 @@ class PushNotificationService {
     // is open (FCM does not display the system notification in this case).
     _foregroundSub?.cancel();
     _foregroundSub = FirebaseMessaging.onMessage.listen((RemoteMessage msg) {
+      if (msg.data['type'] == 'incoming_call') {
+        final caller = msg.data['caller_username'] as String? ?? 'Unknown';
+        final isVideo = msg.data['is_video'] == 'true';
+        final kind = isVideo ? 'video' : 'voice';
+        NotificationService.showIncomingCall(
+          body: 'Incoming $kind call from @$caller',
+        );
+        return;
+      }
       final notif = msg.notification;
       if (notif != null) {
         NotificationService.showMessage(

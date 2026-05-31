@@ -217,13 +217,18 @@ class ApiService {
 
   Future<Map<String, String>> getFreshBulkPublicKeys(
       List<String> userIDs) async {
-    final keys = await Future.wait(userIDs.map(getFreshUserPublicKey));
-    final out = <String, String>{};
-    for (var i = 0; i < userIDs.length; i++) {
-      final k = keys[i];
-      if (k != null) out[userIDs[i]] = k;
-    }
-    return out;
+    // Catch per-user failures so a single bad fetch doesn't drop every key.
+    final entries = await Future.wait(
+      userIDs.map((id) async {
+        try {
+          final k = await getFreshUserPublicKey(id);
+          return k != null ? MapEntry(id, k) : null;
+        } catch (_) {
+          return null;
+        }
+      }),
+    );
+    return Map.fromEntries(entries.whereType<MapEntry<String, String>>());
   }
 
   Future<List<User>> searchUsers(String query) async {
