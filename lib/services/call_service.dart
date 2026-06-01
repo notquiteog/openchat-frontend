@@ -1,5 +1,6 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:uuid/uuid.dart';
 import '../config/api_config.dart' show IceServer;
@@ -65,10 +66,12 @@ class CallEndedEvent {
 /// and forwards signaling through the WebSocket service.
 class CallService {
   final WebSocketService _ws;
+  final Future<List<IceServer>> Function()? _iceServerLoader;
   RTCPeerConnection? _pc;
   MediaStream? _localStream;
   MediaStream? _remoteStream;
   CallSession? _session;
+  final List<RTCIceCandidate> _pendingRemoteCandidates = [];
 
   final _sessionController = StreamController<CallSession?>.broadcast();
   final _remoteStreamController = StreamController<MediaStream?>.broadcast();
@@ -114,12 +117,24 @@ class CallService {
     IceServer(url: 'stun:stun1.l.google.com:19302'),
   ];
 
-  CallService(this._ws) {
+  CallService(this._ws, {Future<List<IceServer>> Function()? iceServerLoader})
+      : _iceServerLoader = iceServerLoader {
     _wsSub = _ws.events.listen(_handleWsEvent);
   }
 
   void updateIceServers(List<IceServer> servers) {
     if (servers.isNotEmpty) _iceServers = servers;
+  }
+
+  Future<void> refreshIceServers() async {
+    final loader = _iceServerLoader;
+    if (loader == null) return;
+    try {
+      final servers = await loader();
+      if (servers.isNotEmpty) updateIceServers(servers);
+    } catch (_) {
+      // Keep the existing/default STUN servers when config fetch fails.
+    }
   }
 
   // ---- Outgoing call ----
@@ -145,6 +160,7 @@ class CallService {
     _sessionController.add(_session);
 
     try {
+      await refreshIceServers();
       await _initPeerConnection(targetUserId, callId);
       await _captureLocalMedia(isVideo: isVideo);
 
@@ -193,6 +209,7 @@ class CallService {
     _sessionController.add(_session);
 
     try {
+      await refreshIceServers();
       await _initPeerConnection(session.remoteUserId, session.callId);
       await _captureLocalMedia(isVideo: session.isVideo);
 
@@ -211,6 +228,7 @@ class CallService {
     if (session == null || _pc == null) return;
 
     await _pc!.setRemoteDescription(RTCSessionDescription(sdpOffer, 'offer'));
+    await _flushPendingRemoteCandidates();
     final answer = await _pc!.createAnswer();
     await _pc!.setLocalDescription(answer);
 
@@ -317,6 +335,7 @@ class CallService {
           state: CallState.ringing,
         );
         // Store the offer SDP so we can answer later
+        _pendingRemoteCandidates.clear();
         _pendingOfferSdp = sdp;
         _pendingIncoming = incoming;
         _incomingCallController.add(incoming);
@@ -342,17 +361,20 @@ class CallService {
         if (_pc != null && sdp.isNotEmpty) {
           _pc!
               .setRemoteDescription(RTCSessionDescription(sdp, 'answer'))
+              .then((_) => _flushPendingRemoteCandidates())
               .catchError((_) => hangup());
         }
 
       case WsEventType.callIceCandidate:
+        final callId = event.data['call_id'] as String? ?? '';
         final candidateMap = event.data['candidate'] as Map<String, dynamic>?;
         if (candidateMap != null) {
-          _pc?.addCandidate(RTCIceCandidate(
+          final candidate = RTCIceCandidate(
             candidateMap['candidate'] as String?,
             candidateMap['sdpMid'] as String?,
             candidateMap['sdpMLineIndex'] as int?,
-          ));
+          );
+          _addOrQueueRemoteCandidate(callId, candidate);
         }
 
       case WsEventType.callHangup:
@@ -415,6 +437,23 @@ class CallService {
           track.enabled = true;
         });
         _remoteStreamController.add(_remoteStream);
+        // Some desktop flutter_webrtc builds do not reliably promote
+        // peerConnectionState to Connected even after media arrives. A remote
+        // track means the call negotiated enough to leave "Connecting…".
+        _markConnected();
+      }
+    };
+
+    _pc!.onIceConnectionState = (state) {
+      switch (state) {
+        case RTCIceConnectionState.RTCIceConnectionStateConnected:
+        case RTCIceConnectionState.RTCIceConnectionStateCompleted:
+          _markConnected();
+        case RTCIceConnectionState.RTCIceConnectionStateFailed:
+        case RTCIceConnectionState.RTCIceConnectionStateClosed:
+          _cleanup();
+        default:
+          break;
       }
     };
 
@@ -431,6 +470,47 @@ class CallService {
           break;
       }
     };
+  }
+
+  Future<void> _addOrQueueRemoteCandidate(
+    String callId,
+    RTCIceCandidate candidate,
+  ) async {
+    final activeCallId = _session?.callId ?? _pendingIncoming?.callId;
+    if (callId.isNotEmpty && activeCallId != null && callId != activeCallId) {
+      return;
+    }
+
+    final pc = _pc;
+    if (pc == null) {
+      _pendingRemoteCandidates.add(candidate);
+      return;
+    }
+
+    try {
+      final remote = await pc.getRemoteDescription();
+      if (remote == null) {
+        _pendingRemoteCandidates.add(candidate);
+        return;
+      }
+      await pc.addCandidate(candidate);
+    } catch (_) {
+      _pendingRemoteCandidates.add(candidate);
+    }
+  }
+
+  Future<void> _flushPendingRemoteCandidates() async {
+    final pc = _pc;
+    if (pc == null || _pendingRemoteCandidates.isEmpty) return;
+    final pending = List<RTCIceCandidate>.from(_pendingRemoteCandidates);
+    _pendingRemoteCandidates.clear();
+    for (final candidate in pending) {
+      try {
+        await pc.addCandidate(candidate);
+      } catch (_) {
+        // A stale/duplicate candidate should not strand the call setup.
+      }
+    }
   }
 
   Future<void> _captureLocalMedia({required bool isVideo}) async {
@@ -488,12 +568,14 @@ class CallService {
       final dur = ending.wasConnected && ending.connectedAt != null
           ? DateTime.now().difference(ending.connectedAt!).inSeconds
           : 0;
-      _callEndedController.add(CallEndedEvent(
-        conversationId: ending.conversationId!,
-        answered: ending.wasConnected,
-        isVideo: ending.isVideo,
-        durationSecs: dur,
-      ));
+      _callEndedController.add(
+        CallEndedEvent(
+          conversationId: ending.conversationId!,
+          answered: ending.wasConnected,
+          isVideo: ending.isVideo,
+          durationSecs: dur,
+        ),
+      );
     }
 
     try {
@@ -509,6 +591,7 @@ class CallService {
     } catch (_) {}
     _pc = null;
     _pendingOfferSdp = null;
+    _pendingRemoteCandidates.clear();
     _session = null;
 
     _sessionController.add(null);

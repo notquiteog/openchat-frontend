@@ -61,7 +61,7 @@ class _Providers extends StatelessWidget {
     final storage = SecureStorageService();
     final api = ApiService(storage);
     final ws = WebSocketService(storage);
-    final callService = CallService(ws);
+    final callService = CallService(ws, iceServerLoader: api.getIceServers);
 
     return MultiProvider(
       providers: [

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:openpgp/openpgp.dart';
 
 /// Handles all PGP cryptographic operations via the openpgp package
@@ -7,10 +8,15 @@ import 'package:openpgp/openpgp.dart';
 /// Key design:
 /// - Private key is NEVER sent to the server or stored unencrypted.
 /// - All encryption/decryption happens on-device in this service.
-/// - Multi-recipient: recipient public keys are joined into a single keyring
-///   string. The Go layer calls ReadArmoredKeyRing and produces one PKESK
-///   packet per key in a single PGP message — identical semantics to dart_pg.
+/// - Outbound messages are stored as an OpenChat envelope with one
+///   signed+encrypted PGP ciphertext per recipient. This keeps decryptability
+///   independent of platform-specific multi-key keyring parsing and lets the
+///   sender decrypt their own messages after an app restart.
 class PgpService {
+  static const _envelopeKey = 'openchat_encrypted_envelope';
+  static const _envelopeVersion = 1;
+  static const _ciphertextsKey = 'ciphertexts';
+
   /// Generate a new ECC key pair (Curve25519 + Ed25519).
   static Future<PgpKeyPair> generateKeyPair({
     required String username,
@@ -89,35 +95,69 @@ class PgpService {
   /// Encrypt a plaintext message for multiple recipients.
   ///
   /// [recipientPublicKeys] should include ALL conversation members (sender
-  /// included). Keys are joined into a keyring string; the native Go layer
-  /// loops over armor.Decode calls to parse each block, producing one PKESK
-  /// packet per key.
+  /// included).
   ///
-  /// Each key is normalised to LF-only line endings before joining (Windows
-  /// Credential Manager stores keys with CRLF; CRLF inside the base64 body
-  /// breaks armor.Decode on the second block and silently drops all recipients
-  /// after the first). Keys are separated by a blank line so armor.Decode can
-  /// unambiguously locate each BEGIN header even when the body reader isn't
-  /// fully drained before the next iteration.
+  /// Always stores a compact OpenChat envelope containing one signed+encrypted
+  /// PGP message per recipient. Using the same envelope path for DMs and groups
+  /// avoids platform OpenPGP bridge keyring parsing limits that can omit later
+  /// recipients or the sender's own key, which makes messages undecryptable
+  /// after a restart.
   static Future<String> encrypt({
     required String plaintext,
     required List<String> recipientPublicKeys,
     required String signingPrivateKeyArmored,
     String signingKeyPassphrase = '',
   }) async {
-    final keyring = recipientPublicKeys
-        .map((k) => k.replaceAll('\r\n', '\n').trim())
-        .join('\n\n');
-    final signer = Entity()
-      ..privateKey = signingPrivateKeyArmored
-      ..passphrase = signingKeyPassphrase;
-    return OpenPGP.encrypt(plaintext, keyring, signed: signer);
+    final keys = _normalizeArmoredKeys(recipientPublicKeys);
+    if (keys.isEmpty) {
+      throw ArgumentError.value(
+        recipientPublicKeys,
+        'recipientPublicKeys',
+        'must contain at least one public key',
+      );
+    }
+    return _encryptEnvelope(
+      plaintext: plaintext,
+      recipientPublicKeys: keys,
+      signingPrivateKeyArmored: signingPrivateKeyArmored,
+      signingKeyPassphrase: signingKeyPassphrase,
+    );
+  }
+
+  static List<String> _normalizeArmoredKeys(List<String> keys) {
+    final seen = <String>{};
+    final out = <String>[];
+    for (final raw in keys) {
+      final key = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n').trim();
+      if (key.isEmpty || !seen.add(key)) continue;
+      out.add(key);
+    }
+    return out;
+  }
+
+  static Future<String> _encryptEnvelope({
+    required String plaintext,
+    required List<String> recipientPublicKeys,
+    required String signingPrivateKeyArmored,
+    required String signingKeyPassphrase,
+  }) async {
+    final ciphertexts = <String>[];
+    for (final key in recipientPublicKeys) {
+      final signer = Entity()
+        ..privateKey = signingPrivateKeyArmored
+        ..passphrase = signingKeyPassphrase;
+      ciphertexts.add(await OpenPGP.encrypt(plaintext, key, signed: signer));
+    }
+    return jsonEncode({
+      _envelopeKey: _envelopeVersion,
+      _ciphertextsKey: ciphertexts,
+    });
   }
 
   /// Encrypt binary data (files, images) for multiple recipients.
   ///
-  /// Data is base64-encoded before encryption so the armored PGP output format
-  /// is preserved end-to-end. Decoded symmetrically in [decryptBytes].
+  /// Data is base64-encoded before encryption so encrypted file bytes still fit
+  /// in the same text-envelope path. Decoded symmetrically in [decryptBytes].
   static Future<String> encryptBytes({
     required List<int> data,
     required String filename,
@@ -139,9 +179,86 @@ class PgpService {
     required String privateKeyArmored,
     String privateKeyPassphrase = '',
     List<String> senderPublicKeys = const [],
-  }) {
+  }) async {
+    final envelopeCiphertexts = tryReadEnvelopeCiphertexts(encryptedArmor);
+    if (envelopeCiphertexts != null) {
+      return _decryptEnvelopeCiphertexts(
+        envelopeCiphertexts,
+        privateKeyArmored: privateKeyArmored,
+        privateKeyPassphrase: privateKeyPassphrase,
+        decryptor: OpenPGP.decrypt,
+      );
+    }
+
     return OpenPGP.decrypt(
-        encryptedArmor, privateKeyArmored, privateKeyPassphrase);
+      encryptedArmor,
+      privateKeyArmored,
+      privateKeyPassphrase,
+    );
+  }
+
+  static Future<String> _decryptEnvelopeCiphertexts(
+    List<String> ciphertexts, {
+    required String privateKeyArmored,
+    required String privateKeyPassphrase,
+    required Future<String> Function(
+      String encryptedArmor,
+      String privateKeyArmored,
+      String privateKeyPassphrase,
+    ) decryptor,
+  }) async {
+    Object? lastError;
+    for (final ciphertext in ciphertexts) {
+      try {
+        final raw = await decryptor(
+          ciphertext,
+          privateKeyArmored,
+          privateKeyPassphrase,
+        );
+        if (raw.isNotEmpty) return raw;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    if (lastError != null) throw lastError;
+    return '';
+  }
+
+  @visibleForTesting
+  static bool usesOpenChatEnvelopeForRecipientCount(int recipientCount) =>
+      recipientCount > 0;
+
+  @visibleForTesting
+  static Future<String> decryptEnvelopeCiphertextsForTesting(
+    List<String> ciphertexts,
+    Future<String> Function(String ciphertext) decryptor,
+  ) {
+    return _decryptEnvelopeCiphertexts(
+      ciphertexts,
+      privateKeyArmored: '',
+      privateKeyPassphrase: '',
+      decryptor: (ciphertext, privateKey, passphrase) => decryptor(ciphertext),
+    );
+  }
+
+  @visibleForTesting
+  static bool isOpenChatEnvelope(String encryptedArmor) =>
+      tryReadEnvelopeCiphertexts(encryptedArmor) != null;
+
+  @visibleForTesting
+  static List<String>? tryReadEnvelopeCiphertexts(String encryptedArmor) {
+    final trimmed = encryptedArmor.trimLeft();
+    if (!trimmed.startsWith('{')) return null;
+    try {
+      final decoded = jsonDecode(trimmed);
+      if (decoded is! Map<String, dynamic>) return null;
+      if (decoded[_envelopeKey] != _envelopeVersion) return null;
+      final values = decoded[_ciphertextsKey];
+      if (values is! List) return const [];
+      return values.whereType<String>().toList(growable: false);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Decrypt binary data (files, images).
@@ -150,8 +267,11 @@ class PgpService {
     required String privateKeyArmored,
     String privateKeyPassphrase = '',
   }) async {
-    final b64 = await OpenPGP.decrypt(
-        encryptedArmor, privateKeyArmored, privateKeyPassphrase);
+    final b64 = await decrypt(
+      encryptedArmor: encryptedArmor,
+      privateKeyArmored: privateKeyArmored,
+      privateKeyPassphrase: privateKeyPassphrase,
+    );
     return base64.decode(b64);
   }
 

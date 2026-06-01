@@ -68,7 +68,19 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
     try {
       final convs = await _api.listConversations();
+      final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
       for (final c in convs) {
+        final last = c.lastMessage;
+        if (last != null) {
+          _hydrateMessageSender(last);
+          final cached = _cachedDecryptedMessage(last);
+          if (cached != null) {
+            _hydrateMessageSender(cached, fresh: last);
+            _conversations[c.id] = c.copyWith(lastMessage: cached);
+            continue;
+          }
+          await _tryDecrypt(last, privateKey);
+        }
         _conversations[c.id] = c;
       }
     } finally {
@@ -581,14 +593,27 @@ class ChatProvider extends ChangeNotifier {
     // loaded members before the message reaches the bubble/avatar UI.
     _hydrateMessageSender(msg);
 
+    final cached = _cachedDecryptedMessage(msg);
+    final displayMsg = (!msg.isDecrypted && cached != null) ? cached : msg;
+    if (displayMsg != msg) {
+      _hydrateMessageSender(displayMsg, fresh: msg);
+    }
+
     final list = _messages[msg.conversationId] ?? [];
-    if (!list.any((m) => m.id == msg.id)) {
-      _messages[msg.conversationId] = [...list, msg];
+    final idx = list.indexWhere((m) => m.id == msg.id);
+    if (idx == -1) {
+      _messages[msg.conversationId] = [...list, displayMsg];
+    } else if (!list[idx].isDecrypted && displayMsg.isDecrypted) {
+      final updated = List<Message>.from(list);
+      updated[idx] = displayMsg;
+      _messages[msg.conversationId] = updated;
     }
 
     final conv = _conversations[msg.conversationId];
     if (conv != null) {
-      _conversations[msg.conversationId] = conv.copyWith(lastMessage: msg);
+      _conversations[msg.conversationId] = conv.copyWith(
+        lastMessage: displayMsg,
+      );
     } else if (!_isLoading) {
       // Message from a conversation we haven't seen yet (new DM or group).
       loadConversations();
@@ -604,11 +629,11 @@ class ChatProvider extends ChangeNotifier {
       if (conv != null && (conv.isGroup || conv.isChannel)) {
         title = conv.name ?? 'Group';
         body =
-            '$senderName: ${msg.isDecrypted ? (msg.decryptedContent ?? 'New message') : 'New message'}';
+            '$senderName: ${displayMsg.isDecrypted ? (displayMsg.decryptedContent ?? 'New message') : 'New message'}';
       } else {
         title = senderName;
-        body = msg.isDecrypted
-            ? (msg.decryptedContent ?? 'New message')
+        body = displayMsg.isDecrypted
+            ? (displayMsg.decryptedContent ?? 'New message')
             : 'New message';
       }
       NotificationService.showMessage(
@@ -620,6 +645,16 @@ class ChatProvider extends ChangeNotifier {
     }
 
     notifyListeners();
+  }
+
+  Message? _cachedDecryptedMessage(Message msg) {
+    final list = _messages[msg.conversationId] ?? const <Message>[];
+    for (final cached in list) {
+      if (cached.id == msg.id && cached.isDecrypted) return cached;
+    }
+    final last = _conversations[msg.conversationId]?.lastMessage;
+    if (last != null && last.id == msg.id && last.isDecrypted) return last;
+    return null;
   }
 
   void _hydrateMessageSender(Message msg, {Message? fresh}) {
