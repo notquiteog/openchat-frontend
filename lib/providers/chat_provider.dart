@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import '../crypto/pgp_service.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
+import '../models/user.dart';
 import '../providers/settings_provider.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
@@ -492,6 +493,18 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> leaveConversation(String convID,
+      {bool deleteOwnMessages = false}) async {
+    await _api.leaveConversation(
+      convID,
+      deleteOwnMessages: deleteOwnMessages,
+    );
+    _conversations.remove(convID);
+    _messages.remove(convID);
+    _typingUsers.remove(convID);
+    notifyListeners();
+  }
+
   Future<Conversation> openDM(String userID) async {
     final conv = await _api.openDM(userID);
     _conversations[conv.id] = conv;
@@ -672,22 +685,38 @@ class ChatProvider extends ChangeNotifier {
 
   void _hydrateMessageSender(Message msg, {Message? fresh}) {
     final freshSender = fresh?.sender;
-    if (freshSender != null &&
-        (msg.sender == null ||
-            (msg.sender!.avatarUrl == null && freshSender.avatarUrl != null))) {
+    if (freshSender != null && _shouldReplaceSender(msg.sender, freshSender)) {
       msg.sender = freshSender;
     }
 
-    final members = _conversations[msg.conversationId]?.members ?? const [];
+    final conv = _conversations[msg.conversationId];
+    if (conv == null) return;
+    hydrateMessageSenderFromConversationForTesting(msg, conv);
+  }
+
+  @visibleForTesting
+  static void hydrateMessageSenderFromConversationForTesting(
+    Message msg,
+    Conversation conv,
+  ) {
+    final members = conv.members;
     for (final m in members) {
       if (m.userId == msg.senderId &&
           m.user != null &&
-          (msg.sender == null ||
-              (msg.sender!.avatarUrl == null && m.user!.avatarUrl != null))) {
+          _shouldReplaceSender(msg.sender, m.user!)) {
         msg.sender = m.user;
         break;
       }
     }
+  }
+
+  static bool _shouldReplaceSender(User? current, User candidate) {
+    if (current == null) return true;
+    return (current.avatarUrl == null && candidate.avatarUrl != null) ||
+        (current.bio == null && candidate.bio != null) ||
+        (current.bubbleColor == null && candidate.bubbleColor != null) ||
+        (current.publicKey.isEmpty && candidate.publicKey.isNotEmpty) ||
+        (current.keyFingerprint.isEmpty && candidate.keyFingerprint.isNotEmpty);
   }
 
   Future<void> _tryDecrypt(Message msg, String privateKey) async {

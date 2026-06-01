@@ -5,6 +5,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import '../firebase_options.dart';
 import 'api_service.dart';
+import 'background_notification_intent.dart';
 import 'notification_service.dart';
 
 /// Firebase Cloud Messaging / APNs push notification service.
@@ -68,6 +69,8 @@ class PushNotificationService {
   static Future<bool> init({required ApiService api}) async {
     if (!_supported) return false;
 
+    await NotificationService.init();
+
     final firebaseOk = await _initFirebase();
     if (!firebaseOk) return false;
 
@@ -102,7 +105,8 @@ class PushNotificationService {
     try {
       await _registerToken(token, api);
     } catch (e) {
-      debugPrint('PushNotificationService: backend token registration failed — $e');
+      debugPrint(
+          'PushNotificationService: backend token registration failed — $e');
       return false;
     }
 
@@ -116,23 +120,21 @@ class PushNotificationService {
     // is open (FCM does not display the system notification in this case).
     _foregroundSub?.cancel();
     _foregroundSub = FirebaseMessaging.onMessage.listen((RemoteMessage msg) {
-      if (msg.data['type'] == 'incoming_call') {
-        final caller = msg.data['caller_username'] as String? ?? 'Unknown';
-        final isVideo = msg.data['is_video'] == 'true';
-        final kind = isVideo ? 'video' : 'voice';
-        NotificationService.showIncomingCall(
-          body: 'Incoming $kind call from @$caller',
-        );
-        return;
-      }
-      final notif = msg.notification;
-      if (notif != null) {
-        NotificationService.showMessage(
-          conversationId: msg.data['conversation_id'] ?? 'push',
-          title: notif.title ?? 'OpenChat',
-          body: notif.body ?? 'New message',
-          showSensitive: true, // title/body are already sanitised by the server
-        );
+      final intent = foregroundNotificationIntent(msg);
+      if (intent == null) return;
+      switch (intent.kind) {
+        case NotificationIntentKind.message:
+          NotificationService.showMessage(
+            conversationId: msg.data['conversation_id'] as String? ?? 'push',
+            title: intent.title,
+            body: intent.body,
+            showSensitive:
+                true, // title/body are already sanitised by the server
+          );
+          break;
+        case NotificationIntentKind.incomingCall:
+          NotificationService.showIncomingCall(body: intent.body);
+          break;
       }
     });
 
@@ -158,6 +160,42 @@ class PushNotificationService {
   }
 
   // ── Internals ────────────────────────────────────────────────────────────────
+
+  /// Maps a foreground FCM message to the local notification OpenChat should
+  /// display while the app is open.
+  @visibleForTesting
+  static NotificationIntent? foregroundNotificationIntent(RemoteMessage msg) {
+    final type = msg.data['type'] as String?;
+    if (type == 'incoming_call') {
+      final caller = msg.data['caller_username'] as String? ?? 'Unknown';
+      final isVideo = msg.data['is_video'] == 'true';
+      final kind = isVideo ? 'video' : 'voice';
+      return NotificationIntent(
+        kind: NotificationIntentKind.incomingCall,
+        notificationId: 1,
+        title: 'Incoming call',
+        body: 'Incoming $kind call from @$caller',
+      );
+    }
+    if (type == 'new_message') {
+      final conversationId = msg.data['conversation_id'] as String? ?? 'push';
+      final notification = msg.notification;
+      if (notification != null) {
+        return NotificationIntent(
+          kind: NotificationIntentKind.message,
+          notificationId: conversationId.hashCode,
+          title: notification.title ?? 'OpenChat',
+          body: notification.body ?? 'New message',
+        );
+      }
+      return notificationIntentFromEvent(
+        type: 'new_message',
+        data: msg.data,
+        showSensitive: true,
+      );
+    }
+    return null;
+  }
 
   /// Initialise Firebase exactly once. Returns false if the credentials in
   /// [firebase_options.dart] are still the placeholder template values.

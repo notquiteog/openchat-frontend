@@ -2,10 +2,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Per-DM visual customization. Applies only to direct messages — group chats
-/// and channels intentionally keep the default look so every member sees the
-/// same thing.
-class DmChatStyle {
+/// Per-chat visual customization.
+class ChatStyle {
   /// Solid background colour behind the message list (ARGB int). null = theme default.
   final int? backgroundColor;
 
@@ -23,7 +21,7 @@ class DmChatStyle {
   /// Corner radius applied to bubbles. Defaults to the app's standard 18.
   final double bubbleRadius;
 
-  const DmChatStyle({
+  const ChatStyle({
     this.backgroundColor,
     this.backgroundImagePath,
     this.myBubbleColor,
@@ -38,7 +36,7 @@ class DmChatStyle {
       theirBubbleColor == null &&
       bubbleRadius == 18;
 
-  DmChatStyle copyWith({
+  ChatStyle copyWith({
     int? backgroundColor,
     String? backgroundImagePath,
     int? myBubbleColor,
@@ -49,7 +47,7 @@ class DmChatStyle {
     bool clearMyBubbleColor = false,
     bool clearTheirBubbleColor = false,
   }) =>
-      DmChatStyle(
+      ChatStyle(
         backgroundColor: clearBackgroundColor
             ? null
             : (backgroundColor ?? this.backgroundColor),
@@ -72,7 +70,7 @@ class DmChatStyle {
         'radius': bubbleRadius,
       };
 
-  factory DmChatStyle.fromJson(Map<String, dynamic> json) => DmChatStyle(
+  factory ChatStyle.fromJson(Map<String, dynamic> json) => ChatStyle(
         backgroundColor: json['bg'] as int?,
         backgroundImagePath: json['bg_img'] as String?,
         myBubbleColor: json['bubble'] as int?,
@@ -80,6 +78,8 @@ class DmChatStyle {
         bubbleRadius: (json['radius'] as num?)?.toDouble() ?? 18,
       );
 }
+
+typedef DmChatStyle = ChatStyle;
 
 /// App-wide user preferences that persist across launches: the accent colour
 /// used to seed the Material theme, whether Channels and Bots get their own
@@ -185,17 +185,19 @@ class SettingsProvider extends ChangeNotifier {
     await _prefs?.setBool(_kNotifSensitive, value);
   }
 
-  DmChatStyle dmStyleFor(String convID) {
+  ChatStyle chatStyleFor(String convID) {
     final raw = _prefs?.getString('$_kDmStylePrefix$convID');
-    if (raw == null || raw.isEmpty) return const DmChatStyle();
+    if (raw == null || raw.isEmpty) return const ChatStyle();
     try {
-      return DmChatStyle.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      return ChatStyle.fromJson(jsonDecode(raw) as Map<String, dynamic>);
     } catch (_) {
-      return const DmChatStyle();
+      return const ChatStyle();
     }
   }
 
-  Future<void> setDmStyle(String convID, DmChatStyle style) async {
+  DmChatStyle dmStyleFor(String convID) => chatStyleFor(convID);
+
+  Future<void> setChatStyle(String convID, ChatStyle style) async {
     if (style.isDefault) {
       await _prefs?.remove('$_kDmStylePrefix$convID');
     } else {
@@ -204,4 +206,7 @@ class SettingsProvider extends ChangeNotifier {
     }
     notifyListeners();
   }
+
+  Future<void> setDmStyle(String convID, DmChatStyle style) =>
+      setChatStyle(convID, style);
 }

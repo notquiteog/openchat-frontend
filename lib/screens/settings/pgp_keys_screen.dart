@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:local_auth/local_auth.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../../crypto/pgp_service.dart';
@@ -179,14 +178,10 @@ class PgpKeysScreen extends StatelessWidget {
 
   Future<void> _showExportPrivateKey(
       BuildContext context, KeyProvider keys) async {
-    // Require biometric if enabled
-    final storage = context.read<SecureStorageService>();
-    if (await storage.getBiometricEnabled()) {
-      final localAuth = LocalAuthentication();
-      final ok = await localAuth.authenticate(
-        localizedReason: 'Authenticate to export your private key',
-        biometricOnly: true,
-      );
+    // Require biometric if enabled. Route through KeyProvider so platform
+    // exceptions are caught consistently on iOS and Android.
+    if (await context.read<SecureStorageService>().getBiometricEnabled()) {
+      final ok = await keys.authenticateAndUnlockKey();
       if (!ok) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(

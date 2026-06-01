@@ -66,11 +66,13 @@ class ChannelActionPolicy {
       ]);
     }
 
-    topBar.add(
-      isSubscribed
-          ? ChannelTopBarAction.unsubscribe
-          : ChannelTopBarAction.subscribe,
-    );
+    if (!canManageLifecycle) {
+      topBar.add(
+        isSubscribed
+            ? ChannelTopBarAction.unsubscribe
+            : ChannelTopBarAction.subscribe,
+      );
+    }
 
     return ChannelActionPlacement(
       topBar: topBar,

@@ -32,6 +32,22 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
+@visibleForTesting
+String conversationExitMenuLabel(
+  Conversation conversation, {
+  required String currentUserId,
+}) {
+  if (conversation.isGroup) {
+    final isOwner = conversation.createdBy == currentUserId;
+    final hasOtherAdmin = conversation.members
+        .any((member) => member.userId != currentUserId && member.isAdmin);
+    if (isOwner && !hasOtherAdmin) return 'Leave group';
+    return 'Leave group';
+  }
+  if (conversation.isChannel) return 'Leave channel';
+  return 'Delete conversation';
+}
+
 class _ChatScreenState extends State<ChatScreen> {
   final _inputCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
@@ -319,14 +335,16 @@ class _ChatScreenState extends State<ChatScreen> {
     final currentUserID = auth.currentUser?.id ?? '';
     final typingUsers = chat.typingUsersFor(conv.id);
 
-    // Per-DM look (background + bubble colour/shape). Only DMs are customizable.
-    final dmStyle = conv.isDM
-        ? context.watch<SettingsProvider>().dmStyleFor(conv.id)
-        : const DmChatStyle();
-    final meBubbleColor =
-        dmStyle.myBubbleColor != null ? Color(dmStyle.myBubbleColor!) : null;
-    final theirBubbleColor = dmStyle.theirBubbleColor != null
-        ? Color(dmStyle.theirBubbleColor!)
+    // Per-chat look. The current user's bubble colour is also stored on their
+    // profile so group/channel participants see the same sender colour.
+    final chatStyle = context.watch<SettingsProvider>().chatStyleFor(conv.id);
+    final meBubbleColor = chatStyle.myBubbleColor != null
+        ? Color(chatStyle.myBubbleColor!)
+        : auth.currentUser?.bubbleColor != null
+            ? Color(auth.currentUser!.bubbleColor!)
+            : null;
+    final theirBubbleColor = conv.isDM && chatStyle.theirBubbleColor != null
+        ? Color(chatStyle.theirBubbleColor!)
         : null;
 
     return Scaffold(
@@ -335,7 +353,7 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           Expanded(
             child: DecoratedBox(
-              decoration: _chatBackground(dmStyle),
+              decoration: _chatBackground(chatStyle),
               child: GestureDetector(
                 onTap: () => setState(() => _showStickers = false),
                 child: messages.isEmpty
@@ -357,7 +375,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             showAvatar: showAvatar,
                             meBubbleColor: meBubbleColor,
                             theirBubbleColor: theirBubbleColor,
-                            bubbleRadius: dmStyle.bubbleRadius,
+                            bubbleRadius: chatStyle.bubbleRadius,
                             onLongPress: () =>
                                 _showMessageMenu(context, msg, isMe),
                             onAvatarTap: msg.sender != null
@@ -413,21 +431,32 @@ class _ChatScreenState extends State<ChatScreen> {
     return const BoxDecoration();
   }
 
-  /// Per-DM appearance editor: chat background (colour or image) and the user's
-  /// own bubble colour + corner shape. DMs only — groups/channels stay uniform.
+  /// Appearance editor: DMs keep local background/their-bubble controls; the
+  /// current user's own bubble colour can be published for any chat type.
   Future<void> _showChatAppearance(BuildContext context) async {
     final settings = context.read<SettingsProvider>();
+    final api = context.read<ApiService>();
+    final auth = context.read<AuthProvider>();
     final convID = conv.id;
-    var style = settings.dmStyleFor(convID);
+    final isDm = conv.isDM;
+    var style = settings.chatStyleFor(convID);
 
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       builder: (sheetCtx) => StatefulBuilder(
         builder: (sheetCtx, setSheet) {
-          void apply(DmChatStyle next) {
+          Future<void> apply(ChatStyle next,
+              {bool publishBubble = false}) async {
             style = next;
-            settings.setDmStyle(convID, next);
+            await settings.setChatStyle(convID, next);
+            if (publishBubble) {
+              await api.updateProfile(
+                bubbleColor: next.myBubbleColor,
+                clearBubbleColor: next.myBubbleColor == null,
+              );
+              await auth.refreshCurrentUser();
+            }
             setSheet(() {});
           }
 
@@ -445,63 +474,71 @@ class _ChatScreenState extends State<ChatScreen> {
                             style: Theme.of(sheetCtx).textTheme.titleMedium),
                         const Spacer(),
                         TextButton(
-                          onPressed: () => apply(const DmChatStyle()),
+                          onPressed: () => apply(const ChatStyle()),
                           child: const Text('Reset'),
                         ),
                       ],
                     ),
                     const SizedBox(height: 8),
-                    const Text('Background colour'),
-                    const SizedBox(height: 8),
-                    _ColorChoices(
-                      selected: style.backgroundColor,
-                      onSelected: (c) => apply(c == null
-                          ? style.copyWith(clearBackgroundColor: true)
-                          : style.copyWith(
-                              backgroundColor: c, clearBackgroundImage: true)),
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        OutlinedButton.icon(
-                          icon: const Icon(Icons.image_outlined, size: 18),
-                          label: const Text('Background image'),
-                          onPressed: () async {
-                            final picked = await ImagePicker().pickImage(
-                                source: ImageSource.gallery, imageQuality: 90);
-                            if (picked != null) {
-                              apply(style.copyWith(
-                                  backgroundImagePath: picked.path,
-                                  clearBackgroundColor: true));
-                            }
-                          },
-                        ),
-                        if (style.backgroundImagePath != null)
-                          TextButton(
-                            onPressed: () => apply(
-                                style.copyWith(clearBackgroundImage: true)),
-                            child: const Text('Remove'),
+                    if (isDm) ...[
+                      const Text('Background colour'),
+                      const SizedBox(height: 8),
+                      _ColorChoices(
+                        selected: style.backgroundColor,
+                        onSelected: (c) => apply(c == null
+                            ? style.copyWith(clearBackgroundColor: true)
+                            : style.copyWith(
+                                backgroundColor: c,
+                                clearBackgroundImage: true)),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.image_outlined, size: 18),
+                            label: const Text('Background image'),
+                            onPressed: () async {
+                              final picked = await ImagePicker().pickImage(
+                                  source: ImageSource.gallery,
+                                  imageQuality: 90);
+                              if (picked != null) {
+                                apply(style.copyWith(
+                                    backgroundImagePath: picked.path,
+                                    clearBackgroundColor: true));
+                              }
+                            },
                           ),
-                      ],
-                    ),
-                    const Divider(height: 24),
+                          if (style.backgroundImagePath != null)
+                            TextButton(
+                              onPressed: () => apply(
+                                  style.copyWith(clearBackgroundImage: true)),
+                              child: const Text('Remove'),
+                            ),
+                        ],
+                      ),
+                      const Divider(height: 24),
+                    ],
                     const Text('My bubble colour'),
                     const SizedBox(height: 8),
                     _ColorChoices(
                       selected: style.myBubbleColor,
-                      onSelected: (c) => apply(c == null
-                          ? style.copyWith(clearMyBubbleColor: true)
-                          : style.copyWith(myBubbleColor: c)),
+                      onSelected: (c) => apply(
+                          c == null
+                              ? style.copyWith(clearMyBubbleColor: true)
+                              : style.copyWith(myBubbleColor: c),
+                          publishBubble: true),
                     ),
-                    const SizedBox(height: 12),
-                    const Text('Their bubble colour'),
-                    const SizedBox(height: 8),
-                    _ColorChoices(
-                      selected: style.theirBubbleColor,
-                      onSelected: (c) => apply(c == null
-                          ? style.copyWith(clearTheirBubbleColor: true)
-                          : style.copyWith(theirBubbleColor: c)),
-                    ),
+                    if (isDm) ...[
+                      const SizedBox(height: 12),
+                      const Text('Their bubble colour'),
+                      const SizedBox(height: 8),
+                      _ColorChoices(
+                        selected: style.theirBubbleColor,
+                        onSelected: (c) => apply(c == null
+                            ? style.copyWith(clearTheirBubbleColor: true)
+                            : style.copyWith(theirBubbleColor: c)),
+                      ),
+                    ],
                     const SizedBox(height: 16),
                     Row(
                       children: [
@@ -596,17 +633,13 @@ class _ChatScreenState extends State<ChatScreen> {
   PreferredSizeWidget _buildAppBar(
       BuildContext context, Set<String> typingUsers, String currentUserID) {
     final name = conv.displayName(currentUserID);
-    final typingLabel = _typingLabel(typingUsers, currentUserID);
-    final subtitle = typingLabel.isNotEmpty
-        ? typingLabel
-        : conv.isGroup
-            ? '${conv.members.length} members'
-            : 'tap for info';
 
     final dmPartner = !conv.isGroup
         ? conv.members.where((m) => m.userId != currentUserID).firstOrNull?.user
         : null;
     final avatarUrl = conv.displayAvatar(currentUserID);
+    final exitLabel =
+        conversationExitMenuLabel(conv, currentUserId: currentUserID);
 
     void openInfo() {
       if (dmPartner != null) {
@@ -647,29 +680,6 @@ class _ChatScreenState extends State<ChatScreen> {
                       style: const TextStyle(
                           fontSize: 16, fontWeight: FontWeight.w600),
                       overflow: TextOverflow.ellipsis),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: typingUsers.isNotEmpty
-                          ? Colors.green
-                          : Colors.grey[400],
-                    ),
-                  ),
-                  if (conv.messageTtlSeconds > 0)
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.timer_outlined,
-                            size: 12, color: Colors.grey[400]),
-                        const SizedBox(width: 3),
-                        Text(
-                          'Disappearing · ${_ttlLabel(conv.messageTtlSeconds)}',
-                          style:
-                              TextStyle(fontSize: 11, color: Colors.grey[400]),
-                        ),
-                      ],
-                    ),
                   ConversationEncryptionStatus(conversation: conv),
                 ],
               ),
@@ -731,18 +741,15 @@ class _ChatScreenState extends State<ChatScreen> {
               const PopupMenuItem(value: 'edit', child: Text('Edit group')),
             if (conv.isGroup)
               const PopupMenuItem(value: 'members', child: Text('Members')),
-            // Per-DM look: backgrounds + bubble colour/shape (DMs only).
-            if (conv.isDM)
-              const PopupMenuItem(
-                  value: 'appearance', child: Text('Chat appearance')),
+            const PopupMenuItem(
+                value: 'appearance', child: Text('Chat appearance')),
             // Premium conversation-wide background, visible to everyone.
             if (_canSetConversationBackground(currentUserID))
               const PopupMenuItem(
                   value: 'background', child: Text('Set chat background')),
-            const PopupMenuItem(
+            PopupMenuItem(
               value: 'delete',
-              child: Text('Delete conversation',
-                  style: TextStyle(color: Colors.red)),
+              child: Text(exitLabel, style: const TextStyle(color: Colors.red)),
             ),
           ],
         ),
@@ -916,14 +923,6 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
     );
-  }
-
-  String _ttlLabel(int seconds) {
-    if (seconds % 604800 == 0) return '${seconds ~/ 604800}w';
-    if (seconds % 86400 == 0) return '${seconds ~/ 86400}d';
-    if (seconds % 3600 == 0) return '${seconds ~/ 3600}h';
-    if (seconds % 60 == 0) return '${seconds ~/ 60}m';
-    return '${seconds}s';
   }
 
   Future<void> _setDisappearing(BuildContext context) async {
@@ -1440,9 +1439,72 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _deleteConversation(BuildContext context) async {
-    final api = context.read<ApiService>();
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
+    final chat = context.read<ChatProvider>();
+    final currentUserId = context.read<AuthProvider>().currentUser?.id ?? '';
+
+    if (conv.isGroup) {
+      final isOwner = conv.createdBy == currentUserId;
+      final hasOtherAdmin =
+          conv.members.any((m) => m.userId != currentUserId && m.isAdmin);
+      if (isOwner && !hasOtherAdmin) {
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Promote another admin first'),
+            content: const Text(
+              'Group owners can leave after another member is an admin. '
+              'Otherwise, delete the group.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+
+      final action = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Leave group?'),
+          content: const Text(
+              'You can leave, or leave and delete your sent messages.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'leave'),
+              child: const Text('Leave'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () => Navigator.pop(ctx, 'leave_delete'),
+              child: const Text('Leave + delete sent'),
+            ),
+          ],
+        ),
+      );
+      if (action == null || !mounted) return;
+      try {
+        await chat.leaveConversation(
+          conv.id,
+          deleteOwnMessages: action == 'leave_delete',
+        );
+        if (mounted) navigator.pop();
+      } catch (e) {
+        messenger.showSnackBar(SnackBar(content: Text('Failed to leave: $e')));
+      }
+      return;
+    }
+
+    final api = context.read<ApiService>();
     final label = conv.isDM
         ? 'conversation'
         : conv.isGroup

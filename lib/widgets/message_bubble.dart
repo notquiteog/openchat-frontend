@@ -42,6 +42,8 @@ class MessageBubble extends StatelessWidget {
   Color _bubbleColor(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     if (isMe) return meBubbleColor ?? cs.primary;
+    final senderBubbleColor = message.sender?.bubbleColor;
+    if (senderBubbleColor != null) return Color(senderBubbleColor);
     return theirBubbleColor ?? cs.surfaceContainerHighest;
   }
 
@@ -173,18 +175,23 @@ class MessageBubble extends StatelessWidget {
   Color _textColorFor(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     if (isMe) {
+      if (meBubbleColor == null) return Colors.white;
       // A custom bubble colour needs a contrasting text colour the theme's
       // onPrimary can't guarantee.
-      if (meBubbleColor != null) {
-        return ThemeData.estimateBrightnessForColor(meBubbleColor!) ==
-                Brightness.dark
-            ? Colors.white
-            : Colors.black;
-      }
-      return cs.onPrimary;
+      return ThemeData.estimateBrightnessForColor(meBubbleColor!) ==
+              Brightness.dark
+          ? Colors.white
+          : Colors.black;
     }
     if (theirBubbleColor != null) {
       return ThemeData.estimateBrightnessForColor(theirBubbleColor!) ==
+              Brightness.dark
+          ? Colors.white
+          : Colors.black;
+    }
+    final senderBubbleColor = message.sender?.bubbleColor;
+    if (senderBubbleColor != null) {
+      return ThemeData.estimateBrightnessForColor(Color(senderBubbleColor)) ==
               Brightness.dark
           ? Colors.white
           : Colors.black;
@@ -274,13 +281,13 @@ class _BubbleShell extends StatelessWidget {
   Widget build(BuildContext context) {
     final tintOpacity =
         ThemeData.estimateBrightnessForColor(color) == Brightness.dark
-            ? 0.58
-            : 0.48;
+            ? 0.34
+            : 0.28;
     return GlassSurface(
-      blur: 16,
+      blur: 28,
       borderRadius: radii,
       border: Border.all(
-        color: Colors.white.withValues(alpha: 0.22),
+        color: Colors.white.withValues(alpha: 0.34),
         width: 0.75,
       ),
       child: Container(

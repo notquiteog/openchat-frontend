@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/foundation.dart';
@@ -9,22 +8,11 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config/api_config.dart';
+import 'background_notification_intent.dart' as intent_mapper;
+import 'background_notification_intent.dart' show NotificationIntent;
 
-enum NotificationIntentKind { message, incomingCall }
-
-class NotificationIntent {
-  final NotificationIntentKind kind;
-  final int notificationId;
-  final String title;
-  final String body;
-
-  const NotificationIntent({
-    required this.kind,
-    required this.notificationId,
-    required this.title,
-    required this.body,
-  });
-}
+export 'background_notification_intent.dart'
+    show NotificationIntent, NotificationIntentKind;
 
 /// Persists a WebSocket connection while the app is in the background so that
 /// users receive message and call notifications without relying on Firebase.
@@ -35,11 +23,11 @@ class NotificationIntent {
 /// Android — add to AndroidManifest.xml inside `<application>`:
 ///   ```xml
 ///   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-///   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+///   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING"/>
 ///   <service
-///     android:name="id.flutter/flutter_background_service_android.BackgroundService"
+///     android:name="id.flutter.flutter_background_service.BackgroundService"
 ///     android:exported="false"
-///     android:foregroundServiceType="dataSync"/>
+///     android:foregroundServiceType="remoteMessaging"/>
 ///   ```
 ///
 /// iOS — enable "Background Modes" in Xcode: tick "Background fetch" and
@@ -53,8 +41,18 @@ class BackgroundWsService {
   static const _kToken = 'bg_ws_access_token';
   static const _kSensitive = 'bg_ws_sensitive_content';
 
-  static bool get _mobileOnly =>
-      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+  static bool supportsPersistentBackgroundWebSocket({
+    required bool isWeb,
+    required bool isAndroid,
+    required bool isIOS,
+  }) =>
+      !isWeb && isAndroid && !isIOS;
+
+  static bool get _mobileOnly => supportsPersistentBackgroundWebSocket(
+        isWeb: kIsWeb,
+        isAndroid: !kIsWeb && Platform.isAndroid,
+        isIOS: !kIsWeb && Platform.isIOS,
+      );
 
   static final _service = FlutterBackgroundService();
 
@@ -92,6 +90,9 @@ class BackgroundWsService {
     required String accessToken,
     required bool showSensitive,
   }) async {
+    if (!kIsWeb && Platform.isIOS) {
+      return false;
+    }
     if (!_mobileOnly) {
       return true; // desktop: process stays alive, nothing to do
     }
@@ -248,58 +249,29 @@ class BackgroundWsService {
   static NotificationIntent? notificationIntentFromRawLine(
     String rawLine, {
     required bool showSensitive,
-  }) {
-    try {
-      final json = jsonDecode(rawLine) as Map<String, dynamic>;
-      final type = json['type'] as String?;
-      final data = (json['data'] as Map<String, dynamic>?) ?? {};
-      if (type == null) return null;
-      return notificationIntentFromEvent(
-        type: type,
-        data: data,
+  }) =>
+      intent_mapper.notificationIntentFromRawLine(
+        rawLine,
         showSensitive: showSensitive,
       );
-    } catch (_) {
-      return null;
-    }
-  }
 
   static NotificationIntent? notificationIntentFromEvent({
     required String type,
     required Map<String, dynamic> data,
     required bool showSensitive,
-  }) {
-    if (type == 'new_message') {
-      final convId = data['conversation_id'] as String? ?? 'msg';
-      final sender = data['sender_username'] as String?;
-      return NotificationIntent(
-        kind: NotificationIntentKind.message,
-        notificationId: convId.hashCode,
-        title: showSensitive && sender != null ? '@$sender' : 'OpenChat',
-        body: showSensitive ? 'New message' : 'You have a new message',
+  }) =>
+      intent_mapper.notificationIntentFromEvent(
+        type: type,
+        data: data,
+        showSensitive: showSensitive,
       );
-    }
-
-    if (type == 'call_offer' || type == 'incoming_call') {
-      final caller = data['caller_username'] as String?;
-      return NotificationIntent(
-        kind: NotificationIntentKind.incomingCall,
-        notificationId: 1,
-        title: 'Incoming call',
-        body:
-            showSensitive && caller != null ? '@$caller is calling' : 'Incoming call',
-      );
-    }
-
-    return null;
-  }
 
   static void _showIntent(
     FlutterLocalNotificationsPlugin notif,
-    NotificationIntent intent,
+    intent_mapper.NotificationIntent intent,
   ) {
     switch (intent.kind) {
-      case NotificationIntentKind.message:
+      case intent_mapper.NotificationIntentKind.message:
         notif.show(
           id: intent.notificationId,
           title: intent.title,
@@ -317,7 +289,7 @@ class BackgroundWsService {
           ),
         );
         break;
-      case NotificationIntentKind.incomingCall:
+      case intent_mapper.NotificationIntentKind.incomingCall:
         notif.show(
           id: intent.notificationId,
           title: intent.title,

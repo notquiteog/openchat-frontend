@@ -9,6 +9,49 @@ class NotificationService {
   static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
   static bool _inited = false;
+  static const List<AndroidNotificationChannel> _androidChannels = [
+    AndroidNotificationChannel(
+      'messages',
+      'Messages',
+      description: 'Notifications for new messages',
+      importance: Importance.high,
+    ),
+    AndroidNotificationChannel(
+      'calls',
+      'Calls',
+      description: 'Notifications for incoming calls',
+      importance: Importance.max,
+    ),
+    AndroidNotificationChannel(
+      'missed_calls',
+      'Missed calls',
+      description: 'Notifications for missed voice and video calls',
+      importance: Importance.high,
+    ),
+    AndroidNotificationChannel(
+      'bg_messages',
+      'Background Messages',
+      description: 'Messages received while the app is in the background',
+      importance: Importance.high,
+    ),
+    AndroidNotificationChannel(
+      'bg_calls',
+      'Background Calls',
+      description:
+          'Call notifications received while the app is in the background',
+      importance: Importance.max,
+    ),
+    AndroidNotificationChannel(
+      'openchat_background',
+      'OpenChat background service',
+      description: 'Keeps OpenChat connected for background notifications',
+      importance: Importance.low,
+    ),
+  ];
+
+  @visibleForTesting
+  static List<String> get androidNotificationChannelIds =>
+      _androidChannels.map((channel) => channel.id).toList(growable: false);
 
   /// Set to the currently open conversation ID so notifications for it are
   /// suppressed while the user is already reading it.
@@ -46,7 +89,18 @@ class NotificationService {
       ),
     );
     await _plugin.initialize(settings: settings);
+    await _ensureAndroidChannels();
     _inited = true;
+  }
+
+  static Future<void> _ensureAndroidChannels() async {
+    if (!Platform.isAndroid) return;
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    if (android == null) return;
+    for (final channel in _androidChannels) {
+      await android.createNotificationChannel(channel);
+    }
   }
 
   /// Explicitly request notification permissions. Call this when the user
@@ -136,7 +190,11 @@ class NotificationService {
         scenario: WindowsNotificationScenario.incomingCall,
       ),
     );
-    await _plugin.show(id: 1, title: 'Incoming call', body: body, notificationDetails: details);
+    await _plugin.show(
+        id: 1,
+        title: 'Incoming call',
+        body: body,
+        notificationDetails: details);
   }
 
   static Future<void> showMissedCall({required String body}) async {

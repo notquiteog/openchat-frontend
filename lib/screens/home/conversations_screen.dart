@@ -120,8 +120,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final isOwner = conv.createdBy == currentUserId;
     final label = conv.isChannel ? 'channel' : 'group';
 
-    // A non-owner of a group/channel can't wipe it for everyone — they leave and
-    // only their own messages are removed. DMs and the owner delete for everyone.
     final leaveOnly = !conv.isDM && !isOwner;
 
     final String title;
@@ -133,13 +131,50 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       action = 'Delete';
     } else if (leaveOnly) {
       title = 'Leave $label?';
-      body = 'You will leave this $label and your own messages will be deleted. '
+      body =
+          'You will leave this $label and your own messages will be deleted. '
           'Other members and their messages stay.';
       action = 'Leave';
     } else {
       title = 'Delete $label?';
-      body = 'This permanently deletes the $label and its messages for everyone.';
+      body =
+          'This permanently deletes the $label and its messages for everyone.';
       action = 'Delete';
+    }
+
+    if (leaveOnly) {
+      final action = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Leave $label?'),
+          content: Text('Leave this $label or also delete your sent messages.'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, 'leave'),
+                child: const Text('Leave')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () => Navigator.pop(ctx, 'leave_delete'),
+              child: const Text('Leave + delete sent'),
+            ),
+          ],
+        ),
+      );
+      if (action == null) return;
+      try {
+        await chat.leaveConversation(
+          conv.id,
+          deleteOwnMessages: action == 'leave_delete',
+        );
+      } catch (_) {
+        messenger.showSnackBar(const SnackBar(
+            content:
+                Text('Could not complete — you may not have permission.')));
+      }
+      return;
     }
 
     final confirmed = await showDialog<bool>(
@@ -218,7 +253,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         onChannelSelected: (channel) {
           Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => ChannelFeedScreen(channel: channel)),
+            MaterialPageRoute(
+                builder: (_) => ChannelFeedScreen(channel: channel)),
           );
         },
       ),
@@ -293,9 +329,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     );
     if (result != null && result.isNotEmpty && context.mounted) {
       final conv = await context.read<ChatProvider>().createGroup(
-            name: result,
-            memberIDs: [],
-          );
+        name: result,
+        memberIDs: [],
+      );
       if (context.mounted) {
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => ChatScreen(conversation: conv)));
@@ -328,8 +364,9 @@ class _ConversationTile extends StatelessWidget {
       onTap: onTap,
       onLongPress: onLongPress,
       leading: CircleAvatar(
-        backgroundImage:
-            avatar != null ? CachedNetworkImageProvider(ApiConfig.resolveMedia(avatar)) : null,
+        backgroundImage: avatar != null
+            ? CachedNetworkImageProvider(ApiConfig.resolveMedia(avatar))
+            : null,
         child: avatar == null
             ? Text(name.isNotEmpty ? name[0].toUpperCase() : '?')
             : null,
@@ -410,7 +447,8 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
 
   @override
   Widget buildLeading(BuildContext context) => IconButton(
-      icon: const Icon(Icons.arrow_back), onPressed: () => close(context, null));
+      icon: const Icon(Icons.arrow_back),
+      onPressed: () => close(context, null));
 
   @override
   Widget buildResults(BuildContext context) => _buildSuggestions();
@@ -442,7 +480,8 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
               ListTile(
                 leading: CircleAvatar(
                   backgroundImage: u.avatarUrl != null
-                      ? CachedNetworkImageProvider(ApiConfig.resolveMedia(u.avatarUrl!))
+                      ? CachedNetworkImageProvider(
+                          ApiConfig.resolveMedia(u.avatarUrl!))
                       : null,
                   child: u.avatarUrl == null
                       ? Text(u.username[0].toUpperCase())
@@ -478,11 +517,11 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
               ListTile(
                 leading: CircleAvatar(
                   backgroundImage: ch.avatarUrl != null
-                      ? CachedNetworkImageProvider(ApiConfig.resolveMedia(ch.avatarUrl!))
+                      ? CachedNetworkImageProvider(
+                          ApiConfig.resolveMedia(ch.avatarUrl!))
                       : null,
-                  child: ch.avatarUrl == null
-                      ? const Icon(Icons.campaign)
-                      : null,
+                  child:
+                      ch.avatarUrl == null ? const Icon(Icons.campaign) : null,
                 ),
                 title: Text(ch.name ?? 'Channel'),
                 subtitle: Text(ch.handle != null

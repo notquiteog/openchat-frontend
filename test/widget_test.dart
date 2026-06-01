@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openchat/crypto/pgp_service.dart';
 import 'package:openchat/models/message.dart';
+import 'package:openchat/models/user.dart';
 
 void main() {
   group('PgpService OpenChat envelope', () {
@@ -70,6 +71,58 @@ void main() {
       message.setDecryptedContent('Hi');
 
       expect(message.listPreview, 'Hi');
+    });
+
+    test('parses sender bubble colour on message payloads', () {
+      final message = Message.fromJson({
+        'id': 'msg-1',
+        'conversation_id': 'conv-1',
+        'sender_id': 'user-2',
+        'message_type': 'text',
+        'encrypted_payload': 'ciphertext',
+        'signature': 'signature',
+        'created_at': DateTime.utc(2026, 5, 31).toIso8601String(),
+        'sender': {
+          'id': 'user-2',
+          'username': 'alice',
+          'public_key': 'pub',
+          'key_fingerprint': 'fingerprint',
+          'bubble_color': '#26323A',
+          'created_at': DateTime.utc(2026, 1, 1).toIso8601String(),
+        },
+      });
+
+      expect(message.sender?.bubbleColor, 0xFF26323A);
+    });
+  });
+
+  group('User profile fields', () {
+    test('parses public bubble colour', () {
+      final user = User.fromJson({
+        'id': 'user-1',
+        'username': 'alice',
+        'public_key': 'pub',
+        'key_fingerprint': 'fingerprint',
+        'bubble_color': 0xFF26323A,
+        'created_at': DateTime.utc(2026, 1, 1).toIso8601String(),
+      });
+
+      expect(user.bubbleColor, 0xFF26323A);
+      expect(user.toJson()['bubble_color'], '#26323A');
+    });
+
+    test('parses public bubble colour from canonical hex', () {
+      final user = User.fromJson({
+        'id': 'user-1',
+        'username': 'alice',
+        'public_key': 'pub',
+        'key_fingerprint': 'fingerprint',
+        'bubble_color': '#26323A',
+        'created_at': DateTime.utc(2026, 1, 1).toIso8601String(),
+      });
+
+      expect(user.bubbleColor, 0xFF26323A);
+      expect(user.toJson()['bubble_color'], '#26323A');
     });
   });
 }

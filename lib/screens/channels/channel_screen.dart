@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
@@ -8,9 +9,12 @@ import '../../models/message.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../services/api_service.dart';
+import '../../services/attachment_service.dart';
 import '../../services/secure_storage_service.dart';
 import '../../crypto/pgp_service.dart';
+import '../../widgets/conversation_encryption_status.dart';
 import '../../widgets/message_bubble.dart';
+import '../../widgets/sticker_picker.dart';
 import '../profile/user_profile_screen.dart';
 import 'channel_action_policy.dart';
 import 'moderation_screen.dart';
@@ -269,6 +273,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   bool _isAdmin = false;
   bool _loading = true;
   bool _archived = false;
+  bool _showStickers = false;
 
   // Mutable copy so edits to name/handle/avatar/privacy reflect immediately.
   late Conversation _channel;
@@ -461,43 +466,52 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }
 
   void _showChannelInfo() {
-    showModalBottomSheet(
+    showDialog<void>(
       context: context,
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              CircleAvatar(
-                radius: 40,
-                backgroundImage: channel.avatarUrl != null
-                    ? CachedNetworkImageProvider(
-                        ApiConfig.resolveMedia(channel.avatarUrl!))
-                    : null,
-                child: channel.avatarUrl == null
-                    ? const Icon(Icons.campaign, size: 36)
-                    : null,
-              ),
-              const SizedBox(height: 12),
-              Text(channel.name ?? 'Channel',
-                  style: Theme.of(context).textTheme.titleLarge),
-              if (channel.handle != null)
-                Text('@${channel.handle}',
-                    style: TextStyle(
-                        color: Theme.of(context).colorScheme.primary)),
-              const SizedBox(height: 4),
-              Text(channel.isPublic ? 'Public channel' : 'Private channel',
-                  style: Theme.of(context).textTheme.bodySmall),
-              if (channel.description != null &&
-                  channel.description!.isNotEmpty) ...[
+      builder: (ctx) => AlertDialog(
+        title: Text(channel.name ?? 'Channel'),
+        content: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                CircleAvatar(
+                  radius: 40,
+                  backgroundImage: channel.avatarUrl != null
+                      ? CachedNetworkImageProvider(
+                          ApiConfig.resolveMedia(channel.avatarUrl!))
+                      : null,
+                  child: channel.avatarUrl == null
+                      ? const Icon(Icons.campaign, size: 36)
+                      : null,
+                ),
                 const SizedBox(height: 12),
-                Text(channel.description!, textAlign: TextAlign.center),
+                Text(channel.name ?? 'Channel',
+                    style: Theme.of(context).textTheme.titleLarge),
+                if (channel.handle != null)
+                  Text('@${channel.handle}',
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.primary)),
+                const SizedBox(height: 4),
+                Text(channel.isPublic ? 'Public channel' : 'Private channel',
+                    style: Theme.of(context).textTheme.bodySmall),
+                if (channel.description != null &&
+                    channel.description!.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text(channel.description!, textAlign: TextAlign.center),
+                ],
               ],
-            ],
+            ),
           ),
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
       ),
     );
   }
@@ -714,14 +728,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     return const BoxDecoration();
   }
 
-  String _ttlLabel(int seconds) {
-    if (seconds % 604800 == 0) return '${seconds ~/ 604800}w';
-    if (seconds % 86400 == 0) return '${seconds ~/ 86400}d';
-    if (seconds % 3600 == 0) return '${seconds ~/ 3600}h';
-    if (seconds % 60 == 0) return '${seconds ~/ 60}m';
-    return '${seconds}s';
-  }
-
   Future<void> _setDisappearing() async {
     final api = context.read<ApiService>();
     final messenger = ScaffoldMessenger.of(context);
@@ -929,10 +935,15 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     }
   }
 
-  Future<void> _post() async {
-    final text = _inputCtrl.text.trim();
+  Future<void> _post({
+    String? plaintextOverride,
+    String messageType = 'text',
+    String? attachmentId,
+  }) async {
+    final text = plaintextOverride ?? _inputCtrl.text.trim();
     if (text.isEmpty) return;
-    _inputCtrl.clear();
+    if (plaintextOverride == null) _inputCtrl.clear();
+    setState(() => _showStickers = false);
 
     final api = context.read<ApiService>();
     final storage = context.read<SecureStorageService>();
@@ -970,9 +981,68 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       chanID: channel.id,
       encryptedPayload: encrypted,
       signature: sig,
+      messageType: messageType,
+      attachmentId: attachmentId,
     );
     msg.setDecryptedContent(text);
     setState(() => _posts.add(msg));
+  }
+
+  Future<void> _sendSticker(String stickerID) async {
+    await _post(plaintextOverride: stickerID, messageType: 'sticker');
+  }
+
+  Future<void> _showAttachmentPicker() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library),
+              title: const Text('Photo from gallery'),
+              onTap: () => Navigator.pop(context, 'gallery_image'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.videocam),
+              title: const Text('Video from gallery'),
+              onTap: () => Navigator.pop(context, 'gallery_video'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.attach_file),
+              title: const Text('File'),
+              onTap: () => Navigator.pop(context, 'file'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+
+    final attachmentService = AttachmentService(context.read<ApiService>());
+    PendingAttachment? pending;
+    try {
+      pending = switch (choice) {
+        'gallery_image' => await attachmentService.pickImage(),
+        'gallery_video' => await attachmentService.pickVideo(),
+        'file' => await attachmentService.pickFile(),
+        _ => null,
+      };
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Upload failed: $e')),
+      );
+      return;
+    }
+    if (pending == null) return;
+
+    await _post(
+      plaintextOverride: jsonEncode(pending.toPayloadJson()),
+      messageType: pending.messageType.name,
+      attachmentId: pending.attachmentId,
+    );
   }
 
   @override
@@ -986,6 +1056,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final isOwner = channel.createdBy == currentUserId;
     final canManageLifecycle = isOwner || isSystemAdmin;
     final isArchived = _archived || channel.isArchived;
+    final meBubbleColor = auth.currentUser?.bubbleColor != null
+        ? Color(auth.currentUser!.bubbleColor!)
+        : null;
     final actionPlacement = ChannelActionPolicy.actionsFor(
       channel: channel,
       isAdmin: _isAdmin,
@@ -1021,50 +1094,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                         style: const TextStyle(
                             fontSize: 16, fontWeight: FontWeight.w600),
                         overflow: TextOverflow.ellipsis),
-                    Text(
-                      channel.handle != null
-                          ? '@${channel.handle}'
-                          : (channel.isPublic
-                              ? 'Public channel'
-                              : 'Private channel'),
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: channel.handle != null
-                            ? Theme.of(context).colorScheme.primary
-                            : Colors.grey,
-                      ),
-                    ),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (channel.messageTtlSeconds > 0) ...[
-                          Icon(Icons.timer_outlined,
-                              size: 12, color: Colors.grey[400]),
-                          const SizedBox(width: 3),
-                          Text(
-                            'Disappearing · ${_ttlLabel(channel.messageTtlSeconds)}',
-                            style: TextStyle(
-                                fontSize: 11, color: Colors.grey[400]),
-                          ),
-                          const SizedBox(width: 8),
-                        ],
-                        Icon(
-                          channel.encryptionEnabled
-                              ? Icons.lock_outline
-                              : Icons.lock_open_outlined,
-                          size: 12,
-                          color: Colors.grey[400],
-                        ),
-                        const SizedBox(width: 3),
-                        Text(
-                          channel.encryptionEnabled
-                              ? 'Encrypted'
-                              : 'Encryption off',
-                          style:
-                              TextStyle(fontSize: 11, color: Colors.grey[400]),
-                        ),
-                      ],
-                    ),
+                    ConversationEncryptionStatus(conversation: channel),
                   ],
                 ),
               ),
@@ -1133,6 +1163,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                               message: msg,
                               isMe: isMe,
                               showAvatar: !isMe,
+                              meBubbleColor: meBubbleColor,
                               onAvatarTap: msg.sender != null
                                   ? () => Navigator.push(
                                         context,
@@ -1148,18 +1179,44 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             ),
           ),
 
+          if (_showStickers) StickerPicker(onStickerSelected: _sendSticker),
           // Admins can always post. When admin-only posting is OFF, any
           // subscriber can post too. Archived channels are read-only.
           if ((_isAdmin || (!channel.ownerOnlyPost && _isSubscribed)) &&
               !_archived &&
               !channel.isArchived)
-            _buildPostBar(context),
+            ChannelPostBar(
+              controller: _inputCtrl,
+              showStickers: _showStickers,
+              onToggleStickers: () =>
+                  setState(() => _showStickers = !_showStickers),
+              onAttach: _showAttachmentPicker,
+              onPost: _post,
+            ),
         ],
       ),
     );
   }
+}
 
-  Widget _buildPostBar(BuildContext context) {
+class ChannelPostBar extends StatelessWidget {
+  final TextEditingController controller;
+  final bool showStickers;
+  final VoidCallback onToggleStickers;
+  final VoidCallback onAttach;
+  final VoidCallback onPost;
+
+  const ChannelPostBar({
+    super.key,
+    required this.controller,
+    required this.showStickers,
+    required this.onToggleStickers,
+    required this.onAttach,
+    required this.onPost,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       decoration: BoxDecoration(
@@ -1171,12 +1228,19 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         top: false,
         child: Row(
           children: [
+            IconButton(
+              icon: Icon(showStickers
+                  ? Icons.keyboard
+                  : Icons.emoji_emotions_outlined),
+              tooltip: showStickers ? 'Keyboard' : 'Stickers',
+              onPressed: onToggleStickers,
+            ),
             Expanded(
               child: TextField(
-                controller: _inputCtrl,
+                controller: controller,
                 maxLines: null,
                 textInputAction: TextInputAction.send,
-                onSubmitted: (_) => _post(),
+                onSubmitted: (_) => onPost(),
                 decoration: InputDecoration(
                   hintText: 'Write a post…',
                   border: OutlineInputBorder(
@@ -1191,8 +1255,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               ),
             ),
             const SizedBox(width: 4),
+            IconButton(
+              icon: const Icon(Icons.attach_file_outlined),
+              tooltip: 'Attach file',
+              onPressed: onAttach,
+            ),
             FilledButton(
-              onPressed: _post,
+              onPressed: onPost,
               style: FilledButton.styleFrom(
                 shape: const CircleBorder(),
                 padding: const EdgeInsets.all(12),

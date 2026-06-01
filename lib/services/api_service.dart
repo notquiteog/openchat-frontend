@@ -239,6 +239,16 @@ class ApiService {
         .toList();
   }
 
+  Future<List<Conversation>> getSharedConversations(String userID,
+      {int limit = 20}) async {
+    final resp =
+        await _get('/api/v1/users/$userID/shared-conversations?limit=$limit');
+    final list = resp['data'] as List? ?? [];
+    return list
+        .map((e) => Conversation.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   // ---- Conversations ----
 
   Future<List<Conversation>> listConversations() async {
@@ -505,10 +515,19 @@ class ApiService {
     await _delete('/api/v1/admin/users/$userID/flag-scammer');
   }
 
-  Future<void> updateProfile({String? bio, String? avatarUrl}) async {
+  Future<void> updateProfile({
+    String? bio,
+    String? avatarUrl,
+    int? bubbleColor,
+    bool clearBubbleColor = false,
+  }) async {
     await _put('/api/v1/users/me', {
       if (bio != null) 'bio': bio,
       if (avatarUrl != null) 'avatar_url': avatarUrl,
+      if (clearBubbleColor)
+        'bubble_color': ''
+      else if (bubbleColor != null)
+        'bubble_color': User.bubbleColorToJson(bubbleColor),
     });
   }
 
@@ -520,6 +539,13 @@ class ApiService {
 
   Future<void> deleteConversation(String convID) async {
     await _delete('/api/v1/conversations/$convID');
+  }
+
+  Future<void> leaveConversation(String convID,
+      {bool deleteOwnMessages = false}) async {
+    await _delete(
+      '/api/v1/conversations/$convID?leave=true&delete_own_messages=$deleteOwnMessages',
+    );
   }
 
   /// Update a group conversation's name, description, and/or avatar (admin only).

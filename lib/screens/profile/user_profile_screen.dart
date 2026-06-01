@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../../config/api_config.dart';
+import '../../models/conversation.dart';
 import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
@@ -20,11 +21,19 @@ class UserProfileScreen extends StatefulWidget {
 class _UserProfileScreenState extends State<UserProfileScreen> {
   late User _user;
   bool _loading = false;
+  Future<List<Conversation>>? _sharedConversationsFuture;
 
   @override
   void initState() {
     super.initState();
     _user = widget.user;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _sharedConversationsFuture ??=
+        context.read<ApiService>().getSharedConversations(_user.id);
   }
 
   bool get _isOwnProfile {
@@ -177,7 +186,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final isAdmin = _viewerIsAdmin;
-
     return Scaffold(
       appBar: AppBar(
         title: Text('@${_user.username}'),
@@ -344,6 +352,56 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                   title: Text(_user.isOnline ? 'Online' : 'Last seen recently'),
                   dense: true,
                 ),
+
+                if (!_isOwnProfile) ...[
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+                    child: Text(
+                      'Shared chats and channels',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ),
+                  FutureBuilder<List<Conversation>>(
+                    future: _sharedConversationsFuture,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const ListTile(
+                          leading: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          title: Text('Loading shared chats...'),
+                          dense: true,
+                        );
+                      }
+                      final sharedConversations =
+                          snapshot.data ?? const <Conversation>[];
+                      if (sharedConversations.isEmpty) {
+                        return const ListTile(
+                          leading: Icon(Icons.forum_outlined),
+                          title: Text('No shared groups or channels'),
+                          dense: true,
+                        );
+                      }
+                      return Column(
+                        children: [
+                          for (final conv in sharedConversations.take(8))
+                            ListTile(
+                              leading: Icon(conv.isChannel
+                                  ? Icons.campaign_outlined
+                                  : Icons.group_outlined),
+                              title: Text(conv.displayName('')),
+                              subtitle:
+                                  Text(conv.isChannel ? 'Channel' : 'Group'),
+                              dense: true,
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+                ],
 
                 // ── PGP fingerprint ───────────────────────────────────────────
                 ListTile(

@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:openchat/models/conversation.dart';
 import 'package:openchat/models/message.dart';
+import 'package:openchat/models/user.dart';
 import 'package:openchat/services/attachment_service.dart';
 import 'package:openchat/widgets/conversation_encryption_status.dart';
 import 'package:openchat/widgets/message_bubble.dart';
@@ -32,6 +33,19 @@ Message _textMessage() {
     createdAt: DateTime.utc(2026, 1, 1),
   );
   msg.setDecryptedContent('hello');
+  return msg;
+}
+
+Message _incomingTextMessageWithBubble(int bubbleColor) {
+  final msg = _textMessage();
+  msg.sender = User(
+    id: 'user-b',
+    username: 'alice',
+    publicKey: 'pub',
+    keyFingerprint: 'fingerprint',
+    bubbleColor: bubbleColor,
+    createdAt: DateTime.utc(2026, 1, 1),
+  );
   return msg;
 }
 
@@ -134,5 +148,74 @@ void main() {
     );
 
     expect(find.byType(BackdropFilter), findsWidgets);
+  });
+
+  testWidgets('default outgoing bubble text is always white', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: Colors.lightBlue,
+            primary: Colors.lightBlueAccent,
+            onPrimary: Colors.blueGrey,
+          ),
+        ),
+        home: Scaffold(
+          body: MessageBubble(
+            message: _textMessage(),
+            isMe: true,
+          ),
+        ),
+      ),
+    );
+
+    final text = tester.widget<Text>(find.text('hello'));
+    expect(text.style?.color, Colors.white);
+  });
+
+  testWidgets('message bubbles use a highly translucent glass tint',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBubble(
+            message: _textMessage(),
+            isMe: true,
+          ),
+        ),
+      ),
+    );
+
+    final tintedDecorations = tester
+        .widgetList<Container>(find.byType(Container))
+        .map((container) => container.decoration)
+        .whereType<BoxDecoration>()
+        .map((decoration) => decoration.color)
+        .whereType<Color>()
+        .where((color) => color.a < 1)
+        .toList();
+
+    expect(tintedDecorations, isNotEmpty);
+    expect(
+      tintedDecorations.map((color) => color.a).reduce((a, b) => a > b ? a : b),
+      lessThanOrEqualTo(0.38),
+    );
+  });
+
+  testWidgets('incoming sender bubble colours keep readable text',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBubble(
+            message: _incomingTextMessageWithBubble(0xFF102033),
+            isMe: false,
+          ),
+        ),
+      ),
+    );
+
+    final text = tester.widget<Text>(find.text('hello'));
+    expect(text.style?.color, Colors.white);
   });
 }
