@@ -24,11 +24,17 @@
   <url type="vcs-browser">https://github.com/notquiteog/openchat-frontend</url>
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/notquiteog/openchat-frontend/v0.3.5/packaging/linux/screenshots/openchat-login.png</image>
+      <image>https://raw.githubusercontent.com/notquiteog/openchat-frontend/v0.3.6/packaging/linux/screenshots/openchat-login.png</image>
       <caption>Sign in to encrypted chats with PGP identity support</caption>
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.3.6" date="2026-06-01">
+      <url type="details">https://github.com/notquiteog/openchat-frontend/releases/tag/v0.3.6</url>
+      <description>
+        <p>Mirrors AppStream screenshots during Flatpak builds for Flathub repository lint compatibility.</p>
+      </description>
+    </release>
     <release version="0.3.5" date="2026-06-01">
       <url type="details">https://github.com/notquiteog/openchat-frontend/releases/tag/v0.3.5</url>
       <description>

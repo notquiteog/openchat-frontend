@@ -111,6 +111,12 @@ modules:
         path: ${SOURCE_DIR}
 EOF
 
-flatpak-builder --force-clean --repo="$REPO_DIR" --default-branch=stable "$BUILD_DIR" "$MANIFEST" >&2
+flatpak-builder \
+  --force-clean \
+  --repo="$REPO_DIR" \
+  --default-branch=stable \
+  --mirror-screenshots-url=https://dl.flathub.org/media \
+  "$BUILD_DIR" \
+  "$MANIFEST" >&2
 flatpak build-bundle "$REPO_DIR" "$FLATPAK_PATH" "$APP_ID" stable >&2
 echo "$FLATPAK_PATH"
