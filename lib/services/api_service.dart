@@ -422,6 +422,12 @@ class ApiService {
         '/api/v1/conversations/$convID/message-ttl', {'seconds': seconds});
   }
 
+  Future<void> setEncryptionEnabled(String convID, bool enabled) async {
+    await _put('/api/v1/conversations/$convID/encryption', {
+      'enabled': enabled,
+    });
+  }
+
   Future<Message> editMessage({
     required String convID,
     required String msgID,

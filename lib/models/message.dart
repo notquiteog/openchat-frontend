@@ -41,7 +41,9 @@ class MessageContent {
 
   /// Parses a decrypted payload string — falls back to plain text if not JSON.
   static MessageContent parse(String raw, MessageType type) {
-    if (type == MessageType.text || type == MessageType.sticker || type == MessageType.system) {
+    if (type == MessageType.text ||
+        type == MessageType.sticker ||
+        type == MessageType.system) {
       return MessageContent.text(raw);
     }
     try {
@@ -119,9 +121,13 @@ class Message {
   final String conversationId;
   final String senderId;
   final MessageType type;
+
   /// PGP-armored ciphertext — decrypted client-side using the local private key.
   final String encryptedPayload;
   final String signature;
+  final bool isEncrypted;
+  final int autoDeleteSeconds;
+  final DateTime? autoDeleteExpiresAt;
   final String? attachmentId;
   final String? replyTo;
   final DateTime createdAt;
@@ -141,6 +147,9 @@ class Message {
     required this.type,
     required this.encryptedPayload,
     required this.signature,
+    this.isEncrypted = true,
+    this.autoDeleteSeconds = 0,
+    this.autoDeleteExpiresAt,
     this.attachmentId,
     this.replyTo,
     required this.createdAt,
@@ -155,6 +164,11 @@ class Message {
         type: _parseType(json['message_type'] as String? ?? 'text'),
         encryptedPayload: json['encrypted_payload'] as String,
         signature: json['signature'] as String? ?? '',
+        isEncrypted: json['is_encrypted'] as bool? ?? true,
+        autoDeleteSeconds: json['auto_delete_seconds'] as int? ?? 0,
+        autoDeleteExpiresAt: json['auto_delete_expires_at'] != null
+            ? DateTime.parse(json['auto_delete_expires_at'] as String)
+            : null,
         attachmentId: json['attachment_id'] as String?,
         replyTo: json['reply_to'] as String?,
         createdAt: DateTime.parse(json['created_at'] as String),
@@ -179,6 +193,8 @@ class Message {
   bool get isDecrypted => _content != null;
   bool get decryptionFailed => _decryptionFailed;
   bool get isEdited => editedAt != null;
+  bool get hasAutoDelete =>
+      autoDeleteSeconds > 0 && autoDeleteExpiresAt != null;
 
   /// Convenience: plain display text (for text/sticker) or caption.
   String? get decryptedContent => _content?.text;
@@ -218,6 +234,9 @@ class PendingMessage extends Message {
     required super.type,
     required super.encryptedPayload,
     required super.signature,
+    super.isEncrypted,
+    super.autoDeleteSeconds,
+    super.autoDeleteExpiresAt,
     super.attachmentId,
     super.replyTo,
     required super.createdAt,

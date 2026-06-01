@@ -63,16 +63,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   'OpenChat',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+                        fontWeight: FontWeight.bold,
+                      ),
                 ),
                 const SizedBox(height: 8),
                 Text(
                   'End-to-end encrypted with PGP',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Colors.grey,
-                  ),
+                        color: Colors.grey,
+                      ),
                 ),
                 const SizedBox(height: 40),
 
@@ -88,7 +88,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   textInputAction: TextInputAction.next,
                   validator: (v) {
                     if (v == null || v.isEmpty) return 'Required';
-                    if (!RegExp(r'^[a-z0-9_]{3,32}$').hasMatch(v.toLowerCase())) {
+                    if (!RegExp(r'^[a-z0-9_]{3,32}$')
+                        .hasMatch(v.toLowerCase())) {
                       return '3–32 lowercase alphanumeric characters or underscores';
                     }
                     return null;
@@ -103,14 +104,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     prefixIcon: const Icon(Icons.lock),
                     border: const OutlineInputBorder(),
                     suffixIcon: IconButton(
-                      icon: Icon(_obscurePassword ? Icons.visibility : Icons.visibility_off),
-                      onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                      icon: Icon(_obscurePassword
+                          ? Icons.visibility
+                          : Icons.visibility_off),
+                      onPressed: () =>
+                          setState(() => _obscurePassword = !_obscurePassword),
                     ),
                   ),
                   obscureText: _obscurePassword,
                   textInputAction: TextInputAction.next,
                   validator: (v) {
-                    if (v == null || v.length < 8) return 'Minimum 8 characters';
+                    if (v == null || v.length < 8) {
+                      return 'Minimum 8 characters';
+                    }
                     return null;
                   },
                 ),
@@ -125,7 +131,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   ),
                   obscureText: _obscurePassword,
                   validator: (v) {
-                    if (v != _passwordCtrl.text) return 'Passwords do not match';
+                    if (v != _passwordCtrl.text) {
+                      return 'Passwords do not match';
+                    }
                     return null;
                   },
                 ),
@@ -137,34 +145,41 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   child: Row(
                     children: [
                       const Text('Advanced options'),
-                      Icon(_showAdvanced ? Icons.expand_less : Icons.expand_more),
+                      Icon(_showAdvanced
+                          ? Icons.expand_less
+                          : Icons.expand_more),
                     ],
                   ),
                 ),
                 if (_showAdvanced) ...[
                   const SizedBox(height: 12),
-                  const Text('PGP Key Algorithm', style: TextStyle(fontWeight: FontWeight.w500)),
+                  const Text('PGP Key Algorithm',
+                      style: TextStyle(fontWeight: FontWeight.w500)),
                   const SizedBox(height: 8),
-                  RadioListTile<KeyType>(
-                    value: KeyType.curve25519,
+                  RadioGroup<KeyType>(
                     groupValue: _keyType,
                     onChanged: (v) => setState(() => _keyType = v!),
-                    title: const Text('Curve25519 (ECC)'),
-                    subtitle: const Text('Recommended — fast, modern, smaller keys'),
-                  ),
-                  RadioListTile<KeyType>(
-                    value: KeyType.pqc,
-                    groupValue: _keyType,
-                    onChanged: (v) => setState(() => _keyType = v!),
-                    title: const Text('ML-DSA-65 + ML-KEM-768 (Post-Quantum)'),
-                    subtitle: const Text('Quantum-resistant hybrid key (FIPS 203/204)'),
-                  ),
-                  RadioListTile<KeyType>(
-                    value: KeyType.rsa4096,
-                    groupValue: _keyType,
-                    onChanged: (v) => setState(() => _keyType = v!),
-                    title: const Text('RSA-4096'),
-                    subtitle: const Text('Traditional — wider compatibility'),
+                    child: Column(
+                      children: const [
+                        RadioListTile<KeyType>(
+                          value: KeyType.curve25519,
+                          title: Text('Curve25519 (ECC)'),
+                          subtitle:
+                              Text('Recommended — fast, modern, smaller keys'),
+                        ),
+                        RadioListTile<KeyType>(
+                          value: KeyType.pqc,
+                          title: Text('ML-DSA-65 + ML-KEM-768 (Post-Quantum)'),
+                          subtitle: Text(
+                              'Quantum-resistant hybrid key (FIPS 203/204)'),
+                        ),
+                        RadioListTile<KeyType>(
+                          value: KeyType.rsa4096,
+                          title: Text('RSA-4096'),
+                          subtitle: Text('Traditional — wider compatibility'),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
                 const SizedBox(height: 32),
@@ -200,9 +215,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.blue.withValues(alpha:0.08),
+                    color: Colors.blue.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.blue.withValues(alpha:0.3)),
+                    border:
+                        Border.all(color: Colors.blue.withValues(alpha: 0.3)),
                   ),
                   child: const Row(
                     children: [

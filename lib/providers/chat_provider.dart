@@ -201,20 +201,26 @@ class ChatProvider extends ChangeNotifier {
     final conv = _conversations[convID];
     if (conv == null) return;
     final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
-    if (privateKey.isEmpty) return;
+    final String encrypted;
+    final String signature;
+    if (conv.encryptionEnabled) {
+      if (privateKey.isEmpty) return;
+      final recipientKeys = await _freshRecipientKeys(convID, conv);
+      if (recipientKeys.isEmpty) return;
 
-    final recipientKeys = await _freshRecipientKeys(convID, conv);
-    if (recipientKeys.isEmpty) return;
-
-    final encrypted = await PgpService.encrypt(
-      plaintext: newPlaintext,
-      recipientPublicKeys: recipientKeys,
-      signingPrivateKeyArmored: privateKey,
-    );
-    final signature = await PgpService.sign(
-      data: '$convID:$encrypted',
-      privateKeyArmored: privateKey,
-    );
+      encrypted = await PgpService.encrypt(
+        plaintext: newPlaintext,
+        recipientPublicKeys: recipientKeys,
+        signingPrivateKeyArmored: privateKey,
+      );
+      signature = await PgpService.sign(
+        data: '$convID:$encrypted',
+        privateKeyArmored: privateKey,
+      );
+    } else {
+      encrypted = newPlaintext;
+      signature = '';
+    }
 
     final updated = await _api.editMessage(
       convID: convID,
@@ -271,7 +277,7 @@ class ChatProvider extends ChangeNotifier {
 
     final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
     final userID = await _storage.getUserID() ?? '';
-    if (privateKey.isEmpty) {
+    if (conv.encryptionEnabled && privateKey.isEmpty) {
       throw const ChatSendException(
         'Your PGP key is locked or missing. Unlock or import it in Settings.',
       );
@@ -282,44 +288,46 @@ class ChatProvider extends ChangeNotifier {
       );
     }
 
-    final recipientKeys = await _freshRecipientKeys(convID, conv);
-    if (recipientKeys.isEmpty) {
-      throw const ChatSendException(
-        'Could not load recipient keys. Refresh the chat and try again.',
-      );
-    }
-
-    // PGP operations go through a Go native library. On Windows the DLL can
-    // hang indefinitely if the key or keyring is malformed; a 30-second timeout
-    // surfaces the failure instead of silently swallowing the message.
     final String encrypted;
-    try {
-      encrypted = await PgpService.encrypt(
-        plaintext: plaintextPayload,
-        recipientPublicKeys: recipientKeys,
-        signingPrivateKeyArmored: privateKey,
-      ).timeout(const Duration(seconds: 30));
-    } on TimeoutException {
-      throw const ChatSendException(
-        'Encryption timed out. Your stored key may be corrupted — try rotating it in Settings → PGP Keys.',
-      );
-    } catch (e) {
-      throw ChatSendException('Encryption failed: $e');
-    }
-
-    final sigData = '$convID:$encrypted';
     final String signature;
-    try {
-      signature = await PgpService.sign(
-        data: sigData,
-        privateKeyArmored: privateKey,
-      ).timeout(const Duration(seconds: 30));
-    } on TimeoutException {
-      throw const ChatSendException(
-        'Signing timed out. Your stored key may be corrupted — try rotating it in Settings → PGP Keys.',
-      );
-    } catch (e) {
-      throw ChatSendException('Signing failed: $e');
+    if (conv.encryptionEnabled) {
+      final recipientKeys = await _freshRecipientKeys(convID, conv);
+      if (recipientKeys.isEmpty) {
+        throw const ChatSendException(
+          'Could not load recipient keys. Refresh the chat and try again.',
+        );
+      }
+
+      try {
+        encrypted = await PgpService.encrypt(
+          plaintext: plaintextPayload,
+          recipientPublicKeys: recipientKeys,
+          signingPrivateKeyArmored: privateKey,
+        ).timeout(const Duration(seconds: 30));
+      } on TimeoutException {
+        throw const ChatSendException(
+          'Encryption timed out. Your stored key may be corrupted — try rotating it in Settings → PGP Keys.',
+        );
+      } catch (e) {
+        throw ChatSendException('Encryption failed: $e');
+      }
+
+      final sigData = '$convID:$encrypted';
+      try {
+        signature = await PgpService.sign(
+          data: sigData,
+          privateKeyArmored: privateKey,
+        ).timeout(const Duration(seconds: 30));
+      } on TimeoutException {
+        throw const ChatSendException(
+          'Signing timed out. Your stored key may be corrupted — try rotating it in Settings → PGP Keys.',
+        );
+      } catch (e) {
+        throw ChatSendException('Signing failed: $e');
+      }
+    } else {
+      encrypted = plaintextPayload;
+      signature = '';
     }
 
     final pending = PendingMessage(
@@ -332,6 +340,11 @@ class ChatProvider extends ChangeNotifier {
       ),
       encryptedPayload: encrypted,
       signature: signature,
+      isEncrypted: conv.encryptionEnabled,
+      autoDeleteSeconds: conv.messageTtlSeconds,
+      autoDeleteExpiresAt: conv.messageTtlSeconds > 0
+          ? DateTime.now().add(Duration(seconds: conv.messageTtlSeconds))
+          : null,
       attachmentId: attachmentId,
       replyTo: replyTo,
       createdAt: DateTime.now(),
@@ -678,6 +691,10 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<void> _tryDecrypt(Message msg, String privateKey) async {
+    if (!msg.isEncrypted) {
+      msg.setDecryptedContent(msg.encryptedPayload);
+      return;
+    }
     if (privateKey.isEmpty) return;
     try {
       final raw = await PgpService.decrypt(

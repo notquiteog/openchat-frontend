@@ -36,12 +36,13 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       context.read<AuthProvider>().currentUser?.isSystemAdmin ?? false;
 
   Future<void> _ban() async {
+    final api = context.read<ApiService>();
     final confirmed = await _confirm('Ban @${_user.username}?',
         'Banned users cannot log in or send messages.');
     if (!confirmed) return;
     setState(() => _loading = true);
     try {
-      await context.read<ApiService>().banUser(_user.id);
+      await api.banUser(_user.id);
       setState(() => _user = _user.copyWith(isBanned: true));
       _snack('User banned.');
     } catch (e) {
@@ -65,12 +66,13 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   }
 
   Future<void> _flagScammer() async {
+    final api = context.read<ApiService>();
     final confirmed = await _confirm('Flag @${_user.username} as scammer?',
         'A warning will be shown to everyone who views this profile.');
     if (!confirmed) return;
     setState(() => _loading = true);
     try {
-      await context.read<ApiService>().flagScammer(_user.id);
+      await api.flagScammer(_user.id);
       setState(() => _user = _user.copyWith(isFlaggedScammer: true));
       _snack('Flagged as scammer.');
     } catch (e) {
@@ -184,21 +186,32 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             PopupMenuButton<String>(
               onSelected: (v) {
                 switch (v) {
-                  case 'ban': _ban(); break;
-                  case 'unban': _unban(); break;
-                  case 'flag': _flagScammer(); break;
-                  case 'unflag': _unflagScammer(); break;
+                  case 'ban':
+                    _ban();
+                    break;
+                  case 'unban':
+                    _unban();
+                    break;
+                  case 'flag':
+                    _flagScammer();
+                    break;
+                  case 'unflag':
+                    _unflagScammer();
+                    break;
                 }
               },
               itemBuilder: (_) => [
                 if (!_user.isBanned)
                   const PopupMenuItem(value: 'ban', child: Text('Ban user'))
                 else
-                  const PopupMenuItem(value: 'unban', child: Text('Unban user')),
+                  const PopupMenuItem(
+                      value: 'unban', child: Text('Unban user')),
                 if (!_user.isFlaggedScammer)
-                  const PopupMenuItem(value: 'flag', child: Text('Flag as scammer'))
+                  const PopupMenuItem(
+                      value: 'flag', child: Text('Flag as scammer'))
                 else
-                  const PopupMenuItem(value: 'unflag', child: Text('Remove scammer flag')),
+                  const PopupMenuItem(
+                      value: 'unflag', child: Text('Remove scammer flag')),
               ],
             ),
         ],
@@ -212,7 +225,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 if (_user.isFlaggedScammer)
                   Container(
                     color: Colors.red[700],
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
                     child: const Row(
                       children: [
                         Icon(Icons.warning_amber, color: Colors.white),
@@ -220,7 +234,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                         Expanded(
                           child: Text(
                             'This user has been flagged as a scammer. Exercise caution.',
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600),
                           ),
                         ),
                       ],
@@ -231,7 +247,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 if (_user.isBanned)
                   Container(
                     color: Colors.grey[800],
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
                     child: const Row(
                       children: [
                         Icon(Icons.block, color: Colors.white70),
@@ -251,15 +268,15 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                       CircleAvatar(
                         radius: 50,
                         backgroundImage: _user.avatarUrl != null
-                            ? CachedNetworkImageProvider(ApiConfig.resolveMedia(_user.avatarUrl!))
+                            ? CachedNetworkImageProvider(
+                                ApiConfig.resolveMedia(_user.avatarUrl!))
                             : null,
                         backgroundColor: cs.primaryContainer,
                         child: _user.avatarUrl == null
                             ? Text(
                                 _user.username[0].toUpperCase(),
                                 style: TextStyle(
-                                    fontSize: 36,
-                                    color: cs.onPrimaryContainer),
+                                    fontSize: 36, color: cs.onPrimaryContainer),
                               )
                             : null,
                       ),

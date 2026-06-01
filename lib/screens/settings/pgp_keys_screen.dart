@@ -27,7 +27,8 @@ class PgpKeysScreen extends StatelessWidget {
         children: [
           // Current key info
           Card(
-            color: isExpired ? Theme.of(context).colorScheme.errorContainer : null,
+            color:
+                isExpired ? Theme.of(context).colorScheme.errorContainer : null,
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -38,7 +39,9 @@ class PgpKeysScreen extends StatelessWidget {
                       Icon(
                         isExpired
                             ? Icons.lock_clock
-                            : (keys.hasKey ? Icons.verified_user : Icons.warning_amber),
+                            : (keys.hasKey
+                                ? Icons.verified_user
+                                : Icons.warning_amber),
                         color: isExpired
                             ? Theme.of(context).colorScheme.error
                             : (keys.hasKey ? Colors.green : Colors.orange),
@@ -47,8 +50,11 @@ class PgpKeysScreen extends StatelessWidget {
                       Text(
                         isExpired
                             ? 'Active Key — EXPIRED'
-                            : (keys.hasKey ? 'Active Key Pair' : 'No Key Found'),
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                            : (keys.hasKey
+                                ? 'Active Key Pair'
+                                : 'No Key Found'),
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 16),
                       ),
                     ],
                   ),
@@ -94,14 +100,16 @@ class PgpKeysScreen extends StatelessWidget {
             _ActionTile(
               icon: Icons.copy,
               title: 'Copy Public Key',
-              subtitle: 'Share this with anyone who wants to verify your messages',
+              subtitle:
+                  'Share this with anyone who wants to verify your messages',
               onTap: () async {
                 final pub = await keys.exportPublicKey();
                 if (pub != null) {
                   await Clipboard.setData(ClipboardData(text: pub));
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Public key copied to clipboard')),
+                      const SnackBar(
+                          content: Text('Public key copied to clipboard')),
                     );
                   }
                 }
@@ -117,7 +125,8 @@ class PgpKeysScreen extends StatelessWidget {
             _ActionTile(
               icon: Icons.autorenew,
               title: 'Rotate PGP Key',
-              subtitle: 'Generate and register a new key pair. Back up your old '
+              subtitle:
+                  'Generate and register a new key pair. Back up your old '
                   'private key first — it is needed to read messages sent before rotation.',
               onTap: () => _showRotateKey(context, keys),
             ),
@@ -149,7 +158,8 @@ class PgpKeysScreen extends StatelessWidget {
             child: const Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('About PGP Encryption', style: TextStyle(fontWeight: FontWeight.bold)),
+                Text('About PGP Encryption',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
                 SizedBox(height: 8),
                 Text(
                   'OpenChat uses OpenPGP (RFC 4880) for end-to-end encryption. '
@@ -167,7 +177,8 @@ class PgpKeysScreen extends StatelessWidget {
     );
   }
 
-  Future<void> _showExportPrivateKey(BuildContext context, KeyProvider keys) async {
+  Future<void> _showExportPrivateKey(
+      BuildContext context, KeyProvider keys) async {
     // Require biometric if enabled
     final storage = context.read<SecureStorageService>();
     if (await storage.getBiometricEnabled()) {
@@ -179,12 +190,13 @@ class PgpKeysScreen extends StatelessWidget {
       if (!ok) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Biometric authentication failed')));
+              const SnackBar(content: Text('Biometric authentication failed')));
         }
         return;
       }
     }
 
+    if (!context.mounted) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -195,7 +207,9 @@ class PgpKeysScreen extends StatelessWidget {
           'and impersonate you. Store it securely and never share it.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.orange),
             onPressed: () => Navigator.pop(ctx, true),
@@ -210,25 +224,30 @@ class PgpKeysScreen extends StatelessWidget {
         await Clipboard.setData(ClipboardData(text: priv));
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Private key copied. Store it very safely.')),
+            const SnackBar(
+                content: Text('Private key copied. Store it very safely.')),
           );
         }
       }
     }
   }
 
-  Future<void> _confirmDeleteKeys(BuildContext context, KeyProvider keys) async {
+  Future<void> _confirmDeleteKeys(
+      BuildContext context, KeyProvider keys) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Delete Local Keys?', style: TextStyle(color: Colors.red)),
+        title: const Text('Delete Local Keys?',
+            style: TextStyle(color: Colors.red)),
         content: const Text(
           'This will permanently delete your PGP keys from this device.\n\n'
           'ALL encrypted messages will become permanently unreadable.\n\n'
           'Make sure you have a backup before proceeding.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -270,9 +289,14 @@ class PgpKeysScreen extends StatelessWidget {
                   border: OutlineInputBorder(),
                 ),
                 items: const [
-                  DropdownMenuItem(value: KeyType.curve25519, child: Text('Curve25519 (ECC)')),
-                  DropdownMenuItem(value: KeyType.pqc,        child: Text('ML-DSA-65 + ML-KEM-768 (Post-Quantum)')),
-                  DropdownMenuItem(value: KeyType.rsa4096,    child: Text('RSA-4096')),
+                  DropdownMenuItem(
+                      value: KeyType.curve25519,
+                      child: Text('Curve25519 (ECC)')),
+                  DropdownMenuItem(
+                      value: KeyType.pqc,
+                      child: Text('ML-DSA-65 + ML-KEM-768 (Post-Quantum)')),
+                  DropdownMenuItem(
+                      value: KeyType.rsa4096, child: Text('RSA-4096')),
                 ],
                 onChanged: (v) => setDialogState(() => selectedKeyType = v!),
               ),
@@ -339,7 +363,8 @@ class PgpKeysScreen extends StatelessWidget {
                 controller: privateCtrl,
                 maxLines: 6,
                 decoration: const InputDecoration(
-                  labelText: 'PGP Private Key (-----BEGIN PGP PRIVATE KEY BLOCK-----)',
+                  labelText:
+                      'PGP Private Key (-----BEGIN PGP PRIVATE KEY BLOCK-----)',
                   border: OutlineInputBorder(),
                 ),
               ),
@@ -347,7 +372,8 @@ class PgpKeysScreen extends StatelessWidget {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           FilledButton(
             onPressed: () async {
               final ok = await keys.importKeyPair(
@@ -356,7 +382,8 @@ class PgpKeysScreen extends StatelessWidget {
               if (ctx.mounted) {
                 Navigator.pop(ctx);
                 ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-                  content: Text(ok ? 'Key imported successfully' : 'Invalid private key'),
+                  content: Text(
+                      ok ? 'Key imported successfully' : 'Invalid private key'),
                 ));
               }
             },
@@ -376,14 +403,16 @@ class _FingerprintDisplay extends StatelessWidget {
   Widget build(BuildContext context) {
     final groups = <String>[];
     for (var i = 0; i < fingerprint.length; i += 4) {
-      groups.add(fingerprint.substring(i, (i + 4).clamp(0, fingerprint.length)));
+      groups
+          .add(fingerprint.substring(i, (i + 4).clamp(0, fingerprint.length)));
     }
     final formatted = groups.join(' ');
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('Fingerprint', style: TextStyle(fontSize: 12, color: Colors.grey)),
+        const Text('Fingerprint',
+            style: TextStyle(fontSize: 12, color: Colors.grey)),
         const SizedBox(height: 4),
         Row(
           children: [
@@ -392,7 +421,7 @@ class _FingerprintDisplay extends StatelessWidget {
                 onTap: () {
                   Clipboard.setData(ClipboardData(text: fingerprint));
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Fingerprint copied')));
+                      const SnackBar(content: Text('Fingerprint copied')));
                 },
                 child: Text(
                   formatted,
@@ -426,7 +455,10 @@ class _FingerprintDisplay extends StatelessWidget {
             QrImageView(data: fp, version: QrVersions.auto, size: 220),
             const SizedBox(height: 12),
             Text(
-              fp.toUpperCase().replaceAllMapped(RegExp(r'.{4}'), (m) => '${m[0]} ').trim(),
+              fp
+                  .toUpperCase()
+                  .replaceAllMapped(RegExp(r'.{4}'), (m) => '${m[0]} ')
+                  .trim(),
               style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
               textAlign: TextAlign.center,
             ),
@@ -440,7 +472,8 @@ class _FingerprintDisplay extends StatelessWidget {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context), child: const Text('Close')),
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close')),
         ],
       ),
     );

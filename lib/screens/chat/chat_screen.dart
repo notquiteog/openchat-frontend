@@ -685,6 +685,27 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       ],
                     ),
+                  if (!conv.isDM)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          conv.encryptionEnabled
+                              ? Icons.lock_outline
+                              : Icons.lock_open_outlined,
+                          size: 12,
+                          color: Colors.grey[400],
+                        ),
+                        const SizedBox(width: 3),
+                        Text(
+                          conv.encryptionEnabled
+                              ? 'Encrypted'
+                              : 'Encryption off',
+                          style:
+                              TextStyle(fontSize: 11, color: Colors.grey[400]),
+                        ),
+                      ],
+                    ),
                 ],
               ),
             ),
@@ -720,6 +741,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 _setConversationBackground(context);
               case 'disappearing':
                 _setDisappearing(context);
+              case 'encryption':
+                _setEncryption(context);
               case 'delete':
                 _deleteConversation(context);
             }
@@ -727,11 +750,18 @@ class _ChatScreenState extends State<ChatScreen> {
           itemBuilder: (_) => [
             const PopupMenuItem(
                 value: 'info', child: Text('Conversation info')),
-            // Disappearing messages: DM participants, or group/channel admins.
             if (conv.isDM ||
                 conv.members.any((m) => m.userId == currentUserID && m.isAdmin))
               const PopupMenuItem(
                   value: 'disappearing', child: Text('Disappearing messages')),
+            if (!conv.isDM &&
+                conv.members.any((m) => m.userId == currentUserID && m.isAdmin))
+              PopupMenuItem(
+                value: 'encryption',
+                child: Text(conv.encryptionEnabled
+                    ? 'Turn encryption off'
+                    : 'Turn encryption on'),
+              ),
             if (conv.isGroup)
               const PopupMenuItem(value: 'edit', child: Text('Edit group')),
             if (conv.isGroup)
@@ -974,6 +1004,45 @@ class _ChatScreenState extends State<ChatScreen> {
         content: Text(chosen == 0
             ? 'Disappearing messages turned off'
             : 'Messages now disappear after ${options.firstWhere((o) => o.$2 == chosen).$1}'),
+      ));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+    }
+  }
+
+  Future<void> _setEncryption(BuildContext context) async {
+    final api = context.read<ApiService>();
+    final chat = context.read<ChatProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    final nextEnabled = !conv.encryptionEnabled;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title:
+            Text(nextEnabled ? 'Turn encryption on?' : 'Turn encryption off?'),
+        content: const Text(
+          'Changing encryption wipes all current messages in this chat for everyone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Wipe and change'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await api.setEncryptionEnabled(conv.id, nextEnabled);
+      await chat.loadConversations();
+      await chat.loadMessages(conv.id);
+      messenger.showSnackBar(SnackBar(
+        content: Text(
+            nextEnabled ? 'Encryption turned on' : 'Encryption turned off'),
       ));
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));

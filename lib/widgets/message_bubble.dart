@@ -800,8 +800,28 @@ class _Timestamp extends StatelessWidget {
             style: TextStyle(
                 fontSize: 10, color: textColor.withValues(alpha: 0.6)),
           ),
+        if (message.hasAutoDelete)
+          StreamBuilder<int>(
+            stream: Stream.periodic(const Duration(seconds: 30), (i) => i),
+            builder: (context, _) => Text(
+              ' · ${_remainingAutoDelete(message)} left',
+              style: TextStyle(
+                  fontSize: 10, color: textColor.withValues(alpha: 0.7)),
+            ),
+          ),
       ],
     );
+  }
+
+  String _remainingAutoDelete(Message message) {
+    final expiresAt = message.autoDeleteExpiresAt;
+    if (expiresAt == null) return '';
+    final remaining = expiresAt.difference(DateTime.now());
+    if (remaining.inSeconds <= 0) return 'expiring';
+    if (remaining.inDays >= 1) return '${remaining.inDays}d';
+    if (remaining.inHours >= 1) return '${remaining.inHours}h';
+    if (remaining.inMinutes >= 1) return '${remaining.inMinutes}m';
+    return '${remaining.inSeconds}s';
   }
 }
 

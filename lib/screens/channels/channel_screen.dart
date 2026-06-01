@@ -316,6 +316,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }
 
   void _tryDecrypt(Message msg, String privateKey) async {
+    if (!msg.isEncrypted) {
+      msg.setDecryptedContent(msg.encryptedPayload);
+      if (mounted) setState(() {});
+      return;
+    }
     try {
       final raw = await PgpService.decrypt(
         encryptedArmor: msg.encryptedPayload,
@@ -708,6 +713,110 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     return const BoxDecoration();
   }
 
+  String _ttlLabel(int seconds) {
+    if (seconds % 604800 == 0) return '${seconds ~/ 604800}w';
+    if (seconds % 86400 == 0) return '${seconds ~/ 86400}d';
+    if (seconds % 3600 == 0) return '${seconds ~/ 3600}h';
+    if (seconds % 60 == 0) return '${seconds ~/ 60}m';
+    return '${seconds}s';
+  }
+
+  Future<void> _setDisappearing() async {
+    final api = context.read<ApiService>();
+    final messenger = ScaffoldMessenger.of(context);
+    const options = <(String, int)>[
+      ('Off', 0),
+      ('1 hour', 3600),
+      ('1 day', 86400),
+      ('1 week', 604800),
+    ];
+    final current = channel.messageTtlSeconds;
+    final chosen = await showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Disappearing messages'),
+        children: [
+          for (final (label, secs) in options)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, secs),
+              child: Row(
+                children: [
+                  Icon(
+                    secs == current
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(label),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (chosen == null || chosen == current) return;
+    try {
+      await api.setMessageTtl(channel.id, chosen);
+      final updated = await api.getChannel(channel.id);
+      if (mounted) setState(() => _channel = updated);
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(
+          content: Text(chosen == 0
+              ? 'Disappearing messages turned off'
+              : 'Messages now disappear after ${options.firstWhere((o) => o.$2 == chosen).$1}'),
+        ));
+      }
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+    }
+  }
+
+  Future<void> _setEncryption() async {
+    final api = context.read<ApiService>();
+    final chat = context.read<ChatProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    final nextEnabled = !channel.encryptionEnabled;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title:
+            Text(nextEnabled ? 'Turn encryption on?' : 'Turn encryption off?'),
+        content: const Text(
+          'Changing encryption wipes all current posts in this channel for everyone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Wipe and change'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await api.setEncryptionEnabled(channel.id, nextEnabled);
+      final updated = await api.getChannel(channel.id);
+      if (mounted) {
+        setState(() {
+          _channel = updated;
+          _posts = const [];
+        });
+      }
+      await chat.loadConversations();
+      messenger.showSnackBar(SnackBar(
+        content: Text(
+            nextEnabled ? 'Encryption turned on' : 'Encryption turned off'),
+      ));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+    }
+  }
+
   Future<void> _post() async {
     final text = _inputCtrl.text.trim();
     if (text.isEmpty) return;
@@ -717,27 +826,33 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final storage = context.read<SecureStorageService>();
     final privateKey = await storage.getPrivateKey() ?? '';
 
-    // Fetch subscriber public keys to encrypt the post for all of them.
-    final members = await api.getConversationMembers(channel.id);
-    final fetchedKeys = await Future.wait(
-      members.map((m) => api.getFreshUserPublicKey(m.userId)),
-    );
-    final recipientKeys = [
-      for (final k in fetchedKeys)
-        if (k != null) k,
-    ];
+    final String encrypted;
+    final String sig;
+    if (channel.encryptionEnabled) {
+      final members = await api.getConversationMembers(channel.id);
+      final fetchedKeys = await Future.wait(
+        members.map((m) => api.getFreshUserPublicKey(m.userId)),
+      );
+      final recipientKeys = [
+        for (final k in fetchedKeys)
+          if (k != null) k,
+      ];
 
-    if (privateKey.isEmpty || recipientKeys.isEmpty) return;
+      if (privateKey.isEmpty || recipientKeys.isEmpty) return;
 
-    final encrypted = await PgpService.encrypt(
-      plaintext: text,
-      recipientPublicKeys: recipientKeys,
-      signingPrivateKeyArmored: privateKey,
-    );
-    final sig = await PgpService.sign(
-      data: '${channel.id}:$encrypted',
-      privateKeyArmored: privateKey,
-    );
+      encrypted = await PgpService.encrypt(
+        plaintext: text,
+        recipientPublicKeys: recipientKeys,
+        signingPrivateKeyArmored: privateKey,
+      );
+      sig = await PgpService.sign(
+        data: '${channel.id}:$encrypted',
+        privateKeyArmored: privateKey,
+      );
+    } else {
+      encrypted = text;
+      sig = '';
+    }
 
     final msg = await api.postToChannel(
       chanID: channel.id,
@@ -801,6 +916,37 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                             : Colors.grey,
                       ),
                     ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (channel.messageTtlSeconds > 0) ...[
+                          Icon(Icons.timer_outlined,
+                              size: 12, color: Colors.grey[400]),
+                          const SizedBox(width: 3),
+                          Text(
+                            'Disappearing · ${_ttlLabel(channel.messageTtlSeconds)}',
+                            style: TextStyle(
+                                fontSize: 11, color: Colors.grey[400]),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                        Icon(
+                          channel.encryptionEnabled
+                              ? Icons.lock_outline
+                              : Icons.lock_open_outlined,
+                          size: 12,
+                          color: Colors.grey[400],
+                        ),
+                        const SizedBox(width: 3),
+                        Text(
+                          channel.encryptionEnabled
+                              ? 'Encrypted'
+                              : 'Encryption off',
+                          style:
+                              TextStyle(fontSize: 11, color: Colors.grey[400]),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -829,6 +975,22 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               icon: const Icon(Icons.wallpaper_outlined),
               tooltip: 'Set chat background (Premium)',
               onPressed: _setBackground,
+            ),
+          if (_isAdmin)
+            IconButton(
+              icon: const Icon(Icons.timer_outlined),
+              tooltip: 'Disappearing messages',
+              onPressed: _setDisappearing,
+            ),
+          if (_isAdmin)
+            IconButton(
+              icon: Icon(channel.encryptionEnabled
+                  ? Icons.lock_outline
+                  : Icons.lock_open_outlined),
+              tooltip: channel.encryptionEnabled
+                  ? 'Turn encryption off'
+                  : 'Turn encryption on',
+              onPressed: _setEncryption,
             ),
           if (canArchive)
             IconButton(
