@@ -34,26 +34,11 @@ if [ -z "$LDCONFIG" ] || [ ! -x "$LDCONFIG" ]; then
   exit 1
 fi
 
+"$ROOT_DIR/packaging/linux/bundle_tray_libs.sh" "$BUNDLE_DIR"
+
 rm -rf "$WORK_ROOT"
 mkdir -p "$SOURCE_DIR/openchat-bundle" "$OUTPUT_DIR"
 cp -a "$BUNDLE_DIR/." "$SOURCE_DIR/openchat-bundle/"
-
-copy_runtime_lib() {
-  local soname="$1"
-  local path
-  path="$("$LDCONFIG" -p | awk -v lib="$soname" '$1 == lib {print $NF; exit}')"
-  if [ -z "$path" ] || [ ! -e "$path" ]; then
-    echo "Required Flatpak-bundled library not found: $soname" >&2
-    exit 1
-  fi
-  cp -L "$path" "$SOURCE_DIR/openchat-bundle/lib/$soname"
-}
-
-copy_runtime_lib libayatana-appindicator3.so.1
-copy_runtime_lib libayatana-indicator3.so.7
-copy_runtime_lib libayatana-ido3-0.4.so.0
-copy_runtime_lib libdbusmenu-glib.so.4
-copy_runtime_lib libdbusmenu-gtk3.so.4
 
 install -Dm644 "$ROOT_DIR/packaging/linux/shared/${APP_ID}.desktop" \
   "$SOURCE_DIR/${APP_ID}.desktop"
