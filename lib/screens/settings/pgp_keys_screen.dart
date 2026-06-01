@@ -259,7 +259,7 @@ class PgpKeysScreen extends StatelessWidget {
   Future<void> _showRotateKey(BuildContext context, KeyProvider keys) async {
     final api = context.read<ApiService>();
     final passCtrl = TextEditingController();
-    KeyType selectedKeyType = KeyType.curve25519;
+    KeyType selectedKeyType = KeyType.defaultType;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -283,15 +283,12 @@ class PgpKeysScreen extends StatelessWidget {
                   labelText: 'New key algorithm',
                   border: OutlineInputBorder(),
                 ),
-                items: const [
-                  DropdownMenuItem(
-                      value: KeyType.curve25519,
-                      child: Text('Curve25519 (ECC)')),
-                  DropdownMenuItem(
-                      value: KeyType.pqc,
-                      child: Text('ML-DSA-65 + ML-KEM-768 (Post-Quantum)')),
-                  DropdownMenuItem(
-                      value: KeyType.rsa4096, child: Text('RSA-4096')),
+                items: [
+                  for (final keyType in KeyType.accountCreationOptions)
+                    DropdownMenuItem(
+                      value: keyType,
+                      child: Text(keyType.dropdownLabel),
+                    ),
                 ],
                 onChanged: (v) => setDialogState(() => selectedKeyType = v!),
               ),

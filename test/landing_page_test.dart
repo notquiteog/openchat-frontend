@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openchat/crypto/pgp_service.dart';
 import 'package:openchat/providers/auth_provider.dart';
 import 'package:openchat/providers/key_provider.dart';
 import 'package:openchat/screens/auth/login_screen.dart';
@@ -49,5 +50,17 @@ void main() {
     expect(find.text('Secure. Open. Encrypted.'), findsOneWidget);
     expect(find.widgetWithText(TextButton, 'Sign in'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Create account'), findsOneWidget);
+  });
+
+  testWidgets('register advanced options list every supported key algorithm',
+      (tester) async {
+    await tester.pumpWidget(_authHarness(const RegisterScreen()));
+
+    await tester.tap(find.text('Advanced options'));
+    await tester.pumpAndSettle();
+
+    for (final keyType in KeyType.accountCreationOptions) {
+      expect(find.text(keyType.title), findsOneWidget);
+    }
   });
 }

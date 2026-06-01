@@ -22,17 +22,55 @@ class PgpService {
     required String username,
     String? passphrase,
   }) async {
+    return _generateKeyPairWithOptions(
+      username: username,
+      passphrase: passphrase,
+      keyOptions: KeyOptions()
+        ..algorithm = Algorithm.EDDSA
+        ..curve = Curve.CURVE25519
+        ..hash = Hash.SHA512
+        ..cipher = Cipher.AES256
+        ..keyLifetimeSecs = 0,
+    );
+  }
+
+  static Future<PgpKeyPair> generateKeyPairForType({
+    required String username,
+    required KeyType keyType,
+    String? passphrase,
+  }) {
+    return switch (keyType) {
+      KeyType.curve25519 => generateKeyPair(
+          username: username,
+          passphrase: passphrase,
+        ),
+      KeyType.rsa4096 => generateRsaKeyPair(
+          username: username,
+          passphrase: passphrase,
+        ),
+      KeyType.mldsa65Ed25519 ||
+      KeyType.mldsa87Ed448 ||
+      KeyType.mlkem768X25519 ||
+      KeyType.mlkem1024X448 =>
+        generateQuantumKeyPair(
+          username: username,
+          keyType: keyType,
+          passphrase: passphrase,
+        ),
+    };
+  }
+
+  static Future<PgpKeyPair> _generateKeyPairWithOptions({
+    required String username,
+    required KeyOptions keyOptions,
+    String? passphrase,
+  }) async {
     final keyPair = await OpenPGP.generate(
       options: Options()
         ..name = username
         ..email = '$username@openchat'
         ..passphrase = passphrase ?? ''
-        ..keyOptions = (KeyOptions()
-          ..algorithm = Algorithm.EDDSA
-          ..curve = Curve.CURVE25519
-          ..hash = Hash.SHA512
-          ..cipher = Cipher.AES256
-          ..keyLifetimeSecs = 0), // 0 = never expires; OpenChat policy
+        ..keyOptions = keyOptions,
     );
     final meta = await OpenPGP.getPublicKeyMetadata(keyPair.publicKey);
     return PgpKeyPair(
@@ -42,28 +80,39 @@ class PgpService {
     );
   }
 
-  /// Generate a composite post-quantum key pair (ML-DSA-65 + Ed25519 signing,
-  /// ML-KEM-768 + X25519 encryption subkey). Requires the notquiteog fork.
+  /// Generate a composite post-quantum key pair. Requires the notquiteog fork.
+  static Future<PgpKeyPair> generateQuantumKeyPair({
+    required String username,
+    required KeyType keyType,
+    String? passphrase,
+  }) async {
+    if (!keyType.isQuantum) {
+      throw ArgumentError.value(
+        keyType,
+        'keyType',
+        'must be a post-quantum key type',
+      );
+    }
+    return _generateKeyPairWithOptions(
+      username: username,
+      passphrase: passphrase,
+      keyOptions: KeyOptions()
+        ..algorithm = keyType.algorithm
+        ..hash = Hash.SHA512
+        ..cipher = Cipher.AES256
+        ..keyLifetimeSecs = 0,
+    );
+  }
+
+  /// Generate a composite ML-DSA-65 + Ed25519 key pair.
   static Future<PgpKeyPair> generatePqcKeyPair({
     required String username,
     String? passphrase,
-  }) async {
-    final keyPair = await OpenPGP.generate(
-      options: Options()
-        ..name = username
-        ..email = '$username@openchat'
-        ..passphrase = passphrase ?? ''
-        ..keyOptions = (KeyOptions()
-          ..algorithm = Algorithm.MLDSA65ED25519
-          ..hash = Hash.SHA512
-          ..cipher = Cipher.AES256
-          ..keyLifetimeSecs = 0),
-    );
-    final meta = await OpenPGP.getPublicKeyMetadata(keyPair.publicKey);
-    return PgpKeyPair(
-      publicKeyArmored: keyPair.publicKey,
-      privateKeyArmored: keyPair.privateKey,
-      fingerprint: meta.fingerprint.toUpperCase(),
+  }) {
+    return generateQuantumKeyPair(
+      username: username,
+      keyType: KeyType.mldsa65Ed25519,
+      passphrase: passphrase,
     );
   }
 
@@ -72,23 +121,15 @@ class PgpService {
     required String username,
     String? passphrase,
   }) async {
-    final keyPair = await OpenPGP.generate(
-      options: Options()
-        ..name = username
-        ..email = '$username@openchat'
-        ..passphrase = passphrase ?? ''
-        ..keyOptions = (KeyOptions()
-          ..algorithm = Algorithm.RSA
-          ..rsaBits = 4096
-          ..hash = Hash.SHA512
-          ..cipher = Cipher.AES256
-          ..keyLifetimeSecs = 0),
-    );
-    final meta = await OpenPGP.getPublicKeyMetadata(keyPair.publicKey);
-    return PgpKeyPair(
-      publicKeyArmored: keyPair.publicKey,
-      privateKeyArmored: keyPair.privateKey,
-      fingerprint: meta.fingerprint.toUpperCase(),
+    return _generateKeyPairWithOptions(
+      username: username,
+      passphrase: passphrase,
+      keyOptions: KeyOptions()
+        ..algorithm = Algorithm.RSA
+        ..rsaBits = 4096
+        ..hash = Hash.SHA512
+        ..cipher = Cipher.AES256
+        ..keyLifetimeSecs = 0,
     );
   }
 
@@ -311,7 +352,80 @@ class PgpService {
   }
 }
 
-enum KeyType { curve25519, rsa4096, pqc }
+enum KeyType {
+  mlkem1024X448(
+    title: 'ML-KEM-1024 + X448',
+    subtitle: 'Recommended - strongest hybrid quantum encryption',
+    dropdownLabel: 'ML-KEM-1024 + X448 (Post-Quantum)',
+    algorithm: Algorithm.MLKEM1024X448,
+    isQuantum: true,
+  ),
+  mldsa87Ed448(
+    title: 'ML-DSA-87 + Ed448',
+    subtitle: 'High-security OpenPGP v6 signing and encryption',
+    dropdownLabel: 'ML-DSA-87 + Ed448 (Post-Quantum)',
+    algorithm: Algorithm.MLDSA87ED448,
+    isQuantum: true,
+  ),
+  mlkem768X25519(
+    title: 'ML-KEM-768 + X25519',
+    subtitle: 'Hybrid quantum encryption with Ed25519 signing',
+    dropdownLabel: 'ML-KEM-768 + X25519 (Post-Quantum)',
+    algorithm: Algorithm.MLKEM768X25519,
+    isQuantum: true,
+  ),
+  mldsa65Ed25519(
+    title: 'ML-DSA-65 + Ed25519',
+    subtitle: 'Hybrid quantum signing and encryption',
+    dropdownLabel: 'ML-DSA-65 + Ed25519 (Post-Quantum)',
+    algorithm: Algorithm.MLDSA65ED25519,
+    isQuantum: true,
+  ),
+  curve25519(
+    title: 'Curve25519 (ECC)',
+    subtitle: 'Fast, modern classical cryptography',
+    dropdownLabel: 'Curve25519 (ECC)',
+    algorithm: Algorithm.EDDSA,
+    isQuantum: false,
+  ),
+  rsa4096(
+    title: 'RSA-4096',
+    subtitle: 'Traditional - wider compatibility',
+    dropdownLabel: 'RSA-4096',
+    algorithm: Algorithm.RSA,
+    isQuantum: false,
+  );
+
+  const KeyType({
+    required this.title,
+    required this.subtitle,
+    required this.dropdownLabel,
+    required this.algorithm,
+    required this.isQuantum,
+  });
+
+  static const defaultType = KeyType.mlkem1024X448;
+  static const accountCreationOptions = [
+    KeyType.mlkem1024X448,
+    KeyType.mldsa87Ed448,
+    KeyType.mlkem768X25519,
+    KeyType.mldsa65Ed25519,
+    KeyType.curve25519,
+    KeyType.rsa4096,
+  ];
+  static const quantumTypes = [
+    KeyType.mldsa65Ed25519,
+    KeyType.mldsa87Ed448,
+    KeyType.mlkem768X25519,
+    KeyType.mlkem1024X448,
+  ];
+
+  final String title;
+  final String subtitle;
+  final String dropdownLabel;
+  final Algorithm algorithm;
+  final bool isQuantum;
+}
 
 class PgpKeyPair {
   final String publicKeyArmored;

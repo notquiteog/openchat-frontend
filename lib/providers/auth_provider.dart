@@ -51,16 +51,16 @@ class AuthProvider extends ChangeNotifier {
   Future<void> register({
     required String username,
     required String password,
-    KeyType keyType = KeyType.curve25519,
+    KeyType keyType = KeyType.defaultType,
     String? keyPassphrase,
   }) async {
     _setLoading(true);
     try {
-      final keyPair = switch (keyType) {
-        KeyType.rsa4096 => await PgpService.generateRsaKeyPair(username: username, passphrase: keyPassphrase),
-        KeyType.pqc     => await PgpService.generatePqcKeyPair(username: username, passphrase: keyPassphrase),
-        _               => await PgpService.generateKeyPair(username: username, passphrase: keyPassphrase),
-      };
+      final keyPair = await PgpService.generateKeyPairForType(
+        username: username,
+        keyType: keyType,
+        passphrase: keyPassphrase,
+      );
 
       final auth = await _api.register(
         username: username,
@@ -123,7 +123,8 @@ class AuthProvider extends ChangeNotifier {
       if (localFp.isNotEmpty &&
           serverFp.isNotEmpty &&
           localFp.toUpperCase() != serverFp.toUpperCase()) {
-        _error = 'Key mismatch: the key on this device (…${localFp.length >= 8 ? localFp.substring(localFp.length - 8) : localFp}) '
+        _error =
+            'Key mismatch: the key on this device (…${localFp.length >= 8 ? localFp.substring(localFp.length - 8) : localFp}) '
             'does not match your account key (…${serverFp.length >= 8 ? serverFp.substring(serverFp.length - 8) : serverFp}). '
             'Messages encrypted to your current account key will not decrypt. '
             'Import the correct key in Settings → PGP Keys.';
@@ -163,4 +164,3 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 }
-

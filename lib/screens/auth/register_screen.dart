@@ -16,7 +16,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _passwordCtrl = TextEditingController();
   final _confirmCtrl = TextEditingController();
 
-  KeyType _keyType = KeyType.curve25519;
+  KeyType _keyType = KeyType.defaultType;
   bool _obscurePassword = true;
   bool _showAdvanced = false;
 
@@ -207,27 +207,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             RadioGroup<KeyType>(
                               groupValue: _keyType,
                               onChanged: (v) => setState(() => _keyType = v!),
-                              child: const Column(
+                              child: Column(
                                 children: [
-                                  RadioListTile<KeyType>(
-                                    value: KeyType.curve25519,
-                                    title: Text('Curve25519 (ECC)'),
-                                    subtitle: Text(
-                                        'Recommended - fast, modern, smaller keys'),
-                                  ),
-                                  RadioListTile<KeyType>(
-                                    value: KeyType.pqc,
-                                    title: Text(
-                                        'ML-DSA-65 + ML-KEM-768 (Post-Quantum)'),
-                                    subtitle: Text(
-                                        'Quantum-resistant hybrid key (FIPS 203/204)'),
-                                  ),
-                                  RadioListTile<KeyType>(
-                                    value: KeyType.rsa4096,
-                                    title: Text('RSA-4096'),
-                                    subtitle: Text(
-                                        'Traditional - wider compatibility'),
-                                  ),
+                                  for (final keyType
+                                      in KeyType.accountCreationOptions)
+                                    Material(
+                                      color: Colors.transparent,
+                                      child: RadioListTile<KeyType>(
+                                        value: keyType,
+                                        title: Text(keyType.title),
+                                        subtitle: Text(keyType.subtitle),
+                                      ),
+                                    ),
                                 ],
                               ),
                             ),

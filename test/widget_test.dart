@@ -1,11 +1,32 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openpgp/openpgp.dart';
 import 'package:openchat/crypto/pgp_service.dart';
 import 'package:openchat/models/message.dart';
 import 'package:openchat/models/user.dart';
 
 void main() {
+  group('KeyType options', () {
+    test('defaults to the strongest quantum key type', () {
+      expect(KeyType.defaultType, KeyType.mlkem1024X448);
+      expect(KeyType.defaultType.algorithm, Algorithm.MLKEM1024X448);
+      expect(KeyType.defaultType.isQuantum, isTrue);
+    });
+
+    test('exposes every supported quantum OpenPGP algorithm', () {
+      expect(
+        KeyType.quantumTypes.map((type) => type.algorithm),
+        [
+          Algorithm.MLDSA65ED25519,
+          Algorithm.MLDSA87ED448,
+          Algorithm.MLKEM768X25519,
+          Algorithm.MLKEM1024X448,
+        ],
+      );
+    });
+  });
+
   group('PgpService OpenChat envelope', () {
     test('uses envelope policy for DMs and groups', () {
       expect(PgpService.usesOpenChatEnvelopeForRecipientCount(0), isFalse);

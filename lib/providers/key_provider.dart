@@ -114,18 +114,15 @@ class KeyProvider extends ChangeNotifier {
   Future<bool> rotateKey({
     required ApiService api,
     String passphrase = '',
-    KeyType keyType = KeyType.curve25519,
+    KeyType keyType = KeyType.defaultType,
   }) async {
     try {
       final username = await _storage.getUsername() ?? 'user';
-      final newPair = switch (keyType) {
-        KeyType.rsa4096 => await PgpService.generateRsaKeyPair(
-            username: username, passphrase: passphrase),
-        KeyType.pqc => await PgpService.generatePqcKeyPair(
-            username: username, passphrase: passphrase),
-        _ => await PgpService.generateKeyPair(
-            username: username, passphrase: passphrase),
-      };
+      final newPair = await PgpService.generateKeyPairForType(
+        username: username,
+        keyType: keyType,
+        passphrase: passphrase,
+      );
       await api.rotatePublicKey(
         publicKey: newPair.publicKeyArmored,
         fingerprint: newPair.fingerprint,
