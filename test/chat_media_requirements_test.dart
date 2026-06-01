@@ -202,7 +202,7 @@ void main() {
     );
   });
 
-  testWidgets('incoming sender bubble colours keep readable text',
+  testWidgets('incoming sender bubble colors keep readable text',
       (tester) async {
     await tester.pumpWidget(
       MaterialApp(

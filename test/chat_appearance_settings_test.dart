@@ -3,7 +3,7 @@ import 'package:openchat/providers/settings_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  test('chat appearance stores the current user bubble colour for any chat',
+  test('chat appearance stores the current user bubble color for any chat',
       () async {
     SharedPreferences.setMockInitialValues({});
     final provider = SettingsProvider();
@@ -15,6 +15,5 @@ void main() {
     );
 
     expect(provider.chatStyleFor('channel-1').myBubbleColor, 0xFF26323A);
-    expect(provider.chatStyleFor('channel-1').theirBubbleColor, isNull);
   });
 }

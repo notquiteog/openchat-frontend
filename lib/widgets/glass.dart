@@ -10,6 +10,7 @@ class GlassSurface extends StatelessWidget {
   final BorderRadius borderRadius;
   final EdgeInsetsGeometry? padding;
   final Border? border;
+  final List<BoxShadow>? boxShadow;
 
   const GlassSurface({
     super.key,
@@ -18,6 +19,7 @@ class GlassSurface extends StatelessWidget {
     this.borderRadius = BorderRadius.zero,
     this.padding,
     this.border,
+    this.boxShadow,
   });
 
   @override
@@ -25,25 +27,31 @@ class GlassSurface extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return ClipRRect(
-      borderRadius: borderRadius,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-        child: Container(
-          padding: padding,
-          decoration: BoxDecoration(
-            borderRadius: borderRadius,
-            border: border,
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                scheme.surface.withValues(alpha: isDark ? 0.55 : 0.72),
-                scheme.surface.withValues(alpha: isDark ? 0.40 : 0.58),
-              ],
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: borderRadius,
+        boxShadow: boxShadow,
+      ),
+      child: ClipRRect(
+        borderRadius: borderRadius,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+          child: Container(
+            padding: padding,
+            decoration: BoxDecoration(
+              borderRadius: borderRadius,
+              border: border,
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  scheme.surface.withValues(alpha: isDark ? 0.50 : 0.66),
+                  scheme.surface.withValues(alpha: isDark ? 0.30 : 0.46),
+                ],
+              ),
             ),
+            child: child,
           ),
-          child: child,
         ),
       ),
     );
@@ -58,6 +66,7 @@ class GlassAppBar extends StatelessWidget implements PreferredSizeWidget {
   final Widget? leading;
   final bool centerTitle;
   final PreferredSizeWidget? bottom;
+  final double? titleSpacing;
 
   const GlassAppBar({
     super.key,
@@ -66,6 +75,7 @@ class GlassAppBar extends StatelessWidget implements PreferredSizeWidget {
     this.leading,
     this.centerTitle = false,
     this.bottom,
+    this.titleSpacing,
   });
 
   @override
@@ -76,7 +86,7 @@ class GlassAppBar extends StatelessWidget implements PreferredSizeWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return GlassSurface(
-      blur: 20,
+      blur: 26,
       border: Border(
         bottom: BorderSide(
           color: scheme.outlineVariant.withValues(alpha: 0.35),
@@ -92,6 +102,7 @@ class GlassAppBar extends StatelessWidget implements PreferredSizeWidget {
         leading: leading,
         centerTitle: centerTitle,
         bottom: bottom,
+        titleSpacing: titleSpacing,
       ),
     );
   }

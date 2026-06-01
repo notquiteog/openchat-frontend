@@ -73,7 +73,7 @@ void main() {
       expect(message.listPreview, 'Hi');
     });
 
-    test('parses sender bubble colour on message payloads', () {
+    test('parses sender bubble color on message payloads', () {
       final message = Message.fromJson({
         'id': 'msg-1',
         'conversation_id': 'conv-1',
@@ -97,7 +97,7 @@ void main() {
   });
 
   group('User profile fields', () {
-    test('parses public bubble colour', () {
+    test('parses public bubble color', () {
       final user = User.fromJson({
         'id': 'user-1',
         'username': 'alice',
@@ -111,7 +111,7 @@ void main() {
       expect(user.toJson()['bubble_color'], '#26323A');
     });
 
-    test('parses public bubble colour from canonical hex', () {
+    test('parses public bubble color from canonical hex', () {
       final user = User.fromJson({
         'id': 'user-1',
         'username': 'alice',

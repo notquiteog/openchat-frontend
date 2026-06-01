@@ -8,11 +8,14 @@ import '../../models/conversation.dart';
 import '../../models/message.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
+import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/attachment_service.dart';
 import '../../services/secure_storage_service.dart';
 import '../../crypto/pgp_service.dart';
 import '../../widgets/conversation_encryption_status.dart';
+import '../../widgets/color_choices.dart';
+import '../../widgets/glass.dart';
 import '../../widgets/message_bubble.dart';
 import '../../widgets/sticker_picker.dart';
 import '../profile/user_profile_screen.dart';
@@ -308,11 +311,17 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
 
       // Load posts
       final posts = await api.getChannelPosts(channel.id);
+      final channelWithMembers = channel.copyWith(members: members);
       final privateKey = await storage.getPrivateKey() ?? '';
       for (final p in posts) {
+        ChatProvider.hydrateMessageSenderFromConversation(
+          p,
+          channelWithMembers,
+        );
         _tryDecrypt(p, privateKey);
       }
       setState(() {
+        _channel = channelWithMembers;
         _posts = posts.reversed.toList();
         _loading = false;
       });
@@ -824,6 +833,68 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     }
   }
 
+  Future<void> _showChatAppearance() async {
+    final settings = context.read<SettingsProvider>();
+    final api = context.read<ApiService>();
+    final auth = context.read<AuthProvider>();
+    var style = settings.chatStyleFor(channel.id);
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (sheetCtx, setSheet) {
+          Future<void> apply(ChatStyle next) async {
+            style = next;
+            await settings.setChatStyle(channel.id, next);
+            await api.updateProfile(
+              bubbleColor: next.myBubbleColor,
+              clearBubbleColor: next.myBubbleColor == null,
+            );
+            await auth.refreshCurrentUser();
+            setSheet(() {});
+          }
+
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        'Chat appearance',
+                        style: Theme.of(sheetCtx).textTheme.titleMedium,
+                      ),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () => apply(const ChatStyle()),
+                        child: const Text('Reset'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  const Text('My bubble color'),
+                  const SizedBox(height: 8),
+                  ColorChoices(
+                    selected: style.myBubbleColor,
+                    onSelected: (color) => apply(
+                      color == null
+                          ? style.copyWith(clearMyBubbleColor: true)
+                          : style.copyWith(myBubbleColor: color),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Future<void> _showChannelModerationMenu() async {
     final auth = context.read<AuthProvider>();
     final currentUserId = auth.currentUser?.id ?? '';
@@ -900,6 +971,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             for (final item in placement.settingsMenu)
               ListTile(
                 leading: Icon(switch (item) {
+                  ChannelSettingsAction.appearance =>
+                    Icons.format_color_fill_outlined,
                   ChannelSettingsAction.edit => Icons.settings_outlined,
                   ChannelSettingsAction.background => Icons.wallpaper_outlined,
                   ChannelSettingsAction.autoDelete => Icons.timer_outlined,
@@ -908,6 +981,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                       : Icons.lock_open_outlined,
                 }),
                 title: Text(switch (item) {
+                  ChannelSettingsAction.appearance => 'Chat appearance',
                   ChannelSettingsAction.edit => 'Channel settings',
                   ChannelSettingsAction.background =>
                     'Set chat background (Premium)',
@@ -924,6 +998,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     );
     if (!mounted || action == null) return;
     switch (action) {
+      case ChannelSettingsAction.appearance:
+        _showChatAppearance();
       case ChannelSettingsAction.edit:
         _editChannelSettings();
       case ChannelSettingsAction.background:
@@ -1056,9 +1132,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final isOwner = channel.createdBy == currentUserId;
     final canManageLifecycle = isOwner || isSystemAdmin;
     final isArchived = _archived || channel.isArchived;
-    final meBubbleColor = auth.currentUser?.bubbleColor != null
-        ? Color(auth.currentUser!.bubbleColor!)
-        : null;
+    final chatStyle =
+        context.watch<SettingsProvider>().chatStyleFor(channel.id);
+    final meBubbleColor = chatStyle.myBubbleColor != null
+        ? Color(chatStyle.myBubbleColor!)
+        : auth.currentUser?.bubbleColor != null
+            ? Color(auth.currentUser!.bubbleColor!)
+            : null;
     final actionPlacement = ChannelActionPolicy.actionsFor(
       channel: channel,
       isAdmin: _isAdmin,
@@ -1068,7 +1148,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     );
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: GlassAppBar(
         titleSpacing: 0,
         title: InkWell(
           onTap: _showChannelInfo,
@@ -1217,12 +1297,14 @@ class ChannelPostBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final scheme = Theme.of(context).colorScheme;
+    return GlassSurface(
+      blur: 24,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      decoration: BoxDecoration(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        border:
-            Border(top: BorderSide(color: Colors.grey.withValues(alpha: 0.2))),
+      border: Border(
+        top: BorderSide(
+          color: scheme.outlineVariant.withValues(alpha: 0.35),
+        ),
       ),
       child: SafeArea(
         top: false,
@@ -1248,7 +1330,8 @@ class ChannelPostBar extends StatelessWidget {
                     borderSide: BorderSide.none,
                   ),
                   filled: true,
-                  fillColor: Colors.grey.withValues(alpha: 0.1),
+                  fillColor:
+                      scheme.surfaceContainerHighest.withValues(alpha: 0.45),
                   contentPadding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 ),

@@ -691,11 +691,10 @@ class ChatProvider extends ChangeNotifier {
 
     final conv = _conversations[msg.conversationId];
     if (conv == null) return;
-    hydrateMessageSenderFromConversationForTesting(msg, conv);
+    hydrateMessageSenderFromConversation(msg, conv);
   }
 
-  @visibleForTesting
-  static void hydrateMessageSenderFromConversationForTesting(
+  static void hydrateMessageSenderFromConversation(
     Message msg,
     Conversation conv,
   ) {
@@ -714,7 +713,7 @@ class ChatProvider extends ChangeNotifier {
     if (current == null) return true;
     return (current.avatarUrl == null && candidate.avatarUrl != null) ||
         (current.bio == null && candidate.bio != null) ||
-        (current.bubbleColor == null && candidate.bubbleColor != null) ||
+        current.bubbleColor != candidate.bubbleColor ||
         (current.publicKey.isEmpty && candidate.publicKey.isNotEmpty) ||
         (current.keyFingerprint.isEmpty && candidate.keyFingerprint.isNotEmpty);
   }

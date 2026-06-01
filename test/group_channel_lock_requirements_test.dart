@@ -110,9 +110,24 @@ void main() {
       expect(
           placement.moderationMenu, contains(ChannelModerationAction.archive));
       expect(
+          placement.settingsMenu, contains(ChannelSettingsAction.appearance));
+      expect(
           placement.settingsMenu, contains(ChannelSettingsAction.autoDelete));
       expect(
           placement.settingsMenu, contains(ChannelSettingsAction.encryption));
+    });
+
+    test('channel subscribers get chat appearance for their bubble color', () {
+      final placement = ChannelActionPolicy.actionsFor(
+        channel: _conversation(type: ConversationType.channel),
+        isAdmin: false,
+        isPremium: false,
+        canManageLifecycle: false,
+        isSubscribed: true,
+      );
+
+      expect(placement.topBar, contains(ChannelTopBarAction.settings));
+      expect(placement.settingsMenu, [ChannelSettingsAction.appearance]);
     });
 
     test('archived channel exposes unarchive and delete in moderation menu',

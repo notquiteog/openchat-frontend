@@ -4,7 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// Per-chat visual customization.
 class ChatStyle {
-  /// Solid background colour behind the message list (ARGB int). null = theme default.
+  /// Solid background color behind the message list (ARGB int). null = theme default.
   final int? backgroundColor;
 
   /// Local file path to a background image picked by the user. Takes precedence
@@ -12,11 +12,8 @@ class ChatStyle {
   /// device-local preference that never leaves the client.
   final String? backgroundImagePath;
 
-  /// Colour of the current user's own outgoing bubbles (ARGB int). null = theme primary.
+  /// Color of the current user's own outgoing bubbles (ARGB int). null = theme primary.
   final int? myBubbleColor;
-
-  /// Colour of the other participant's incoming bubbles (ARGB int). null = theme surface.
-  final int? theirBubbleColor;
 
   /// Corner radius applied to bubbles. Defaults to the app's standard 18.
   final double bubbleRadius;
@@ -25,7 +22,6 @@ class ChatStyle {
     this.backgroundColor,
     this.backgroundImagePath,
     this.myBubbleColor,
-    this.theirBubbleColor,
     this.bubbleRadius = 18,
   });
 
@@ -33,19 +29,16 @@ class ChatStyle {
       backgroundColor == null &&
       backgroundImagePath == null &&
       myBubbleColor == null &&
-      theirBubbleColor == null &&
       bubbleRadius == 18;
 
   ChatStyle copyWith({
     int? backgroundColor,
     String? backgroundImagePath,
     int? myBubbleColor,
-    int? theirBubbleColor,
     double? bubbleRadius,
     bool clearBackgroundColor = false,
     bool clearBackgroundImage = false,
     bool clearMyBubbleColor = false,
-    bool clearTheirBubbleColor = false,
   }) =>
       ChatStyle(
         backgroundColor: clearBackgroundColor
@@ -56,9 +49,6 @@ class ChatStyle {
             : (backgroundImagePath ?? this.backgroundImagePath),
         myBubbleColor:
             clearMyBubbleColor ? null : (myBubbleColor ?? this.myBubbleColor),
-        theirBubbleColor: clearTheirBubbleColor
-            ? null
-            : (theirBubbleColor ?? this.theirBubbleColor),
         bubbleRadius: bubbleRadius ?? this.bubbleRadius,
       );
 
@@ -66,7 +56,6 @@ class ChatStyle {
         if (backgroundColor != null) 'bg': backgroundColor,
         if (backgroundImagePath != null) 'bg_img': backgroundImagePath,
         if (myBubbleColor != null) 'bubble': myBubbleColor,
-        if (theirBubbleColor != null) 'their_bubble': theirBubbleColor,
         'radius': bubbleRadius,
       };
 
@@ -74,14 +63,13 @@ class ChatStyle {
         backgroundColor: json['bg'] as int?,
         backgroundImagePath: json['bg_img'] as String?,
         myBubbleColor: json['bubble'] as int?,
-        theirBubbleColor: json['their_bubble'] as int?,
         bubbleRadius: (json['radius'] as num?)?.toDouble() ?? 18,
       );
 }
 
 typedef DmChatStyle = ChatStyle;
 
-/// App-wide user preferences that persist across launches: the accent colour
+/// App-wide user preferences that persist across launches: the accent color
 /// used to seed the Material theme, whether Channels and Bots get their own
 /// navigation tabs, per-DM chat styling, and notification settings.
 class SettingsProvider extends ChangeNotifier {

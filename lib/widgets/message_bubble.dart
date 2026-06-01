@@ -19,11 +19,9 @@ class MessageBubble extends StatelessWidget {
   final bool showAvatar;
   final VoidCallback? onLongPress;
   final VoidCallback? onAvatarTap;
-  // Per-DM customization. meBubbleColor overrides the colour of the current
-  // user's own bubbles; theirBubbleColor overrides incoming bubbles.
-  // Defaults are used in groups and channels so everyone sees the same look.
+  // The current user's own bubble can be previewed locally while the published
+  // sender bubble color remains authoritative for incoming messages.
   final Color? meBubbleColor;
-  final Color? theirBubbleColor;
   final double bubbleRadius;
 
   const MessageBubble({
@@ -34,17 +32,16 @@ class MessageBubble extends StatelessWidget {
     this.onLongPress,
     this.onAvatarTap,
     this.meBubbleColor,
-    this.theirBubbleColor,
     this.bubbleRadius = 18,
   });
 
-  /// Resolved background colour for this bubble.
+  /// Resolved background color for this bubble.
   Color _bubbleColor(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     if (isMe) return meBubbleColor ?? cs.primary;
     final senderBubbleColor = message.sender?.bubbleColor;
     if (senderBubbleColor != null) return Color(senderBubbleColor);
-    return theirBubbleColor ?? cs.surfaceContainerHighest;
+    return cs.surfaceContainerHighest;
   }
 
   /// Corner radii honouring the configured [bubbleRadius]; the "tail" corner
@@ -176,15 +173,9 @@ class MessageBubble extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     if (isMe) {
       if (meBubbleColor == null) return Colors.white;
-      // A custom bubble colour needs a contrasting text colour the theme's
+      // A custom bubble color needs a contrasting text color the theme's
       // onPrimary can't guarantee.
       return ThemeData.estimateBrightnessForColor(meBubbleColor!) ==
-              Brightness.dark
-          ? Colors.white
-          : Colors.black;
-    }
-    if (theirBubbleColor != null) {
-      return ThemeData.estimateBrightnessForColor(theirBubbleColor!) ==
               Brightness.dark
           ? Colors.white
           : Colors.black;
@@ -281,15 +272,22 @@ class _BubbleShell extends StatelessWidget {
   Widget build(BuildContext context) {
     final tintOpacity =
         ThemeData.estimateBrightnessForColor(color) == Brightness.dark
-            ? 0.34
-            : 0.28;
+            ? 0.38
+            : 0.34;
     return GlassSurface(
-      blur: 28,
+      blur: 30,
       borderRadius: radii,
       border: Border.all(
-        color: Colors.white.withValues(alpha: 0.34),
+        color: Colors.white.withValues(alpha: 0.42),
         width: 0.75,
       ),
+      boxShadow: [
+        BoxShadow(
+          color: color.withValues(alpha: 0.18),
+          blurRadius: 20,
+          offset: const Offset(0, 10),
+        ),
+      ],
       child: Container(
         constraints:
             BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),

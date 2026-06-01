@@ -20,6 +20,8 @@ import '../../services/notification_service.dart';
 import '../../services/attachment_service.dart';
 import '../../widgets/conversation_encryption_status.dart';
 import '../../widgets/conversation_info_panel.dart';
+import '../../widgets/color_choices.dart';
+import '../../widgets/glass.dart';
 import '../../widgets/message_bubble.dart';
 import '../../widgets/sticker_picker.dart';
 import '../profile/user_profile_screen.dart';
@@ -335,18 +337,14 @@ class _ChatScreenState extends State<ChatScreen> {
     final currentUserID = auth.currentUser?.id ?? '';
     final typingUsers = chat.typingUsersFor(conv.id);
 
-    // Per-chat look. The current user's bubble colour is also stored on their
-    // profile so group/channel participants see the same sender colour.
+    // Per-chat look. The current user's bubble color is also stored on their
+    // profile so group/channel participants see the same sender color.
     final chatStyle = context.watch<SettingsProvider>().chatStyleFor(conv.id);
     final meBubbleColor = chatStyle.myBubbleColor != null
         ? Color(chatStyle.myBubbleColor!)
         : auth.currentUser?.bubbleColor != null
             ? Color(auth.currentUser!.bubbleColor!)
             : null;
-    final theirBubbleColor = conv.isDM && chatStyle.theirBubbleColor != null
-        ? Color(chatStyle.theirBubbleColor!)
-        : null;
-
     return Scaffold(
       appBar: _buildAppBar(context, typingUsers, currentUserID),
       body: Column(
@@ -374,7 +372,6 @@ class _ChatScreenState extends State<ChatScreen> {
                             isMe: isMe,
                             showAvatar: showAvatar,
                             meBubbleColor: meBubbleColor,
-                            theirBubbleColor: theirBubbleColor,
                             bubbleRadius: chatStyle.bubbleRadius,
                             onLongPress: () =>
                                 _showMessageMenu(context, msg, isMe),
@@ -406,7 +403,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Background behind the message list. A premium conversation-wide image
   /// (set by an admin, visible to everyone) wins; otherwise the viewer's own
-  /// per-DM background image or colour applies.
+  /// per-DM background image or color applies.
   Decoration _chatBackground(DmChatStyle style) {
     final convBg = conv.backgroundUrl;
     if (convBg != null && convBg.isNotEmpty) {
@@ -431,8 +428,8 @@ class _ChatScreenState extends State<ChatScreen> {
     return const BoxDecoration();
   }
 
-  /// Appearance editor: DMs keep local background/their-bubble controls; the
-  /// current user's own bubble colour can be published for any chat type.
+  /// Appearance editor: DMs keep local background controls; the current user's
+  /// own bubble color can be published for any chat type.
   Future<void> _showChatAppearance(BuildContext context) async {
     final settings = context.read<SettingsProvider>();
     final api = context.read<ApiService>();
@@ -474,16 +471,17 @@ class _ChatScreenState extends State<ChatScreen> {
                             style: Theme.of(sheetCtx).textTheme.titleMedium),
                         const Spacer(),
                         TextButton(
-                          onPressed: () => apply(const ChatStyle()),
+                          onPressed: () =>
+                              apply(const ChatStyle(), publishBubble: true),
                           child: const Text('Reset'),
                         ),
                       ],
                     ),
                     const SizedBox(height: 8),
                     if (isDm) ...[
-                      const Text('Background colour'),
+                      const Text('Background color'),
                       const SizedBox(height: 8),
-                      _ColorChoices(
+                      ColorChoices(
                         selected: style.backgroundColor,
                         onSelected: (c) => apply(c == null
                             ? style.copyWith(clearBackgroundColor: true)
@@ -518,9 +516,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                       const Divider(height: 24),
                     ],
-                    const Text('My bubble colour'),
+                    const Text('My bubble color'),
                     const SizedBox(height: 8),
-                    _ColorChoices(
+                    ColorChoices(
                       selected: style.myBubbleColor,
                       onSelected: (c) => apply(
                           c == null
@@ -528,17 +526,6 @@ class _ChatScreenState extends State<ChatScreen> {
                               : style.copyWith(myBubbleColor: c),
                           publishBubble: true),
                     ),
-                    if (isDm) ...[
-                      const SizedBox(height: 12),
-                      const Text('Their bubble colour'),
-                      const SizedBox(height: 8),
-                      _ColorChoices(
-                        selected: style.theirBubbleColor,
-                        onSelected: (c) => apply(c == null
-                            ? style.copyWith(clearTheirBubbleColor: true)
-                            : style.copyWith(theirBubbleColor: c)),
-                      ),
-                    ],
                     const SizedBox(height: 16),
                     Row(
                       children: [
@@ -652,7 +639,7 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
 
-    return AppBar(
+    return GlassAppBar(
       titleSpacing: 0,
       title: InkWell(
         onTap: openInfo,
@@ -758,11 +745,13 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _buildInputBar(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        border:
-            Border(top: BorderSide(color: Colors.grey.withValues(alpha: 0.2))),
+    final scheme = Theme.of(context).colorScheme;
+    return GlassSurface(
+      blur: 24,
+      border: Border(
+        top: BorderSide(
+          color: scheme.outlineVariant.withValues(alpha: 0.35),
+        ),
       ),
       child: SafeArea(
         top: false,
@@ -795,7 +784,8 @@ class _ChatScreenState extends State<ChatScreen> {
                           borderSide: BorderSide.none,
                         ),
                         filled: true,
-                        fillColor: Colors.grey.withValues(alpha: 0.1),
+                        fillColor: scheme.surfaceContainerHighest
+                            .withValues(alpha: 0.45),
                         contentPadding: const EdgeInsets.symmetric(
                             horizontal: 16, vertical: 8),
                       ),
@@ -1618,76 +1608,6 @@ class _BouncingDots extends AnimatedWidget {
           ),
         );
       }),
-    );
-  }
-}
-
-/// A compact swatch picker: a "default" (no override) choice followed by a
-/// preset palette. Emits the chosen colour as an ARGB int, or null for default.
-class _ColorChoices extends StatelessWidget {
-  final int? selected;
-  final void Function(int?) onSelected;
-
-  const _ColorChoices({required this.selected, required this.onSelected});
-
-  static const List<Color> _palette = [
-    Color(0xFFEF5350),
-    Color(0xFFEC407A),
-    Color(0xFFAB47BC),
-    Color(0xFF7E57C2),
-    Color(0xFF5C6BC0),
-    Color(0xFF42A5F5),
-    Color(0xFF26A69A),
-    Color(0xFF66BB6A),
-    Color(0xFFD4E157),
-    Color(0xFFFFCA28),
-    Color(0xFFFFA726),
-    Color(0xFF8D6E63),
-    Color(0xFF26323A),
-    Color(0xFFECEFF1),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    final primary = Theme.of(context).colorScheme.primary;
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: [
-        // Default / clear choice.
-        GestureDetector(
-          onTap: () => onSelected(null),
-          child: Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: selected == null ? primary : Colors.grey,
-                width: selected == null ? 3 : 1,
-              ),
-            ),
-            child: const Icon(Icons.format_color_reset, size: 16),
-          ),
-        ),
-        for (final c in _palette)
-          GestureDetector(
-            onTap: () => onSelected(c.toARGB32()),
-            child: Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: c,
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color:
-                      selected == c.toARGB32() ? primary : Colors.transparent,
-                  width: 3,
-                ),
-              ),
-            ),
-          ),
-      ],
     );
   }
 }

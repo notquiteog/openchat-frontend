@@ -342,7 +342,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Accent colour'),
+        title: const Text('Accent color'),
         content: Wrap(
           spacing: 12,
           runSpacing: 12,
@@ -702,8 +702,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           ListTile(
             leading: const Icon(Icons.palette_outlined),
-            title: const Text('Accent colour'),
-            subtitle: const Text('Theme colour used across the app'),
+            title: const Text('Accent color'),
+            subtitle: const Text('Theme color used across the app'),
             trailing: Container(
               width: 28,
               height: 28,

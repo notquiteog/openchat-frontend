@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 /// Central Material 3 theme for OpenChat. Both light and dark variants are
-/// generated from a single brand seed so colour roles stay harmonious, then
+/// generated from a single brand seed so color roles stay harmonious, then
 /// refined with softer shapes, gentle elevation and a translucent navigation
 /// surface to suit the frosted-glass chrome used across the app.
 class AppTheme {
@@ -9,8 +9,10 @@ class AppTheme {
 
   static const Color _seed = Color(0xFF3D5AFE);
 
-  static ThemeData light({Color? seed}) => _build(Brightness.light, seed ?? _seed);
-  static ThemeData dark({Color? seed}) => _build(Brightness.dark, seed ?? _seed);
+  static ThemeData light({Color? seed}) =>
+      _build(Brightness.light, seed ?? _seed);
+  static ThemeData dark({Color? seed}) =>
+      _build(Brightness.dark, seed ?? _seed);
 
   static ThemeData _build(Brightness brightness, Color seed) {
     final scheme = ColorScheme.fromSeed(
@@ -20,16 +22,19 @@ class AppTheme {
     final base = ThemeData(
       colorScheme: scheme,
       useMaterial3: true,
-      scaffoldBackgroundColor: scheme.surface,
+      scaffoldBackgroundColor: brightness == Brightness.dark
+          ? const Color(0xFF071114)
+          : const Color(0xFFF4FAF8),
       splashFactory: InkSparkle.splashFactory,
       visualDensity: VisualDensity.standard,
     );
 
     return base.copyWith(
       textTheme: _textTheme(base.textTheme),
-
       appBarTheme: AppBarTheme(
-        backgroundColor: scheme.surface,
+        backgroundColor: scheme.surface.withValues(
+          alpha: brightness == Brightness.dark ? 0.50 : 0.66,
+        ),
         surfaceTintColor: Colors.transparent,
         foregroundColor: scheme.onSurface,
         elevation: 0,
@@ -42,7 +47,6 @@ class AppTheme {
           letterSpacing: -0.2,
         ),
       ),
-
       navigationBarTheme: NavigationBarThemeData(
         // Transparent so the frosted-glass surface underneath shows through.
         backgroundColor: Colors.transparent,
@@ -67,7 +71,6 @@ class AppTheme {
           ),
         ),
       ),
-
       cardTheme: CardThemeData(
         elevation: 0,
         color: scheme.surfaceContainerLow,
@@ -75,22 +78,20 @@ class AppTheme {
         margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       ),
-
       listTileTheme: ListTileThemeData(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       ),
-
       dividerTheme: DividerThemeData(
         color: scheme.outlineVariant.withValues(alpha: 0.4),
         thickness: 1,
         space: 1,
       ),
-
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(18),
           borderSide: BorderSide.none,
@@ -104,7 +105,6 @@ class AppTheme {
           borderSide: BorderSide(color: scheme.primary, width: 1.6),
         ),
       ),
-
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
@@ -114,7 +114,6 @@ class AppTheme {
           textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
         ),
       ),
-
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
           shape: RoundedRectangleBorder(
@@ -123,7 +122,6 @@ class AppTheme {
           textStyle: const TextStyle(fontWeight: FontWeight.w600),
         ),
       ),
-
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           elevation: 0,
@@ -133,13 +131,11 @@ class AppTheme {
           ),
         ),
       ),
-
       floatingActionButtonTheme: FloatingActionButtonThemeData(
         elevation: 2,
         highlightElevation: 4,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       ),
-
       dialogTheme: DialogThemeData(
         elevation: 0,
         backgroundColor: scheme.surfaceContainerHigh,
@@ -151,7 +147,6 @@ class AppTheme {
           fontWeight: FontWeight.w700,
         ),
       ),
-
       bottomSheetTheme: BottomSheetThemeData(
         backgroundColor: scheme.surfaceContainerHigh,
         surfaceTintColor: Colors.transparent,
@@ -159,19 +154,16 @@ class AppTheme {
           borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),
       ),
-
       chipTheme: ChipThemeData(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.5)),
       ),
-
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
         backgroundColor: scheme.inverseSurface,
         contentTextStyle: TextStyle(color: scheme.onInverseSurface),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
-
       progressIndicatorTheme: ProgressIndicatorThemeData(
         color: scheme.primary,
       ),

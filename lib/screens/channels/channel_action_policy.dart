@@ -13,7 +13,13 @@ enum ChannelTopBarAction {
 
 enum ChannelModerationAction { openModeration, archive, unarchive, delete }
 
-enum ChannelSettingsAction { edit, background, autoDelete, encryption }
+enum ChannelSettingsAction {
+  appearance,
+  edit,
+  background,
+  autoDelete,
+  encryption,
+}
 
 class ChannelActionPlacement {
   final List<ChannelTopBarAction> topBar;
@@ -56,8 +62,12 @@ class ChannelActionPolicy {
       }
     }
 
-    if (isAdmin) {
+    if (isSubscribed || isAdmin) {
       topBar.add(ChannelTopBarAction.settings);
+      settings.add(ChannelSettingsAction.appearance);
+    }
+
+    if (isAdmin) {
       settings.add(ChannelSettingsAction.edit);
       if (isPremium) settings.add(ChannelSettingsAction.background);
       settings.addAll([
