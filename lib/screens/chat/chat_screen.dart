@@ -55,6 +55,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final _scrollCtrl = ScrollController();
   bool _showStickers = false;
   bool _loadingMore = false;
+  int _lastMessageCount = 0;
   Message? _replyingTo;
   Timer? _typingTimer;
 
@@ -73,10 +74,10 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     NotificationService.setActiveConversation(widget.conversation.id);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      // Capture context-dependent reads before the async gap.
       final chat = context.read<ChatProvider>();
-      chat.loadMessages(conv.id);
-      chat.loadConversationMembers(conv.id);
+      await chat.loadMessages(conv.id);
+      if (mounted) _jumpToBottom();
+      unawaited(chat.loadConversationMembers(conv.id));
     });
     _scrollCtrl.addListener(_onScroll);
   }
@@ -84,9 +85,16 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onScroll() {
     if (_loadingMore) return;
     if (_scrollCtrl.position.pixels <= 100) {
+      final oldMax = _scrollCtrl.position.maxScrollExtent;
       setState(() => _loadingMore = true);
       context.read<ChatProvider>().loadMoreMessages(conv.id).whenComplete(() {
-        if (mounted) setState(() => _loadingMore = false);
+        if (!mounted) return;
+        setState(() => _loadingMore = false);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!_scrollCtrl.hasClients) return;
+          final delta = _scrollCtrl.position.maxScrollExtent - oldMax;
+          _scrollCtrl.jumpTo(_scrollCtrl.position.pixels + delta);
+        });
       });
     }
   }
@@ -194,6 +202,14 @@ class _ChatScreenState extends State<ChatScreen> {
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut,
         );
+      }
+    });
+  }
+
+  void _jumpToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollCtrl.hasClients) {
+        _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
       }
     });
   }
@@ -336,6 +352,15 @@ class _ChatScreenState extends State<ChatScreen> {
     final messages = chat.messagesFor(conv.id);
     final currentUserID = auth.currentUser?.id ?? '';
     final typingUsers = chat.typingUsersFor(conv.id);
+    if (messages.length > _lastMessageCount) {
+      final wasNearBottom = !_scrollCtrl.hasClients ||
+          (_scrollCtrl.position.maxScrollExtent - _scrollCtrl.position.pixels) <
+              180;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && wasNearBottom) _scrollToBottom();
+      });
+    }
+    _lastMessageCount = messages.length;
 
     // Per-chat look. The current user's bubble color is also stored on their
     // profile so group/channel participants see the same sender color.
@@ -365,25 +390,28 @@ class _ChatScreenState extends State<ChatScreen> {
                           final msg = messages[i];
                           final isMe = msg.senderId == currentUserID;
                           final showAvatar = !isMe &&
-                              (i == 0 ||
-                                  messages[i - 1].senderId != msg.senderId);
-                          return MessageBubble(
-                            message: msg,
-                            isMe: isMe,
-                            showAvatar: showAvatar,
-                            meBubbleColor: meBubbleColor,
-                            bubbleRadius: chatStyle.bubbleRadius,
-                            onLongPress: () =>
-                                _showMessageMenu(context, msg, isMe),
-                            onAvatarTap: msg.sender != null
-                                ? () => Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => UserProfileScreen(
-                                            user: msg.sender!),
-                                      ),
-                                    )
-                                : null,
+                              (i == messages.length - 1 ||
+                                  messages[i + 1].senderId != msg.senderId);
+                          return _AnimatedMessageEntry(
+                            id: msg.id,
+                            child: MessageBubble(
+                              message: msg,
+                              isMe: isMe,
+                              showAvatar: showAvatar,
+                              meBubbleColor: meBubbleColor,
+                              bubbleRadius: chatStyle.bubbleRadius,
+                              onLongPress: () =>
+                                  _showMessageMenu(context, msg, isMe),
+                              onAvatarTap: msg.sender != null
+                                  ? () => Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => UserProfileScreen(
+                                              user: msg.sender!),
+                                        ),
+                                      )
+                                  : null,
+                            ),
                           );
                         },
                       ),
@@ -1530,6 +1558,31 @@ class _ChatScreenState extends State<ChatScreen> {
         messenger.showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
       }
     }
+  }
+}
+
+class _AnimatedMessageEntry extends StatelessWidget {
+  final String id;
+  final Widget child;
+
+  const _AnimatedMessageEntry({required this.id, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      key: ValueKey(id),
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, child) => Opacity(
+        opacity: value,
+        child: Transform.translate(
+          offset: Offset(0, 10 * (1 - value)),
+          child: child,
+        ),
+      ),
+      child: child,
+    );
   }
 }
 

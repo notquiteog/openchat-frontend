@@ -1239,20 +1239,26 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                           itemBuilder: (context, i) {
                             final msg = _posts[i];
                             final isMe = msg.senderId == currentUserId;
-                            return MessageBubble(
-                              message: msg,
-                              isMe: isMe,
-                              showAvatar: !isMe,
-                              meBubbleColor: meBubbleColor,
-                              onAvatarTap: msg.sender != null
-                                  ? () => Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) => UserProfileScreen(
-                                              user: msg.sender!),
-                                        ),
-                                      )
-                                  : null,
+                            final showAvatar = !isMe &&
+                                (i == _posts.length - 1 ||
+                                    _posts[i + 1].senderId != msg.senderId);
+                            return _AnimatedChannelPost(
+                              id: msg.id,
+                              child: MessageBubble(
+                                message: msg,
+                                isMe: isMe,
+                                showAvatar: showAvatar,
+                                meBubbleColor: meBubbleColor,
+                                onAvatarTap: msg.sender != null
+                                    ? () => Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) => UserProfileScreen(
+                                                user: msg.sender!),
+                                          ),
+                                        )
+                                    : null,
+                              ),
                             );
                           },
                         ),
@@ -1275,6 +1281,31 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             ),
         ],
       ),
+    );
+  }
+}
+
+class _AnimatedChannelPost extends StatelessWidget {
+  final String id;
+  final Widget child;
+
+  const _AnimatedChannelPost({required this.id, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      key: ValueKey(id),
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, child) => Opacity(
+        opacity: value,
+        child: Transform.translate(
+          offset: Offset(0, 10 * (1 - value)),
+          child: child,
+        ),
+      ),
+      child: child,
     );
   }
 }

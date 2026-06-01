@@ -515,6 +515,10 @@ class ApiService {
     await _delete('/api/v1/admin/users/$userID/flag-scammer');
   }
 
+  Future<void> grantPremiumMonth(String userID) async {
+    await _post('/api/v1/admin/users/$userID/premium/month', {});
+  }
+
   Future<void> updateProfile({
     String? bio,
     String? avatarUrl,
@@ -769,6 +773,10 @@ class ApiService {
   Future<List<dynamic>> listInvoices() async {
     final resp = await _get('/api/v1/billing/invoices');
     return resp['data'] as List;
+  }
+
+  Future<void> cancelInvoice(String invoiceID) async {
+    await _delete('/api/v1/billing/invoices/$invoiceID');
   }
 
   // ---- Channel / conversation moderation ----

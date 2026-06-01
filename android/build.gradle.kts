@@ -23,6 +23,13 @@ subprojects {
     plugins.withId("com.android.library") {
         apply(plugin = "org.jetbrains.kotlin.android")
     }
+    plugins.withId("org.jetbrains.kotlin.android") {
+        extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension> {
+            compilerOptions {
+                jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+            }
+        }
+    }
 }
 subprojects {
     project.evaluationDependsOn(":app")

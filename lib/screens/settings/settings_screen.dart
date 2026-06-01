@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:local_auth/local_auth.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import '../../config/api_config.dart';
 import '../../providers/auth_provider.dart';
@@ -31,10 +32,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _biometricAvailable = false;
   bool _biometricEnabled = false;
   bool _appLockEnabled = false;
+  late final Future<PackageInfo> _packageInfoFuture;
 
   @override
   void initState() {
     super.initState();
+    _packageInfoFuture = PackageInfo.fromPlatform();
     _loadSecurityPrefs();
   }
 
@@ -765,21 +768,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           // ── About ───────────────────────────────────────────────────────────
           const _SectionHeader('About'),
-          ListTile(
-            leading: const Icon(Icons.info_outline),
-            title: const Text('OpenChat'),
-            subtitle: const Text('v0.3.0 • Open Source • E2E Encrypted'),
-            onTap: () => showAboutDialog(
-              context: context,
-              applicationName: 'OpenChat',
-              applicationVersion: '0.3.0',
-              applicationIcon: Image.asset('assets/images/logo.png',
-                  height: 48,
-                  errorBuilder: (_, __, ___) => const SizedBox.shrink()),
-              applicationLegalese:
-                  'Open source, end-to-end encrypted messenger.\n'
-                  'Uses OpenPGP (RFC 4880) for encryption.',
-            ),
+          FutureBuilder<PackageInfo>(
+            future: _packageInfoFuture,
+            builder: (context, snapshot) {
+              final version = snapshot.data == null
+                  ? ''
+                  : 'v${snapshot.data!.version}+${snapshot.data!.buildNumber}';
+              return ListTile(
+                leading: const Icon(Icons.info_outline),
+                title: const Text('OpenChat'),
+                subtitle: Text(
+                  version.isEmpty
+                      ? 'Open Source • E2E Encrypted'
+                      : '$version • Open Source • E2E Encrypted',
+                ),
+                onTap: () => showAboutDialog(
+                  context: context,
+                  applicationName: 'OpenChat',
+                  applicationVersion: version,
+                  applicationIcon: Image.asset('assets/images/logo.png',
+                      height: 48,
+                      errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+                  applicationLegalese:
+                      'Open source, end-to-end encrypted messenger.\n'
+                      'Uses OpenPGP (RFC 4880) for encryption.',
+                ),
+              );
+            },
           ),
 
           const Divider(),

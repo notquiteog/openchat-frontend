@@ -14,6 +14,7 @@ import 'providers/settings_provider.dart';
 import 'services/api_service.dart';
 import 'services/background_ws_service.dart';
 import 'services/call_service.dart';
+import 'services/desktop_tray_service.dart';
 import 'services/notification_service.dart';
 import 'services/push_notification_service.dart';
 import 'services/secure_storage_service.dart';
@@ -41,6 +42,7 @@ void main() async {
   if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
+    await DesktopTrayService().init();
   }
   // Register Firebase background message handler before runApp so the
   // messaging plugin can dispatch messages when the app is terminated.

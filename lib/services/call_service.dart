@@ -323,11 +323,15 @@ class CallService {
     try {
       final outputs = await Helper.audiooutputs;
       if (outputs.isNotEmpty) {
-        return outputs
-            .where((d) => d.deviceId.isNotEmpty)
-            .map((d) => CallAudioOutput(
-                deviceId: d.deviceId, label: _labelForAudioOutput(d.label)))
-            .toList(growable: false);
+        return outputs.where((d) => d.deviceId.isNotEmpty).map((d) {
+          final label = _labelForAudioOutput(d.label);
+          final deviceId = !kIsWeb &&
+                  (defaultTargetPlatform == TargetPlatform.android ||
+                      defaultTargetPlatform == TargetPlatform.iOS)
+              ? _mobileAudioOutputId(label, d.deviceId)
+              : d.deviceId;
+          return CallAudioOutput(deviceId: deviceId, label: label);
+        }).toList(growable: false);
       }
     } catch (_) {}
 
@@ -382,6 +386,17 @@ class CallService {
       return 'Headset';
     }
     return label;
+  }
+
+  String _mobileAudioOutputId(String label, String fallback) {
+    switch (label) {
+      case 'Speaker':
+        return 'speaker';
+      case 'Earpiece':
+        return 'earpiece';
+      default:
+        return fallback;
+    }
   }
 
   // ---- WebSocket events ----

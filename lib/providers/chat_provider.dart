@@ -47,11 +47,18 @@ class ChatProvider extends ChangeNotifier {
   bool get isLoading => _isLoading;
 
   StreamSubscription<WsEvent>? _wsSub;
+  Timer? _pollTimer;
 
   ChatProvider(this._api, this._storage, this._ws, this._settings) {
     _wsSub = _ws.events.listen(_handleWsEvent);
     _ws.connect();
     _storage.getUserID().then((id) => _selfId = id);
+    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      final token = await _storage.getAccessToken();
+      if (token == null) return;
+      unawaited(_ws.connect());
+      unawaited(loadConversations());
+    });
   }
 
   Future<void> connectWebSocket() => _ws.connect();
@@ -92,7 +99,7 @@ class ChatProvider extends ChangeNotifier {
 
   Future<void> loadMessages(String convID) async {
     try {
-      final msgs = await _api.getMessages(convID, limit: 50);
+      final msgs = await _api.getMessages(convID, limit: 20);
       final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
 
       // Reuse in-memory decrypted state for messages already decrypted this
@@ -129,7 +136,7 @@ class ChatProvider extends ChangeNotifier {
       final older = await _api.getMessages(
         convID,
         beforeID: oldest.id,
-        limit: 50,
+        limit: 20,
       );
       for (final msg in older) {
         _hydrateMessageSender(msg);
@@ -762,6 +769,7 @@ class ChatProvider extends ChangeNotifier {
   @override
   void dispose() {
     _wsSub?.cancel();
+    _pollTimer?.cancel();
     _ws.disconnect();
     super.dispose();
   }

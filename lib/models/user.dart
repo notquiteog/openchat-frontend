@@ -129,6 +129,7 @@ class User {
     bool? isFlaggedScammer,
     bool? isBanned,
     bool? allowGroupAdd,
+    DateTime? premiumUntil,
   }) =>
       User(
         id: id,
@@ -145,7 +146,7 @@ class User {
         allowGroupAdd: allowGroupAdd ?? this.allowGroupAdd,
         createdAt: createdAt,
         lastSeen: lastSeen,
-        premiumUntil: premiumUntil,
+        premiumUntil: premiumUntil ?? this.premiumUntil,
         publicKeyExpiresAt: publicKeyExpiresAt,
       );
 }

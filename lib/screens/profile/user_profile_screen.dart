@@ -104,6 +104,31 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     }
   }
 
+  Future<void> _grantPremiumMonth() async {
+    final api = context.read<ApiService>();
+    final confirmed = await _confirm('Give @${_user.username} Premium?',
+        'This adds one month of Premium to the user account.');
+    if (!confirmed) return;
+    setState(() => _loading = true);
+    try {
+      await api.grantPremiumMonth(_user.id);
+      setState(() {
+        final now = DateTime.now();
+        final base =
+            _user.premiumUntil != null && _user.premiumUntil!.isAfter(now)
+                ? _user.premiumUntil!
+                : now;
+        _user =
+            _user.copyWith(premiumUntil: base.add(const Duration(days: 30)));
+      });
+      _snack('Premium granted for one month.');
+    } catch (e) {
+      _snack('Failed: $e');
+    } finally {
+      setState(() => _loading = false);
+    }
+  }
+
   Future<bool> _confirm(String title, String content) async {
     return await showDialog<bool>(
           context: context,
@@ -206,6 +231,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                   case 'unflag':
                     _unflagScammer();
                     break;
+                  case 'premium_month':
+                    _grantPremiumMonth();
+                    break;
                 }
               },
               itemBuilder: (_) => [
@@ -220,6 +248,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 else
                   const PopupMenuItem(
                       value: 'unflag', child: Text('Remove scammer flag')),
+                const PopupMenuItem(
+                    value: 'premium_month',
+                    child: Text('Give Premium for 1 month')),
               ],
             ),
         ],
@@ -352,6 +383,18 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                   title: Text(_user.isOnline ? 'Online' : 'Last seen recently'),
                   dense: true,
                 ),
+
+                if (_user.isPremium)
+                  ListTile(
+                    leading: const Icon(Icons.workspace_premium),
+                    title: const Text('Premium active'),
+                    subtitle: _user.premiumUntil == null
+                        ? null
+                        : Text(
+                            'Until ${_user.premiumUntil!.toLocal().toString().split('.').first}',
+                          ),
+                    dense: true,
+                  ),
 
                 if (!_isOwnProfile) ...[
                   const Divider(height: 1),
