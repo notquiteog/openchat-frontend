@@ -115,7 +115,7 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: false
+          cache: true
 
       - name: Inject Firebase config
         env:
