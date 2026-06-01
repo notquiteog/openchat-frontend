@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=OpenChat
+Comment=Open-source E2E encrypted messenger with PGP
+Exec=openchat %u
+Icon=win.openchat.OpenChat
+Terminal=false
+Categories=Network;Chat;InstantMessaging;
+Keywords=chat;messenger;encrypted;pgp;openchat;
+StartupNotify=true

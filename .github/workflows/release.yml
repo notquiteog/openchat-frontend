@@ -185,7 +185,8 @@ jobs:
             libgtk-3-dev liblzma-dev libsecret-1-dev \
             libayatana-appindicator3-dev \
             libjsoncpp-dev libunwind-dev \
-            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            desktop-file-utils dpkg-dev flatpak flatpak-builder
 
       - name: Inject Firebase config
         env:
@@ -207,8 +208,25 @@ jobs:
           tar -czf "$ARCHIVE" -C build/linux/x64/release/bundle .
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
+      - name: Package deb
+        run: |
+          DEB="$(packaging/linux/build_deb.sh "${{ needs.version.outputs.version }}")"
+          echo "DEB=${DEB}" >> "$GITHUB_ENV"
+
+      - name: Package Flatpak
+        run: |
+          sudo flatpak remote-add --if-not-exists --system flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install --system --noninteractive -y flathub org.gnome.Platform//50 org.gnome.Sdk//50
+          FLATPAK="$(packaging/linux/build_flatpak.sh "${{ needs.version.outputs.version }}")"
+          echo "FLATPAK=${FLATPAK}" >> "$GITHUB_ENV"
+
       - name: Upload to release
-        run: gh release upload "${{ needs.version.outputs.release_tag }}" "${{ env.ARCHIVE }}" --clobber
+        run: |
+          gh release upload "${{ needs.version.outputs.release_tag }}" \
+            "${{ env.ARCHIVE }}" \
+            "${{ env.DEB }}" \
+            "${{ env.FLATPAK }}" \
+            --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 
