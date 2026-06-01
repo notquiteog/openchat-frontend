@@ -3,6 +3,8 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mime/mime.dart';
 import 'package:path/path.dart' as p;
@@ -42,6 +44,23 @@ class PendingAttachment {
       };
 }
 
+/// Bytes + metadata prepared for encryption/upload.
+class PreparedAttachmentInput {
+  final Uint8List bytes;
+  final String fileName;
+  final String mimeType;
+  final MessageType messageType;
+  final int originalFileSize;
+
+  const PreparedAttachmentInput({
+    required this.bytes,
+    required this.fileName,
+    required this.mimeType,
+    required this.messageType,
+    required this.originalFileSize,
+  });
+}
+
 class AttachmentService {
   final ApiService _api;
   final _cipher = AesGcm.with256bits();
@@ -60,10 +79,13 @@ class AttachmentService {
 
   Future<PendingAttachment?> pickImage({bool fromCamera = false}) async {
     final XFile? file = fromCamera
-        ? await _imagePicker.pickImage(source: ImageSource.camera, imageQuality: 85)
-        : await _imagePicker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+        ? await _imagePicker.pickImage(
+            source: ImageSource.camera, imageQuality: 85)
+        : await _imagePicker.pickImage(
+            source: ImageSource.gallery, imageQuality: 85);
     if (file == null) return null;
-    return _processFile(File(file.path));
+    final prepared = await prepareGalleryPhotoForUpload(File(file.path));
+    return _processPrepared(prepared);
   }
 
   Future<PendingAttachment?> pickVideo({bool fromCamera = false}) async {
@@ -71,7 +93,8 @@ class AttachmentService {
         ? await _imagePicker.pickVideo(source: ImageSource.camera)
         : await _imagePicker.pickVideo(source: ImageSource.gallery);
     if (file == null) return null;
-    return _processFile(File(file.path));
+    final prepared = await prepareFileForUpload(File(file.path));
+    return _processPrepared(prepared);
   }
 
   Future<PendingAttachment?> pickFile() async {
@@ -79,23 +102,62 @@ class AttachmentService {
     if (result == null || result.files.isEmpty) return null;
     final pf = result.files.first;
     if (pf.path == null) return null;
-    return _processFile(File(pf.path!));
+    final prepared = await prepareFileForUpload(File(pf.path!));
+    return _processPrepared(prepared);
   }
 
   // ---- Core: encrypt + upload ----
 
-  Future<PendingAttachment> _processFile(File file) async {
+  static Future<PreparedAttachmentInput> prepareGalleryPhotoForUpload(
+    File file, {
+    Future<Uint8List?> Function(File file, Uint8List bytes)? webpEncoder,
+  }) async {
+    final originalBytes = await file.readAsBytes();
+    final compressed = await (webpEncoder ?? _compressToWebp)(
+      file,
+      originalBytes,
+    );
+    if (compressed == null) {
+      throw StateError('Could not encode gallery photo as WebP');
+    }
+    final fileName = _webpFileName(file.path);
+    return PreparedAttachmentInput(
+      bytes: compressed,
+      fileName: fileName,
+      mimeType: 'image/webp',
+      messageType: MessageType.image,
+      originalFileSize: originalBytes.length,
+    );
+  }
+
+  static Future<PreparedAttachmentInput> prepareFileForUpload(File file) async {
     final bytes = await file.readAsBytes();
     final fileName = p.basename(file.path);
-    final mimeType = lookupMimeType(file.path) ?? 'application/octet-stream';
-    final msgType = _mimeToMessageType(mimeType);
+    final mimeType = lookupMimeType(file.path, headerBytes: bytes) ??
+        'application/octet-stream';
+    return PreparedAttachmentInput(
+      bytes: bytes,
+      fileName: fileName,
+      mimeType: mimeType,
+      messageType: _mimeToMessageTypeStatic(mimeType),
+      originalFileSize: bytes.length,
+    );
+  }
+
+  Future<PendingAttachment> _processPrepared(
+      PreparedAttachmentInput prepared) async {
+    final bytes = prepared.bytes;
+    final fileName = prepared.fileName;
+    final mimeType = prepared.mimeType;
+    final msgType = prepared.messageType;
 
     // 1. Generate a random AES-256-GCM key + 12-byte nonce.
     final secretKey = await _cipher.newSecretKey();
     final nonce = _cipher.newNonce();
 
     // 2. Encrypt the file bytes client-side.
-    final secretBox = await _cipher.encrypt(bytes, secretKey: secretKey, nonce: nonce);
+    final secretBox =
+        await _cipher.encrypt(bytes, secretKey: secretKey, nonce: nonce);
     final ciphertext = Uint8List.fromList(secretBox.concatenation());
 
     // 3. Encode key + nonce as base64 to embed in the PGP payload.
@@ -119,12 +181,46 @@ class AttachmentService {
     return PendingAttachment(
       attachmentId: uploadReq.attachmentId,
       fileName: fileName,
-      fileSize: bytes.length, // original unencrypted size for display
+      fileSize:
+          prepared.originalFileSize, // original unencrypted size for display
       mimeType: mimeType,
       messageType: msgType,
       fileKey: keyB64,
       fileNonce: nonceB64,
     );
+  }
+
+  static Future<Uint8List?> _compressToWebp(
+    File file,
+    Uint8List bytes,
+  ) async {
+    try {
+      List<int>? out;
+      if (kIsWeb) {
+        out = await FlutterImageCompress.compressWithList(
+          bytes,
+          format: CompressFormat.webp,
+          quality: 86,
+          keepExif: false,
+        );
+      } else {
+        out = await FlutterImageCompress.compressWithFile(
+          file.absolute.path,
+          format: CompressFormat.webp,
+          quality: 86,
+          keepExif: false,
+        );
+      }
+      if (out == null) return null;
+      return Uint8List.fromList(out);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static String _webpFileName(String originalPath) {
+    final stem = p.basenameWithoutExtension(originalPath);
+    return '$stem.webp';
   }
 
   // ---- Download + decrypt ----
@@ -177,7 +273,7 @@ class AttachmentService {
     return builder.toBytes();
   }
 
-  MessageType _mimeToMessageType(String mime) {
+  static MessageType _mimeToMessageTypeStatic(String mime) {
     if (mime.startsWith('image/')) return MessageType.image;
     if (mime.startsWith('video/')) return MessageType.video;
     return MessageType.file;

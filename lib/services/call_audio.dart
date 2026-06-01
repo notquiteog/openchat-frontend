@@ -1,52 +1,71 @@
 import 'package:audioplayers/audioplayers.dart';
 import 'call_service.dart';
 
+abstract class CallAudioController {
+  Future<void> update({CallState? state, bool incoming = false});
+  Future<void> stop();
+  void dispose();
+}
+
 /// Plays the looping call tones: `ringing.mp3` while a call is ringing (incoming
 /// awaiting answer, or outgoing awaiting pickup) and `connecting.mp3` while media
 /// is negotiating. Driven by [CallProvider] from the call state; a no-op once the
 /// call connects or ends. Tolerant of platforms without audio output.
-class CallAudio {
+class CallAudio implements CallAudioController {
   final AudioPlayer _player = AudioPlayer();
+  Future<void> _pending = Future<void>.value();
+  int _op = 0;
   String? _current; // 'ringing' | 'connecting' | null
 
-  Future<void> _play(String tone) async {
+  @override
+  Future<void> stop() async {
+    await _enqueue(null);
+  }
+
+  /// Update the tone to match the call. [incoming] is an unanswered incoming
+  /// call; otherwise [state] is the active session's state.
+  @override
+  Future<void> update({CallState? state, bool incoming = false}) {
+    if (incoming) return _enqueue('ringing');
+    return _enqueue(
+      switch (state) {
+        CallState.calling || CallState.ringing => 'ringing',
+        CallState.connecting => 'connecting',
+        _ => null,
+      },
+    );
+  }
+
+  Future<void> _enqueue(String? tone) {
+    final op = ++_op;
+    _pending = _pending.then((_) => _apply(op: op, tone: tone));
+    return _pending;
+  }
+
+  Future<void> _apply({required int op, required String? tone}) async {
+    if (op != _op) return;
+    if (tone == null) {
+      if (_current == null) return;
+      _current = null;
+      try {
+        await _player.stop();
+      } catch (_) {}
+      return;
+    }
     if (_current == tone) return;
     _current = tone;
     try {
       await _player.stop();
+      if (op != _op || _current != tone) return;
       await _player.setReleaseMode(ReleaseMode.loop);
+      if (op != _op || _current != tone) return;
       await _player.play(AssetSource('sounds/$tone.mp3'));
     } catch (_) {
       // No audio device / unsupported — fail quietly, the call still works.
     }
   }
 
-  Future<void> stop() async {
-    if (_current == null) return;
-    _current = null;
-    try {
-      await _player.stop();
-    } catch (_) {}
-  }
-
-  /// Update the tone to match the call. [incoming] is an unanswered incoming
-  /// call; otherwise [state] is the active session's state.
-  void update({CallState? state, bool incoming = false}) {
-    if (incoming) {
-      _play('ringing');
-      return;
-    }
-    switch (state) {
-      case CallState.calling:
-      case CallState.ringing:
-        _play('ringing');
-      case CallState.connecting:
-        _play('connecting');
-      default:
-        stop();
-    }
-  }
-
+  @override
   void dispose() {
     _player.dispose();
   }

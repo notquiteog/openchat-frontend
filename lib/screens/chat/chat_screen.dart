@@ -13,13 +13,13 @@ import '../../models/message.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/call_provider.dart';
 import '../../providers/chat_provider.dart';
-import '../../providers/key_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/call_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/attachment_service.dart';
-import '../../services/secure_storage_service.dart';
+import '../../widgets/conversation_encryption_status.dart';
+import '../../widgets/conversation_info_panel.dart';
 import '../../widgets/message_bubble.dart';
 import '../../widgets/sticker_picker.dart';
 import '../profile/user_profile_screen.dart';
@@ -39,7 +39,6 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _loadingMore = false;
   Message? _replyingTo;
   Timer? _typingTimer;
-  bool _biometricKeyEnabled = false;
 
   // Read the live conversation from the provider (members get loaded
   // asynchronously after the screen opens) and fall back to the one passed in.
@@ -57,22 +56,11 @@ class _ChatScreenState extends State<ChatScreen> {
     NotificationService.setActiveConversation(widget.conversation.id);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       // Capture context-dependent reads before the async gap.
-      final storage = context.read<SecureStorageService>();
       final chat = context.read<ChatProvider>();
-      _biometricKeyEnabled = await storage.shouldRequireBiometricKeyUnlock();
-      if (mounted) setState(() {});
       chat.loadMessages(conv.id);
       chat.loadConversationMembers(conv.id);
     });
     _scrollCtrl.addListener(_onScroll);
-  }
-
-  Future<void> _unlockAndReload() async {
-    final keys = context.read<KeyProvider>();
-    final ok = await keys.authenticateAndUnlockKey();
-    if (ok && mounted) {
-      context.read<ChatProvider>().loadMessages(conv.id);
-    }
   }
 
   void _onScroll() {
@@ -327,11 +315,9 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
     final chat = context.watch<ChatProvider>();
-    final keys = context.watch<KeyProvider>();
     final messages = chat.messagesFor(conv.id);
     final currentUserID = auth.currentUser?.id ?? '';
     final typingUsers = chat.typingUsersFor(conv.id);
-    final keyLocked = _biometricKeyEnabled && !keys.isKeySessionUnlocked;
 
     // Per-DM look (background + bubble colour/shape). Only DMs are customizable.
     final dmStyle = conv.isDM
@@ -347,7 +333,6 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: _buildAppBar(context, typingUsers, currentUserID),
       body: Column(
         children: [
-          if (keyLocked) _KeyLockedBanner(onUnlock: _unlockAndReload),
           Expanded(
             child: DecoratedBox(
               decoration: _chatBackground(dmStyle),
@@ -685,27 +670,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       ],
                     ),
-                  if (!conv.isDM)
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          conv.encryptionEnabled
-                              ? Icons.lock_outline
-                              : Icons.lock_open_outlined,
-                          size: 12,
-                          color: Colors.grey[400],
-                        ),
-                        const SizedBox(width: 3),
-                        Text(
-                          conv.encryptionEnabled
-                              ? 'Encrypted'
-                              : 'Encryption off',
-                          style:
-                              TextStyle(fontSize: 11, color: Colors.grey[400]),
-                        ),
-                      ],
-                    ),
+                  ConversationEncryptionStatus(conversation: conv),
                 ],
               ),
             ),
@@ -1089,19 +1054,9 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(conv.displayName(currentUserID)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (conv.description != null && conv.description!.isNotEmpty) ...[
-              Text(conv.description!),
-              const SizedBox(height: 8),
-            ],
-            Text(
-              '${conv.members.length} member${conv.members.length == 1 ? '' : 's'}',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
+        content: ConversationInfoPanel(
+          conversation: conv,
+          currentUserId: currentUserID,
         ),
         actions: [
           TextButton(
@@ -1523,43 +1478,6 @@ class _ChatScreenState extends State<ChatScreen> {
         messenger.showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
       }
     }
-  }
-}
-
-class _KeyLockedBanner extends StatelessWidget {
-  final VoidCallback onUnlock;
-  const _KeyLockedBanner({required this.onUnlock});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Material(
-      color: theme.colorScheme.secondaryContainer,
-      child: InkWell(
-        onTap: onUnlock,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          child: Row(
-            children: [
-              Icon(Icons.lock_outline,
-                  size: 18, color: theme.colorScheme.onSecondaryContainer),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Messages are locked — tap to authenticate and decrypt',
-                  style: TextStyle(
-                    color: theme.colorScheme.onSecondaryContainer,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-              Icon(Icons.fingerprint,
-                  color: theme.colorScheme.onSecondaryContainer),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }
 

@@ -18,6 +18,7 @@ class NotificationService {
       !kIsWeb &&
       (Platform.isAndroid ||
           Platform.isIOS ||
+          Platform.isWindows ||
           Platform.isMacOS ||
           Platform.isLinux);
 
@@ -38,6 +39,11 @@ class NotificationService {
         requestSoundPermission: false,
       ),
       linux: LinuxInitializationSettings(defaultActionName: 'Open'),
+      windows: WindowsInitializationSettings(
+        appName: 'OpenChat',
+        appUserModelId: 'OpenChat.Client.Desktop',
+        guid: '4f8aa98f-306e-4f6d-84ee-e1206cd6b623',
+      ),
     );
     await _plugin.initialize(settings: settings);
     _inited = true;
@@ -99,6 +105,7 @@ class NotificationService {
       iOS: DarwinNotificationDetails(),
       macOS: DarwinNotificationDetails(),
       linux: LinuxNotificationDetails(),
+      windows: WindowsNotificationDetails(),
     );
     final displayTitle = showSensitive ? title : 'OpenChat';
     final displayBody = showSensitive ? body : 'You have a new message';
@@ -125,6 +132,9 @@ class NotificationService {
       iOS: DarwinNotificationDetails(),
       macOS: DarwinNotificationDetails(),
       linux: LinuxNotificationDetails(),
+      windows: WindowsNotificationDetails(
+        scenario: WindowsNotificationScenario.incomingCall,
+      ),
     );
     await _plugin.show(id: 1, title: 'Incoming call', body: body, notificationDetails: details);
   }
@@ -143,6 +153,7 @@ class NotificationService {
       iOS: DarwinNotificationDetails(),
       macOS: DarwinNotificationDetails(),
       linux: LinuxNotificationDetails(),
+      windows: WindowsNotificationDetails(),
     );
     await _plugin.show(
       id: DateTime.now().millisecondsSinceEpoch ~/ 1000,

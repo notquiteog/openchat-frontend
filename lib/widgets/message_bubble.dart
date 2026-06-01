@@ -10,6 +10,8 @@ import '../config/api_config.dart';
 import '../models/message.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
+import 'glass.dart';
+import 'message_image_layout.dart';
 
 class MessageBubble extends StatelessWidget {
   final Message message;
@@ -270,12 +272,27 @@ class _BubbleShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      constraints:
-          BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(color: color, borderRadius: radii),
-      child: child,
+    final tintOpacity =
+        ThemeData.estimateBrightnessForColor(color) == Brightness.dark
+            ? 0.58
+            : 0.48;
+    return GlassSurface(
+      blur: 16,
+      borderRadius: radii,
+      border: Border.all(
+        color: Colors.white.withValues(alpha: 0.22),
+        width: 0.75,
+      ),
+      child: Container(
+        constraints:
+            BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: tintOpacity),
+          borderRadius: radii,
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: child,
+      ),
     );
   }
 }
@@ -394,18 +411,18 @@ class _ImageBubbleState extends State<_ImageBubble> {
   Widget build(BuildContext context) {
     final textColor = widget.textColor;
     final c = widget.content;
-    final maxW = MediaQuery.of(context).size.width * 0.75;
+    final layout = MessageImageLayout.forViewport(MediaQuery.of(context).size);
 
     return ClipRRect(
       borderRadius: widget.radii,
       child: Container(
-        constraints: BoxConstraints(maxWidth: maxW),
+        constraints: BoxConstraints(maxWidth: layout.maxBubbleWidth),
         color: widget.bubbleColor,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.end,
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildImageArea(),
+            _buildImageArea(layout),
             if ((c.text).isNotEmpty)
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
@@ -422,15 +439,45 @@ class _ImageBubbleState extends State<_ImageBubble> {
     );
   }
 
-  Widget _buildImageArea() {
+  Widget _buildImageArea(MessageImageLayout layout) {
     return switch (_state) {
       _LoadState.done => GestureDetector(
           onTap: () => _showFullscreen(context),
-          child: Image.memory(
-            _bytes!,
-            width: double.infinity,
-            fit: BoxFit.cover,
-            gaplessPlayback: true,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: layout.maxImageHeight,
+            ),
+            child: Stack(
+              children: [
+                Image.memory(
+                  _bytes!,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                ),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: Tooltip(
+                    message: MessageImageLayout.expandTooltip,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Padding(
+                        padding: EdgeInsets.all(4),
+                        child: Icon(
+                          Icons.open_in_full,
+                          size: 14,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       _LoadState.loading => Container(

@@ -12,6 +12,7 @@ import '../../services/secure_storage_service.dart';
 import '../../crypto/pgp_service.dart';
 import '../../widgets/message_bubble.dart';
 import '../profile/user_profile_screen.dart';
+import 'channel_action_policy.dart';
 import 'moderation_screen.dart';
 
 /// Shows the channel-creation dialog and creates the channel. Returns the new
@@ -817,6 +818,117 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     }
   }
 
+  Future<void> _showChannelModerationMenu() async {
+    final auth = context.read<AuthProvider>();
+    final currentUserId = auth.currentUser?.id ?? '';
+    final canManageLifecycle = channel.createdBy == currentUserId ||
+        (auth.currentUser?.isSystemAdmin ?? false);
+    final placement = ChannelActionPolicy.actionsFor(
+      channel: channel,
+      isAdmin: _isAdmin,
+      isPremium: auth.currentUser?.isPremium ?? false,
+      canManageLifecycle: canManageLifecycle,
+      isSubscribed: _isSubscribed,
+    );
+    final action = await showModalBottomSheet<ChannelModerationAction>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final item in placement.moderationMenu)
+              ListTile(
+                leading: Icon(switch (item) {
+                  ChannelModerationAction.openModeration =>
+                    Icons.shield_outlined,
+                  ChannelModerationAction.archive => Icons.archive_outlined,
+                  ChannelModerationAction.unarchive => Icons.unarchive_outlined,
+                  ChannelModerationAction.delete => Icons.delete_outline,
+                }),
+                title: Text(switch (item) {
+                  ChannelModerationAction.openModeration => 'Moderation',
+                  ChannelModerationAction.archive => 'Archive channel',
+                  ChannelModerationAction.unarchive => 'Unarchive channel',
+                  ChannelModerationAction.delete => 'Delete channel',
+                }),
+                onTap: () => Navigator.pop(context, item),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case ChannelModerationAction.openModeration:
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ModerationScreen(conversation: channel),
+          ),
+        );
+      case ChannelModerationAction.archive:
+        _archiveChannel();
+      case ChannelModerationAction.unarchive:
+        _unarchiveChannel();
+      case ChannelModerationAction.delete:
+        _deleteChannel();
+    }
+  }
+
+  Future<void> _showChannelSettingsMenu() async {
+    final isPremium =
+        context.read<AuthProvider>().currentUser?.isPremium ?? false;
+    final placement = ChannelActionPolicy.actionsFor(
+      channel: channel,
+      isAdmin: _isAdmin,
+      isPremium: isPremium,
+      canManageLifecycle: false,
+      isSubscribed: _isSubscribed,
+    );
+    final action = await showModalBottomSheet<ChannelSettingsAction>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final item in placement.settingsMenu)
+              ListTile(
+                leading: Icon(switch (item) {
+                  ChannelSettingsAction.edit => Icons.settings_outlined,
+                  ChannelSettingsAction.background => Icons.wallpaper_outlined,
+                  ChannelSettingsAction.autoDelete => Icons.timer_outlined,
+                  ChannelSettingsAction.encryption => channel.encryptionEnabled
+                      ? Icons.lock_outline
+                      : Icons.lock_open_outlined,
+                }),
+                title: Text(switch (item) {
+                  ChannelSettingsAction.edit => 'Channel settings',
+                  ChannelSettingsAction.background =>
+                    'Set chat background (Premium)',
+                  ChannelSettingsAction.autoDelete => 'Disappearing messages',
+                  ChannelSettingsAction.encryption => channel.encryptionEnabled
+                      ? 'Turn encryption off'
+                      : 'Turn encryption on',
+                }),
+                onTap: () => Navigator.pop(context, item),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case ChannelSettingsAction.edit:
+        _editChannelSettings();
+      case ChannelSettingsAction.background:
+        _setBackground();
+      case ChannelSettingsAction.autoDelete:
+        _setDisappearing();
+      case ChannelSettingsAction.encryption:
+        _setEncryption();
+    }
+  }
+
   Future<void> _post() async {
     final text = _inputCtrl.text.trim();
     if (text.isEmpty) return;
@@ -874,7 +986,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final isOwner = channel.createdBy == currentUserId;
     final canManageLifecycle = isOwner || isSystemAdmin;
     final isArchived = _archived || channel.isArchived;
-    final canArchive = canManageLifecycle && !isArchived;
+    final actionPlacement = ChannelActionPolicy.actionsFor(
+      channel: channel,
+      isAdmin: _isAdmin,
+      isPremium: isPremium,
+      canManageLifecycle: canManageLifecycle,
+      isSubscribed: _isSubscribed,
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -954,69 +1072,27 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           ),
         ),
         actions: [
-          if (_isAdmin)
+          if (actionPlacement.topBar.contains(ChannelTopBarAction.moderation))
             IconButton(
               icon: const Icon(Icons.shield_outlined),
-              tooltip: 'Moderation',
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => ModerationScreen(conversation: channel)),
-              ),
+              tooltip: 'Channel moderation',
+              onPressed: _showChannelModerationMenu,
             ),
-          if (_isAdmin)
+          if (actionPlacement.topBar.contains(ChannelTopBarAction.settings))
             IconButton(
               icon: const Icon(Icons.settings_outlined),
               tooltip: 'Channel settings',
-              onPressed: _editChannelSettings,
+              onPressed: _showChannelSettingsMenu,
             ),
-          if (_isAdmin && isPremium)
-            IconButton(
-              icon: const Icon(Icons.wallpaper_outlined),
-              tooltip: 'Set chat background (Premium)',
-              onPressed: _setBackground,
-            ),
-          if (_isAdmin)
-            IconButton(
-              icon: const Icon(Icons.timer_outlined),
-              tooltip: 'Disappearing messages',
-              onPressed: _setDisappearing,
-            ),
-          if (_isAdmin)
-            IconButton(
-              icon: Icon(channel.encryptionEnabled
-                  ? Icons.lock_outline
-                  : Icons.lock_open_outlined),
-              tooltip: channel.encryptionEnabled
-                  ? 'Turn encryption off'
-                  : 'Turn encryption on',
-              onPressed: _setEncryption,
-            ),
-          if (canArchive)
-            IconButton(
-              icon: const Icon(Icons.archive_outlined),
-              tooltip: 'Archive channel',
-              onPressed: _archiveChannel,
-            ),
-          if (canManageLifecycle && isArchived) ...[
-            IconButton(
-              icon: const Icon(Icons.unarchive_outlined),
-              tooltip: 'Unarchive channel',
-              onPressed: _unarchiveChannel,
-            ),
-            IconButton(
-              icon: const Icon(Icons.delete_outline),
-              tooltip: 'Delete channel',
-              onPressed: _deleteChannel,
-            ),
-          ],
-          if (_isSubscribed)
+          if (actionPlacement.topBar.contains(ChannelTopBarAction.unsubscribe))
             IconButton(
               icon: const Icon(Icons.notifications_off_outlined),
               tooltip: 'Unsubscribe',
               onPressed: _unsubscribe,
             )
-          else if (!_archived && !channel.isArchived)
+          else if (actionPlacement.topBar
+                  .contains(ChannelTopBarAction.subscribe) &&
+              !isArchived)
             TextButton(onPressed: _subscribe, child: const Text('Subscribe')),
         ],
       ),

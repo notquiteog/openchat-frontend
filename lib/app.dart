@@ -1,3 +1,7 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:provider/provider.dart';
@@ -13,9 +17,14 @@ import 'screens/channels/channel_screen.dart';
 import 'screens/home/conversations_screen.dart';
 import 'screens/settings/pgp_keys_screen.dart';
 import 'services/api_service.dart';
+import 'services/app_access_gate.dart';
+import 'services/background_ws_service.dart';
 import 'services/call_service.dart';
+import 'services/foreground_ws_notification_router.dart';
+import 'services/notification_service.dart';
 import 'services/push_notification_service.dart';
 import 'services/secure_storage_service.dart';
+import 'services/websocket_service.dart';
 import 'theme/app_theme.dart';
 import 'widgets/glass.dart';
 
@@ -66,11 +75,8 @@ class _AppRootState extends State<_AppRoot> {
   bool _appLocked = false;
   bool _appLockEnabled = false;
   bool _promptingAppUnlock = false;
-  // Biometric key-unlock: when true the PGP key is gated behind biometrics,
-  // and we show a full-screen lock whenever the key session is not unlocked.
-  bool _biometricKeyRequired = false;
-  bool _promptingKeyUnlock = false;
   AppLifecycleListener? _lifecycleListener;
+  StreamSubscription<WsEvent>? _wsForegroundSub;
 
   @override
   void initState() {
@@ -82,19 +88,16 @@ class _AppRootState extends State<_AppRoot> {
       auth.initialize();
       context.read<KeyProvider>().load();
       context.read<CallProvider>().addListener(_onCallChanged);
+      _wsForegroundSub = context.read<WebSocketService>().events.listen(
+            _onForegroundWsEvent,
+          );
 
-      // Cache the app-lock and biometric-key-unlock preferences.
+      // Cache the app-lock preference.
       final storage = context.read<SecureStorageService>();
       _appLockEnabled = await storage.getAppLockEnabled();
-      _biometricKeyRequired = await storage.shouldRequireBiometricKeyUnlock();
       final shouldLockOnLaunch = _appLockEnabled && await storage.isLoggedIn();
       if (mounted && shouldLockOnLaunch) {
         setState(() => _appLocked = true);
-      }
-      // If biometric key unlock is enabled, the key session starts locked —
-      // _AppRoot.build() will show the lock screen immediately.
-      if (mounted && _biometricKeyRequired) {
-        setState(() {});
       }
       _lifecycleListener = AppLifecycleListener(
         onHide: _onBackground,
@@ -105,25 +108,15 @@ class _AppRootState extends State<_AppRoot> {
   }
 
   void _onBackground() {
-    final keys = context.read<KeyProvider>();
-    // Always lock the key session when the app backgrounds — regardless of
-    // app-lock, so biometric key-unlock requires re-auth after resuming.
-    keys.lockKeySession();
     final storage = context.read<SecureStorageService>();
-    Future.wait([
-      storage.getAppLockEnabled(),
-      storage.shouldRequireBiometricKeyUnlock(),
-    ]).then((results) {
+    storage.getAppLockEnabled().then((enabled) {
       if (!mounted) return;
-      _appLockEnabled = results[0];
-      _biometricKeyRequired = results[1];
+      _appLockEnabled = enabled;
       if (_appLockEnabled) {
         setState(() => _appLocked = true);
       } else if (_appLocked) {
         setState(() => _appLocked = false);
       }
-      // Key session was already locked above; build() will react to
-      // keys.isKeySessionUnlocked == false via the KeyProvider watch.
     });
     if (_appLockEnabled) {
       setState(() => _appLocked = true);
@@ -132,23 +125,13 @@ class _AppRootState extends State<_AppRoot> {
 
   void _onForeground() {
     final storage = context.read<SecureStorageService>();
-    Future.wait([
-      storage.getAppLockEnabled(),
-      storage.shouldRequireBiometricKeyUnlock(),
-    ]).then((results) {
+    storage.getAppLockEnabled().then((enabled) {
       if (!mounted) return;
-      _appLockEnabled = results[0];
-      _biometricKeyRequired = results[1];
+      _appLockEnabled = enabled;
       if (!_appLockEnabled && _appLocked) {
         setState(() => _appLocked = false);
       } else if (_appLocked) {
         _promptAppUnlock();
-        return;
-      }
-      // Auto-prompt biometric key unlock if needed (key was locked on background).
-      final keys = context.read<KeyProvider>();
-      if (_biometricKeyRequired && !keys.isKeySessionUnlocked) {
-        _promptKeyUnlock();
       }
     });
   }
@@ -170,26 +153,43 @@ class _AppRootState extends State<_AppRoot> {
     }
   }
 
-  Future<void> _promptKeyUnlock() async {
-    if (_promptingKeyUnlock) return;
-    _promptingKeyUnlock = true;
-    try {
-      // authenticateAndUnlockKey calls notifyListeners on success, which
-      // triggers the KeyProvider watch in build() to re-evaluate.
-      await context.read<KeyProvider>().authenticateAndUnlockKey();
-    } catch (_) {
-      // Stay locked; the user can retry via the lock-screen button.
-    } finally {
-      _promptingKeyUnlock = false;
-    }
-  }
-
   @override
   void dispose() {
     _lifecycleListener?.dispose();
+    _wsForegroundSub?.cancel();
     context.read<AuthProvider>().removeListener(_onAuthChanged);
     context.read<CallProvider>().removeListener(_onCallChanged);
     super.dispose();
+  }
+
+  void _onForegroundWsEvent(WsEvent event) {
+    final isDesktop = !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.windows ||
+            defaultTargetPlatform == TargetPlatform.linux ||
+            defaultTargetPlatform == TargetPlatform.macOS);
+
+    final showSensitive =
+        context.read<SettingsProvider>().notificationSensitiveContent;
+    final intent = ForegroundWsNotificationRouter.intentForEvent(
+      event,
+      showSensitive: showSensitive,
+      isDesktop: isDesktop,
+    );
+    if (intent == null) return;
+
+    switch (intent.kind) {
+      case NotificationIntentKind.message:
+        NotificationService.showMessage(
+          conversationId: (event.data['conversation_id'] as String?) ?? 'ws',
+          title: intent.title,
+          body: intent.body,
+          showSensitive: true,
+        );
+        break;
+      case NotificationIntentKind.incomingCall:
+        NotificationService.showIncomingCall(body: intent.body);
+        break;
+    }
   }
 
   void _onCallChanged() {
@@ -259,21 +259,15 @@ class _AppRootState extends State<_AppRoot> {
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
-    final keys = context.watch<KeyProvider>();
+    final gate = AppAccessGateDecision.resolve(
+      authenticated: auth.state == AuthState.authenticated,
+      appLockEnabled: _appLockEnabled,
+      appLocked: _appLocked,
+      biometricKeyExportEnabled: false,
+    );
 
-    if (auth.state == AuthState.authenticated && _appLocked) {
+    if (gate == AppAccessGateDecision.showAppLock) {
       return _AppLockScreen(onUnlock: _promptAppUnlock);
-    }
-
-    // Biometric key-unlock is enabled and the key session is locked.
-    // Block all app content until the user authenticates — not just the chat.
-    if (auth.state == AuthState.authenticated &&
-        _biometricKeyRequired &&
-        !keys.isKeySessionUnlocked) {
-      return _AppLockScreen(
-        subtitle: 'Authenticate to decrypt your messages',
-        onUnlock: _promptKeyUnlock,
-      );
     }
 
     return switch (auth.state) {
@@ -361,8 +355,7 @@ class _HomeShellState extends State<_HomeShell> {
 
 class _AppLockScreen extends StatelessWidget {
   final VoidCallback onUnlock;
-  final String? subtitle;
-  const _AppLockScreen({required this.onUnlock, this.subtitle});
+  const _AppLockScreen({required this.onUnlock});
 
   @override
   Widget build(BuildContext context) {
@@ -379,7 +372,7 @@ class _AppLockScreen extends StatelessWidget {
                 style: theme.textTheme.headlineSmall
                     ?.copyWith(fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
-            Text(subtitle ?? 'Authenticate to continue',
+            Text('Authenticate to continue',
                 style: theme.textTheme.bodyMedium
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
             const SizedBox(height: 32),

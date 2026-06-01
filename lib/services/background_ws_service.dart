@@ -10,6 +10,22 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config/api_config.dart';
 
+enum NotificationIntentKind { message, incomingCall }
+
+class NotificationIntent {
+  final NotificationIntentKind kind;
+  final int notificationId;
+  final String title;
+  final String body;
+
+  const NotificationIntent({
+    required this.kind,
+    required this.notificationId,
+    required this.title,
+    required this.body,
+  });
+}
+
 /// Persists a WebSocket connection while the app is in the background so that
 /// users receive message and call notifications without relying on Firebase.
 ///
@@ -220,52 +236,105 @@ class BackgroundWsService {
     if (raw is! String) return;
     for (final line in raw.trim().split('\n')) {
       if (line.isEmpty) continue;
-      try {
-        final json = jsonDecode(line) as Map<String, dynamic>;
-        final type = json['type'] as String?;
-        final data = (json['data'] as Map<String, dynamic>?) ?? {};
+      final intent = notificationIntentFromRawLine(
+        line,
+        showSensitive: showSensitive,
+      );
+      if (intent == null) continue;
+      _showIntent(notif, intent);
+    }
+  }
 
-        if (type == 'new_message') {
-          final convId = data['conversation_id'] as String? ?? 'msg';
-          final sender = data['sender_username'] as String?;
-          notif.show(
-            id: convId.hashCode,
-            title: showSensitive && sender != null ? '@$sender' : 'OpenChat',
-            body: showSensitive ? 'New message' : 'You have a new message',
-            notificationDetails: const NotificationDetails(
-              android: AndroidNotificationDetails(
-                'bg_messages',
-                'Background Messages',
-                channelDescription:
-                    'Messages received while the app is in the background',
-                importance: Importance.high,
-                priority: Priority.high,
-              ),
-              iOS: DarwinNotificationDetails(),
+  static NotificationIntent? notificationIntentFromRawLine(
+    String rawLine, {
+    required bool showSensitive,
+  }) {
+    try {
+      final json = jsonDecode(rawLine) as Map<String, dynamic>;
+      final type = json['type'] as String?;
+      final data = (json['data'] as Map<String, dynamic>?) ?? {};
+      if (type == null) return null;
+      return notificationIntentFromEvent(
+        type: type,
+        data: data,
+        showSensitive: showSensitive,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static NotificationIntent? notificationIntentFromEvent({
+    required String type,
+    required Map<String, dynamic> data,
+    required bool showSensitive,
+  }) {
+    if (type == 'new_message') {
+      final convId = data['conversation_id'] as String? ?? 'msg';
+      final sender = data['sender_username'] as String?;
+      return NotificationIntent(
+        kind: NotificationIntentKind.message,
+        notificationId: convId.hashCode,
+        title: showSensitive && sender != null ? '@$sender' : 'OpenChat',
+        body: showSensitive ? 'New message' : 'You have a new message',
+      );
+    }
+
+    if (type == 'call_offer' || type == 'incoming_call') {
+      final caller = data['caller_username'] as String?;
+      return NotificationIntent(
+        kind: NotificationIntentKind.incomingCall,
+        notificationId: 1,
+        title: 'Incoming call',
+        body:
+            showSensitive && caller != null ? '@$caller is calling' : 'Incoming call',
+      );
+    }
+
+    return null;
+  }
+
+  static void _showIntent(
+    FlutterLocalNotificationsPlugin notif,
+    NotificationIntent intent,
+  ) {
+    switch (intent.kind) {
+      case NotificationIntentKind.message:
+        notif.show(
+          id: intent.notificationId,
+          title: intent.title,
+          body: intent.body,
+          notificationDetails: const NotificationDetails(
+            android: AndroidNotificationDetails(
+              'bg_messages',
+              'Background Messages',
+              channelDescription:
+                  'Messages received while the app is in the background',
+              importance: Importance.high,
+              priority: Priority.high,
             ),
-          );
-        } else if (type == 'call_offer') {
-          final caller = data['caller_username'] as String?;
-          notif.show(
-            id: 1,
-            title: 'Incoming call',
-            body: showSensitive && caller != null
-                ? '@$caller is calling'
-                : 'Incoming call',
-            notificationDetails: const NotificationDetails(
-              android: AndroidNotificationDetails(
-                'bg_calls',
-                'Background Calls',
-                channelDescription:
-                    'Call notifications received while the app is in the background',
-                importance: Importance.max,
-                priority: Priority.max,
-              ),
-              iOS: DarwinNotificationDetails(),
+            iOS: DarwinNotificationDetails(),
+          ),
+        );
+        break;
+      case NotificationIntentKind.incomingCall:
+        notif.show(
+          id: intent.notificationId,
+          title: intent.title,
+          body: intent.body,
+          notificationDetails: const NotificationDetails(
+            android: AndroidNotificationDetails(
+              'bg_calls',
+              'Background Calls',
+              channelDescription:
+                  'Call notifications received while the app is in the background',
+              importance: Importance.max,
+              priority: Priority.max,
             ),
-          );
-        }
-      } catch (_) {}
+            iOS: DarwinNotificationDetails(),
+          ),
+        );
+        break;
     }
   }
 }

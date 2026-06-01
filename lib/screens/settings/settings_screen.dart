@@ -597,7 +597,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               secondary: const Icon(Icons.fingerprint),
               title: const Text('Biometric Key Unlock'),
               subtitle: const Text(
-                  'Require fingerprint / face to decrypt messages and use your PGP key'),
+                  'Require fingerprint / face before exporting your private key'),
               value: _biometricEnabled,
               onChanged: _setBiometric,
             ),

@@ -26,6 +26,10 @@ class _CallScreenState extends State<CallScreen> {
   void initState() {
     super.initState();
     _initRenderers();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      context.read<CallProvider>().refreshAudioOutputs();
+    });
   }
 
   Future<void> _initRenderers() async {
@@ -72,6 +76,45 @@ class _CallScreenState extends State<CallScreen> {
     context.read<CallProvider>().hangup();
   }
 
+  void _minimize() {
+    context.read<CallProvider>().setCallMinimized(true);
+  }
+
+  Future<void> _pickAudioOutput() async {
+    final cp = context.read<CallProvider>();
+    final outputs = cp.audioOutputs;
+    if (outputs.isEmpty) return;
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              const Text(
+                'Audio output',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              for (final output in outputs)
+                ListTile(
+                  title: Text(output.label),
+                  trailing: cp.selectedAudioOutputId == output.deviceId
+                      ? const Icon(Icons.check)
+                      : null,
+                  onTap: () => Navigator.of(context).pop(output.deviceId),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+    if (selected != null) {
+      await cp.selectAudioOutput(selected);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final callProvider = context.watch<CallProvider>();
@@ -91,14 +134,7 @@ class _CallScreenState extends State<CallScreen> {
     }
 
     final isVideo = session.isVideo;
-    final statusText = switch (session.state) {
-      CallState.ringing => 'Ringing…',
-      CallState.calling => 'Calling…',
-      CallState.connecting => 'Connecting…',
-      CallState.connected => 'Connected',
-      CallState.ended => 'Call ended',
-      CallState.idle => '',
-    };
+    final statusText = callProvider.callStatusText;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -174,12 +210,26 @@ class _CallScreenState extends State<CallScreen> {
             left: 0,
             right: 0,
             child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                child: Text(
-                  statusText,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70, fontSize: 16),
+              child: SizedBox(
+                height: 56,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Text(
+                      statusText,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white70, fontSize: 16),
+                    ),
+                    Positioned(
+                      left: 8,
+                      child: IconButton(
+                        key: const Key('minimize-call-button'),
+                        tooltip: 'Minimize call',
+                        onPressed: _minimize,
+                        icon: const Icon(Icons.expand_more, color: Colors.white70),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -208,6 +258,12 @@ class _CallScreenState extends State<CallScreen> {
                       icon: _micMuted ? Icons.mic_off : Icons.mic,
                       label: _micMuted ? 'Unmute' : 'Mute',
                       onTap: _toggleMic,
+                    ),
+
+                    _ControlButton(
+                      icon: Icons.volume_up,
+                      label: 'Audio',
+                      onTap: _pickAudioOutput,
                     ),
 
                     // Camera toggle (video calls only)
@@ -289,9 +345,65 @@ class CallOverlay extends StatelessWidget {
     }
     final session = cp.session;
     if (session != null && session.state != CallState.ended) {
+      if (cp.isCallMinimized) {
+        return const _MinimizedCallOverlay();
+      }
       return const CallScreen();
     }
     return const SizedBox.shrink();
+  }
+}
+
+class _MinimizedCallOverlay extends StatelessWidget {
+  const _MinimizedCallOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    final cp = context.watch<CallProvider>();
+    final session = cp.session;
+    if (session == null) return const SizedBox.shrink();
+    final name = session.remoteUsername ?? 'Unknown';
+    return SafeArea(
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Material(
+            key: const Key('minimized-call-overlay'),
+            color: Colors.black.withValues(alpha: 0.78),
+            borderRadius: BorderRadius.circular(24),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(24),
+              onTap: () => cp.setCallMinimized(false),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      key: const Key('expand-call-button'),
+                      tooltip: 'Expand call',
+                      onPressed: () => cp.setCallMinimized(false),
+                      icon: const Icon(Icons.open_in_full, color: Colors.white),
+                    ),
+                    Text(
+                      '$name • ${cp.callStatusText}',
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    const SizedBox(width: 4),
+                    IconButton(
+                      tooltip: 'End call',
+                      onPressed: cp.hangup,
+                      icon: const Icon(Icons.call_end, color: Colors.redAccent),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

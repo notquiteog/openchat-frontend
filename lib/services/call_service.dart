@@ -62,6 +62,13 @@ class CallEndedEvent {
   });
 }
 
+class CallAudioOutput {
+  final String deviceId;
+  final String label;
+
+  const CallAudioOutput({required this.deviceId, required this.label});
+}
+
 /// Manages a single WebRTC call. Handles offer/answer, ICE candidates,
 /// and forwards signaling through the WebSocket service.
 class CallService {
@@ -303,6 +310,78 @@ class CallService {
 
   void setCameraEnabled(bool enabled) {
     _localStream?.getVideoTracks().forEach((t) => t.enabled = enabled);
+  }
+
+  Future<List<CallAudioOutput>> getAudioOutputs() async {
+    if (!kIsWeb &&
+        defaultTargetPlatform != TargetPlatform.android &&
+        defaultTargetPlatform != TargetPlatform.iOS &&
+        defaultTargetPlatform != TargetPlatform.macOS &&
+        defaultTargetPlatform != TargetPlatform.windows) {
+      return const [];
+    }
+    try {
+      final outputs = await Helper.audiooutputs;
+      if (outputs.isNotEmpty) {
+        return outputs
+            .where((d) => d.deviceId.isNotEmpty)
+            .map((d) => CallAudioOutput(
+                deviceId: d.deviceId, label: _labelForAudioOutput(d.label)))
+            .toList(growable: false);
+      }
+    } catch (_) {}
+
+    if (!kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS)) {
+      return const [
+        CallAudioOutput(deviceId: 'speaker', label: 'Speaker'),
+        CallAudioOutput(deviceId: 'earpiece', label: 'Earpiece'),
+      ];
+    }
+    return const [];
+  }
+
+  Future<void> selectAudioOutput(String deviceId) async {
+    try {
+      if (!kIsWeb &&
+          (defaultTargetPlatform == TargetPlatform.android ||
+              defaultTargetPlatform == TargetPlatform.iOS)) {
+        if (deviceId == 'speaker') {
+          await Helper.setSpeakerphoneOn(true);
+          return;
+        }
+        if (deviceId == 'earpiece') {
+          await Helper.setSpeakerphoneOn(false);
+          return;
+        }
+      }
+      await Helper.selectAudioOutput(deviceId);
+    } catch (_) {
+      // Some platforms do not expose output routing in flutter_webrtc.
+    }
+  }
+
+  String _labelForAudioOutput(String raw) {
+    final label = raw.trim();
+    if (label.isEmpty) return 'Audio output';
+    final lower = label.toLowerCase();
+    if (lower.contains('bluetooth') || lower.contains('airpods')) {
+      return 'Bluetooth';
+    }
+    if (lower.contains('speaker')) {
+      return 'Speaker';
+    }
+    if (lower.contains('earpiece') || lower.contains('receiver')) {
+      return 'Earpiece';
+    }
+    if (lower.contains('headset') ||
+        lower.contains('headphone') ||
+        lower.contains('wired') ||
+        lower.contains('usb')) {
+      return 'Headset';
+    }
+    return label;
   }
 
   // ---- WebSocket events ----

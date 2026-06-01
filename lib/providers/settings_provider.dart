@@ -126,6 +126,11 @@ class SettingsProvider extends ChangeNotifier {
     _botsOwnTab = _prefs!.getBool(_kBotsTab) ?? false;
     _pushEnabled = _prefs!.getBool(_kPushEnabled) ?? false;
     _wsBgEnabled = _prefs!.getBool(_kWsBgEnabled) ?? false;
+    if (_pushEnabled && _wsBgEnabled) {
+      // Legacy state guard: never allow both channels to stay enabled.
+      _wsBgEnabled = false;
+      await _prefs!.setBool(_kWsBgEnabled, false);
+    }
     _notifSensitive = _prefs!.getBool(_kNotifSensitive) ?? false;
     notifyListeners();
   }
@@ -152,14 +157,26 @@ class SettingsProvider extends ChangeNotifier {
 
   Future<void> setPushNotificationsEnabled(bool value) async {
     _pushEnabled = value;
+    if (value) {
+      _wsBgEnabled = false;
+    }
     notifyListeners();
     await _prefs?.setBool(_kPushEnabled, value);
+    if (value) {
+      await _prefs?.setBool(_kWsBgEnabled, false);
+    }
   }
 
   Future<void> setWsBackgroundEnabled(bool value) async {
     _wsBgEnabled = value;
+    if (value) {
+      _pushEnabled = false;
+    }
     notifyListeners();
     await _prefs?.setBool(_kWsBgEnabled, value);
+    if (value) {
+      await _prefs?.setBool(_kPushEnabled, false);
+    }
   }
 
   Future<void> setNotificationSensitiveContent(bool value) async {

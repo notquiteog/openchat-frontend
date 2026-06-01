@@ -27,10 +27,10 @@ class SecureStorageService {
   static const _keyBiometricEnabled = 'biometric_enabled';
   static const _keyAppLockEnabled = 'app_lock_enabled';
 
-  // ---- In-memory session state (never persisted) ----
+  // ---- In-memory session state (kept for migration compatibility) ----
 
-  /// True once the user has biometrically authenticated to unlock their PGP key
-  /// this session. Reset to false on app lock or restart.
+  /// Legacy key-session state. Biometric key unlock now protects only private
+  /// key export, but older provider code may still read this value.
   bool _keySessionUnlocked = false;
 
   bool get isKeySessionUnlocked => _keySessionUnlocked;
@@ -137,12 +137,9 @@ class SecureStorageService {
   Future<void> setAppLockEnabled(bool enabled) => _storage.write(
       key: _keyAppLockEnabled, value: enabled ? 'true' : 'false');
 
-  /// Returns the private key only when biometric key unlock is disabled OR the
-  /// session has been explicitly unlocked via [unlockKeySession]. Returns null
-  /// otherwise so callers can prompt the user to authenticate.
+  /// Message encryption/decryption needs the private key during normal app use.
+  /// Biometric key unlock only protects explicit private-key export.
   Future<String?> getPrivateKeyIfUnlocked() async {
-    final biometricRequired = await shouldRequireBiometricKeyUnlock();
-    if (biometricRequired && !_keySessionUnlocked) return null;
     return getPrivateKey();
   }
 
