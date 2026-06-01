@@ -61,6 +61,14 @@ install -Dm644 "$ROOT_DIR/packaging/linux/shared/${APP_ID}.metainfo.xml" \
   "$SOURCE_DIR/${APP_ID}.metainfo.xml"
 install -Dm644 "$ROOT_DIR/web/icons/Icon-512.png" "$SOURCE_DIR/${APP_ID}.png"
 
+if command -v desktop-file-validate >/dev/null 2>&1; then
+  desktop-file-validate "$SOURCE_DIR/${APP_ID}.desktop" >&2
+fi
+
+if command -v appstreamcli >/dev/null 2>&1; then
+  appstreamcli validate --no-net "$SOURCE_DIR/${APP_ID}.metainfo.xml" >&2
+fi
+
 cat > "$SOURCE_DIR/openchat-flatpak" <<'EOF'
 #!/bin/sh
 export LD_LIBRARY_PATH="/app/openchat/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -88,7 +96,6 @@ finish-args:
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.freedesktop.secrets
   - --talk-name=org.kde.StatusNotifierWatcher
-  - --own-name=${APP_ID}
 modules:
   - name: openchat
     buildsystem: simple

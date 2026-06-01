@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>win.openchat.OpenChat</id>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>LicenseRef-proprietary</project_license>
+  <project_license>MIT</project_license>
   <name>OpenChat</name>
   <summary>Open-source E2E encrypted messenger with PGP</summary>
   <description>
@@ -16,8 +16,36 @@
     <color type="primary" scheme_preference="light">#3D5AFE</color>
     <color type="primary" scheme_preference="dark">#8EA0FF</color>
   </branding>
-  <developer_name>OpenChat</developer_name>
+  <developer id="win.openchat">
+    <name>OpenChat</name>
+  </developer>
   <url type="homepage">https://openchat.win</url>
-  <url type="bugtracker">https://github.com/notquiteog/openchat/issues</url>
+  <url type="bugtracker">https://github.com/notquiteog/openchat-frontend/issues</url>
+  <url type="vcs-browser">https://github.com/notquiteog/openchat-frontend</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/notquiteog/openchat-frontend/v0.3.5/packaging/linux/screenshots/openchat-login.png</image>
+      <caption>Sign in to encrypted chats with PGP identity support</caption>
+    </screenshot>
+  </screenshots>
+  <releases>
+    <release version="0.3.5" date="2026-06-01">
+      <url type="details">https://github.com/notquiteog/openchat-frontend/releases/tag/v0.3.5</url>
+      <description>
+        <p>Improves Linux packaging metadata and Flatpak release validation for Flathub submission readiness.</p>
+      </description>
+    </release>
+    <release version="0.3.4" date="2026-06-01">
+      <url type="details">https://github.com/notquiteog/openchat-frontend/releases/tag/v0.3.4</url>
+      <description>
+        <p>Adds Linux release packages, including Debian and Flatpak bundles.</p>
+      </description>
+    </release>
+  </releases>
   <content_rating type="oars-1.1" />
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>touch</control>
+  </supports>
 </component>
