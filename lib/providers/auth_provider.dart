@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import '../crypto/pgp_service.dart';
 import '../models/user.dart';
 import '../services/api_service.dart';
@@ -25,26 +26,32 @@ class AuthProvider extends ChangeNotifier {
   AuthProvider(this._api, this._storage);
 
   Future<void> initialize() async {
-    final loggedIn = await _storage.isLoggedIn();
-    if (!loggedIn) {
-      _state = AuthState.unauthenticated;
-      notifyListeners();
-      return;
-    }
     try {
-      _currentUser = await _api.getMe();
-      _state = AuthState.authenticated;
-    } catch (_) {
+      final loggedIn = await _storage.isLoggedIn();
+      if (!loggedIn) {
+        _state = AuthState.unauthenticated;
+        return;
+      }
       try {
-        await _api.refreshTokens();
         _currentUser = await _api.getMe();
         _state = AuthState.authenticated;
       } catch (_) {
-        await _storage.clearSession();
-        _state = AuthState.unauthenticated;
+        try {
+          await _api.refreshTokens();
+          _currentUser = await _api.getMe();
+          _state = AuthState.authenticated;
+        } catch (_) {
+          await _storage.clearSession();
+          _state = AuthState.unauthenticated;
+        }
       }
+    } on PlatformException catch (error) {
+      if (!SecureStorageService.isRecoverableReadFailure(error)) rethrow;
+      _currentUser = null;
+      _state = AuthState.unauthenticated;
+    } finally {
+      notifyListeners();
     }
-    notifyListeners();
   }
 
   /// Register: generates PGP key pair, registers with server, saves keys locally.

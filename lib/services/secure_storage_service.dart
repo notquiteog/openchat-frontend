@@ -1,4 +1,5 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 
 /// Manages secure storage of cryptographic keys and session tokens.
@@ -49,9 +50,9 @@ class SecureStorageService {
     await _storage.write(key: _keyFingerprint, value: fingerprint);
   }
 
-  Future<String?> getPrivateKey() => _storage.read(key: _keyPrivateKey);
-  Future<String?> getPublicKey() => _storage.read(key: _keyPublicKey);
-  Future<String?> getFingerprint() => _storage.read(key: _keyFingerprint);
+  Future<String?> getPrivateKey() => _readOrNull(_keyPrivateKey);
+  Future<String?> getPublicKey() => _readOrNull(_keyPublicKey);
+  Future<String?> getFingerprint() => _readOrNull(_keyFingerprint);
 
   Future<bool> hasKeyPair() async {
     final fp = await getFingerprint();
@@ -80,10 +81,10 @@ class SecureStorageService {
     await _storage.write(key: _keyRefreshToken, value: refreshToken);
   }
 
-  Future<String?> getAccessToken() => _storage.read(key: _keyAccessToken);
-  Future<String?> getRefreshToken() => _storage.read(key: _keyRefreshToken);
-  Future<String?> getUserID() => _storage.read(key: _keyUserID);
-  Future<String?> getUsername() => _storage.read(key: _keyUsername);
+  Future<String?> getAccessToken() => _readOrNull(_keyAccessToken);
+  Future<String?> getRefreshToken() => _readOrNull(_keyRefreshToken);
+  Future<String?> getUserID() => _readOrNull(_keyUserID);
+  Future<String?> getUsername() => _readOrNull(_keyUsername);
 
   Future<bool> isLoggedIn() async {
     final token = await getAccessToken();
@@ -110,7 +111,7 @@ class SecureStorageService {
   // ---- Biometric preference ----
 
   Future<bool> getBiometricEnabled() async {
-    final v = await _storage.read(key: _keyBiometricEnabled);
+    final v = await _readOrNull(_keyBiometricEnabled);
     return v == 'true';
   }
 
@@ -130,7 +131,7 @@ class SecureStorageService {
   // ---- App lock ----
 
   Future<bool> getAppLockEnabled() async {
-    final v = await _storage.read(key: _keyAppLockEnabled);
+    final v = await _readOrNull(_keyAppLockEnabled);
     return v == 'true';
   }
 
@@ -145,4 +146,17 @@ class SecureStorageService {
 
   /// Full wipe — called on logout or account deletion.
   Future<void> clearAll() => _storage.deleteAll();
+
+  static bool isRecoverableReadFailure(PlatformException error) {
+    return error.code == 'KeyringLocked';
+  }
+
+  static Future<String?> _readOrNull(String key) async {
+    try {
+      return await _storage.read(key: key);
+    } on PlatformException catch (error) {
+      if (!isRecoverableReadFailure(error)) rethrow;
+      return null;
+    }
+  }
 }

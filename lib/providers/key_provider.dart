@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 import '../crypto/pgp_service.dart';
 import '../services/api_service.dart';
@@ -59,8 +60,14 @@ class KeyProvider extends ChangeNotifier {
   KeyProvider(this._storage);
 
   Future<void> load() async {
-    _fingerprint = await _storage.getFingerprint();
-    _publicKey = await _storage.getPublicKey();
+    try {
+      _fingerprint = await _storage.getFingerprint();
+      _publicKey = await _storage.getPublicKey();
+    } on PlatformException catch (error) {
+      if (!SecureStorageService.isRecoverableReadFailure(error)) rethrow;
+      _fingerprint = null;
+      _publicKey = null;
+    }
     _hasKey = _fingerprint != null && _fingerprint!.isNotEmpty;
     notifyListeners();
   }

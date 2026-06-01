@@ -1,10 +1,6 @@
-import 'dart:io';
-
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'app.dart';
 import 'providers/auth_provider.dart';
 import 'providers/call_provider.dart';
@@ -14,7 +10,7 @@ import 'providers/settings_provider.dart';
 import 'services/api_service.dart';
 import 'services/background_ws_service.dart';
 import 'services/call_service.dart';
-import 'services/desktop_tray_service.dart';
+import 'services/desktop_startup_service.dart';
 import 'services/notification_service.dart';
 import 'services/push_notification_service.dart';
 import 'services/secure_storage_service.dart';
@@ -39,11 +35,8 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
-    sqfliteFfiInit();
-    databaseFactory = databaseFactoryFfi;
-    await DesktopTrayService().init();
-  }
+  DesktopStartupService.configureDatabaseFactory();
+  DesktopStartupService.startTray();
   // Register Firebase background message handler before runApp so the
   // messaging plugin can dispatch messages when the app is terminated.
   // No-op when Firebase credentials are placeholders or platform unsupported.

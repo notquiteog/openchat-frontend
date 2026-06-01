@@ -16,8 +16,6 @@ if [ ! -x "$BUNDLE_DIR/openchat" ]; then
   exit 1
 fi
 
-"$ROOT_DIR/packaging/linux/bundle_tray_libs.sh" "$BUNDLE_DIR"
-
 rm -rf "$WORK_DIR"
 mkdir -p \
   "$WORK_DIR/DEBIAN" \

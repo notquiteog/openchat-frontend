@@ -66,7 +66,6 @@ add_dependencies(${BINARY_NAME} flutter_assemble)
 # the default top-level location.
 set_target_properties(${BINARY_NAME}
   PROPERTIES
-  OUTPUT_NAME "${BINARY_NAME}.bin"
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/intermediates_do_not_run"
 )
 
@@ -95,13 +94,6 @@ set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib")
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
 
-set(LINUX_LAUNCHER_SCRIPT
-  "${CMAKE_CURRENT_SOURCE_DIR}/../packaging/linux/openchat-launcher.sh")
-install(PROGRAMS "${LINUX_LAUNCHER_SCRIPT}"
-  DESTINATION "${CMAKE_INSTALL_PREFIX}"
-  RENAME "${BINARY_NAME}"
-  COMPONENT Runtime)
-
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   COMPONENT Runtime)
 
@@ -113,18 +105,6 @@ foreach(bundled_library ${PLUGIN_BUNDLED_LIBRARIES})
     DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
     COMPONENT Runtime)
 endforeach(bundled_library)
-
-set(LINUX_TRAY_LIBS_BUNDLER
-  "${CMAKE_CURRENT_SOURCE_DIR}/../packaging/linux/bundle_tray_libs.sh")
-install(CODE "
-  execute_process(
-    COMMAND bash \"${LINUX_TRAY_LIBS_BUNDLER}\" \"${CMAKE_INSTALL_PREFIX}\"
-    RESULT_VARIABLE tray_libs_result
-  )
-  if(NOT tray_libs_result EQUAL 0)
-    message(FATAL_ERROR \"Failed to bundle Linux tray runtime libraries\")
-  endif()
-  " COMPONENT Runtime)
 
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/linux/")
