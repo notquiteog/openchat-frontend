@@ -13,6 +13,7 @@ timestamp="$(date +%Y%m%d%H%M%S)"
 changed_pam=0
 changed_portal=0
 changed_group=0
+changed_secret_service=0
 
 usage() {
   cat <<'EOF'
@@ -497,6 +498,28 @@ restart_user_portals() {
   run_user systemctl --user try-restart xdg-desktop-portal-cosmic.service >/dev/null 2>&1 || true
 }
 
+secret_service_pid() {
+  busctl --user status org.freedesktop.secrets 2>/dev/null |
+    awk -F= '/^PID=/{print $2; exit}'
+}
+
+restart_secret_service() {
+  local pid
+  pid="$(secret_service_pid)"
+  if [ -n "$pid" ]; then
+    if [ "$dry_run" -eq 1 ]; then
+      printf '[dry-run] kill %q\n' "$pid"
+    else
+      kill "$pid" || true
+    fi
+    sleep 1
+  fi
+
+  run_user busctl --user call org.freedesktop.secrets /org/freedesktop/secrets \
+    org.freedesktop.Secret.Service ReadAlias s default >/dev/null 2>&1 || true
+  changed_secret_service=1
+}
+
 ensure_portal_config() {
   [ "$skip_portal" -eq 0 ] || {
     info "Portal preference: skipped"
@@ -624,6 +647,82 @@ ensure_default_alias() {
   warn "No login or Default collection was found. Open Seahorse and create/unlock a Login keyring."
 }
 
+probe_libsecret_collection_load() {
+  command -v python3 >/dev/null 2>&1 || return 10
+
+  python3 - <<'PY'
+try:
+    import gi
+    gi.require_version('Secret', '1')
+    from gi.repository import Secret
+except Exception as error:
+    print(error)
+    raise SystemExit(10)
+
+try:
+    flags = Secret.ServiceFlags.OPEN_SESSION | Secret.ServiceFlags.LOAD_COLLECTIONS
+    service = Secret.Service.get_sync(flags, None)
+    collection = Secret.Collection.for_alias_sync(
+        service,
+        Secret.COLLECTION_DEFAULT,
+        Secret.CollectionFlags.NONE,
+        None,
+    )
+    if collection is None:
+        print('default collection alias did not resolve')
+        raise SystemExit(11)
+    print(f'{collection.get_label()} locked={str(collection.get_locked()).lower()}')
+except Exception as error:
+    print(error)
+    raise SystemExit(11)
+PY
+}
+
+ensure_libsecret_collection_load() {
+  [ "$skip_alias" -eq 0 ] || return
+
+  local output status retry_output retry_status
+  set +e
+  output="$(probe_libsecret_collection_load 2>&1)"
+  status=$?
+  set -e
+
+  case "$status" in
+    0)
+      info "Libsecret warmup: $output"
+      return
+      ;;
+    10)
+      warn "Libsecret warmup probe skipped; Python GI Secret bindings are unavailable."
+      return
+      ;;
+  esac
+
+  warn "Libsecret warmup failed: $output"
+  if [ "$mode" != "apply" ]; then
+    warn "Run with --apply to restart the user Secret Service and clear stale GNOME Keyring item paths."
+    return
+  fi
+
+  confirm "Restart the user Secret Service to clear stale keyring item paths?" || {
+    warn "Secret Service restart skipped by user."
+    return
+  }
+
+  restart_secret_service
+
+  set +e
+  retry_output="$(probe_libsecret_collection_load 2>&1)"
+  retry_status=$?
+  set -e
+
+  if [ "$retry_status" -eq 0 ]; then
+    info "Libsecret warmup after restart: $retry_output"
+  else
+    warn "Libsecret warmup still fails after restart: $retry_output"
+  fi
+}
+
 ensure_password_login_group() {
   if ! getent group nopasswdlogin >/dev/null 2>&1; then
     return
@@ -658,6 +757,7 @@ ensure_portal_config
 ensure_pam_hooks
 ensure_password_login_group
 ensure_default_alias
+ensure_libsecret_collection_load
 
 if [ "$mode" = "check" ]; then
   info "Check complete. Re-run with --apply to make the suggested changes."
@@ -669,4 +769,6 @@ if [ "$changed_pam" -eq 1 ] || [ "$changed_group" -eq 1 ]; then
   warn "Log out and sign back in with your password for PAM/group changes to take effect."
 elif [ "$changed_portal" -eq 1 ]; then
   warn "Restart OpenChat. If Flatpak still sees the old portal, log out and back in."
+elif [ "$changed_secret_service" -eq 1 ]; then
+  warn "Restart OpenChat so it reconnects to the refreshed Secret Service."
 fi

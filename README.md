@@ -91,7 +91,7 @@ OpenChat ships a Linux helper for this:
 ./tool/configure_linux_keyring.sh --apply
 ```
 
-The helper is conservative: `--check` only reports problems, while `--apply` prompts before host-level changes. On COSMIC/CachyOS it can install the GNOME Keyring/libsecret packages, write the user-level Secret portal preference, add backed-up `pam_gnome_keyring.so` auth/session hooks to the greeter PAM service, repair a missing default Secret Service alias, and warn about or remove the `nopasswdlogin` group that prevents login-time keyring unlock.
+The helper is conservative: `--check` only reports problems, while `--apply` prompts before host-level changes. On COSMIC/CachyOS it can install the GNOME Keyring/libsecret packages, write the user-level Secret portal preference, add backed-up `pam_gnome_keyring.so` auth/session hooks to the greeter PAM service, repair a missing default Secret Service alias, clear stale GNOME Keyring item paths by restarting the user Secret Service, and warn about or remove the `nopasswdlogin` group that prevents login-time keyring unlock.
 
 ```sh
 sudo pacman -S gnome-keyring libsecret seahorse xdg-desktop-portal xdg-desktop-portal-cosmic xdg-desktop-portal-gtk
