@@ -66,7 +66,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         if (!ok) return;
       } catch (e) {
         messenger.showSnackBar(
-            SnackBar(content: Text('Biometric unlock unavailable: $e')));
+          SnackBar(content: Text('Biometric unlock unavailable: $e')),
+        );
         return;
       }
     }
@@ -85,8 +86,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
         if (!ok) return;
       } catch (e) {
-        messenger
-            .showSnackBar(SnackBar(content: Text('App lock unavailable: $e')));
+        messenger.showSnackBar(
+          SnackBar(content: Text('App lock unavailable: $e')),
+        );
         return;
       }
     }
@@ -115,11 +117,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Cancel')),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
             FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Enable')),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Enable'),
+            ),
           ],
         ),
       );
@@ -135,13 +139,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final result = await PushNotificationService.initDetailed(api: api);
       if (!mounted) return;
       if (!result.success) {
-        messenger.showSnackBar(SnackBar(
-          content: Text(
-            PushNotificationService.messageForInitFailure(
-              result.failure ?? PushNotificationInitFailure.unsupported,
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              PushNotificationService.messageForInitFailure(
+                result.failure ?? PushNotificationInitFailure.unsupported,
+              ),
             ),
           ),
-        ));
+        );
         return;
       }
     } else {
@@ -168,11 +174,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Cancel')),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
             FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Enable')),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Enable'),
+            ),
           ],
         ),
       );
@@ -193,11 +201,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final permitted = await NotificationService.requestPermission();
       if (!mounted) return;
       if (!permitted) {
-        messenger.showSnackBar(const SnackBar(
-          content: Text(
-            'Notification permission is required for background notifications.',
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Notification permission is required for background notifications.',
+            ),
           ),
-        ));
+        );
         return;
       }
 
@@ -209,11 +219,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
       if (!mounted) return;
       if (!started) {
-        messenger.showSnackBar(const SnackBar(
-          content: Text(
-            'Background WebSocket could not start. Try again.',
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Background WebSocket could not start. Try again.'),
           ),
-        ));
+        );
         return;
       }
     } else {
@@ -239,22 +249,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setStateDialog) {
           Future<void> pickAndUpload() async {
-            final picked = await ImagePicker()
-                .pickImage(source: ImageSource.gallery, imageQuality: 90);
+            final picked = await ImagePicker().pickImage(
+              source: ImageSource.gallery,
+              imageQuality: 90,
+            );
             if (picked == null) return;
             setStateDialog(() => uploading = true);
             try {
               final bytes = await picked.readAsBytes();
               final url = await api.uploadAvatar(
-                  fileBytes: bytes, filename: picked.name);
+                fileBytes: bytes,
+                filename: picked.name,
+              );
               setStateDialog(() {
                 pendingAvatarUrl = url;
                 uploading = false;
               });
             } catch (e) {
               setStateDialog(() => uploading = false);
-              messenger
-                  .showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+              messenger.showSnackBar(
+                SnackBar(content: Text('Upload failed: $e')),
+              );
             }
           }
 
@@ -272,11 +287,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         radius: 40,
                         backgroundImage: pendingAvatarUrl != null
                             ? CachedNetworkImageProvider(
-                                ApiConfig.resolveMedia(pendingAvatarUrl!))
+                                ApiConfig.resolveMedia(pendingAvatarUrl!),
+                              )
                             : null,
                         child: pendingAvatarUrl == null
-                            ? Text(user.username[0].toUpperCase(),
-                                style: const TextStyle(fontSize: 28))
+                            ? Text(
+                                user.username[0].toUpperCase(),
+                                style: const TextStyle(fontSize: 28),
+                              )
                             : null,
                       ),
                       if (uploading) const CircularProgressIndicator(),
@@ -287,8 +305,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           child: CircleAvatar(
                             radius: 12,
                             backgroundColor: Theme.of(ctx).colorScheme.primary,
-                            child: const Icon(Icons.camera_alt,
-                                size: 14, color: Colors.white),
+                            child: const Icon(
+                              Icons.camera_alt,
+                              size: 14,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                     ],
@@ -305,8 +326,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             actions: [
               TextButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('Cancel')),
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
               FilledButton(
                 onPressed: uploading
                     ? null
@@ -321,7 +343,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           await auth.refreshCurrentUser();
                         } catch (e) {
                           messenger.showSnackBar(
-                              SnackBar(content: Text('Failed to update: $e')));
+                            SnackBar(content: Text('Failed to update: $e')),
+                          );
                         }
                       },
                 child: const Text('Save'),
@@ -342,7 +365,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   ];
 
   Future<void> _pickAccentColor(
-      BuildContext context, SettingsProvider settings) async {
+    BuildContext context,
+    SettingsProvider settings,
+  ) async {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -409,8 +434,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 TextFormField(
                   controller: currentCtrl,
                   obscureText: true,
-                  decoration:
-                      const InputDecoration(labelText: 'Current password'),
+                  decoration: const InputDecoration(
+                    labelText: 'Current password',
+                  ),
                   validator: (v) =>
                       (v == null || v.isEmpty) ? 'Required' : null,
                 ),
@@ -425,8 +451,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 TextFormField(
                   controller: confirmCtrl,
                   obscureText: true,
-                  decoration:
-                      const InputDecoration(labelText: 'Confirm new password'),
+                  decoration: const InputDecoration(
+                    labelText: 'Confirm new password',
+                  ),
                   validator: (v) =>
                       v != newCtrl.text ? 'Passwords do not match' : null,
                 ),
@@ -435,8 +462,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           actions: [
             TextButton(
-                onPressed: submitting ? null : () => Navigator.pop(ctx),
-                child: const Text('Cancel')),
+              onPressed: submitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
             FilledButton(
               onPressed: submitting
                   ? null
@@ -450,19 +478,233 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         );
                         if (ctx.mounted) Navigator.pop(ctx);
                         messenger.showSnackBar(
-                            const SnackBar(content: Text('Password changed')));
+                          const SnackBar(content: Text('Password changed')),
+                        );
                       } catch (e) {
                         setDlg(() => submitting = false);
                         messenger.showSnackBar(
-                            SnackBar(content: Text('Failed: $e')));
+                          SnackBar(content: Text('Failed: $e')),
+                        );
                       }
                     },
               child: submitting
                   ? const SizedBox(
                       width: 16,
                       height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2))
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
                   : const Text('Change'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _manageAccountSecurity() async {
+    final api = context.read<ApiService>();
+    final messenger = ScaffoldMessenger.of(context);
+    final twoFactorCtrl = TextEditingController();
+    final settings = await api.getSecuritySettings();
+    var selfDestructDays = settings['account_self_destruct_days'] as int? ?? 0;
+    final twoFactorEnabled = settings['two_factor_enabled'] as bool? ?? false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: const Text('Account security'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: twoFactorCtrl,
+                obscureText: true,
+                decoration: InputDecoration(
+                  labelText: twoFactorEnabled
+                      ? 'New 2FA password'
+                      : 'Enable 2FA password',
+                ),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int>(
+                initialValue: selfDestructDays,
+                decoration: const InputDecoration(
+                  labelText: 'Account self-destruct',
+                ),
+                items: const [
+                  DropdownMenuItem(value: 0, child: Text('Off')),
+                  DropdownMenuItem(value: 30, child: Text('After 30 days')),
+                  DropdownMenuItem(value: 180, child: Text('After 6 months')),
+                  DropdownMenuItem(value: 365, child: Text('After 1 year')),
+                ],
+                onChanged: (v) => setDlg(() => selfDestructDays = v ?? 0),
+              ),
+            ],
+          ),
+          actions: [
+            if (twoFactorEnabled)
+              TextButton(
+                onPressed: () async {
+                  await api.updateSecuritySettings(disableTwoFactor: true);
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  messenger.showSnackBar(
+                    const SnackBar(content: Text('2FA disabled')),
+                  );
+                },
+                child: const Text('Disable 2FA'),
+              ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final password = twoFactorCtrl.text.trim();
+                await api.updateSecuritySettings(
+                  twoFactorPassword: password.isEmpty ? null : password,
+                  accountSelfDestructDays: selfDestructDays,
+                );
+                if (ctx.mounted) Navigator.pop(ctx);
+                messenger.showSnackBar(
+                  const SnackBar(content: Text('Security settings updated')),
+                );
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _manageSessions() async {
+    final api = context.read<ApiService>();
+    final messenger = ScaffoldMessenger.of(context);
+    final sessions = await api.listSessions();
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Active sessions'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: sessions.isEmpty
+              ? const Text('No active sessions found')
+              : ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final session in sessions)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.devices_outlined),
+                        title: Text(
+                          session['device_name'] as String? ??
+                              session['user_agent'] as String? ??
+                              'OpenChat session',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(
+                          session['last_seen_at'] as String? ?? '',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.logout_outlined),
+                          onPressed: () async {
+                            await api.revokeSession(session['id'] as String);
+                            if (ctx.mounted) Navigator.pop(ctx);
+                            messenger.showSnackBar(
+                              const SnackBar(content: Text('Session revoked')),
+                            );
+                          },
+                        ),
+                      ),
+                  ],
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _manageBusinessProfile() async {
+    final api = context.read<ApiService>();
+    final messenger = ScaffoldMessenger.of(context);
+    final profile = await api.getBusinessProfile();
+    final displayCtrl = TextEditingController(
+      text: profile['display_name'] as String? ?? '',
+    );
+    final greetingCtrl = TextEditingController(
+      text: profile['greeting_message'] as String? ?? '',
+    );
+    final awayCtrl = TextEditingController(
+      text: profile['away_message'] as String? ?? '',
+    );
+    var enabled = profile['enabled'] as bool? ?? false;
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: const Text('Business suite'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Enabled'),
+                value: enabled,
+                onChanged: (v) => setDlg(() => enabled = v),
+              ),
+              TextField(
+                controller: displayCtrl,
+                decoration: const InputDecoration(labelText: 'Display name'),
+              ),
+              TextField(
+                controller: greetingCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Greeting message',
+                ),
+              ),
+              TextField(
+                controller: awayCtrl,
+                decoration: const InputDecoration(labelText: 'Away message'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                await api.updateBusinessProfile(
+                  displayName: displayCtrl.text.trim().isEmpty
+                      ? null
+                      : displayCtrl.text.trim(),
+                  greetingMessage: greetingCtrl.text.trim().isEmpty
+                      ? null
+                      : greetingCtrl.text.trim(),
+                  awayMessage: awayCtrl.text.trim().isEmpty
+                      ? null
+                      : awayCtrl.text.trim(),
+                  enabled: enabled,
+                );
+                if (ctx.mounted) Navigator.pop(ctx);
+                messenger.showSnackBar(
+                  const SnackBar(content: Text('Business profile saved')),
+                );
+              },
+              child: const Text('Save'),
             ),
           ],
         ),
@@ -537,7 +779,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               leading: CircleAvatar(
                 backgroundImage: user.avatarUrl != null
                     ? CachedNetworkImageProvider(
-                        ApiConfig.resolveMedia(user.avatarUrl!))
+                        ApiConfig.resolveMedia(user.avatarUrl!),
+                      )
                     : null,
                 child: user.avatarUrl == null
                     ? Text(user.username[0].toUpperCase())
@@ -545,8 +788,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               title: Row(
                 children: [
-                  Text('@${user.username}',
-                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                  Text(
+                    '@${user.username}',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
                   if (user.isSystemAdmin)
                     const Padding(
                       padding: EdgeInsets.only(left: 6),
@@ -555,8 +800,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   if (user.isPremium)
                     const Padding(
                       padding: EdgeInsets.only(left: 6),
-                      child: Icon(Icons.workspace_premium,
-                          size: 16, color: Colors.amber),
+                      child: Icon(
+                        Icons.workspace_premium,
+                        size: 16,
+                        color: Colors.amber,
+                      ),
                     ),
                 ],
               ),
@@ -578,9 +826,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: const Text('PGP Keys'),
             subtitle: keys.hasKey
                 ? Text(
-                    'Fingerprint: …${keys.fingerprint?.substring((keys.fingerprint?.length ?? 8) - 8)}')
-                : const Text('No key on device',
-                    style: TextStyle(color: Colors.orange)),
+                    'Fingerprint: …${keys.fingerprint?.substring((keys.fingerprint?.length ?? 8) - 8)}',
+                  )
+                : const Text(
+                    'No key on device',
+                    style: TextStyle(color: Colors.orange),
+                  ),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.push(
               context,
@@ -596,12 +847,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: _changePassword,
           ),
 
+          ListTile(
+            leading: const Icon(Icons.security_outlined),
+            title: const Text('Account security'),
+            subtitle: const Text('2FA password and self-destruct timer'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _manageAccountSecurity,
+          ),
+
+          ListTile(
+            leading: const Icon(Icons.devices_outlined),
+            title: const Text('Active sessions'),
+            subtitle: const Text('Review and revoke signed-in devices'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _manageSessions,
+          ),
+
+          ListTile(
+            leading: const Icon(Icons.business_center_outlined),
+            title: const Text('Business suite'),
+            subtitle: const Text('Greeting, away message, and profile'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _manageBusinessProfile,
+          ),
+
           if (_biometricAvailable) ...[
             SwitchListTile(
               secondary: const Icon(Icons.fingerprint),
               title: const Text('Biometric Key Unlock'),
               subtitle: const Text(
-                  'Require fingerprint / face before exporting your private key'),
+                'Require fingerprint / face before exporting your private key',
+              ),
               value: _biometricEnabled,
               onChanged: _setBiometric,
             ),
@@ -609,7 +885,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               secondary: const Icon(Icons.lock_outline),
               title: const Text('App Lock'),
               subtitle: const Text(
-                  'Require biometrics to open OpenChat after it leaves the background'),
+                'Require biometrics to open OpenChat after it leaves the background',
+              ),
               value: _appLockEnabled,
               onChanged: _setAppLock,
             ),
@@ -630,7 +907,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               } catch (e) {
                 if (mounted) {
                   messenger.showSnackBar(
-                      SnackBar(content: Text('Failed to update: $e')));
+                    SnackBar(content: Text('Failed to update: $e')),
+                  );
                 }
               }
             },
@@ -651,7 +929,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               secondary: const Icon(Icons.notifications_outlined),
               title: const Text('Push Notifications'),
               subtitle: const Text(
-                  'Receive notifications via Firebase when the app is closed'),
+                'Receive notifications via Firebase when the app is closed',
+              ),
               value: settings.pushNotificationsEnabled,
               onChanged: (v) => _setPushEnabled(v, settings),
             ),
@@ -660,8 +939,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             secondary: const Icon(Icons.wifi_tethering),
             title: const Text('Background WebSocket'),
             subtitle: const Text(
-                'Keep a live connection open for real-time notifications '
-                '(uses more battery)'),
+              'Keep a live connection open for real-time notifications '
+              '(uses more battery)',
+            ),
             value: settings.wsBackgroundEnabled,
             onChanged: (v) => _setWsBackground(v, settings),
           ),
@@ -670,8 +950,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             secondary: const Icon(Icons.visibility_outlined),
             title: const Text('Show Sensitive Content'),
             subtitle: const Text(
-                'Display sender name and message preview in notifications. '
-                'Off shows only "New message"'),
+              'Display sender name and message preview in notifications. '
+              'Off shows only "New message"',
+            ),
             value: settings.notificationSensitiveContent,
             onChanged: settings.setNotificationSensitiveContent,
           ),
@@ -723,8 +1004,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           SwitchListTile(
             secondary: const Icon(Icons.campaign_outlined),
             title: const Text('Channels in their own tab'),
-            subtitle:
-                const Text('Off: channels appear in your Chats list (default)'),
+            subtitle: const Text(
+              'Off: channels appear in your Chats list (default)',
+            ),
             value: settings.channelsOwnTab,
             onChanged: settings.setChannelsOwnTab,
           ),
@@ -733,7 +1015,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             secondary: const Icon(Icons.smart_toy_outlined),
             title: const Text('Bots in their own tab'),
             subtitle: const Text(
-                'Off: bot chats appear in your Chats list (default)'),
+              'Off: bot chats appear in your Chats list (default)',
+            ),
             value: settings.botsOwnTab,
             onChanged: settings.setBotsOwnTab,
           ),
@@ -787,9 +1070,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   context: context,
                   applicationName: 'OpenChat',
                   applicationVersion: version,
-                  applicationIcon: Image.asset('assets/images/logo.png',
-                      height: 48,
-                      errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+                  applicationIcon: Image.asset(
+                    'assets/images/logo.png',
+                    height: 48,
+                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                  ),
                   applicationLegalese:
                       'Open source, end-to-end encrypted messenger.\n'
                       'Uses OpenPGP (RFC 4880) for encryption.',
@@ -808,15 +1093,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 context: context,
                 builder: (ctx) => AlertDialog(
                   title: const Text('Sign Out'),
-                  content:
-                      const Text('Your PGP keys will remain on this device.'),
+                  content: const Text(
+                    'Your PGP keys will remain on this device.',
+                  ),
                   actions: [
                     TextButton(
-                        onPressed: () => Navigator.pop(ctx, false),
-                        child: const Text('Cancel')),
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel'),
+                    ),
                     FilledButton(
-                        onPressed: () => Navigator.pop(ctx, true),
-                        child: const Text('Sign Out')),
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Sign Out'),
+                    ),
                   ],
                 ),
               );
@@ -835,12 +1123,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   defaultTargetPlatform == TargetPlatform.macOS)) ...[
             const Divider(),
             ListTile(
-              leading:
-                  const Icon(Icons.delete_forever_outlined, color: Colors.red),
-              title: const Text('Clear All Local Data',
-                  style: TextStyle(color: Colors.red)),
+              leading: const Icon(
+                Icons.delete_forever_outlined,
+                color: Colors.red,
+              ),
+              title: const Text(
+                'Clear All Local Data',
+                style: TextStyle(color: Colors.red),
+              ),
               subtitle: const Text(
-                  'Remove stored keys, tokens, and preferences from this device'),
+                'Remove stored keys, tokens, and preferences from this device',
+              ),
               onTap: _clearAllData,
             ),
           ],
@@ -856,15 +1149,15 @@ class _SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-        child: Text(
-          title,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: Theme.of(context).colorScheme.primary,
-            letterSpacing: 0.8,
-          ),
-        ),
-      );
+    padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+    child: Text(
+      title,
+      style: TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+        color: Theme.of(context).colorScheme.primary,
+        letterSpacing: 0.8,
+      ),
+    ),
+  );
 }

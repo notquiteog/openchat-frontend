@@ -56,6 +56,8 @@ class _ChatScreenState extends State<ChatScreen> {
   final _scrollCtrl = ScrollController();
   bool _showStickers = false;
   bool _loadingMore = false;
+  bool _sendSilent = false;
+  DateTime? _scheduledFor;
   int _lastMessageCount = 0;
   Message? _replyingTo;
   Timer? _typingTimer;
@@ -144,10 +146,19 @@ class _ChatScreenState extends State<ChatScreen> {
         convID: conv.id,
         plaintext: text,
         replyTo: replyTo,
+        silent: _sendSilent,
+        scheduledFor: _scheduledFor,
       );
       if (!mounted) return;
       if (sent) {
-        _scrollToBottom();
+        if (_scheduledFor == null) {
+          _scrollToBottom();
+        } else {
+          messenger.showSnackBar(
+            SnackBar(content: Text('Scheduled for ${_scheduleLabel()}')),
+          );
+        }
+        setState(() => _scheduledFor = null);
       } else {
         _restoreComposedMessage(text, replyingTo);
         messenger.showSnackBar(
@@ -159,6 +170,72 @@ class _ChatScreenState extends State<ChatScreen> {
       _restoreComposedMessage(text, replyingTo);
       messenger.showSnackBar(SnackBar(content: Text(e.toString())));
     }
+  }
+
+  String _scheduleLabel() {
+    final when = _scheduledFor;
+    if (when == null) return '';
+    final local = when.toLocal();
+    final h = local.hour.toString().padLeft(2, '0');
+    final m = local.minute.toString().padLeft(2, '0');
+    return '${local.month}/${local.day} $h:$m';
+  }
+
+  Future<void> _showSendOptions() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SwitchListTile(
+                secondary: const Icon(Icons.notifications_off_outlined),
+                title: const Text('Send silently'),
+                value: _sendSilent,
+                onChanged: (v) {
+                  setState(() => _sendSilent = v);
+                  setSheetState(() {});
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.schedule_outlined),
+                title: const Text('Schedule in 5 minutes'),
+                onTap: () {
+                  setState(
+                    () => _scheduledFor = DateTime.now().add(
+                      const Duration(minutes: 5),
+                    ),
+                  );
+                  Navigator.pop(ctx);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.more_time_outlined),
+                title: const Text('Schedule in 1 hour'),
+                onTap: () {
+                  setState(
+                    () => _scheduledFor = DateTime.now().add(
+                      const Duration(hours: 1),
+                    ),
+                  );
+                  Navigator.pop(ctx);
+                },
+              ),
+              if (_scheduledFor != null)
+                ListTile(
+                  leading: const Icon(Icons.event_busy_outlined),
+                  title: const Text('Clear schedule'),
+                  onTap: () {
+                    setState(() => _scheduledFor = null);
+                    Navigator.pop(ctx);
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _sendSticker(String stickerID) async {
@@ -251,6 +328,11 @@ class _ChatScreenState extends State<ChatScreen> {
               title: const Text('File'),
               onTap: () => Navigator.pop(context, 'file'),
             ),
+            ListTile(
+              leading: const Icon(Icons.mic_none_outlined),
+              title: const Text('Voice note'),
+              onTap: () => Navigator.pop(context, 'voice'),
+            ),
           ],
         ),
       ),
@@ -269,6 +351,7 @@ class _ChatScreenState extends State<ChatScreen> {
         'camera_image' => await attachmentService.pickImage(fromCamera: true),
         'gallery_video' => await attachmentService.pickVideo(),
         'file' => await attachmentService.pickFile(),
+        'voice' => await attachmentService.pickVoice(),
         _ => null,
       };
     } catch (e) {
@@ -768,6 +851,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 _setConversationBackground(context);
               case 'disappearing':
                 _setDisappearing(context);
+              case 'slow_mode':
+                _setSlowMode(context);
               case 'encryption':
                 _setEncryption(context);
               case 'delete_messages':
@@ -787,6 +872,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 value: 'disappearing',
                 child: Text('Disappearing messages'),
               ),
+            if (!conv.isDM &&
+                conv.members.any((m) => m.userId == currentUserID && m.isAdmin))
+              const PopupMenuItem(value: 'slow_mode', child: Text('Slow mode')),
             if (!conv.isDM &&
                 conv.members.any((m) => m.userId == currentUserID && m.isAdmin))
               PopupMenuItem(
@@ -881,6 +969,20 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   const SizedBox(width: 4),
                   IconButton(
+                    tooltip: 'Send options',
+                    icon: Icon(
+                      _scheduledFor != null
+                          ? Icons.schedule_send_outlined
+                          : _sendSilent
+                          ? Icons.notifications_off_outlined
+                          : Icons.tune_outlined,
+                    ),
+                    color: (_sendSilent || _scheduledFor != null)
+                        ? scheme.primary
+                        : null,
+                    onPressed: _showSendOptions,
+                  ),
+                  IconButton(
                     icon: const Icon(Icons.attach_file_outlined),
                     onPressed: _showAttachmentPicker,
                   ),
@@ -962,6 +1064,37 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       builder: (_) => SimpleDialog(
         children: [
+          if (!isSystem)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Wrap(
+                spacing: 8,
+                children: [
+                  for (final emoji in const [
+                    '👍',
+                    '❤️',
+                    '😂',
+                    '🔥',
+                    '🎉',
+                    '👀',
+                  ])
+                    InkWell(
+                      borderRadius: BorderRadius.circular(18),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _reactToMessage(msg, emoji);
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: Text(
+                          emoji,
+                          style: const TextStyle(fontSize: 22),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           if (!isSystem && msg.isDecrypted)
             ListTile(
               leading: const Icon(Icons.copy),
@@ -1004,6 +1137,18 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _reactToMessage(Message msg, String emoji) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await context.read<ApiService>().reactToMessage(msg.id, emoji);
+      if (mounted) await context.read<ChatProvider>().loadMessages(conv.id);
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(content: Text('Reaction failed: $e')));
+      }
+    }
   }
 
   Future<void> _setDisappearing(BuildContext context) async {
@@ -1052,6 +1197,56 @@ class _ChatScreenState extends State<ChatScreen> {
                 ? 'Disappearing messages turned off'
                 : 'Messages now disappear after ${options.firstWhere((o) => o.$2 == chosen).$1}',
           ),
+        ),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+    }
+  }
+
+  Future<void> _setSlowMode(BuildContext context) async {
+    final api = context.read<ApiService>();
+    final chat = context.read<ChatProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    const options = <(String, int)>[
+      ('Off', 0),
+      ('10 seconds', 10),
+      ('30 seconds', 30),
+      ('1 minute', 60),
+      ('5 minutes', 300),
+    ];
+    final current = conv.slowModeSeconds;
+    final chosen = await showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Slow mode'),
+        children: [
+          for (final (label, secs) in options)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, secs),
+              child: Row(
+                children: [
+                  Icon(
+                    secs == current
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(label),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (chosen == null || chosen == current) return;
+    try {
+      await api.setSlowMode(conv.id, chosen);
+      await chat.loadConversations();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(chosen == 0 ? 'Slow mode off' : 'Slow mode updated'),
         ),
       );
     } catch (e) {

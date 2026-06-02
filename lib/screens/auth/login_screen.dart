@@ -15,21 +15,24 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _usernameCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
+  final _twoFactorCtrl = TextEditingController();
   bool _obscurePassword = true;
 
   @override
   void dispose() {
     _usernameCtrl.dispose();
     _passwordCtrl.dispose();
+    _twoFactorCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
     await context.read<AuthProvider>().login(
-          username: _usernameCtrl.text.trim().toLowerCase(),
-          password: _passwordCtrl.text,
-        );
+      username: _usernameCtrl.text.trim().toLowerCase(),
+      password: _passwordCtrl.text,
+      twoFactorPassword: _twoFactorCtrl.text.trim(),
+    );
   }
 
   @override
@@ -51,10 +54,9 @@ class _LoginScreenState extends State<LoginScreen> {
                   end: Alignment.bottomRight,
                   colors: [
                     const Color(0xFFF6FBF8),
-                    Theme.of(context)
-                        .colorScheme
-                        .primary
-                        .withValues(alpha: 0.08),
+                    Theme.of(
+                      context,
+                    ).colorScheme.primary.withValues(alpha: 0.08),
                   ],
                 ),
               ),
@@ -62,8 +64,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
                   child: ConstrainedBox(
-                    constraints:
-                        BoxConstraints(minHeight: constraints.maxHeight - 40),
+                    constraints: BoxConstraints(
+                      minHeight: constraints.maxHeight - 40,
+                    ),
                     child: Form(
                       key: _formKey,
                       child: Column(
@@ -82,7 +85,8 @@ class _LoginScreenState extends State<LoginScreen> {
                                   onPressed: () => Navigator.push(
                                     context,
                                     MaterialPageRoute(
-                                        builder: (_) => const RegisterScreen()),
+                                      builder: (_) => const RegisterScreen(),
+                                    ),
                                   ),
                                   child: const Text('Sign up'),
                                 ),
@@ -93,18 +97,14 @@ class _LoginScreenState extends State<LoginScreen> {
                           Text(
                             'OpenChat',
                             textAlign: TextAlign.center,
-                            style: Theme.of(context)
-                                .textTheme
-                                .displayMedium
+                            style: Theme.of(context).textTheme.displayMedium
                                 ?.copyWith(fontWeight: FontWeight.w800),
                           ),
                           const SizedBox(height: 8),
                           Text(
                             'Secure. Open. Encrypted.',
                             textAlign: TextAlign.center,
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleMedium
+                            style: Theme.of(context).textTheme.titleMedium
                                 ?.copyWith(
                                   color: Colors.grey[700],
                                   letterSpacing: 1.4,
@@ -131,11 +131,14 @@ class _LoginScreenState extends State<LoginScreen> {
                               prefixIcon: const Icon(Icons.lock),
                               border: const OutlineInputBorder(),
                               suffixIcon: IconButton(
-                                icon: Icon(_obscurePassword
-                                    ? Icons.visibility
-                                    : Icons.visibility_off),
+                                icon: Icon(
+                                  _obscurePassword
+                                      ? Icons.visibility
+                                      : Icons.visibility_off,
+                                ),
                                 onPressed: () => setState(
-                                    () => _obscurePassword = !_obscurePassword),
+                                  () => _obscurePassword = !_obscurePassword,
+                                ),
                               ),
                             ),
                             obscureText: _obscurePassword,
@@ -144,6 +147,22 @@ class _LoginScreenState extends State<LoginScreen> {
                             validator: (v) =>
                                 v?.isEmpty == true ? 'Required' : null,
                           ),
+                          if (auth.twoFactorRequired ||
+                              _twoFactorCtrl.text.isNotEmpty) ...[
+                            const SizedBox(height: 16),
+                            TextFormField(
+                              controller: _twoFactorCtrl,
+                              decoration: const InputDecoration(
+                                labelText: '2FA password',
+                                prefixIcon: Icon(Icons.security_outlined),
+                                border: OutlineInputBorder(),
+                              ),
+                              obscureText: true,
+                              textInputAction: TextInputAction.done,
+                              onChanged: (_) => setState(() {}),
+                              onFieldSubmitted: (_) => _login(),
+                            ),
+                          ],
                           const SizedBox(height: 28),
                           if (auth.storageWarning != null)
                             Padding(
@@ -169,7 +188,9 @@ class _LoginScreenState extends State<LoginScreen> {
                                     height: 20,
                                     width: 20,
                                     child: CircularProgressIndicator(
-                                        strokeWidth: 2, color: Colors.white),
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
                                   )
                                 : const Text('Sign in'),
                           ),
@@ -178,7 +199,8 @@ class _LoginScreenState extends State<LoginScreen> {
                             onPressed: () => Navigator.push(
                               context,
                               MaterialPageRoute(
-                                  builder: (_) => const RegisterScreen()),
+                                builder: (_) => const RegisterScreen(),
+                              ),
                             ),
                             child: const Text('Create your account'),
                           ),
@@ -190,16 +212,16 @@ class _LoginScreenState extends State<LoginScreen> {
                             onPressed: () => Navigator.push(
                               context,
                               MaterialPageRoute(
-                                  builder: (_) => const PgpKeysScreen()),
+                                builder: (_) => const PgpKeysScreen(),
+                              ),
                             ),
                           ),
                           Text(
                             'Sign-in requires your private key to be on this device.',
                             textAlign: TextAlign.center,
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodySmall
-                                ?.copyWith(color: Colors.grey),
+                            style: Theme.of(
+                              context,
+                            ).textTheme.bodySmall?.copyWith(color: Colors.grey),
                           ),
                         ],
                       ),

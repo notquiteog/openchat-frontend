@@ -16,12 +16,14 @@ class AuthProvider extends ChangeNotifier {
   User? _currentUser;
   String? _error;
   String? _storageWarning;
+  bool _twoFactorRequired = false;
   bool _isLoading = false;
 
   AuthState get state => _state;
   User? get currentUser => _currentUser;
   String? get error => _error;
   String? get storageWarning => _storageWarning;
+  bool get twoFactorRequired => _twoFactorRequired;
   bool get isLoading => _isLoading;
   bool get isAuthenticated => _state == AuthState.authenticated;
 
@@ -75,6 +77,7 @@ class AuthProvider extends ChangeNotifier {
   }) async {
     _error = null;
     _storageWarning = null;
+    _twoFactorRequired = false;
     _setLoading(true);
     try {
       final storageStatus = await _storage.checkAvailability();
@@ -121,6 +124,7 @@ class AuthProvider extends ChangeNotifier {
   Future<void> login({
     required String username,
     required String password,
+    String? twoFactorPassword,
   }) async {
     _error = null;
     _storageWarning = null;
@@ -134,13 +138,18 @@ class AuthProvider extends ChangeNotifier {
         final currentStatus = await _storage.checkAvailability();
         if (!_requireSecureStorage(currentStatus)) return;
 
-        _error = 'No PGP key found on this device. '
+        _error =
+            'No PGP key found on this device. '
             'Import your key in Settings or register a new account.';
         _setLoading(false);
         return;
       }
 
-      final auth = await _api.login(username: username, password: password);
+      final auth = await _api.login(
+        username: username,
+        password: password,
+        twoFactorPassword: twoFactorPassword,
+      );
 
       await _storage.saveSession(
         userID: auth.user.id,
@@ -168,8 +177,16 @@ class AuthProvider extends ChangeNotifier {
       _currentUser = auth.user;
       _state = AuthState.authenticated;
       _storageWarning = null;
+      _twoFactorRequired = false;
     } on PlatformException catch (error) {
       _setStorageError(error);
+    } on ApiException catch (e) {
+      if (e.code == 'TWO_FACTOR_REQUIRED') {
+        _twoFactorRequired = true;
+        _error = 'Enter your 2FA password.';
+      } else {
+        _error = e.toString();
+      }
     } catch (e) {
       _error = e.toString();
     } finally {
@@ -194,6 +211,7 @@ class AuthProvider extends ChangeNotifier {
     _state = AuthState.unauthenticated;
     _error = null;
     _storageWarning = null;
+    _twoFactorRequired = false;
     notifyListeners();
   }
 

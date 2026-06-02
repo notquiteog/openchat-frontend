@@ -34,14 +34,14 @@ class PendingAttachment {
 
   /// Encode as the JSON that goes into the PGP-encrypted message payload.
   Map<String, dynamic> toPayloadJson({String caption = ''}) => {
-        'text': caption,
-        'attachment_id': attachmentId,
-        'file_name': fileName,
-        'file_size': fileSize,
-        'mime_type': mimeType,
-        'file_key': fileKey,
-        'file_nonce': fileNonce,
-      };
+    'text': caption,
+    'attachment_id': attachmentId,
+    'file_name': fileName,
+    'file_size': fileSize,
+    'mime_type': mimeType,
+    'file_key': fileKey,
+    'file_nonce': fileNonce,
+  };
 }
 
 /// Bytes + metadata prepared for encryption/upload.
@@ -80,9 +80,13 @@ class AttachmentService {
   Future<PendingAttachment?> pickImage({bool fromCamera = false}) async {
     final XFile? file = fromCamera
         ? await _imagePicker.pickImage(
-            source: ImageSource.camera, imageQuality: 85)
+            source: ImageSource.camera,
+            imageQuality: 85,
+          )
         : await _imagePicker.pickImage(
-            source: ImageSource.gallery, imageQuality: 85);
+            source: ImageSource.gallery,
+            imageQuality: 85,
+          );
     if (file == null) return null;
     final prepared = await prepareGalleryPhotoForUpload(File(file.path));
     return _processPrepared(prepared);
@@ -104,6 +108,26 @@ class AttachmentService {
     if (pf.path == null) return null;
     final prepared = await prepareFileForUpload(File(pf.path!));
     return _processPrepared(prepared);
+  }
+
+  Future<PendingAttachment?> pickVoice() async {
+    final result = await FilePicker.pickFiles(
+      type: FileType.audio,
+      withData: false,
+    );
+    if (result == null || result.files.isEmpty) return null;
+    final pf = result.files.first;
+    if (pf.path == null) return null;
+    final prepared = await prepareFileForUpload(File(pf.path!));
+    return _processPrepared(
+      PreparedAttachmentInput(
+        bytes: prepared.bytes,
+        fileName: prepared.fileName,
+        mimeType: prepared.mimeType,
+        messageType: MessageType.voice,
+        originalFileSize: prepared.originalFileSize,
+      ),
+    );
   }
 
   // ---- Core: encrypt + upload ----
@@ -133,7 +157,8 @@ class AttachmentService {
   static Future<PreparedAttachmentInput> prepareFileForUpload(File file) async {
     final bytes = await file.readAsBytes();
     final fileName = p.basename(file.path);
-    final mimeType = lookupMimeType(file.path, headerBytes: bytes) ??
+    final mimeType =
+        lookupMimeType(file.path, headerBytes: bytes) ??
         'application/octet-stream';
     return PreparedAttachmentInput(
       bytes: bytes,
@@ -145,7 +170,8 @@ class AttachmentService {
   }
 
   Future<PendingAttachment> _processPrepared(
-      PreparedAttachmentInput prepared) async {
+    PreparedAttachmentInput prepared,
+  ) async {
     final bytes = prepared.bytes;
     final fileName = prepared.fileName;
     final mimeType = prepared.mimeType;
@@ -156,8 +182,11 @@ class AttachmentService {
     final nonce = _cipher.newNonce();
 
     // 2. Encrypt the file bytes client-side.
-    final secretBox =
-        await _cipher.encrypt(bytes, secretKey: secretKey, nonce: nonce);
+    final secretBox = await _cipher.encrypt(
+      bytes,
+      secretKey: secretKey,
+      nonce: nonce,
+    );
     final ciphertext = Uint8List.fromList(secretBox.concatenation());
 
     // 3. Encode key + nonce as base64 to embed in the PGP payload.
@@ -190,10 +219,7 @@ class AttachmentService {
     );
   }
 
-  static Future<Uint8List?> _compressToWebp(
-    File file,
-    Uint8List bytes,
-  ) async {
+  static Future<Uint8List?> _compressToWebp(File file, Uint8List bytes) async {
     try {
       List<int>? out;
       if (kIsWeb) {

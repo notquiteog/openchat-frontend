@@ -23,6 +23,10 @@ class Conversation {
   /// Disappearing-messages timer in seconds (0 = off).
   final int messageTtlSeconds;
   final bool encryptionEnabled;
+  final int slowModeSeconds;
+  final bool joinApprovalRequired;
+  final bool topicsEnabled;
+  final bool businessSuiteEnabled;
   final DateTime createdAt;
   final String createdBy;
   final List<ConversationMember> members;
@@ -42,6 +46,10 @@ class Conversation {
     this.ownerOnlyPost = false,
     this.messageTtlSeconds = 0,
     this.encryptionEnabled = true,
+    this.slowModeSeconds = 0,
+    this.joinApprovalRequired = false,
+    this.topicsEnabled = false,
+    this.businessSuiteEnabled = false,
     required this.createdAt,
     required this.createdBy,
     this.members = const [],
@@ -50,34 +58,38 @@ class Conversation {
   });
 
   factory Conversation.fromJson(Map<String, dynamic> json) => Conversation(
-        id: json['id'] as String,
-        type: switch (json['type'] as String?) {
-          'group' => ConversationType.group,
-          'channel' => ConversationType.channel,
-          _ => ConversationType.dm,
-        },
-        name: json['name'] as String?,
-        description: json['description'] as String?,
-        avatarUrl: json['avatar_url'] as String?,
-        backgroundUrl: json['background_url'] as String?,
-        isPublic: json['is_public'] as bool? ?? false,
-        handle: json['handle'] as String?,
-        archivedAt: json['archived_at'] != null
-            ? DateTime.parse(json['archived_at'] as String)
-            : null,
-        ownerOnlyPost: json['owner_only_post'] as bool? ?? false,
-        messageTtlSeconds: json['message_ttl_seconds'] as int? ?? 0,
-        encryptionEnabled: json['encryption_enabled'] as bool? ?? true,
-        createdAt: DateTime.parse(json['created_at'] as String),
-        createdBy: json['created_by'] as String,
-        members: (json['members'] as List? ?? [])
-            .map((e) => ConversationMember.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        lastMessage: json['last_message'] != null
-            ? Message.fromJson(json['last_message'] as Map<String, dynamic>)
-            : null,
-        unreadCount: json['unread_count'] as int? ?? 0,
-      );
+    id: json['id'] as String,
+    type: switch (json['type'] as String?) {
+      'group' => ConversationType.group,
+      'channel' => ConversationType.channel,
+      _ => ConversationType.dm,
+    },
+    name: json['name'] as String?,
+    description: json['description'] as String?,
+    avatarUrl: json['avatar_url'] as String?,
+    backgroundUrl: json['background_url'] as String?,
+    isPublic: json['is_public'] as bool? ?? false,
+    handle: json['handle'] as String?,
+    archivedAt: json['archived_at'] != null
+        ? DateTime.parse(json['archived_at'] as String)
+        : null,
+    ownerOnlyPost: json['owner_only_post'] as bool? ?? false,
+    messageTtlSeconds: json['message_ttl_seconds'] as int? ?? 0,
+    encryptionEnabled: json['encryption_enabled'] as bool? ?? true,
+    slowModeSeconds: json['slow_mode_seconds'] as int? ?? 0,
+    joinApprovalRequired: json['join_approval_required'] as bool? ?? false,
+    topicsEnabled: json['topics_enabled'] as bool? ?? false,
+    businessSuiteEnabled: json['business_suite_enabled'] as bool? ?? false,
+    createdAt: DateTime.parse(json['created_at'] as String),
+    createdBy: json['created_by'] as String,
+    members: (json['members'] as List? ?? [])
+        .map((e) => ConversationMember.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    lastMessage: json['last_message'] != null
+        ? Message.fromJson(json['last_message'] as Map<String, dynamic>)
+        : null,
+    unreadCount: json['unread_count'] as int? ?? 0,
+  );
 
   bool get isGroup => type == ConversationType.group;
   bool get isDM => type == ConversationType.dm;
@@ -145,27 +157,34 @@ class Conversation {
     DateTime? archivedAt,
     bool? ownerOnlyPost,
     bool? encryptionEnabled,
+    int? slowModeSeconds,
+    bool? joinApprovalRequired,
+    bool? topicsEnabled,
+    bool? businessSuiteEnabled,
     String? backgroundUrl,
-  }) =>
-      Conversation(
-        id: id,
-        type: type,
-        name: name,
-        description: description,
-        avatarUrl: avatarUrl,
-        backgroundUrl: backgroundUrl ?? this.backgroundUrl,
-        isPublic: isPublic,
-        handle: handle,
-        archivedAt: archivedAt ?? this.archivedAt,
-        ownerOnlyPost: ownerOnlyPost ?? this.ownerOnlyPost,
-        messageTtlSeconds: messageTtlSeconds,
-        encryptionEnabled: encryptionEnabled ?? this.encryptionEnabled,
-        createdAt: createdAt,
-        createdBy: createdBy,
-        members: members ?? this.members,
-        lastMessage: lastMessage ?? this.lastMessage,
-        unreadCount: unreadCount ?? this.unreadCount,
-      );
+  }) => Conversation(
+    id: id,
+    type: type,
+    name: name,
+    description: description,
+    avatarUrl: avatarUrl,
+    backgroundUrl: backgroundUrl ?? this.backgroundUrl,
+    isPublic: isPublic,
+    handle: handle,
+    archivedAt: archivedAt ?? this.archivedAt,
+    ownerOnlyPost: ownerOnlyPost ?? this.ownerOnlyPost,
+    messageTtlSeconds: messageTtlSeconds,
+    encryptionEnabled: encryptionEnabled ?? this.encryptionEnabled,
+    slowModeSeconds: slowModeSeconds ?? this.slowModeSeconds,
+    joinApprovalRequired: joinApprovalRequired ?? this.joinApprovalRequired,
+    topicsEnabled: topicsEnabled ?? this.topicsEnabled,
+    businessSuiteEnabled: businessSuiteEnabled ?? this.businessSuiteEnabled,
+    createdAt: createdAt,
+    createdBy: createdBy,
+    members: members ?? this.members,
+    lastMessage: lastMessage ?? this.lastMessage,
+    unreadCount: unreadCount ?? this.unreadCount,
+  );
 }
 
 enum MemberRole { admin, moderator, member }
@@ -174,6 +193,7 @@ class ConversationMember {
   final String conversationId;
   final String userId;
   final MemberRole role;
+  final bool isAnonymous;
   final DateTime joinedAt;
   final User? user;
 
@@ -181,6 +201,7 @@ class ConversationMember {
     required this.conversationId,
     required this.userId,
     required this.role,
+    this.isAnonymous = false,
     required this.joinedAt,
     this.user,
   });
@@ -194,6 +215,7 @@ class ConversationMember {
           'moderator' => MemberRole.moderator,
           _ => MemberRole.member,
         },
+        isAnonymous: json['is_anonymous'] as bool? ?? false,
         joinedAt: DateTime.parse(json['joined_at'] as String),
         user: json['user'] != null
             ? User.fromJson(json['user'] as Map<String, dynamic>)

@@ -14,6 +14,7 @@ enum WsEventType {
   userOffline,
   messageDeleted,
   messageEdited,
+  messageReaction,
   conversationDeleted,
   conversationUpdated,
   // WebRTC call signaling
@@ -93,7 +94,10 @@ class WebSocketService {
   // ---- Send helpers ----
 
   void sendTyping(String conversationID) {
-    _send({'type': 'typing', 'data': {'conversation_id': conversationID}});
+    _send({
+      'type': 'typing',
+      'data': {'conversation_id': conversationID},
+    });
   }
 
   void sendCallOffer({
@@ -180,24 +184,25 @@ class WebSocketService {
   }
 
   WsEventType _parseType(String? type) => switch (type) {
-        'new_message'          => WsEventType.newMessage,
-        'typing'               => WsEventType.typing,
-        'read_receipt'         => WsEventType.readReceipt,
-        'member_joined'        => WsEventType.memberJoined,
-        'member_left'          => WsEventType.memberLeft,
-        'user_online'          => WsEventType.userOnline,
-        'user_offline'         => WsEventType.userOffline,
-        'message_deleted'      => WsEventType.messageDeleted,
-        'message_edited'       => WsEventType.messageEdited,
-        'conversation_deleted' => WsEventType.conversationDeleted,
-        'conversation_updated' => WsEventType.conversationUpdated,
-        'call_offer'       => WsEventType.callOffer,
-        'call_answer'      => WsEventType.callAnswer,
-        'call_ice_candidate' => WsEventType.callIceCandidate,
-        'call_hangup'      => WsEventType.callHangup,
-        'call_reject'      => WsEventType.callReject,
-        'call_ringing'     => WsEventType.callRinging,
-        'error'            => WsEventType.error,
-        _                  => WsEventType.unknown,
-      };
+    'new_message' => WsEventType.newMessage,
+    'typing' => WsEventType.typing,
+    'read_receipt' => WsEventType.readReceipt,
+    'member_joined' => WsEventType.memberJoined,
+    'member_left' => WsEventType.memberLeft,
+    'user_online' => WsEventType.userOnline,
+    'user_offline' => WsEventType.userOffline,
+    'message_deleted' => WsEventType.messageDeleted,
+    'message_edited' => WsEventType.messageEdited,
+    'message_reaction' => WsEventType.messageReaction,
+    'conversation_deleted' => WsEventType.conversationDeleted,
+    'conversation_updated' => WsEventType.conversationUpdated,
+    'call_offer' => WsEventType.callOffer,
+    'call_answer' => WsEventType.callAnswer,
+    'call_ice_candidate' => WsEventType.callIceCandidate,
+    'call_hangup' => WsEventType.callHangup,
+    'call_reject' => WsEventType.callReject,
+    'call_ringing' => WsEventType.callRinging,
+    'error' => WsEventType.error,
+    _ => WsEventType.unknown,
+  };
 }

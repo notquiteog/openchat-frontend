@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'user.dart';
 
-enum MessageType { text, sticker, file, image, video, system }
+enum MessageType { text, sticker, file, image, video, voice, system }
 
 /// Parsed content for media messages. Text messages just use [text] directly.
 class MessageContent {
@@ -30,14 +30,14 @@ class MessageContent {
   factory MessageContent.text(String content) => MessageContent(text: content);
 
   factory MessageContent.fromJson(Map<String, dynamic> json) => MessageContent(
-        text: json['text'] as String? ?? '',
-        attachmentId: json['attachment_id'] as String?,
-        fileName: json['file_name'] as String?,
-        fileSize: json['file_size'] as int?,
-        mimeType: json['mime_type'] as String?,
-        fileKey: json['file_key'] as String?,
-        fileNonce: json['file_nonce'] as String?,
-      );
+    text: json['text'] as String? ?? '',
+    attachmentId: json['attachment_id'] as String?,
+    fileName: json['file_name'] as String?,
+    fileSize: json['file_size'] as int?,
+    mimeType: json['mime_type'] as String?,
+    fileKey: json['file_key'] as String?,
+    fileNonce: json['file_nonce'] as String?,
+  );
 
   /// Parses a decrypted payload string — falls back to plain text if not JSON.
   static MessageContent parse(String raw, MessageType type) {
@@ -55,14 +55,14 @@ class MessageContent {
   }
 
   Map<String, dynamic> toJson() => {
-        'text': text,
-        if (attachmentId != null) 'attachment_id': attachmentId,
-        if (fileName != null) 'file_name': fileName,
-        if (fileSize != null) 'file_size': fileSize,
-        if (mimeType != null) 'mime_type': mimeType,
-        if (fileKey != null) 'file_key': fileKey,
-        if (fileNonce != null) 'file_nonce': fileNonce,
-      };
+    'text': text,
+    if (attachmentId != null) 'attachment_id': attachmentId,
+    if (fileName != null) 'file_name': fileName,
+    if (fileSize != null) 'file_size': fileSize,
+    if (mimeType != null) 'mime_type': mimeType,
+    if (fileKey != null) 'file_key': fileKey,
+    if (fileNonce != null) 'file_nonce': fileNonce,
+  };
 }
 
 /// Outcome of a call, surfaced in a DM as a deletable `system` message.
@@ -130,6 +130,9 @@ class Message {
   final DateTime? autoDeleteExpiresAt;
   final String? attachmentId;
   final String? replyTo;
+  final String? topicId;
+  final bool silent;
+  final List<MessageReactionSummary> reactions;
   final DateTime createdAt;
   final DateTime? editedAt;
   // Not final: realtime new_message events arrive without sender details, so
@@ -152,33 +155,41 @@ class Message {
     this.autoDeleteExpiresAt,
     this.attachmentId,
     this.replyTo,
+    this.topicId,
+    this.silent = false,
+    this.reactions = const [],
     required this.createdAt,
     this.editedAt,
     this.sender,
   });
 
   factory Message.fromJson(Map<String, dynamic> json) => Message(
-        id: json['id'] as String,
-        conversationId: json['conversation_id'] as String,
-        senderId: json['sender_id'] as String,
-        type: _parseType(json['message_type'] as String? ?? 'text'),
-        encryptedPayload: json['encrypted_payload'] as String,
-        signature: json['signature'] as String? ?? '',
-        isEncrypted: json['is_encrypted'] as bool? ?? true,
-        autoDeleteSeconds: json['auto_delete_seconds'] as int? ?? 0,
-        autoDeleteExpiresAt: json['auto_delete_expires_at'] != null
-            ? DateTime.parse(json['auto_delete_expires_at'] as String)
-            : null,
-        attachmentId: json['attachment_id'] as String?,
-        replyTo: json['reply_to'] as String?,
-        createdAt: DateTime.parse(json['created_at'] as String),
-        editedAt: json['edited_at'] != null
-            ? DateTime.parse(json['edited_at'] as String)
-            : null,
-        sender: json['sender'] != null
-            ? User.fromJson(json['sender'] as Map<String, dynamic>)
-            : null,
-      );
+    id: json['id'] as String,
+    conversationId: json['conversation_id'] as String,
+    senderId: json['sender_id'] as String,
+    type: _parseType(json['message_type'] as String? ?? 'text'),
+    encryptedPayload: json['encrypted_payload'] as String,
+    signature: json['signature'] as String? ?? '',
+    isEncrypted: json['is_encrypted'] as bool? ?? true,
+    autoDeleteSeconds: json['auto_delete_seconds'] as int? ?? 0,
+    autoDeleteExpiresAt: json['auto_delete_expires_at'] != null
+        ? DateTime.parse(json['auto_delete_expires_at'] as String)
+        : null,
+    attachmentId: json['attachment_id'] as String?,
+    replyTo: json['reply_to'] as String?,
+    topicId: json['topic_id'] as String?,
+    silent: json['silent'] as bool? ?? false,
+    reactions: (json['reactions'] as List? ?? [])
+        .map((e) => MessageReactionSummary.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    createdAt: DateTime.parse(json['created_at'] as String),
+    editedAt: json['edited_at'] != null
+        ? DateTime.parse(json['edited_at'] as String)
+        : null,
+    sender: json['sender'] != null
+        ? User.fromJson(json['sender'] as Map<String, dynamic>)
+        : null,
+  );
 
   void setDecryptedContent(String raw) {
     _content = MessageContent.parse(raw, type);
@@ -214,13 +225,27 @@ class Message {
   }
 
   static MessageType _parseType(String t) => switch (t) {
-        'sticker' => MessageType.sticker,
-        'file' => MessageType.file,
-        'image' => MessageType.image,
-        'video' => MessageType.video,
-        'system' => MessageType.system,
-        _ => MessageType.text,
-      };
+    'sticker' => MessageType.sticker,
+    'file' => MessageType.file,
+    'image' => MessageType.image,
+    'video' => MessageType.video,
+    'voice' => MessageType.voice,
+    'system' => MessageType.system,
+    _ => MessageType.text,
+  };
+}
+
+class MessageReactionSummary {
+  final String emoji;
+  final int count;
+
+  const MessageReactionSummary({required this.emoji, required this.count});
+
+  factory MessageReactionSummary.fromJson(Map<String, dynamic> json) =>
+      MessageReactionSummary(
+        emoji: json['emoji'] as String? ?? '',
+        count: json['count'] as int? ?? 0,
+      );
 }
 
 /// Optimistic local message shown while the server confirms delivery.
@@ -239,6 +264,9 @@ class PendingMessage extends Message {
     super.autoDeleteExpiresAt,
     super.attachmentId,
     super.replyTo,
+    super.topicId,
+    super.silent,
+    super.reactions,
     required super.createdAt,
     required String plaintext,
     this.isSending = true,

@@ -22,16 +22,17 @@ class AuthResponse {
   final String refreshToken;
   final User user;
 
-  AuthResponse(
-      {required this.accessToken,
-      required this.refreshToken,
-      required this.user});
+  AuthResponse({
+    required this.accessToken,
+    required this.refreshToken,
+    required this.user,
+  });
 
   factory AuthResponse.fromJson(Map<String, dynamic> json) => AuthResponse(
-        accessToken: json['access_token'] as String,
-        refreshToken: json['refresh_token'] as String,
-        user: User.fromJson(json['user'] as Map<String, dynamic>),
-      );
+    accessToken: json['access_token'] as String,
+    refreshToken: json['refresh_token'] as String,
+    user: User.fromJson(json['user'] as Map<String, dynamic>),
+  );
 }
 
 class UploadRequest {
@@ -39,16 +40,17 @@ class UploadRequest {
   final String uploadUrl;
   final int expiresIn;
 
-  UploadRequest(
-      {required this.attachmentId,
-      required this.uploadUrl,
-      required this.expiresIn});
+  UploadRequest({
+    required this.attachmentId,
+    required this.uploadUrl,
+    required this.expiresIn,
+  });
 
   factory UploadRequest.fromJson(Map<String, dynamic> json) => UploadRequest(
-        attachmentId: json['attachment_id'] as String,
-        uploadUrl: json['upload_url'] as String,
-        expiresIn: json['expires_in'] as int,
-      );
+    attachmentId: json['attachment_id'] as String,
+    uploadUrl: json['upload_url'] as String,
+    expiresIn: json['expires_in'] as int,
+  );
 }
 
 class DownloadInfo {
@@ -65,11 +67,11 @@ class DownloadInfo {
   });
 
   factory DownloadInfo.fromJson(Map<String, dynamic> json) => DownloadInfo(
-        downloadUrl: json['download_url'] as String,
-        fileName: json['file_name'] as String,
-        fileSize: json['file_size'] as int,
-        mimeType: json['mime_type'] as String,
-      );
+    downloadUrl: json['download_url'] as String,
+    fileName: json['file_name'] as String,
+    fileSize: json['file_size'] as int,
+    mimeType: json['mime_type'] as String,
+  );
 }
 
 class ApiService {
@@ -90,26 +92,25 @@ class ApiService {
     required String password,
     required String publicKey,
   }) async {
-    final resp = await _post(
-        '/api/v1/auth/register',
-        {
-          'username': username,
-          'password': password,
-          'public_key': publicKey,
-        },
-        authenticated: false);
+    final resp = await _post('/api/v1/auth/register', {
+      'username': username,
+      'password': password,
+      'public_key': publicKey,
+    }, authenticated: false);
     return AuthResponse.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
-  Future<AuthResponse> login(
-      {required String username, required String password}) async {
-    final resp = await _post(
-        '/api/v1/auth/login',
-        {
-          'username': username,
-          'password': password,
-        },
-        authenticated: false);
+  Future<AuthResponse> login({
+    required String username,
+    required String password,
+    String? twoFactorPassword,
+  }) async {
+    final resp = await _post('/api/v1/auth/login', {
+      'username': username,
+      'password': password,
+      if (twoFactorPassword != null && twoFactorPassword.isNotEmpty)
+        'two_factor_password': twoFactorPassword,
+    }, authenticated: false);
     return AuthResponse.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
@@ -118,12 +119,9 @@ class ApiService {
     if (refreshToken == null) {
       throw ApiException(401, 'NO_TOKEN', 'no refresh token');
     }
-    final resp = await _post(
-        '/api/v1/auth/refresh',
-        {
-          'refresh_token': refreshToken,
-        },
-        authenticated: false);
+    final resp = await _post('/api/v1/auth/refresh', {
+      'refresh_token': refreshToken,
+    }, authenticated: false);
     final data = resp['data'] as Map<String, dynamic>;
     await _storage.updateTokens(
       accessToken: data['access_token'] as String,
@@ -166,8 +164,12 @@ class ApiService {
     final expiresAt = data['public_key_expires_at'] != null
         ? DateTime.parse(data['public_key_expires_at'] as String)
         : null;
-    await KeyCacheService.put(userID, publicKey, fingerprint,
-        expiresAt: expiresAt);
+    await KeyCacheService.put(
+      userID,
+      publicKey,
+      fingerprint,
+      expiresAt: expiresAt,
+    );
     return publicKey;
   }
 
@@ -216,7 +218,8 @@ class ApiService {
   }
 
   Future<Map<String, String>> getFreshBulkPublicKeys(
-      List<String> userIDs) async {
+    List<String> userIDs,
+  ) async {
     // Catch per-user failures so a single bad fetch doesn't drop every key.
     final entries = await Future.wait(
       userIDs.map((id) async {
@@ -232,17 +235,21 @@ class ApiService {
   }
 
   Future<List<User>> searchUsers(String query) async {
-    final resp =
-        await _get('/api/v1/users/search?q=${Uri.encodeComponent(query)}');
+    final resp = await _get(
+      '/api/v1/users/search?q=${Uri.encodeComponent(query)}',
+    );
     return (resp['data'] as List)
         .map((e) => User.fromJson(e as Map<String, dynamic>))
         .toList();
   }
 
-  Future<List<Conversation>> getSharedConversations(String userID,
-      {int limit = 20}) async {
-    final resp =
-        await _get('/api/v1/users/$userID/shared-conversations?limit=$limit');
+  Future<List<Conversation>> getSharedConversations(
+    String userID, {
+    int limit = 20,
+  }) async {
+    final resp = await _get(
+      '/api/v1/users/$userID/shared-conversations?limit=$limit',
+    );
     final list = resp['data'] as List? ?? [];
     return list
         .map((e) => Conversation.fromJson(e as Map<String, dynamic>))
@@ -298,9 +305,13 @@ class ApiService {
   }
 
   Future<void> setConversationMemberRole(
-      String convID, String userID, String role) async {
-    await _put(
-        '/api/v1/conversations/$convID/members/$userID/role', {'role': role});
+    String convID,
+    String userID,
+    String role,
+  ) async {
+    await _put('/api/v1/conversations/$convID/members/$userID/role', {
+      'role': role,
+    });
   }
 
   // ---- Channels ----
@@ -342,13 +353,19 @@ class ApiService {
 
   /// Set a channel member's role: 'admin', 'moderator', or 'member' (admins only).
   Future<void> setChannelMemberRole(
-      String chanID, String userID, String role) async {
+    String chanID,
+    String userID,
+    String role,
+  ) async {
     await _put('/api/v1/channels/$chanID/members/$userID/role', {'role': role});
   }
 
   /// Ban a user from a channel (admins/moderators). Removes their membership.
-  Future<void> banChannelUser(String chanID, String userID,
-      {String? reason}) async {
+  Future<void> banChannelUser(
+    String chanID,
+    String userID, {
+    String? reason,
+  }) async {
     await _post('/api/v1/channels/$chanID/bans', {
       'user_id': userID,
       if (reason != null) 'reason': reason,
@@ -364,16 +381,20 @@ class ApiService {
     return Conversation.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
-  Future<void> subscribeChannel(String chanID) async {
-    await _post('/api/v1/channels/$chanID/subscribe', {});
+  Future<Map<String, dynamic>> subscribeChannel(String chanID) async {
+    final resp = await _post('/api/v1/channels/$chanID/subscribe', {});
+    return resp['data'] as Map<String, dynamic>;
   }
 
   Future<void> unsubscribeChannel(String chanID) async {
     await _delete('/api/v1/channels/$chanID/subscribe');
   }
 
-  Future<List<Message>> getChannelPosts(String chanID,
-      {String? beforeID, int limit = 50}) async {
+  Future<List<Message>> getChannelPosts(
+    String chanID, {
+    String? beforeID,
+    int limit = 50,
+  }) async {
     var path = '/api/v1/channels/$chanID/posts?limit=$limit';
     if (beforeID != null) path += '&before=$beforeID';
     final resp = await _get(path);
@@ -388,20 +409,28 @@ class ApiService {
     required String signature,
     String messageType = 'text',
     String? attachmentId,
+    bool silent = false,
+    DateTime? scheduledFor,
   }) async {
     final resp = await _post('/api/v1/channels/$chanID/posts', {
       'encrypted_payload': encryptedPayload,
       'signature': signature,
       'message_type': messageType,
       if (attachmentId != null) 'attachment_id': attachmentId,
+      if (silent) 'silent': true,
+      if (scheduledFor != null)
+        'scheduled_for': scheduledFor.toUtc().toIso8601String(),
     });
     return Message.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
   // ---- Messages ----
 
-  Future<List<Message>> getMessages(String convID,
-      {String? beforeID, int limit = 50}) async {
+  Future<List<Message>> getMessages(
+    String convID, {
+    String? beforeID,
+    int limit = 50,
+  }) async {
     var path = '/api/v1/conversations/$convID/messages?limit=$limit';
     if (beforeID != null) path += '&before=$beforeID';
     final resp = await _get(path);
@@ -417,6 +446,9 @@ class ApiService {
     String messageType = 'text',
     String? replyTo,
     String? attachmentId,
+    String? topicId,
+    bool silent = false,
+    DateTime? scheduledFor,
   }) async {
     final resp = await _post('/api/v1/conversations/$convID/messages', {
       'encrypted_payload': encryptedPayload,
@@ -424,8 +456,27 @@ class ApiService {
       'message_type': messageType,
       if (replyTo != null) 'reply_to': replyTo,
       if (attachmentId != null) 'attachment_id': attachmentId,
+      if (topicId != null) 'topic_id': topicId,
+      if (silent) 'silent': true,
+      if (scheduledFor != null)
+        'scheduled_for': scheduledFor.toUtc().toIso8601String(),
     });
     return Message.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<void> reactToMessage(String msgID, String emoji) async {
+    await _post('/api/v1/messages/$msgID/reactions', {'emoji': emoji});
+  }
+
+  Future<void> removeReaction(String msgID, String emoji) async {
+    await _delete(
+      '/api/v1/messages/$msgID/reactions?emoji=${Uri.encodeComponent(emoji)}',
+    );
+  }
+
+  Future<Conversation> getSavedMessages() async {
+    final resp = await _get('/api/v1/conversations/saved-messages');
+    return Conversation.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
   Future<void> deleteMessage(String convID, String msgID) async {
@@ -441,9 +492,7 @@ class ApiService {
   }
 
   Future<void> deleteChannelUserMessages(String chanID, String userID) async {
-    await _delete(
-      '/api/v1/channels/$chanID/posts?scope=user&user_id=$userID',
-    );
+    await _delete('/api/v1/channels/$chanID/posts?scope=user&user_id=$userID');
   }
 
   Future<void> deleteOwnChannelMessages(String chanID) async {
@@ -452,8 +501,41 @@ class ApiService {
 
   /// Set the disappearing-messages timer (seconds; 0 = off).
   Future<void> setMessageTtl(String convID, int seconds) async {
-    await _put(
-        '/api/v1/conversations/$convID/message-ttl', {'seconds': seconds});
+    await _put('/api/v1/conversations/$convID/message-ttl', {
+      'seconds': seconds,
+    });
+  }
+
+  Future<void> setSlowMode(
+    String convID,
+    int seconds, {
+    bool channel = false,
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    await _put('$base/$convID/slow-mode', {'seconds': seconds});
+  }
+
+  Future<void> setJoinApproval(
+    String convID,
+    bool required, {
+    bool channel = false,
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    await _put('$base/$convID/join-approval', {'required': required});
+  }
+
+  Future<void> setTopicsEnabled(
+    String convID,
+    bool enabled, {
+    bool channel = false,
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    await _put('$base/$convID/topics-enabled', {'enabled': enabled});
+  }
+
+  Future<Map<String, dynamic>> getChannelStats(String chanID) async {
+    final resp = await _get('/api/v1/channels/$chanID/stats');
+    return resp['data'] as Map<String, dynamic>;
   }
 
   Future<void> setEncryptionEnabled(String convID, bool enabled) async {
@@ -476,8 +558,9 @@ class ApiService {
   }
 
   Future<void> markRead(String convID, String messageID) async {
-    await _post(
-        '/api/v1/conversations/$convID/read', {'message_id': messageID});
+    await _post('/api/v1/conversations/$convID/read', {
+      'message_id': messageID,
+    });
   }
 
   // ---- Attachments ----
@@ -498,7 +581,10 @@ class ApiService {
 
   /// Upload raw bytes (already encrypted by client) directly to MinIO via presigned PUT URL.
   Future<void> uploadBytes(
-      String uploadUrl, Uint8List bytes, String mimeType) async {
+    String uploadUrl,
+    Uint8List bytes,
+    String mimeType,
+  ) async {
     final response = await _httpClient.put(
       Uri.parse(uploadUrl),
       headers: {'Content-Type': mimeType},
@@ -506,7 +592,10 @@ class ApiService {
     );
     if (response.statusCode >= 400) {
       throw ApiException(
-          response.statusCode, 'UPLOAD_FAILED', 'object storage upload failed');
+        response.statusCode,
+        'UPLOAD_FAILED',
+        'object storage upload failed',
+      );
     }
   }
 
@@ -565,12 +654,68 @@ class ApiService {
     });
   }
 
+  Future<Map<String, dynamic>> getSecuritySettings() async {
+    final resp = await _get('/api/v1/me/security');
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> updateSecuritySettings({
+    String? twoFactorPassword,
+    bool disableTwoFactor = false,
+    int? accountSelfDestructDays,
+  }) async {
+    final resp = await _put('/api/v1/me/security', {
+      if (twoFactorPassword != null) 'two_factor_password': twoFactorPassword,
+      if (disableTwoFactor) 'disable_two_factor': true,
+      if (accountSelfDestructDays != null)
+        'account_self_destruct_days': accountSelfDestructDays,
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<List<Map<String, dynamic>>> listSessions() async {
+    final resp = await _get('/api/v1/me/sessions');
+    return (resp['data'] as List)
+        .map((e) => e as Map<String, dynamic>)
+        .toList();
+  }
+
+  Future<void> revokeSession(String sessionId) async {
+    await _delete('/api/v1/me/sessions/$sessionId');
+  }
+
+  Future<Map<String, dynamic>> getBusinessProfile() async {
+    final resp = await _get('/api/v1/me/business');
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> updateBusinessProfile({
+    String? displayName,
+    String? greetingMessage,
+    String? awayMessage,
+    List<Map<String, dynamic>> quickReplies = const [],
+    Map<String, dynamic> openingHours = const {},
+    bool enabled = false,
+  }) async {
+    final resp = await _put('/api/v1/me/business', {
+      'display_name': displayName,
+      'greeting_message': greetingMessage,
+      'away_message': awayMessage,
+      'quick_replies': quickReplies,
+      'opening_hours': openingHours,
+      'enabled': enabled,
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
   Future<void> deleteConversation(String convID) async {
     await _delete('/api/v1/conversations/$convID');
   }
 
-  Future<void> leaveConversation(String convID,
-      {bool deleteOwnMessages = false}) async {
+  Future<void> leaveConversation(
+    String convID, {
+    bool deleteOwnMessages = false,
+  }) async {
     await _delete(
       '/api/v1/conversations/$convID?leave=true&delete_own_messages=$deleteOwnMessages',
     );
@@ -819,8 +964,10 @@ class ApiService {
     });
   }
 
-  Future<void> unmuteUser(
-      {required String convID, required String userID}) async {
+  Future<void> unmuteUser({
+    required String convID,
+    required String userID,
+  }) async {
     await _delete('/api/v1/conversations/$convID/mutes/$userID');
   }
 
@@ -868,8 +1015,13 @@ class ApiService {
       final req = http.MultipartRequest('POST', uri)
         ..headers['Authorization'] = 'Bearer ${token ?? ""}'
         ..fields.addAll(fields)
-        ..files.add(http.MultipartFile.fromBytes(fileField, fileBytes,
-            filename: filename));
+        ..files.add(
+          http.MultipartFile.fromBytes(
+            fileField,
+            fileBytes,
+            filename: filename,
+          ),
+        );
       final streamed = await req.send();
       return http.Response.fromStream(streamed);
     }
@@ -878,8 +1030,10 @@ class ApiService {
     return _parse(response);
   }
 
-  Future<Map<String, dynamic>> _get(String path,
-      {bool authenticated = true}) async {
+  Future<Map<String, dynamic>> _get(
+    String path, {
+    bool authenticated = true,
+  }) async {
     final response = await _requestWithRetry(() async {
       final token = authenticated ? await _storage.getAccessToken() : null;
       return _httpClient.get(
@@ -890,8 +1044,11 @@ class ApiService {
     return _parse(response);
   }
 
-  Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> body,
-      {bool authenticated = true}) async {
+  Future<Map<String, dynamic>> _post(
+    String path,
+    Map<String, dynamic> body, {
+    bool authenticated = true,
+  }) async {
     final response = await _requestWithRetry(() async {
       final token = authenticated ? await _storage.getAccessToken() : null;
       return _httpClient.post(
@@ -904,7 +1061,9 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> _put(
-      String path, Map<String, dynamic> body) async {
+    String path,
+    Map<String, dynamic> body,
+  ) async {
     final response = await _requestWithRetry(() async {
       final token = await _storage.getAccessToken();
       return _httpClient.put(
@@ -927,9 +1086,9 @@ class ApiService {
   }
 
   Map<String, String> _headers(String? token) => {
-        'Content-Type': 'application/json',
-        if (token != null) 'Authorization': 'Bearer $token',
-      };
+    'Content-Type': 'application/json',
+    if (token != null) 'Authorization': 'Bearer $token',
+  };
 
   Future<http.Response> _requestWithRetry(
     Future<http.Response> Function() fn, {

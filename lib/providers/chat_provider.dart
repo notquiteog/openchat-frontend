@@ -31,12 +31,12 @@ class ChatProvider extends ChangeNotifier {
   final Map<String, Set<String>> _typingUsers = {};
   String? _selfId;
 
-  List<Conversation> get conversations => _conversations.values.toList()
-    ..sort((a, b) {
-      final aTime = a.lastMessage?.createdAt ?? a.createdAt;
-      final bTime = b.lastMessage?.createdAt ?? b.createdAt;
-      return bTime.compareTo(aTime);
-    });
+  List<Conversation> get conversations =>
+      _conversations.values.toList()..sort((a, b) {
+        final aTime = a.lastMessage?.createdAt ?? a.createdAt;
+        final bTime = b.lastMessage?.createdAt ?? b.createdAt;
+        return bTime.compareTo(aTime);
+      });
 
   List<Message> messagesFor(String convID) =>
       List.unmodifiable(_messages[convID] ?? []);
@@ -75,11 +75,10 @@ class ChatProvider extends ChangeNotifier {
   Future<void> loadConversations() => _loadConversations(silent: false);
 
   Future<void> refreshConversationsSilently() {
-    _conversationRefreshInFlight ??= _loadConversations(
-      silent: true,
-    ).whenComplete(() {
-      _conversationRefreshInFlight = null;
-    });
+    _conversationRefreshInFlight ??= _loadConversations(silent: true)
+        .whenComplete(() {
+          _conversationRefreshInFlight = null;
+        });
     return _conversationRefreshInFlight!;
   }
 
@@ -147,22 +146,22 @@ class ChatProvider extends ChangeNotifier {
   }
 
   static Object _conversationFingerprint(Conversation conv) => (
-        conv.id,
-        conv.type,
-        conv.name,
-        conv.description,
-        conv.avatarUrl,
-        conv.backgroundUrl,
-        conv.archivedAt?.toIso8601String(),
-        conv.ownerOnlyPost,
-        conv.messageTtlSeconds,
-        conv.encryptionEnabled,
-        conv.unreadCount,
-        conv.members.length,
-        conv.lastMessage?.id,
-        conv.lastMessage?.encryptedPayload,
-        conv.lastMessage?.editedAt?.toIso8601String(),
-      );
+    conv.id,
+    conv.type,
+    conv.name,
+    conv.description,
+    conv.avatarUrl,
+    conv.backgroundUrl,
+    conv.archivedAt?.toIso8601String(),
+    conv.ownerOnlyPost,
+    conv.messageTtlSeconds,
+    conv.encryptionEnabled,
+    conv.unreadCount,
+    conv.members.length,
+    conv.lastMessage?.id,
+    conv.lastMessage?.encryptedPayload,
+    conv.lastMessage?.editedAt?.toIso8601String(),
+  );
 
   Future<void> loadMessages(String convID) async {
     try {
@@ -221,12 +220,18 @@ class ChatProvider extends ChangeNotifier {
     required String plaintext,
     String messageType = 'text',
     String? replyTo,
+    bool silent = false,
+    DateTime? scheduledFor,
+    String? topicId,
   }) async {
     return _sendEncryptedPayload(
       convID: convID,
       plaintextPayload: plaintext,
       messageType: messageType,
       replyTo: replyTo,
+      silent: silent,
+      scheduledFor: scheduledFor,
+      topicId: topicId,
     );
   }
 
@@ -342,6 +347,9 @@ class ChatProvider extends ChangeNotifier {
     required String messageType,
     String? replyTo,
     String? attachmentId,
+    String? topicId,
+    bool silent = false,
+    DateTime? scheduledFor,
   }) async {
     final conv = _conversations[convID];
     if (conv == null) {
@@ -405,6 +413,21 @@ class ChatProvider extends ChangeNotifier {
       signature = '';
     }
 
+    if (scheduledFor != null) {
+      await _api.sendMessage(
+        convID: convID,
+        encryptedPayload: encrypted,
+        signature: signature,
+        messageType: messageType,
+        replyTo: replyTo,
+        attachmentId: attachmentId,
+        topicId: topicId,
+        silent: silent,
+        scheduledFor: scheduledFor,
+      );
+      return true;
+    }
+
     final pending = PendingMessage(
       id: 'pending-${DateTime.now().millisecondsSinceEpoch}',
       conversationId: convID,
@@ -422,6 +445,8 @@ class ChatProvider extends ChangeNotifier {
           : null,
       attachmentId: attachmentId,
       replyTo: replyTo,
+      topicId: topicId,
+      silent: silent,
       createdAt: DateTime.now(),
       plaintext: plaintextPayload,
     );
@@ -437,6 +462,8 @@ class ChatProvider extends ChangeNotifier {
         messageType: messageType,
         replyTo: replyTo,
         attachmentId: attachmentId,
+        topicId: topicId,
+        silent: silent,
       );
       confirmed.setDecryptedContent(plaintextPayload);
 
@@ -579,12 +606,11 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> leaveConversation(String convID,
-      {bool deleteOwnMessages = false}) async {
-    await _api.leaveConversation(
-      convID,
-      deleteOwnMessages: deleteOwnMessages,
-    );
+  Future<void> leaveConversation(
+    String convID, {
+    bool deleteOwnMessages = false,
+  }) async {
+    await _api.leaveConversation(convID, deleteOwnMessages: deleteOwnMessages);
     _conversations.remove(convID);
     _messages.remove(convID);
     _typingUsers.remove(convID);
@@ -656,6 +682,10 @@ class ChatProvider extends ChangeNotifier {
 
       case WsEventType.messageEdited:
         _handleEditedMessage(Message.fromJson(event.data));
+
+      case WsEventType.messageReaction:
+        final convID = event.data['conversation_id'] as String?;
+        if (convID != null) unawaited(loadMessages(convID));
 
       case WsEventType.conversationUpdated:
         // Name / description / avatar (and for channels, handle) changed. Pull
@@ -734,8 +764,9 @@ class ChatProvider extends ChangeNotifier {
     if (_selfId != null &&
         msg.senderId != _selfId &&
         msg.type != MessageType.system) {
-      final senderName =
-          msg.sender?.username != null ? '@${msg.sender!.username}' : 'Someone';
+      final senderName = msg.sender?.username != null
+          ? '@${msg.sender!.username}'
+          : 'Someone';
       final String title;
       final String body;
       if (conv != null && (conv.isGroup || conv.isChannel)) {

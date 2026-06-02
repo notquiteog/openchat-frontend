@@ -298,6 +298,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   bool _loading = true;
   bool _archived = false;
   bool _showStickers = false;
+  bool _sendSilent = false;
+  DateTime? _scheduledFor;
 
   // Mutable copy so edits to name/handle/avatar/privacy reflect immediately.
   late Conversation _channel;
@@ -372,7 +374,17 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
 
   Future<void> _subscribe() async {
     try {
-      await context.read<ApiService>().subscribeChannel(channel.id);
+      final result = await context.read<ApiService>().subscribeChannel(
+        channel.id,
+      );
+      if (result['join_request'] == 'pending') {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('Join request sent')));
+        }
+        return;
+      }
       setState(() => _isSubscribed = true);
       if (mounted) context.read<ChatProvider>().loadConversations();
     } catch (e) {
@@ -1288,9 +1300,86 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       signature: sig,
       messageType: messageType,
       attachmentId: attachmentId,
+      silent: _sendSilent,
+      scheduledFor: _scheduledFor,
     );
     msg.setDecryptedContent(text);
-    setState(() => _posts.add(msg));
+    if (_scheduledFor == null) {
+      setState(() => _posts.add(msg));
+    } else if (mounted) {
+      final scheduledFor = _scheduledFor;
+      setState(() => _scheduledFor = null);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Scheduled for ${_formatSchedule(scheduledFor)}'),
+        ),
+      );
+    }
+  }
+
+  String _formatSchedule(DateTime? when) {
+    if (when == null) return '';
+    final local = when.toLocal();
+    final h = local.hour.toString().padLeft(2, '0');
+    final m = local.minute.toString().padLeft(2, '0');
+    return '${local.month}/${local.day} $h:$m';
+  }
+
+  Future<void> _showSendOptions() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SwitchListTile(
+                secondary: const Icon(Icons.notifications_off_outlined),
+                title: const Text('Post silently'),
+                value: _sendSilent,
+                onChanged: (v) {
+                  setState(() => _sendSilent = v);
+                  setSheetState(() {});
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.schedule_outlined),
+                title: const Text('Schedule in 5 minutes'),
+                onTap: () {
+                  setState(
+                    () => _scheduledFor = DateTime.now().add(
+                      const Duration(minutes: 5),
+                    ),
+                  );
+                  Navigator.pop(ctx);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.more_time_outlined),
+                title: const Text('Schedule in 1 hour'),
+                onTap: () {
+                  setState(
+                    () => _scheduledFor = DateTime.now().add(
+                      const Duration(hours: 1),
+                    ),
+                  );
+                  Navigator.pop(ctx);
+                },
+              ),
+              if (_scheduledFor != null)
+                ListTile(
+                  leading: const Icon(Icons.event_busy_outlined),
+                  title: const Text('Clear schedule'),
+                  onTap: () {
+                    setState(() => _scheduledFor = null);
+                    Navigator.pop(ctx);
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _sendSticker(String stickerID) async {
@@ -1319,6 +1408,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               title: const Text('File'),
               onTap: () => Navigator.pop(context, 'file'),
             ),
+            ListTile(
+              leading: const Icon(Icons.mic_none_outlined),
+              title: const Text('Voice note'),
+              onTap: () => Navigator.pop(context, 'voice'),
+            ),
           ],
         ),
       ),
@@ -1332,6 +1426,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         'gallery_image' => await attachmentService.pickImage(),
         'gallery_video' => await attachmentService.pickVideo(),
         'file' => await attachmentService.pickFile(),
+        'voice' => await attachmentService.pickVoice(),
         _ => null,
       };
     } catch (e) {
@@ -1514,6 +1609,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               onToggleStickers: () =>
                   setState(() => _showStickers = !_showStickers),
               onAttach: _showAttachmentPicker,
+              onOptions: _showSendOptions,
+              hasOptions: _sendSilent || _scheduledFor != null,
               onPost: _post,
             ),
         ],
@@ -1552,6 +1649,8 @@ class ChannelPostBar extends StatelessWidget {
   final bool showStickers;
   final VoidCallback onToggleStickers;
   final VoidCallback onAttach;
+  final VoidCallback? onOptions;
+  final bool hasOptions;
   final VoidCallback onPost;
 
   const ChannelPostBar({
@@ -1560,6 +1659,8 @@ class ChannelPostBar extends StatelessWidget {
     required this.showStickers,
     required this.onToggleStickers,
     required this.onAttach,
+    this.onOptions,
+    this.hasOptions = false,
     required this.onPost,
   });
 
@@ -1607,6 +1708,14 @@ class ChannelPostBar extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 4),
+            IconButton(
+              icon: Icon(
+                hasOptions ? Icons.schedule_send_outlined : Icons.tune_outlined,
+              ),
+              color: hasOptions ? scheme.primary : null,
+              tooltip: 'Post options',
+              onPressed: onOptions,
+            ),
             IconButton(
               icon: const Icon(Icons.attach_file_outlined),
               tooltip: 'Attach file',

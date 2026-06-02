@@ -47,11 +47,11 @@ class MessageBubble extends StatelessWidget {
   /// Corner radii honouring the configured [bubbleRadius]; the "tail" corner
   /// stays tight for the speech-bubble look.
   BorderRadius _radii() => BorderRadius.only(
-        topLeft: Radius.circular(bubbleRadius),
-        topRight: Radius.circular(bubbleRadius),
-        bottomLeft: Radius.circular(isMe ? bubbleRadius : 4),
-        bottomRight: Radius.circular(isMe ? 4 : bubbleRadius),
-      );
+    topLeft: Radius.circular(bubbleRadius),
+    topRight: Radius.circular(bubbleRadius),
+    bottomLeft: Radius.circular(isMe ? bubbleRadius : 4),
+    bottomRight: Radius.circular(isMe ? 4 : bubbleRadius),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -69,8 +69,9 @@ class MessageBubble extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
-        mainAxisAlignment:
-            isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment: isMe
+            ? MainAxisAlignment.end
+            : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           if (!isMe && showAvatar) ...[
@@ -80,7 +81,8 @@ class MessageBubble extends StatelessWidget {
                 radius: 14,
                 backgroundImage: message.sender?.avatarUrl != null
                     ? CachedNetworkImageProvider(
-                        ApiConfig.resolveMedia(message.sender!.avatarUrl!))
+                        ApiConfig.resolveMedia(message.sender!.avatarUrl!),
+                      )
                     : null,
                 child: message.sender?.avatarUrl == null
                     ? Text(
@@ -137,26 +139,26 @@ class MessageBubble extends StatelessWidget {
     if (content.hasAttachment) {
       return switch (message.type) {
         MessageType.image => _ImageBubble(
-            message: message,
-            content: content,
-            bubbleColor: bubbleColor,
-            textColor: textColor,
-            radii: radii,
-          ),
+          message: message,
+          content: content,
+          bubbleColor: bubbleColor,
+          textColor: textColor,
+          radii: radii,
+        ),
         MessageType.video => _VideoBubble(
-            message: message,
-            content: content,
-            bubbleColor: bubbleColor,
-            textColor: textColor,
-            radii: radii,
-          ),
+          message: message,
+          content: content,
+          bubbleColor: bubbleColor,
+          textColor: textColor,
+          radii: radii,
+        ),
         _ => _FileBubble(
-            message: message,
-            content: content,
-            bubbleColor: bubbleColor,
-            textColor: textColor,
-            radii: radii,
-          ),
+          message: message,
+          content: content,
+          bubbleColor: bubbleColor,
+          textColor: textColor,
+          radii: radii,
+        ),
       };
     }
 
@@ -238,14 +240,18 @@ class _CallEventChip extends StatelessWidget {
               Text(
                 event.label,
                 style: TextStyle(
-                    fontSize: 12, color: color, fontWeight: FontWeight.w500),
+                  fontSize: 12,
+                  color: color,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
               const SizedBox(width: 6),
               Text(
                 timeago.format(time, locale: 'en_short'),
                 style: TextStyle(
-                    fontSize: 11,
-                    color: cs.onSurfaceVariant.withValues(alpha: 0.7)),
+                  fontSize: 11,
+                  color: cs.onSurfaceVariant.withValues(alpha: 0.7),
+                ),
               ),
             ],
           ),
@@ -272,8 +278,8 @@ class _BubbleShell extends StatelessWidget {
   Widget build(BuildContext context) {
     final tintOpacity =
         ThemeData.estimateBrightnessForColor(color) == Brightness.dark
-            ? 0.38
-            : 0.34;
+        ? 0.38
+        : 0.34;
     return GlassSurface(
       blur: 30,
       borderRadius: radii,
@@ -289,8 +295,9 @@ class _BubbleShell extends StatelessWidget {
         ),
       ],
       child: Container(
-        constraints:
-            BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.75,
+        ),
         decoration: BoxDecoration(
           color: color.withValues(alpha: tintOpacity),
           borderRadius: radii,
@@ -342,14 +349,156 @@ class _TextBubble extends StatelessWidget {
                 ),
               ),
             ),
-          Text(
-            message.decryptedContent ?? '',
-            style: TextStyle(color: textColor, fontSize: 15),
+          Text.rich(
+            TextSpan(
+              children: _formatMessageText(
+                message.decryptedContent ?? '',
+                textColor,
+              ),
+            ),
+            style: TextStyle(color: textColor, fontSize: 15, height: 1.25),
           ),
+          if (message.reactions.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            _ReactionChips(reactions: message.reactions, textColor: textColor),
+          ],
           const SizedBox(height: 2),
           _Timestamp(message: message, textColor: textColor),
         ],
       ),
+    );
+  }
+}
+
+List<InlineSpan> _formatMessageText(String text, Color color) {
+  final spans = <InlineSpan>[];
+  var i = 0;
+  while (i < text.length) {
+    final markers = <String, int>{
+      '**': text.indexOf('**', i),
+      '__': text.indexOf('__', i),
+      '`': text.indexOf('`', i),
+      '||': text.indexOf('||', i),
+    }..removeWhere((_, value) => value < 0);
+    if (markers.isEmpty) {
+      spans.add(TextSpan(text: text.substring(i)));
+      break;
+    }
+    final next = markers.entries.reduce((a, b) => a.value <= b.value ? a : b);
+    if (next.value > i)
+      spans.add(TextSpan(text: text.substring(i, next.value)));
+    final marker = next.key;
+    final start = next.value + marker.length;
+    final end = text.indexOf(marker, start);
+    if (end < 0) {
+      spans.add(TextSpan(text: text.substring(next.value)));
+      break;
+    }
+    final inner = text.substring(start, end);
+    switch (marker) {
+      case '**':
+        spans.add(
+          TextSpan(
+            text: inner,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+        );
+      case '__':
+        spans.add(
+          TextSpan(
+            text: inner,
+            style: const TextStyle(fontStyle: FontStyle.italic),
+          ),
+        );
+      case '`':
+        spans.add(
+          TextSpan(
+            text: inner,
+            style: TextStyle(
+              fontFamily: 'monospace',
+              backgroundColor: color.withValues(alpha: 0.16),
+            ),
+          ),
+        );
+      case '||':
+        spans.add(
+          WidgetSpan(
+            alignment: PlaceholderAlignment.baseline,
+            baseline: TextBaseline.alphabetic,
+            child: _SpoilerText(text: inner, color: color),
+          ),
+        );
+    }
+    i = end + marker.length;
+  }
+  return spans;
+}
+
+class _SpoilerText extends StatefulWidget {
+  final String text;
+  final Color color;
+
+  const _SpoilerText({required this.text, required this.color});
+
+  @override
+  State<_SpoilerText> createState() => _SpoilerTextState();
+}
+
+class _SpoilerTextState extends State<_SpoilerText> {
+  bool _revealed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => setState(() => _revealed = !_revealed),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+        decoration: BoxDecoration(
+          color: _revealed
+              ? widget.color.withValues(alpha: 0.08)
+              : widget.color.withValues(alpha: 0.82),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          widget.text,
+          style: TextStyle(
+            color: _revealed ? widget.color : Colors.transparent,
+            fontSize: 15,
+            height: 1.2,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReactionChips extends StatelessWidget {
+  final List<MessageReactionSummary> reactions;
+  final Color textColor;
+
+  const _ReactionChips({required this.reactions, required this.textColor});
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 4,
+      runSpacing: 4,
+      children: [
+        for (final reaction in reactions)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+            decoration: BoxDecoration(
+              color: textColor.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: textColor.withValues(alpha: 0.16)),
+            ),
+            child: Text(
+              '${reaction.emoji} ${reaction.count}',
+              style: TextStyle(color: textColor, fontSize: 12),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -431,8 +580,10 @@ class _ImageBubbleState extends State<_ImageBubble> {
             if ((c.text).isNotEmpty)
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
-                child: Text(c.text,
-                    style: TextStyle(color: textColor, fontSize: 14)),
+                child: Text(
+                  c.text,
+                  style: TextStyle(color: textColor, fontSize: 14),
+                ),
               ),
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 2, 12, 8),
@@ -447,55 +598,56 @@ class _ImageBubbleState extends State<_ImageBubble> {
   Widget _buildImageArea(MessageImageLayout layout) {
     return switch (_state) {
       _LoadState.done => GestureDetector(
-          onTap: () => _showFullscreen(context),
-          child: SizedBox(
-            width: layout.maxBubbleWidth,
-            height: layout.reservedImageHeight,
-            child: Stack(
-              children: [
-                Image.memory(
-                  _bytes!,
-                  width: double.infinity,
-                  height: double.infinity,
-                  fit: BoxFit.cover,
-                  gaplessPlayback: true,
-                ),
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: Tooltip(
-                    message: MessageImageLayout.expandTooltip,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: Colors.black54,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Padding(
-                        padding: EdgeInsets.all(4),
-                        child: Icon(
-                          Icons.open_in_full,
-                          size: 14,
-                          color: Colors.white,
-                        ),
+        onTap: () => _showFullscreen(context),
+        child: SizedBox(
+          width: layout.maxBubbleWidth,
+          height: layout.reservedImageHeight,
+          child: Stack(
+            children: [
+              Image.memory(
+                _bytes!,
+                width: double.infinity,
+                height: double.infinity,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+              ),
+              Positioned(
+                top: 8,
+                right: 8,
+                child: Tooltip(
+                  message: MessageImageLayout.expandTooltip,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Padding(
+                      padding: EdgeInsets.all(4),
+                      child: Icon(
+                        Icons.open_in_full,
+                        size: 14,
+                        color: Colors.white,
                       ),
                     ),
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
+      ),
       _LoadState.loading => Container(
-          height: layout.reservedImageHeight,
-          color: Colors.black12,
-          child: const Center(child: CircularProgressIndicator()),
-        ),
+        height: layout.reservedImageHeight,
+        color: Colors.black12,
+        child: const Center(child: CircularProgressIndicator()),
+      ),
       _LoadState.error => Container(
-          height: layout.reservedImageHeight,
-          color: Colors.black12,
-          child:
-              const Center(child: Icon(Icons.broken_image, color: Colors.grey)),
+        height: layout.reservedImageHeight,
+        color: Colors.black12,
+        child: const Center(
+          child: Icon(Icons.broken_image, color: Colors.grey),
         ),
+      ),
       _LoadState.idle => const SizedBox.shrink(),
     };
   }
@@ -508,10 +660,10 @@ class _ImageBubbleState extends State<_ImageBubble> {
         builder: (_) => Scaffold(
           backgroundColor: Colors.black,
           appBar: AppBar(
-              backgroundColor: Colors.black, foregroundColor: Colors.white),
-          body: Center(
-            child: InteractiveViewer(child: Image.memory(_bytes!)),
+            backgroundColor: Colors.black,
+            foregroundColor: Colors.white,
           ),
+          body: Center(child: InteractiveViewer(child: Image.memory(_bytes!))),
         ),
       ),
     );
@@ -622,30 +774,31 @@ class _VideoBubbleState extends State<_VideoBubble> {
     return switch (_state) {
       _LoadState.done => _VideoPlayerWidget(controller: _controller!),
       _LoadState.loading => Container(
+        height: 160,
+        color: Colors.black26,
+        child: const Center(child: CircularProgressIndicator()),
+      ),
+      _LoadState.error => Container(
+        height: 100,
+        color: Colors.black12,
+        child: const Center(
+          child: Icon(Icons.videocam_off, color: Colors.grey),
+        ),
+      ),
+      _LoadState.idle => GestureDetector(
+        onTap: _load,
+        child: Container(
           height: 160,
           color: Colors.black26,
-          child: const Center(child: CircularProgressIndicator()),
-        ),
-      _LoadState.error => Container(
-          height: 100,
-          color: Colors.black12,
-          child:
-              const Center(child: Icon(Icons.videocam_off, color: Colors.grey)),
-        ),
-      _LoadState.idle => GestureDetector(
-          onTap: _load,
-          child: Container(
-            height: 160,
-            color: Colors.black26,
-            child: const Center(
-              child: CircleAvatar(
-                radius: 28,
-                backgroundColor: Colors.black54,
-                child: Icon(Icons.play_arrow, color: Colors.white, size: 36),
-              ),
+          child: const Center(
+            child: CircleAvatar(
+              radius: 28,
+              backgroundColor: Colors.black54,
+              child: Icon(Icons.play_arrow, color: Colors.white, size: 36),
             ),
           ),
         ),
+      ),
     };
   }
 }
@@ -744,9 +897,9 @@ class _FileBubbleState extends State<_FileBubble> {
 
       if (mounted) {
         setState(() => _state = _LoadState.done);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Saved to ${file.path}')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Saved to ${file.path}')));
       }
     } catch (_) {
       if (mounted) setState(() => _state = _LoadState.error);
@@ -812,15 +965,21 @@ class _FileBubbleState extends State<_FileBubble> {
           : null,
       child: switch (_state) {
         _LoadState.loading => SizedBox(
-            width: 40,
-            height: 40,
-            child: CircularProgressIndicator(strokeWidth: 2, color: textColor),
-          ),
+          width: 40,
+          height: 40,
+          child: CircularProgressIndicator(strokeWidth: 2, color: textColor),
+        ),
         _LoadState.done => Icon(Icons.check_circle, color: textColor, size: 40),
-        _LoadState.error =>
-          Icon(Icons.error_outline, color: Colors.red[300], size: 40),
-        _LoadState.idle =>
-          Icon(Icons.download_outlined, color: textColor, size: 40),
+        _LoadState.error => Icon(
+          Icons.error_outline,
+          color: Colors.red[300],
+          size: 40,
+        ),
+        _LoadState.idle => Icon(
+          Icons.download_outlined,
+          color: textColor,
+          size: 40,
+        ),
       },
     );
   }
@@ -841,16 +1000,29 @@ class _Timestamp extends StatelessWidget {
       children: [
         if (message.decryptionFailed)
           Icon(Icons.lock, size: 10, color: textColor.withValues(alpha: 0.5)),
+        if (message.silent)
+          Padding(
+            padding: const EdgeInsets.only(right: 3),
+            child: Icon(
+              Icons.notifications_off_outlined,
+              size: 11,
+              color: textColor.withValues(alpha: 0.55),
+            ),
+          ),
         Text(
           timeago.format(message.createdAt, locale: 'en_short'),
-          style:
-              TextStyle(fontSize: 10, color: textColor.withValues(alpha: 0.6)),
+          style: TextStyle(
+            fontSize: 10,
+            color: textColor.withValues(alpha: 0.6),
+          ),
         ),
         if (message.isEdited)
           Text(
             ' · edited',
             style: TextStyle(
-                fontSize: 10, color: textColor.withValues(alpha: 0.6)),
+              fontSize: 10,
+              color: textColor.withValues(alpha: 0.6),
+            ),
           ),
         if (message.hasAutoDelete)
           StreamBuilder<int>(
@@ -858,7 +1030,9 @@ class _Timestamp extends StatelessWidget {
             builder: (context, _) => Text(
               ' · ${_remainingAutoDelete(message)} left',
               style: TextStyle(
-                  fontSize: 10, color: textColor.withValues(alpha: 0.7)),
+                fontSize: 10,
+                color: textColor.withValues(alpha: 0.7),
+              ),
             ),
           ),
       ],
@@ -886,7 +1060,9 @@ class _DecryptionError extends StatelessWidget {
     return Text(
       '🔒 Unable to decrypt',
       style: TextStyle(
-          color: textColor.withValues(alpha: 0.5), fontStyle: FontStyle.italic),
+        color: textColor.withValues(alpha: 0.5),
+        fontStyle: FontStyle.italic,
+      ),
     );
   }
 }
@@ -932,10 +1108,8 @@ class _StickerBubbleState extends State<_StickerBubble> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (_) => _StickerPackSheet(
-        packID: packId,
-        api: context.read<ApiService>(),
-      ),
+      builder: (_) =>
+          _StickerPackSheet(packID: packId, api: context.read<ApiService>()),
     );
   }
 
@@ -950,27 +1124,28 @@ class _StickerBubbleState extends State<_StickerBubble> {
         child: _loading
             ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
             : fileUrl != null
-                ? ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: CachedNetworkImage(
-                      imageUrl: ApiConfig.resolveMedia(fileUrl),
-                      fit: BoxFit.contain,
-                      placeholder: (_, __) => const Center(
-                          child: CircularProgressIndicator(strokeWidth: 2)),
-                      errorWidget: (_, __, ___) => Center(
-                        child: Text(
-                          _sticker?['emoji'] as String? ?? '😀',
-                          style: const TextStyle(fontSize: 60),
-                        ),
-                      ),
-                    ),
-                  )
-                : Center(
+            ? ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: CachedNetworkImage(
+                  imageUrl: ApiConfig.resolveMedia(fileUrl),
+                  fit: BoxFit.contain,
+                  placeholder: (_, __) => const Center(
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  errorWidget: (_, __, ___) => Center(
                     child: Text(
                       _sticker?['emoji'] as String? ?? '😀',
                       style: const TextStyle(fontSize: 60),
                     ),
                   ),
+                ),
+              )
+            : Center(
+                child: Text(
+                  _sticker?['emoji'] as String? ?? '😀',
+                  style: const TextStyle(fontSize: 60),
+                ),
+              ),
       ),
     );
   }
@@ -1023,17 +1198,17 @@ class _StickerPackSheetState extends State<_StickerPackSheet> {
     } catch (e) {
       if (mounted) {
         setState(() => _adding = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to add pack: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to add pack: $e')));
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final stickers =
-        (_pack?['stickers'] as List? ?? []).cast<Map<String, dynamic>>();
+    final stickers = (_pack?['stickers'] as List? ?? [])
+        .cast<Map<String, dynamic>>();
     final coverUrl = _pack?['cover_url'] as String?;
 
     return DraggableScrollableSheet(
@@ -1067,13 +1242,17 @@ class _StickerPackSheetState extends State<_StickerPackSheet> {
                       Text(
                         _pack?['name'] as String? ?? 'Sticker Pack',
                         style: const TextStyle(
-                            fontWeight: FontWeight.w700, fontSize: 16),
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                        ),
                       ),
                       if (_pack?['description'] != null)
                         Text(
                           _pack!['description'] as String,
-                          style:
-                              TextStyle(color: Colors.grey[600], fontSize: 13),
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 13,
+                          ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -1099,42 +1278,42 @@ class _StickerPackSheetState extends State<_StickerPackSheet> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : stickers.isEmpty
-                    ? const Center(child: Text('No stickers in this pack'))
-                    : GridView.builder(
-                        controller: controller,
-                        padding: const EdgeInsets.all(8),
-                        gridDelegate:
-                            const SliverGridDelegateWithFixedCrossAxisCount(
+                ? const Center(child: Text('No stickers in this pack'))
+                : GridView.builder(
+                    controller: controller,
+                    padding: const EdgeInsets.all(8),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
                           crossAxisCount: 4,
                           crossAxisSpacing: 6,
                           mainAxisSpacing: 6,
                         ),
-                        itemCount: stickers.length,
-                        itemBuilder: (_, i) {
-                          final st = stickers[i];
-                          final url = st['file_url'] as String?;
-                          return ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: url != null
-                                ? CachedNetworkImage(
-                                    imageUrl: ApiConfig.resolveMedia(url),
-                                    fit: BoxFit.contain,
-                                    errorWidget: (_, __, ___) => Center(
-                                      child: Text(
-                                        st['emoji'] as String? ?? '😀',
-                                        style: const TextStyle(fontSize: 28),
-                                      ),
-                                    ),
-                                  )
-                                : Center(
-                                    child: Text(
-                                      st['emoji'] as String? ?? '😀',
-                                      style: const TextStyle(fontSize: 28),
-                                    ),
+                    itemCount: stickers.length,
+                    itemBuilder: (_, i) {
+                      final st = stickers[i];
+                      final url = st['file_url'] as String?;
+                      return ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: url != null
+                            ? CachedNetworkImage(
+                                imageUrl: ApiConfig.resolveMedia(url),
+                                fit: BoxFit.contain,
+                                errorWidget: (_, __, ___) => Center(
+                                  child: Text(
+                                    st['emoji'] as String? ?? '😀',
+                                    style: const TextStyle(fontSize: 28),
                                   ),
-                          );
-                        },
-                      ),
+                                ),
+                              )
+                            : Center(
+                                child: Text(
+                                  st['emoji'] as String? ?? '😀',
+                                  style: const TextStyle(fontSize: 28),
+                                ),
+                              ),
+                      );
+                    },
+                  ),
           ),
         ],
       ),

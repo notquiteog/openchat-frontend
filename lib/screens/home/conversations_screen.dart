@@ -300,6 +300,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
               },
             ),
             ListTile(
+              leading: const Icon(Icons.bookmark_border_outlined),
+              title: const Text('Saved Messages'),
+              onTap: () async {
+                Navigator.pop(ctx);
+                await _openSavedMessages(context);
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.group_outlined),
               title: const Text('New Group'),
               onTap: () {
@@ -364,6 +372,21 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           MaterialPageRoute(builder: (_) => ChatScreen(conversation: conv)),
         );
       }
+    }
+  }
+
+  Future<void> _openSavedMessages(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final conv = await context.read<ApiService>().getSavedMessages();
+      if (!context.mounted) return;
+      await context.read<ChatProvider>().loadConversations();
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => ChatScreen(conversation: conv)),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
     }
   }
 }
