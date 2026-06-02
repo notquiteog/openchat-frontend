@@ -78,11 +78,55 @@ flutter build windows --release ...
 flutter build linux --release ...
 ```
 
+## Linux packages
+
+For source builds:
+
+```sh
+# Debian / Ubuntu
+sudo apt update
+sudo apt install -y clang cmake ninja-build pkg-config \
+  libgtk-3-dev libstdc++-12-dev liblzma-dev libsecret-1-dev \
+  libayatana-appindicator3-dev libunwind-dev \
+  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+
+# Fedora
+sudo dnf install -y clang cmake ninja-build pkgconf-pkg-config \
+  gtk3-devel xz-devel libsecret-devel libayatana-appindicator-gtk3-devel \
+  libunwind-devel gstreamer1-devel gstreamer1-plugins-base-devel
+
+# Arch / CachyOS
+sudo pacman -S --needed base-devel clang cmake ninja pkgconf gtk3 xz \
+  libsecret libayatana-appindicator libunwind gstreamer gst-plugins-base
+```
+
+For Debian packages and Flatpak bundles on Debian/Ubuntu builders, also install:
+
+```sh
+sudo apt install -y desktop-file-utils dpkg-dev flatpak flatpak-builder
+```
+
 ## Linux Secret Service / keyring
 
 Linux secure storage uses `flutter_secure_storage` through libsecret. That means OpenChat needs a working Secret Service backend, usually GNOME Keyring or KWallet. If the keyring is locked or the default collection alias is missing, startup may log `libsecret_error: KeyringLocked`; OpenChat treats locked startup reads as recoverable. Current Linux builds also run a small secure-storage preflight before sign-in and account creation; if the host keyring is locked or unavailable, the auth screens show a `System keyring unavailable` warning and avoid saving keys or tokens until the desktop session exposes an unlocked Secret Service.
 
 On Arch/CachyOS with COSMIC, install and wire GNOME Keyring because COSMIC does not provide its own Secret Service backend:
+
+Runtime/keyring packages:
+
+```sh
+# Debian / Ubuntu
+sudo apt install -y gnome-keyring libsecret-1-0 libsecret-tools seahorse xdg-desktop-portal xdg-desktop-portal-gtk
+
+# Fedora
+sudo dnf install -y gnome-keyring libsecret libsecret-tools seahorse xdg-desktop-portal xdg-desktop-portal-gtk
+
+# Arch / CachyOS
+sudo pacman -S --needed gnome-keyring libsecret seahorse xdg-desktop-portal xdg-desktop-portal-gtk
+
+# COSMIC on Arch / CachyOS
+sudo pacman -S --needed xdg-desktop-portal-cosmic
+```
 
 OpenChat ships a Linux helper for this:
 
@@ -92,10 +136,6 @@ OpenChat ships a Linux helper for this:
 ```
 
 The helper is conservative: `--check` only reports problems, while `--apply` prompts before host-level changes. On COSMIC/CachyOS it can install the GNOME Keyring/libsecret packages, write the user-level Secret portal preference, add backed-up `pam_gnome_keyring.so` auth/session hooks to the greeter PAM service, repair a missing default Secret Service alias, clear stale GNOME Keyring item paths by restarting the user Secret Service, and warn about or remove the `nopasswdlogin` group that prevents login-time keyring unlock.
-
-```sh
-sudo pacman -S gnome-keyring libsecret seahorse xdg-desktop-portal xdg-desktop-portal-cosmic xdg-desktop-portal-gtk
-```
 
 The greeter's PAM service should include:
 
