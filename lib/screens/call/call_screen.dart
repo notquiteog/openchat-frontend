@@ -1,4 +1,5 @@
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
@@ -19,11 +20,14 @@ class _CallScreenState extends State<CallScreen> {
   final _localRenderer = RTCVideoRenderer();
   final _remoteRenderer = RTCVideoRenderer();
   bool _renderersReady = false;
+  bool _renderersInitialized = false;
 
   @override
   void initState() {
     super.initState();
-    _initRenderers();
+    if (!_isLinuxAudioOnly(context.read<CallProvider>().session)) {
+      _initRenderers();
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       context.read<CallProvider>().refreshAudioOutputs();
@@ -34,11 +38,22 @@ class _CallScreenState extends State<CallScreen> {
     try {
       await _localRenderer.initialize();
       await _remoteRenderer.initialize();
+      _renderersInitialized = true;
     } catch (_) {
+      try {
+        _localRenderer.dispose();
+      } catch (_) {}
+      try {
+        _remoteRenderer.dispose();
+      } catch (_) {}
       if (mounted) setState(() => _renderersReady = false);
       return;
     }
-    if (!mounted) return;
+    if (!mounted) {
+      _localRenderer.dispose();
+      _remoteRenderer.dispose();
+      return;
+    }
     final ready =
         _localRenderer.textureId != null && _remoteRenderer.textureId != null;
     if (ready) {
@@ -51,10 +66,18 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   void dispose() {
-    _localRenderer.dispose();
-    _remoteRenderer.dispose();
+    if (_renderersInitialized) {
+      _localRenderer.dispose();
+      _remoteRenderer.dispose();
+    }
     super.dispose();
   }
+
+  bool _isLinuxAudioOnly(CallSession? session) =>
+      session != null &&
+      !session.isVideo &&
+      !kIsWeb &&
+      defaultTargetPlatform == TargetPlatform.linux;
 
   void _toggleMic() {
     final callProvider = context.read<CallProvider>();
@@ -126,8 +149,11 @@ class _CallScreenState extends State<CallScreen> {
       return const SizedBox.shrink();
     }
 
+    final isVideo = session.isVideo;
+    final linuxAudioOnly = _isLinuxAudioOnly(session);
+
     // Keep renderers in sync whenever streams change (guard: must be initialized first)
-    if (_renderersReady) {
+    if (_renderersReady && !linuxAudioOnly) {
       if (callProvider.localStream != null) {
         _localRenderer.srcObject = callProvider.localStream;
       }
@@ -136,7 +162,6 @@ class _CallScreenState extends State<CallScreen> {
       }
     }
 
-    final isVideo = session.isVideo;
     final statusText = callProvider.callStatusText;
     final micMuted = callProvider.isMicMuted;
     final cameraOff = !callProvider.isCameraEnabled;
@@ -147,7 +172,7 @@ class _CallScreenState extends State<CallScreen> {
         children: [
           // Audio-only calls still attach the remote stream to a renderer so
           // platforms that route audio through RTCVideoRenderer will play it.
-          if (!isVideo && _renderersReady)
+          if (!isVideo && !linuxAudioOnly && _renderersReady)
             Positioned(
               left: 0,
               top: 0,

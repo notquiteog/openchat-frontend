@@ -1,8 +1,10 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:openchat/providers/call_provider.dart';
 import 'package:openchat/screens/call/call_screen.dart';
 import 'package:openchat/services/call_audio.dart';
@@ -86,6 +88,41 @@ void main() {
   });
 
   group('Call overlay minimize and expand', () {
+    testWidgets('does not mount hidden RTC renderer for Linux voice calls', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+
+      final service = _FakeCallService();
+      final provider = CallProvider(service, audio: _FakeCallAudio());
+      try {
+        final session = CallSession(
+          callId: 'c-linux-audio',
+          remoteUserId: 'u-linux',
+          remoteUsername: 'linux',
+          isVideo: false,
+          isIncoming: false,
+          state: CallState.connected,
+        )..connectedAt = DateTime.now();
+
+        service.emitSession(session);
+
+        await tester.pumpWidget(
+          ChangeNotifierProvider<CallProvider>.value(
+            value: provider,
+            child: const MaterialApp(home: Scaffold(body: CallOverlay())),
+          ),
+        );
+
+        expect(find.byType(CallScreen), findsOneWidget);
+        expect(find.byType(RTCVideoView), findsNothing);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+        provider.dispose();
+        service.dispose();
+      }
+    });
+
     testWidgets('shows compact affordance and expands back to full', (
       tester,
     ) async {
