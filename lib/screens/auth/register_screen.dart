@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../crypto/pgp_service.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/key_provider.dart';
+import '../../widgets/secure_storage_warning.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -224,7 +225,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             ),
                           ],
                           const SizedBox(height: 28),
-                          if (auth.error != null)
+                          if (auth.storageWarning != null)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 16),
+                              child: SecureStorageWarning(
+                                message: auth.storageWarning!,
+                              ),
+                            ),
+                          if (auth.error != null &&
+                              auth.error != auth.storageWarning)
                             Padding(
                               padding: const EdgeInsets.only(bottom: 16),
                               child: Text(

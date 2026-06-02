@@ -80,7 +80,7 @@ flutter build linux --release ...
 
 ## Linux Secret Service / keyring
 
-Linux secure storage uses `flutter_secure_storage` through libsecret. That means OpenChat needs a working Secret Service backend, usually GNOME Keyring or KWallet. If the keyring is locked or the default collection alias is missing, startup may log `libsecret_error: KeyringLocked`; OpenChat treats locked startup reads as recoverable, but login persistence and key writes still require an unlocked keyring.
+Linux secure storage uses `flutter_secure_storage` through libsecret. That means OpenChat needs a working Secret Service backend, usually GNOME Keyring or KWallet. If the keyring is locked or the default collection alias is missing, startup may log `libsecret_error: KeyringLocked`; OpenChat treats locked startup reads as recoverable. Current Linux builds also run a small secure-storage preflight before sign-in and account creation; if the host keyring is locked or unavailable, the auth screens show a `System keyring unavailable` warning and avoid saving keys or tokens until the desktop session exposes an unlocked Secret Service.
 
 On Arch/CachyOS with COSMIC, install and wire GNOME Keyring because COSMIC does not provide its own Secret Service backend:
 

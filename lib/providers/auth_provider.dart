@@ -15,11 +15,13 @@ class AuthProvider extends ChangeNotifier {
   AuthState _state = AuthState.unknown;
   User? _currentUser;
   String? _error;
+  String? _storageWarning;
   bool _isLoading = false;
 
   AuthState get state => _state;
   User? get currentUser => _currentUser;
   String? get error => _error;
+  String? get storageWarning => _storageWarning;
   bool get isLoading => _isLoading;
   bool get isAuthenticated => _state == AuthState.authenticated;
 
@@ -27,6 +29,15 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> initialize() async {
     try {
+      _storageWarning = null;
+      final storageStatus = await _storage.checkAvailability();
+      if (!storageStatus.available) {
+        _storageWarning = storageStatus.warning;
+        _currentUser = null;
+        _state = AuthState.unauthenticated;
+        return;
+      }
+
       final loggedIn = await _storage.isLoggedIn();
       if (!loggedIn) {
         _state = AuthState.unauthenticated;
@@ -47,6 +58,7 @@ class AuthProvider extends ChangeNotifier {
       }
     } on PlatformException catch (error) {
       if (!SecureStorageService.isRecoverableReadFailure(error)) rethrow;
+      _storageWarning = SecureStorageService.warningFor(error);
       _currentUser = null;
       _state = AuthState.unauthenticated;
     } finally {
@@ -61,8 +73,13 @@ class AuthProvider extends ChangeNotifier {
     KeyType keyType = KeyType.defaultType,
     String? keyPassphrase,
   }) async {
+    _error = null;
+    _storageWarning = null;
     _setLoading(true);
     try {
+      final storageStatus = await _storage.checkAvailability();
+      if (!_requireSecureStorage(storageStatus)) return;
+
       final keyPair = await PgpService.generateKeyPairForType(
         username: username,
         keyType: keyType,
@@ -91,6 +108,9 @@ class AuthProvider extends ChangeNotifier {
       _currentUser = auth.user;
       _state = AuthState.authenticated;
       _error = null;
+      _storageWarning = null;
+    } on PlatformException catch (error) {
+      _setStorageError(error);
     } catch (e) {
       _error = e.toString();
     } finally {
@@ -103,10 +123,17 @@ class AuthProvider extends ChangeNotifier {
     required String password,
   }) async {
     _error = null;
+    _storageWarning = null;
     _setLoading(true);
     try {
+      final storageStatus = await _storage.checkAvailability();
+      if (!_requireSecureStorage(storageStatus)) return;
+
       final hasKeys = await _storage.hasKeyPair();
       if (!hasKeys) {
+        final currentStatus = await _storage.checkAvailability();
+        if (!_requireSecureStorage(currentStatus)) return;
+
         _error = 'No PGP key found on this device. '
             'Import your key in Settings or register a new account.';
         _setLoading(false);
@@ -140,6 +167,9 @@ class AuthProvider extends ChangeNotifier {
 
       _currentUser = auth.user;
       _state = AuthState.authenticated;
+      _storageWarning = null;
+    } on PlatformException catch (error) {
+      _setStorageError(error);
     } catch (e) {
       _error = e.toString();
     } finally {
@@ -163,7 +193,25 @@ class AuthProvider extends ChangeNotifier {
     _currentUser = null;
     _state = AuthState.unauthenticated;
     _error = null;
+    _storageWarning = null;
     notifyListeners();
+  }
+
+  bool _requireSecureStorage(SecureStorageStatus status) {
+    if (status.available) return true;
+    _storageWarning = status.warning;
+    _error = status.warning;
+    return false;
+  }
+
+  void _setStorageError(PlatformException error) {
+    final warning = SecureStorageService.warningFor(error);
+    if (warning != null) {
+      _storageWarning = warning;
+      _error = warning;
+      return;
+    }
+    _error = error.toString();
   }
 
   void _setLoading(bool v) {

@@ -14,6 +14,31 @@ void main() {
     await auth.initialize();
 
     expect(auth.state, AuthState.unauthenticated);
+    expect(auth.storageWarning, contains('Linux keyring'));
+  });
+
+  test('login reports locked keyring before continuing', () async {
+    final storage = _LockedStartupStorage();
+    final auth = AuthProvider(ApiService(storage), storage);
+
+    await auth.initialize();
+    await auth.login(username: 'alice', password: 'password123');
+
+    expect(auth.state, AuthState.unauthenticated);
+    expect(auth.error, contains('Linux keyring'));
+    expect(auth.storageWarning, contains('Linux keyring'));
+  });
+
+  test('register reports locked keyring before continuing', () async {
+    final storage = _LockedStartupStorage();
+    final auth = AuthProvider(ApiService(storage), storage);
+
+    await auth.initialize();
+    await auth.register(username: 'alice', password: 'password123');
+
+    expect(auth.state, AuthState.unauthenticated);
+    expect(auth.error, contains('Linux keyring'));
+    expect(auth.storageWarning, contains('Linux keyring'));
   });
 
   test('key startup ignores unavailable Linux keyring', () async {
@@ -56,6 +81,13 @@ class _LockedStartupStorage extends SecureStorageService {
   Future<bool> isLoggedIn() => Future<bool>.error(_locked);
 
   @override
+  Future<SecureStorageStatus> checkAvailability() async {
+    return const SecureStorageStatus.unavailable(
+      SecureStorageService.linuxKeyringWarning,
+    );
+  }
+
+  @override
   Future<String?> getFingerprint() => Future<String?>.error(_locked);
 
   @override
@@ -70,6 +102,11 @@ class _BrokenStartupStorage extends SecureStorageService {
 
   @override
   Future<bool> isLoggedIn() => Future<bool>.error(_broken);
+
+  @override
+  Future<SecureStorageStatus> checkAvailability() async {
+    return const SecureStorageStatus.available();
+  }
 
   @override
   Future<String?> getFingerprint() => Future<String?>.error(_broken);

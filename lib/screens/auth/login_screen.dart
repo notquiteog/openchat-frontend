@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
+import '../../widgets/secure_storage_warning.dart';
 import '../settings/pgp_keys_screen.dart';
 import 'register_screen.dart';
 
@@ -144,7 +145,15 @@ class _LoginScreenState extends State<LoginScreen> {
                                 v?.isEmpty == true ? 'Required' : null,
                           ),
                           const SizedBox(height: 28),
-                          if (auth.error != null)
+                          if (auth.storageWarning != null)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 16),
+                              child: SecureStorageWarning(
+                                message: auth.storageWarning!,
+                              ),
+                            ),
+                          if (auth.error != null &&
+                              auth.error != auth.storageWarning)
                             Padding(
                               padding: const EdgeInsets.only(bottom: 16),
                               child: Text(

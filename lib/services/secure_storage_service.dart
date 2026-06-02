@@ -2,6 +2,17 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 
+class SecureStorageStatus {
+  final bool available;
+  final String? warning;
+
+  const SecureStorageStatus.available()
+      : available = true,
+        warning = null;
+
+  const SecureStorageStatus.unavailable(this.warning) : available = false;
+}
+
 /// Manages secure storage of cryptographic keys and session tokens.
 ///
 /// Platform backing:
@@ -27,6 +38,12 @@ class SecureStorageService {
   static const _keyRefreshToken = 'refresh_token';
   static const _keyBiometricEnabled = 'biometric_enabled';
   static const _keyAppLockEnabled = 'app_lock_enabled';
+  static const _keyStorageProbe = '_openchat_secure_storage_probe';
+
+  static const linuxKeyringWarning =
+      'OpenChat cannot access your Linux keyring. Unlock GNOME Keyring or '
+      'KWallet and try again. If you use autologin or passwordless login, '
+      'sign in with your password so the keyring can unlock.';
 
   // ---- In-memory session state (kept for migration compatibility) ----
 
@@ -39,6 +56,20 @@ class SecureStorageService {
   void lockKeySession() => _keySessionUnlocked = false;
 
   // ---- PGP keys ----
+
+  Future<SecureStorageStatus> checkAvailability() async {
+    try {
+      await _storage.write(key: _keyStorageProbe, value: 'ok');
+      final value = await _storage.read(key: _keyStorageProbe);
+      await _storage.delete(key: _keyStorageProbe);
+      if (value == 'ok') return const SecureStorageStatus.available();
+      return const SecureStorageStatus.unavailable(linuxKeyringWarning);
+    } on PlatformException catch (error) {
+      final warning = warningFor(error);
+      if (warning != null) return SecureStorageStatus.unavailable(warning);
+      rethrow;
+    }
+  }
 
   Future<void> saveKeyPair({
     required String privateKeyArmored,
@@ -148,7 +179,29 @@ class SecureStorageService {
   Future<void> clearAll() => _storage.deleteAll();
 
   static bool isRecoverableReadFailure(PlatformException error) {
-    return error.code == 'KeyringLocked';
+    return isLinuxKeyringFailure(error);
+  }
+
+  static bool isLinuxKeyringFailure(PlatformException error) {
+    final text = _errorText(error);
+    return error.code == 'KeyringLocked' ||
+        text.contains('keyringlocked') ||
+        text.contains('keyring locked') ||
+        text.contains('collection is locked') ||
+        text.contains('no such secret collection') ||
+        text.contains('org.freedesktop.secrets') ||
+        text.contains('secret service');
+  }
+
+  static String? warningFor(Object error) {
+    if (error is PlatformException && isLinuxKeyringFailure(error)) {
+      return linuxKeyringWarning;
+    }
+    return null;
+  }
+
+  static String _errorText(PlatformException error) {
+    return '${error.code} ${error.message} ${error.details}'.toLowerCase();
   }
 
   static Future<String?> _readOrNull(String key) async {
