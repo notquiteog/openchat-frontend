@@ -84,8 +84,17 @@ Linux secure storage uses `flutter_secure_storage` through libsecret. That means
 
 On Arch/CachyOS with COSMIC, install and wire GNOME Keyring because COSMIC does not provide its own Secret Service backend:
 
+OpenChat ships a Linux helper for this:
+
 ```sh
-sudo pacman -S gnome-keyring libsecret seahorse xdg-desktop-portal
+./tool/configure_linux_keyring.sh --check
+./tool/configure_linux_keyring.sh --apply
+```
+
+The helper is conservative: `--check` only reports problems, while `--apply` prompts before host-level changes. On COSMIC/CachyOS it can install the GNOME Keyring/libsecret packages, write the user-level Secret portal preference, add backed-up `pam_gnome_keyring.so` auth/session hooks to the greeter PAM service, repair a missing default Secret Service alias, and warn about or remove the `nopasswdlogin` group that prevents login-time keyring unlock.
+
+```sh
+sudo pacman -S gnome-keyring libsecret seahorse xdg-desktop-portal xdg-desktop-portal-cosmic xdg-desktop-portal-gtk
 ```
 
 The greeter's PAM service should include:
