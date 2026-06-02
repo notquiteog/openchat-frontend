@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -60,6 +61,10 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _sendSilent = false;
   DateTime? _scheduledFor;
   int _lastMessageCount = 0;
+  String? _lastTailMessageId;
+  bool _wasNearBottom = true;
+  bool _showNewMessagesPill = false;
+  int _pendingNewMessageCount = 0;
   Message? _replyingTo;
   Timer? _typingTimer;
 
@@ -87,6 +92,17 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _onScroll() {
+    final nearBottom = _isNearBottom();
+    if (nearBottom != _wasNearBottom || (nearBottom && _showNewMessagesPill)) {
+      setState(() {
+        _wasNearBottom = nearBottom;
+        if (nearBottom) {
+          _showNewMessagesPill = false;
+          _pendingNewMessageCount = 0;
+        }
+      });
+    }
+
     if (_loadingMore) return;
     if (_scrollCtrl.position.pixels <= 100) {
       final oldMax = _scrollCtrl.position.maxScrollExtent;
@@ -180,6 +196,67 @@ class _ChatScreenState extends State<ChatScreen> {
     final h = local.hour.toString().padLeft(2, '0');
     final m = local.minute.toString().padLeft(2, '0');
     return '${local.month}/${local.day} $h:$m';
+  }
+
+  bool _isNearBottom() {
+    if (!_scrollCtrl.hasClients) return true;
+    final position = _scrollCtrl.position;
+    return position.maxScrollExtent - position.pixels <= 96;
+  }
+
+  void _handleMessageListChange(List<Message> messages, String currentUserID) {
+    final nextTailMessageId = messages.isEmpty ? null : messages.last.id;
+    final addedCount = messages.length - _lastMessageCount;
+    final hasNewTail =
+        addedCount > 0 &&
+        nextTailMessageId != null &&
+        nextTailMessageId != _lastTailMessageId;
+
+    if (hasNewTail) {
+      final newTailMessages = _newTailMessages(messages, addedCount);
+      final incomingCount = newTailMessages
+          .where((msg) => msg.senderId != currentUserID)
+          .length;
+      final shouldAutoScroll =
+          _lastMessageCount == 0 || _wasNearBottom || incomingCount == 0;
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (shouldAutoScroll) {
+          _scrollToBottom();
+        } else {
+          setState(() {
+            _showNewMessagesPill = true;
+            _pendingNewMessageCount = math.max(
+              1,
+              _pendingNewMessageCount + incomingCount,
+            );
+          });
+        }
+      });
+    } else if (messages.isEmpty && _showNewMessagesPill) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() {
+          _showNewMessagesPill = false;
+          _pendingNewMessageCount = 0;
+        });
+      });
+    }
+
+    _lastMessageCount = messages.length;
+    _lastTailMessageId = nextTailMessageId;
+  }
+
+  List<Message> _newTailMessages(List<Message> messages, int addedCount) {
+    final lastTailId = _lastTailMessageId;
+    if (lastTailId != null) {
+      final oldTailIndex = messages.indexWhere((msg) => msg.id == lastTailId);
+      if (oldTailIndex >= 0 && oldTailIndex < messages.length - 1) {
+        return messages.sublist(oldTailIndex + 1);
+      }
+    }
+    return messages.sublist(math.max(0, messages.length - addedCount));
   }
 
   Future<void> _showSendOptions() async {
@@ -301,13 +378,22 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollCtrl.hasClients) {
-        _scrollCtrl.animateTo(
-          _scrollCtrl.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!_scrollCtrl.hasClients) return;
+      final target = _scrollCtrl.position.maxScrollExtent;
+      if ((target - _scrollCtrl.position.pixels).abs() > 1) {
+        await _scrollCtrl.animateTo(
+          target,
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeOutCubic,
         );
+      }
+      if (mounted) {
+        setState(() {
+          _wasNearBottom = true;
+          _showNewMessagesPill = false;
+          _pendingNewMessageCount = 0;
+        });
       }
     });
   }
@@ -316,6 +402,7 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollCtrl.hasClients) {
         _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
+        _wasNearBottom = true;
       }
     });
   }
@@ -469,16 +556,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final callTopInset = context.select<CallProvider, double>(
       (cp) => cp.minimizedContentTopInset,
     );
-    if (messages.length > _lastMessageCount) {
-      final wasNearBottom =
-          !_scrollCtrl.hasClients ||
-          (_scrollCtrl.position.maxScrollExtent - _scrollCtrl.position.pixels) <
-              180;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && wasNearBottom) _scrollToBottom();
-      });
-    }
-    _lastMessageCount = messages.length;
+    _handleMessageListChange(messages, currentUserID);
 
     // Per-chat look. The current user's bubble color is also stored on their
     // profile so group/channel participants see the same sender color.
@@ -498,47 +576,102 @@ class _ChatScreenState extends State<ChatScreen> {
               decoration: _chatBackground(chatStyle),
               child: GestureDetector(
                 onTap: () => setState(() => _showStickers = false),
-                child: messages.isEmpty
-                    ? const Center(child: Text('No messages yet'))
-                    : ListView.builder(
-                        controller: _scrollCtrl,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 8,
-                        ),
-                        itemCount: messages.length,
-                        itemBuilder: (context, i) {
-                          final msg = messages[i];
-                          final isMe = msg.senderId == currentUserID;
-                          final showAvatar =
-                              !isMe &&
-                              (i == messages.length - 1 ||
-                                  messages[i + 1].senderId != msg.senderId);
-                          return _AnimatedMessageEntry(
-                            id: msg.id,
-                            child: MessageBubble(
-                              message: msg,
-                              isMe: isMe,
-                              showAvatar: showAvatar,
-                              meBubbleColor: meBubbleColor,
-                              bubbleRadius: chatStyle.bubbleRadius,
-                              onTap: () => _showReactionMenu(context, msg),
-                              onLongPress: () =>
-                                  _showMessageMenu(context, msg, isMe),
-                              onAvatarTap: msg.sender != null
-                                  ? () => Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => UserProfileScreen(
-                                          user: msg.sender!,
-                                        ),
-                                      ),
-                                    )
-                                  : null,
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: messages.isEmpty
+                          ? const Center(child: Text('No messages yet'))
+                          : ListView.builder(
+                              controller: _scrollCtrl,
+                              physics: const BouncingScrollPhysics(
+                                parent: AlwaysScrollableScrollPhysics(),
+                              ),
+                              scrollCacheExtent: const ScrollCacheExtent.pixels(
+                                720,
+                              ),
+                              keyboardDismissBehavior:
+                                  ScrollViewKeyboardDismissBehavior.onDrag,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 8,
+                              ),
+                              itemCount: messages.length,
+                              itemBuilder: (context, i) {
+                                final msg = messages[i];
+                                final isMe = msg.senderId == currentUserID;
+                                final showAvatar =
+                                    !isMe &&
+                                    (i == messages.length - 1 ||
+                                        messages[i + 1].senderId !=
+                                            msg.senderId);
+                                return _AnimatedMessageEntry(
+                                  id: msg.id,
+                                  child: MessageBubble(
+                                    message: msg,
+                                    isMe: isMe,
+                                    showAvatar: showAvatar,
+                                    meBubbleColor: meBubbleColor,
+                                    bubbleRadius: chatStyle.bubbleRadius,
+                                    onTap: () =>
+                                        _showReactionMenu(context, msg),
+                                    onLongPress: () =>
+                                        _showMessageMenu(context, msg, isMe),
+                                    onAvatarTap: msg.sender != null
+                                        ? () => Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (_) => UserProfileScreen(
+                                                user: msg.sender!,
+                                              ),
+                                            ),
+                                          )
+                                        : null,
+                                  ),
+                                );
+                              },
                             ),
-                          );
-                        },
+                    ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 12,
+                      child: IgnorePointer(
+                        ignoring: !_showNewMessagesPill,
+                        child: AnimatedSlide(
+                          offset: _showNewMessagesPill
+                              ? Offset.zero
+                              : const Offset(0, 0.45),
+                          duration: const Duration(milliseconds: 180),
+                          curve: Curves.easeOutCubic,
+                          child: AnimatedOpacity(
+                            opacity: _showNewMessagesPill ? 1 : 0,
+                            duration: const Duration(milliseconds: 140),
+                            child: Center(
+                              child: FilledButton.tonalIcon(
+                                onPressed: _scrollToBottom,
+                                icon: const Icon(Icons.keyboard_arrow_down),
+                                label: Text(
+                                  _pendingNewMessageCount <= 1
+                                      ? 'View new messages'
+                                      : 'View $_pendingNewMessageCount new messages',
+                                ),
+                                style: FilledButton.styleFrom(
+                                  visualDensity: VisualDensity.compact,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 8,
+                                  ),
+                                  shape: const StadiumBorder(),
+                                  elevation: 2,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
