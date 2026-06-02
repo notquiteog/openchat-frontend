@@ -1136,23 +1136,15 @@ class _StickerBubbleState extends State<_StickerBubble> {
                 child: CachedNetworkImage(
                   imageUrl: ApiConfig.resolveMedia(fileUrl),
                   fit: BoxFit.contain,
-                  placeholder: (_, __) => const Center(
+                  placeholder: (_, _) => const Center(
                     child: CircularProgressIndicator(strokeWidth: 2),
                   ),
-                  errorWidget: (_, __, ___) => Center(
-                    child: Text(
-                      _sticker?['emoji'] as String? ?? '😀',
-                      style: const TextStyle(fontSize: 60),
-                    ),
+                  errorWidget: (_, _, _) => const Center(
+                    child: Icon(Icons.broken_image_outlined, size: 44),
                   ),
                 ),
               )
-            : Center(
-                child: Text(
-                  _sticker?['emoji'] as String? ?? '😀',
-                  style: const TextStyle(fontSize: 60),
-                ),
-              ),
+            : const Center(child: Icon(Icons.broken_image_outlined, size: 44)),
       ),
     );
   }
@@ -1305,18 +1297,12 @@ class _StickerPackSheetState extends State<_StickerPackSheet> {
                             ? CachedNetworkImage(
                                 imageUrl: ApiConfig.resolveMedia(url),
                                 fit: BoxFit.contain,
-                                errorWidget: (_, __, ___) => Center(
-                                  child: Text(
-                                    st['emoji'] as String? ?? '😀',
-                                    style: const TextStyle(fontSize: 28),
-                                  ),
+                                errorWidget: (_, _, _) => const Center(
+                                  child: Icon(Icons.broken_image_outlined),
                                 ),
                               )
-                            : Center(
-                                child: Text(
-                                  st['emoji'] as String? ?? '😀',
-                                  style: const TextStyle(fontSize: 28),
-                                ),
+                            : const Center(
+                                child: Icon(Icons.broken_image_outlined),
                               ),
                       );
                     },

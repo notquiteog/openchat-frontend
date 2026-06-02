@@ -6,6 +6,10 @@ import '../../config/api_config.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
 
+const _stickerPackNameMax = 128;
+const _stickerPackDescriptionMax = 2048;
+const _stickerNameMax = 64;
+
 class StickerPackScreen extends StatefulWidget {
   const StickerPackScreen({super.key});
 
@@ -37,7 +41,11 @@ class _StickerPackScreenState extends State<StickerPackScreen> {
           packs.add(p);
         }
       }
-      if (mounted) setState(() { _packs = packs; _loading = false; });
+      if (mounted)
+        setState(() {
+          _packs = packs;
+          _loading = false;
+        });
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
@@ -57,18 +65,25 @@ class _StickerPackScreenState extends State<StickerPackScreen> {
               controller: nameCtrl,
               decoration: const InputDecoration(labelText: 'Pack name'),
               textCapitalization: TextCapitalization.words,
+              maxLength: _stickerPackNameMax,
               autofocus: true,
             ),
             const SizedBox(height: 8),
             TextField(
               controller: descCtrl,
-              decoration: const InputDecoration(labelText: 'Description (optional)'),
+              decoration: const InputDecoration(
+                labelText: 'Description (optional)',
+              ),
               maxLines: 2,
+              maxLength: _stickerPackDescriptionMax,
             ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () async {
               final name = nameCtrl.text.trim();
@@ -77,7 +92,9 @@ class _StickerPackScreenState extends State<StickerPackScreen> {
               try {
                 await context.read<ApiService>().createStickerPack(
                   name: name,
-                  description: descCtrl.text.trim().isEmpty ? null : descCtrl.text.trim(),
+                  description: descCtrl.text.trim().isEmpty
+                      ? null
+                      : descCtrl.text.trim(),
                 );
                 _loadPacks();
               } catch (e) {
@@ -111,67 +128,79 @@ class _StickerPackScreenState extends State<StickerPackScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _packs.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.emoji_emotions_outlined, size: 72, color: Colors.grey),
-                      const SizedBox(height: 16),
-                      const Text('No sticker packs yet',
-                          style: TextStyle(fontSize: 16, color: Colors.grey)),
-                      const SizedBox(height: 12),
-                      FilledButton.icon(
-                        icon: const Icon(Icons.add),
-                        label: const Text('Create a pack'),
-                        onPressed: _createPack,
-                      ),
-                    ],
+          ? Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.emoji_emotions_outlined,
+                    size: 72,
+                    color: Colors.grey,
                   ),
-                )
-              : ListView.builder(
-                  itemCount: _packs.length,
-                  itemBuilder: (context, i) {
-                    final pack = _packs[i];
-                    final coverUrl = pack['cover_url'] as String?;
-                    final count = (pack['stickers'] as List? ?? []).length;
-                    final currentUserId =
-                        context.read<AuthProvider>().currentUser?.id;
-                    // Packs added from other users are use-only — flag them so
-                    // the user knows they can't manage them.
-                    final isOwner = currentUserId != null &&
-                        pack['creator_id'] == currentUserId;
-                    return ListTile(
-                      leading: SizedBox(
-                        width: 48,
-                        height: 48,
-                        child: coverUrl != null
-                            ? CachedNetworkImage(
-                                imageUrl: ApiConfig.resolveMedia(coverUrl),
-                                fit: BoxFit.cover,
-                                errorWidget: (_, __, ___) =>
-                                    const Icon(Icons.emoji_emotions, size: 36),
-                              )
-                            : const Icon(Icons.emoji_emotions, size: 36),
-                      ),
-                      title: Text(pack['name'] as String? ?? 'Pack'),
-                      subtitle: Text(isOwner ? '$count stickers' : '$count stickers · Added'),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => _PackDetailScreen(pack: pack),
-                        ),
-                      ).then((_) => _loadPacks()),
-                    );
-                  },
-                ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'No sticker packs yet',
+                    style: TextStyle(fontSize: 16, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    icon: const Icon(Icons.add),
+                    label: const Text('Create a pack'),
+                    onPressed: _createPack,
+                  ),
+                ],
+              ),
+            )
+          : ListView.builder(
+              itemCount: _packs.length,
+              itemBuilder: (context, i) {
+                final pack = _packs[i];
+                final coverUrl = pack['cover_url'] as String?;
+                final count = (pack['stickers'] as List? ?? []).length;
+                final currentUserId = context
+                    .read<AuthProvider>()
+                    .currentUser
+                    ?.id;
+                // Packs added from other users are use-only — flag them so
+                // the user knows they can't manage them.
+                final isOwner =
+                    currentUserId != null &&
+                    pack['creator_id'] == currentUserId;
+                return ListTile(
+                  leading: SizedBox(
+                    width: 48,
+                    height: 48,
+                    child: coverUrl != null
+                        ? CachedNetworkImage(
+                            imageUrl: ApiConfig.resolveMedia(coverUrl),
+                            fit: BoxFit.cover,
+                            errorWidget: (_, _, _) =>
+                                const Icon(Icons.emoji_emotions, size: 36),
+                          )
+                        : const Icon(Icons.emoji_emotions, size: 36),
+                  ),
+                  title: Text(pack['name'] as String? ?? 'Pack'),
+                  subtitle: Text(
+                    isOwner ? '$count stickers' : '$count stickers · Added',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => _PackDetailScreen(pack: pack),
+                    ),
+                  ).then((_) => _loadPacks()),
+                );
+              },
+            ),
     );
   }
 }
 
 class _PackDetailScreen extends StatefulWidget {
   final Map<String, dynamic> initialPack;
-  const _PackDetailScreen({required Map<String, dynamic> pack}) : initialPack = pack;
+  const _PackDetailScreen({required Map<String, dynamic> pack})
+    : initialPack = pack;
 
   @override
   State<_PackDetailScreen> createState() => _PackDetailScreenState();
@@ -191,8 +220,14 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
   Future<void> _reload() async {
     setState(() => _loading = true);
     try {
-      final pack = await context.read<ApiService>().getStickerPack(_pack['id'] as String);
-      if (mounted) setState(() { _pack = pack; _loading = false; });
+      final pack = await context.read<ApiService>().getStickerPack(
+        _pack['id'] as String,
+      );
+      if (mounted)
+        setState(() {
+          _pack = pack;
+          _loading = false;
+        });
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
@@ -204,11 +239,13 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Remove pack?'),
         content: const Text(
-            'This pack will be removed from your library. You can add it again later.'),
+          'This pack will be removed from your library. You can add it again later.',
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -244,7 +281,6 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
     final nameCtrl = TextEditingController(
       text: picked.name.split('.').first.replaceAll('_', ' '),
     );
-    final emojiCtrl = TextEditingController(text: '😀');
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -256,26 +292,29 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
             TextField(
               controller: nameCtrl,
               decoration: const InputDecoration(labelText: 'Name'),
+              maxLength: _stickerNameMax,
               autofocus: true,
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: emojiCtrl,
-              decoration: const InputDecoration(labelText: 'Emoji'),
             ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Upload')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Upload'),
+          ),
         ],
       ),
     );
     if (confirmed != true || !mounted) return;
 
     final api = context.read<ApiService>();
-    final stickerName = nameCtrl.text.trim().isEmpty ? 'Sticker' : nameCtrl.text.trim();
-    final stickerEmoji = emojiCtrl.text.trim().isEmpty ? '😀' : emojiCtrl.text.trim();
+    final stickerName = nameCtrl.text.trim().isEmpty
+        ? 'Sticker'
+        : nameCtrl.text.trim();
     setState(() => _loading = true);
     try {
       final bytes = await picked.readAsBytes();
@@ -284,15 +323,14 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
         fileBytes: bytes,
         filename: picked.name,
         name: stickerName,
-        emoji: stickerEmoji,
       );
       await _reload();
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Upload failed: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
       }
     }
   }
@@ -302,9 +340,14 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete sticker?'),
-        content: const Text('This sticker will be removed from the pack permanently.'),
+        content: const Text(
+          'This sticker will be removed from the pack permanently.',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -316,16 +359,13 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
     if (confirmed != true || !mounted) return;
     final api = context.read<ApiService>();
     try {
-      await api.deleteStickerFromPack(
-        _pack['id'] as String,
-        stickerID,
-      );
+      await api.deleteStickerFromPack(_pack['id'] as String, stickerID);
       await _reload();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to delete: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
       }
     }
   }
@@ -341,24 +381,25 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
         fileBytes: bytes,
         filename: picked.name,
       );
-      await api.updateStickerPack(
-        _pack['id'] as String,
-        coverUrl: url,
-      );
+      await api.updateStickerPack(_pack['id'] as String, coverUrl: url);
       await _reload();
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to set cover: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to set cover: $e')));
       }
     }
   }
 
   void _editPackInfo() {
-    final nameCtrl = TextEditingController(text: _pack['name'] as String? ?? '');
-    final descCtrl = TextEditingController(text: _pack['description'] as String? ?? '');
+    final nameCtrl = TextEditingController(
+      text: _pack['name'] as String? ?? '',
+    );
+    final descCtrl = TextEditingController(
+      text: _pack['description'] as String? ?? '',
+    );
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -369,6 +410,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
             TextField(
               controller: nameCtrl,
               decoration: const InputDecoration(labelText: 'Pack name'),
+              maxLength: _stickerPackNameMax,
               autofocus: true,
             ),
             const SizedBox(height: 8),
@@ -376,11 +418,15 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
               controller: descCtrl,
               decoration: const InputDecoration(labelText: 'Description'),
               maxLines: 2,
+              maxLength: _stickerPackDescriptionMax,
             ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () async {
               final name = nameCtrl.text.trim();
@@ -412,7 +458,8 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final stickers = (_pack['stickers'] as List? ?? []).cast<Map<String, dynamic>>();
+    final stickers = (_pack['stickers'] as List? ?? [])
+        .cast<Map<String, dynamic>>();
     final coverUrl = _pack['cover_url'] as String?;
     final count = stickers.length;
 
@@ -467,17 +514,25 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                             Text(
                               '$count / 50 stickers',
                               style: TextStyle(
-                                color: count >= 50 ? Colors.red : Colors.grey[600],
+                                color: count >= 50
+                                    ? Colors.red
+                                    : Colors.grey[600],
                                 fontSize: 13,
-                                fontWeight: count >= 50 ? FontWeight.w600 : FontWeight.normal,
+                                fontWeight: count >= 50
+                                    ? FontWeight.w600
+                                    : FontWeight.normal,
                               ),
                             ),
                             const SizedBox(width: 12),
                             Expanded(
                               child: LinearProgressIndicator(
                                 value: count / 50,
-                                color: count >= 50 ? Colors.red : Theme.of(context).colorScheme.primary,
-                                backgroundColor: Colors.grey.withValues(alpha: 0.2),
+                                color: count >= 50
+                                    ? Colors.red
+                                    : Theme.of(context).colorScheme.primary,
+                                backgroundColor: Colors.grey.withValues(
+                                  alpha: 0.2,
+                                ),
                               ),
                             ),
                           ],
@@ -486,7 +541,10 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                           alignment: Alignment.centerLeft,
                           child: Text(
                             '$count sticker${count == 1 ? '' : 's'} · Added from another user',
-                            style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                            style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: 13,
+                            ),
                           ),
                         ),
                 ),
@@ -496,11 +554,16 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Icons.add_photo_alternate_outlined,
-                                  size: 56, color: Colors.grey),
+                              const Icon(
+                                Icons.add_photo_alternate_outlined,
+                                size: 56,
+                                color: Colors.grey,
+                              ),
                               const SizedBox(height: 12),
-                              const Text('No stickers yet',
-                                  style: TextStyle(color: Colors.grey)),
+                              const Text(
+                                'No stickers yet',
+                                style: TextStyle(color: Colors.grey),
+                              ),
                               if (isOwner) ...[
                                 const SizedBox(height: 8),
                                 FilledButton.icon(
@@ -516,18 +579,18 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                           padding: const EdgeInsets.all(8),
                           gridDelegate:
                               const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 4,
-                            crossAxisSpacing: 6,
-                            mainAxisSpacing: 6,
-                          ),
+                                crossAxisCount: 4,
+                                crossAxisSpacing: 6,
+                                mainAxisSpacing: 6,
+                              ),
                           itemCount: stickers.length,
                           itemBuilder: (context, i) {
                             final sticker = stickers[i];
                             final fileUrl = sticker['file_url'] as String?;
-                            final emoji = sticker['emoji'] as String? ?? '😀';
                             return GestureDetector(
                               onLongPress: isOwner
-                                  ? () => _deleteSticker(sticker['id'] as String)
+                                  ? () =>
+                                        _deleteSticker(sticker['id'] as String)
                                   : null,
                               child: Stack(
                                 fit: StackFit.expand,
@@ -539,19 +602,27 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                                     ),
                                     child: fileUrl != null
                                         ? ClipRRect(
-                                            borderRadius: BorderRadius.circular(8),
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
                                             child: CachedNetworkImage(
-                                              imageUrl: ApiConfig.resolveMedia(fileUrl),
-                                              fit: BoxFit.cover,
-                                              errorWidget: (_, __, ___) => Center(
-                                                child: Text(emoji,
-                                                    style: const TextStyle(fontSize: 28)),
+                                              imageUrl: ApiConfig.resolveMedia(
+                                                fileUrl,
                                               ),
+                                              fit: BoxFit.cover,
+                                              errorWidget: (_, _, _) =>
+                                                  const Center(
+                                                    child: Icon(
+                                                      Icons
+                                                          .broken_image_outlined,
+                                                    ),
+                                                  ),
                                             ),
                                           )
-                                        : Center(
-                                            child: Text(emoji,
-                                                style: const TextStyle(fontSize: 28)),
+                                        : const Center(
+                                            child: Icon(
+                                              Icons.broken_image_outlined,
+                                            ),
                                           ),
                                   ),
                                   if (isOwner)
@@ -559,8 +630,9 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                                       top: 2,
                                       right: 2,
                                       child: GestureDetector(
-                                        onTap: () =>
-                                            _deleteSticker(sticker['id'] as String),
+                                        onTap: () => _deleteSticker(
+                                          sticker['id'] as String,
+                                        ),
                                         child: Container(
                                           width: 20,
                                           height: 20,
@@ -568,8 +640,11 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                                             color: Colors.red,
                                             shape: BoxShape.circle,
                                           ),
-                                          child: const Icon(Icons.close,
-                                              size: 14, color: Colors.white),
+                                          child: const Icon(
+                                            Icons.close,
+                                            size: 14,
+                                            color: Colors.white,
+                                          ),
                                         ),
                                       ),
                                     ),

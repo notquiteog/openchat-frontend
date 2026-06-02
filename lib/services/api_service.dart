@@ -794,14 +794,14 @@ class ApiService {
     required Uint8List fileBytes,
     required String filename,
     required String name,
-    required String emoji,
+    String emoji = '',
   }) async {
     return await _multipartPost(
       '/api/v1/stickers/packs/$packID/stickers',
       fileField: 'file',
       fileBytes: fileBytes,
       filename: filename,
-      fields: {'name': name, 'emoji': emoji},
+      fields: {'name': name, if (emoji.isNotEmpty) 'emoji': emoji},
     );
   }
 
