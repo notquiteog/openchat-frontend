@@ -8,6 +8,7 @@ skip_install=0
 skip_pam=0
 skip_portal=0
 skip_alias=0
+force_cosmic_portal=0
 pam_service=""
 timestamp="$(date +%Y%m%d%H%M%S)"
 changed_pam=0
@@ -36,7 +37,8 @@ Options:
   --pam-service SERVICE   PAM service to inspect/patch, for example login.
   --no-install            Skip package installation.
   --no-pam                Skip PAM checks and edits.
-  --no-portal             Skip COSMIC xdg-desktop-portal preference.
+  --cosmic-portal         Manage COSMIC portal config even if COSMIC is not detected.
+  --no-portal             Skip xdg-desktop-portal Secret portal preference checks.
   --no-alias              Skip Secret Service default-alias repair.
   -h, --help              Show this help.
 
@@ -133,6 +135,10 @@ while [ "$#" -gt 0 ]; do
       skip_portal=1
       shift
       ;;
+    --cosmic-portal)
+      force_cosmic_portal=1
+      shift
+      ;;
     --no-alias)
       skip_alias=1
       shift
@@ -163,8 +169,16 @@ target_user="${USER:-$(id -un)}"
 desktop="${XDG_CURRENT_DESKTOP:-${DESKTOP_SESSION:-unknown}}"
 desktop_lc="$(lower "$desktop")"
 
-is_cosmic() {
-  [ -f /etc/greetd/cosmic-greeter.toml ] || [[ "$desktop_lc" == *cosmic* ]]
+is_cosmic_desktop() {
+  [[ "$desktop_lc" == *cosmic* ]]
+}
+
+portal_config_path() {
+  printf '%s/xdg-desktop-portal/cosmic-portals.conf' "${XDG_CONFIG_HOME:-$HOME/.config}"
+}
+
+uses_cosmic_portal() {
+  [ "$force_cosmic_portal" -eq 1 ] || is_cosmic_desktop || [ -f "$(portal_config_path)" ]
 }
 
 package_manager() {
@@ -206,35 +220,28 @@ pkg_installed() {
   esac
 }
 
-candidate_packages() {
+required_packages() {
   local pm="$1"
 
   case "$pm" in
     pacman)
       printf '%s\n' gnome-keyring libsecret seahorse xdg-desktop-portal xdg-desktop-portal-gtk
-      if is_cosmic; then
-        printf '%s\n' xdg-desktop-portal-cosmic
-      fi
       ;;
     apt)
       printf '%s\n' gnome-keyring libsecret-1-0 libsecret-tools seahorse xdg-desktop-portal xdg-desktop-portal-gtk
-      if is_cosmic; then
-        printf '%s\n' xdg-desktop-portal-cosmic
-      fi
       ;;
     dnf)
       printf '%s\n' gnome-keyring libsecret libsecret-tools seahorse xdg-desktop-portal xdg-desktop-portal-gtk
-      if is_cosmic; then
-        printf '%s\n' xdg-desktop-portal-cosmic
-      fi
       ;;
     zypper)
       printf '%s\n' gnome-keyring libsecret-tools seahorse xdg-desktop-portal xdg-desktop-portal-gtk
-      if is_cosmic; then
-        printf '%s\n' xdg-desktop-portal-cosmic
-      fi
       ;;
   esac
+}
+
+optional_packages() {
+  uses_cosmic_portal || return 0
+  printf '%s\n' xdg-desktop-portal-cosmic
 }
 
 ensure_packages() {
@@ -251,33 +258,72 @@ ensure_packages() {
   fi
 
   local pkg=""
-  local available=()
-  local missing=()
+  local required_available=()
+  local missing_required=()
+  local unavailable_required=()
+  local optional_available=()
+  local missing_optional=()
+  local unavailable_optional=()
   while IFS= read -r pkg; do
     [ -n "$pkg" ] || continue
     if ! pkg_exists "$pm" "$pkg"; then
-      warn "Package not found in enabled repositories: $pkg"
+      unavailable_required+=("$pkg")
       continue
     fi
-    available+=("$pkg")
+    required_available+=("$pkg")
     if ! pkg_installed "$pm" "$pkg"; then
-      missing+=("$pkg")
+      missing_required+=("$pkg")
     fi
-  done < <(candidate_packages "$pm")
+  done < <(required_packages "$pm")
 
-  if [ "${#available[@]}" -eq 0 ]; then
+  while IFS= read -r pkg; do
+    [ -n "$pkg" ] || continue
+    if ! pkg_exists "$pm" "$pkg"; then
+      unavailable_optional+=("$pkg")
+      continue
+    fi
+    optional_available+=("$pkg")
+    if ! pkg_installed "$pm" "$pkg"; then
+      missing_optional+=("$pkg")
+    fi
+  done < <(optional_packages "$pm")
+
+  if [ "${#required_available[@]}" -eq 0 ]; then
     warn "No Secret Service packages could be matched for package manager: $pm"
     return
   fi
 
-  if [ "${#missing[@]}" -eq 0 ]; then
+  if [ "${#unavailable_required[@]}" -gt 0 ]; then
+    warn "Required packages not found in enabled repositories: ${unavailable_required[*]}"
+  fi
+
+  if [ "${#unavailable_optional[@]}" -gt 0 ]; then
+    info "Optional COSMIC portal package not found in enabled repositories: ${unavailable_optional[*]}"
+  fi
+
+  if [ "${#missing_required[@]}" -eq 0 ]; then
     info "Packages: required Secret Service packages are installed"
+  else
+    warn "Required packages missing: ${missing_required[*]}"
+  fi
+
+  if uses_cosmic_portal; then
+    if [ "${#missing_optional[@]}" -gt 0 ]; then
+      warn "Optional COSMIC portal packages missing: ${missing_optional[*]}"
+    elif [ "${#optional_available[@]}" -gt 0 ]; then
+      info "Packages: optional COSMIC portal packages are installed"
+    fi
+  else
+    info "Packages: COSMIC portal package not needed for detected desktop"
+  fi
+
+  local missing=("${missing_required[@]}" "${missing_optional[@]}")
+  if [ "${#missing[@]}" -eq 0 ]; then
     return
   fi
 
-  warn "Packages missing: ${missing[*]}"
   if [ "$mode" != "apply" ]; then
-    warn "Run with --apply to install them."
+    warn "Run with --apply to install missing packages."
     return
   fi
 
@@ -428,10 +474,6 @@ ensure_pam_hooks() {
   info "PAM hooks: patched $path (backup: $backup)"
 }
 
-portal_config_path() {
-  printf '%s/xdg-desktop-portal/cosmic-portals.conf' "${XDG_CONFIG_HOME:-$HOME/.config}"
-}
-
 write_new_portal_config() {
   local path="$1"
   cat > "$path" <<'EOF'
@@ -495,7 +537,9 @@ merge_portal_config() {
 restart_user_portals() {
   command -v systemctl >/dev/null 2>&1 || return 0
   run_user systemctl --user try-restart xdg-desktop-portal.service >/dev/null 2>&1 || true
-  run_user systemctl --user try-restart xdg-desktop-portal-cosmic.service >/dev/null 2>&1 || true
+  if uses_cosmic_portal; then
+    run_user systemctl --user try-restart xdg-desktop-portal-cosmic.service >/dev/null 2>&1 || true
+  fi
 }
 
 secret_service_pid() {
@@ -529,9 +573,15 @@ ensure_portal_config() {
   local path
   path="$(portal_config_path)"
 
-  if ! is_cosmic && [ ! -f "$path" ]; then
-    info "Portal preference: not COSMIC, leaving xdg-desktop-portal config unchanged"
+  if ! uses_cosmic_portal; then
+    info "Portal preference: COSMIC not detected, leaving xdg-desktop-portal config unchanged"
     return
+  fi
+
+  if ! is_cosmic_desktop && [ "$force_cosmic_portal" -eq 1 ]; then
+    info "Portal preference: --cosmic-portal supplied, managing COSMIC portal config"
+  elif ! is_cosmic_desktop && [ -f "$path" ]; then
+    info "Portal preference: existing COSMIC portal config found"
   fi
 
   if [ -f "$path" ] &&
@@ -540,9 +590,9 @@ ensure_portal_config() {
     return
   fi
 
-  warn "Portal preference missing: $path"
+  warn "COSMIC Secret portal preference missing: $path"
   if [ "$mode" != "apply" ]; then
-    warn "Run with --apply to prefer GNOME Keyring for the COSMIC Secret portal."
+    warn "Run with --apply to prefer GNOME Keyring for COSMIC's Secret portal."
     return
   fi
 
@@ -679,7 +729,7 @@ PY
 }
 
 ensure_libsecret_collection_load() {
-  [ "$skip_alias" -eq 0 ] || return
+  [ "$skip_alias" -eq 0 ] || return 0
 
   local output status retry_output retry_status
   set +e

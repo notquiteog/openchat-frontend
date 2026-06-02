@@ -124,7 +124,7 @@ sudo dnf install -y gnome-keyring libsecret libsecret-tools seahorse xdg-desktop
 # Arch / CachyOS
 sudo pacman -S --needed gnome-keyring libsecret seahorse xdg-desktop-portal xdg-desktop-portal-gtk
 
-# COSMIC on Arch / CachyOS
+# COSMIC only, if the package exists in your enabled repositories
 sudo pacman -S --needed xdg-desktop-portal-cosmic
 ```
 
@@ -135,7 +135,7 @@ OpenChat ships a Linux helper for this:
 ./tool/configure_linux_keyring.sh --apply
 ```
 
-The helper is conservative: `--check` only reports problems, while `--apply` prompts before host-level changes. On COSMIC/CachyOS it can install the GNOME Keyring/libsecret packages, write the user-level Secret portal preference, add backed-up `pam_gnome_keyring.so` auth/session hooks to the greeter PAM service, repair a missing default Secret Service alias, clear stale GNOME Keyring item paths by restarting the user Secret Service, and warn about or remove the `nopasswdlogin` group that prevents login-time keyring unlock.
+The helper is conservative: `--check` only reports problems, while `--apply` prompts before host-level changes. On non-COSMIC desktops it leaves COSMIC portal config untouched. On COSMIC/CachyOS it can additionally install the optional COSMIC portal package when available, write the user-level Secret portal preference, add backed-up `pam_gnome_keyring.so` auth/session hooks to the greeter PAM service, repair a missing default Secret Service alias, clear stale GNOME Keyring item paths by restarting the user Secret Service, and warn about or remove the `nopasswdlogin` group that prevents login-time keyring unlock. Pass `--cosmic-portal` if you need to manage COSMIC portal config on a system where COSMIC was not auto-detected.
 
 The greeter's PAM service should include:
 
