@@ -7,6 +7,7 @@ import '../../config/api_config.dart';
 import '../../models/conversation.dart';
 import '../../models/message.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/call_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
@@ -58,8 +59,9 @@ Future<Conversation?> showCreateChannelDialog(BuildContext context) async {
               ),
             TextField(
               controller: descCtrl,
-              decoration:
-                  const InputDecoration(labelText: 'Description (optional)'),
+              decoration: const InputDecoration(
+                labelText: 'Description (optional)',
+              ),
             ),
             SwitchListTile(
               title: const Text('Public'),
@@ -71,7 +73,9 @@ Future<Conversation?> showCreateChannelDialog(BuildContext context) async {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, {
               'name': nameCtrl.text.trim(),
@@ -166,6 +170,9 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     final chat = context.watch<ChatProvider>();
     final subscribed = chat.conversations.where((c) => c.isChannel).toList();
     final searching = _searchCtrl.text.isNotEmpty;
+    final callTopInset = context.select<CallProvider, double>(
+      (cp) => cp.minimizedContentTopInset,
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -176,6 +183,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
       ),
       body: Column(
         children: [
+          if (callTopInset > 0) SizedBox(height: callTopInset),
           Padding(
             padding: const EdgeInsets.all(12),
             child: TextField(
@@ -187,11 +195,14 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
               decoration: InputDecoration(
                 hintText: 'Search public channels…',
                 prefixIcon: const Icon(Icons.search),
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(24)),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                ),
                 filled: true,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
               ),
             ),
           ),
@@ -199,28 +210,36 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
           Expanded(
             child: searching
                 ? _buildList(_results, emptyText: 'No channels found')
-                : _buildList(subscribed,
+                : _buildList(
+                    subscribed,
                     emptyText:
                         'No channels yet — search above or tap + to create one',
-                    subscribedView: true),
+                    subscribedView: true,
+                  ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildList(List<Conversation> channels,
-      {required String emptyText, bool subscribedView = false}) {
+  Widget _buildList(
+    List<Conversation> channels, {
+    required String emptyText,
+    bool subscribedView = false,
+  }) {
     if (channels.isEmpty) {
       return Center(
-        child: Text(emptyText,
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.grey)),
+        child: Text(
+          emptyText,
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Colors.grey),
+        ),
       );
     }
     return ListView.builder(
-      padding:
-          EdgeInsets.only(bottom: MediaQuery.paddingOf(context).bottom + 8),
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.paddingOf(context).bottom + 8,
+      ),
       itemCount: channels.length,
       itemBuilder: (context, i) {
         final ch = channels[i];
@@ -228,7 +247,8 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
           leading: CircleAvatar(
             backgroundImage: ch.avatarUrl != null
                 ? CachedNetworkImageProvider(
-                    ApiConfig.resolveMedia(ch.avatarUrl!))
+                    ApiConfig.resolveMedia(ch.avatarUrl!),
+                  )
                 : null,
             child: ch.avatarUrl == null
                 ? Text(ch.name?.substring(0, 1).toUpperCase() ?? 'C')
@@ -357,8 +377,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       if (mounted) context.read<ChatProvider>().loadConversations();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Subscribe failed: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Subscribe failed: $e')));
       }
     }
   }
@@ -373,11 +394,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         content: Text('Leave ${channel.name}?'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
           TextButton(
-              onPressed: () => Navigator.pop(context, 'leave'),
-              child: const Text('Leave')),
+            onPressed: () => Navigator.pop(context, 'leave'),
+            child: const Text('Leave'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(context, 'leave_delete'),
@@ -402,12 +425,14 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Delete your posts?'),
-        content:
-            const Text('This deletes all messages you sent in this channel.'),
+        content: const Text(
+          'This deletes all messages you sent in this channel.',
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(context, true),
@@ -422,8 +447,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       if (mounted) await _load();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
       }
     }
   }
@@ -431,7 +457,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   Future<void> _showChannelUserActions(Message msg) async {
     final user = msg.sender;
     if (user == null) return;
-    final canModerateUser = (_isAdmin || _isModerator) &&
+    final canModerateUser =
+        (_isAdmin || _isModerator) &&
         msg.senderId != context.read<AuthProvider>().currentUser?.id;
     final action = await showModalBottomSheet<String>(
       context: context,
@@ -447,14 +474,18 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             if (canModerateUser) ...[
               ListTile(
                 leading: const Icon(Icons.delete_outline, color: Colors.red),
-                title: const Text('Delete their messages',
-                    style: TextStyle(color: Colors.red)),
+                title: const Text(
+                  'Delete their messages',
+                  style: TextStyle(color: Colors.red),
+                ),
                 onTap: () => Navigator.pop(context, 'delete_messages'),
               ),
               ListTile(
                 leading: const Icon(Icons.block, color: Colors.red),
-                title: const Text('Ban from channel',
-                    style: TextStyle(color: Colors.red)),
+                title: const Text(
+                  'Ban from channel',
+                  style: TextStyle(color: Colors.red),
+                ),
                 onTap: () => Navigator.pop(context, 'ban'),
               ),
             ],
@@ -477,7 +508,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }
 
   Future<void> _deleteChannelUserMessages(
-      String userID, String username) async {
+    String userID,
+    String username,
+  ) async {
     final api = context.read<ApiService>();
     final confirmed = await showDialog<bool>(
       context: context,
@@ -486,8 +519,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         content: const Text('This removes all messages this user sent here.'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(context, true),
@@ -502,8 +536,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       if (mounted) await _load();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
       }
     }
   }
@@ -517,8 +552,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         content: const Text('They will be removed and blocked from rejoining.'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(context, true),
@@ -533,8 +569,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       if (mounted) await _load();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Ban failed: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Ban failed: $e')));
       }
     }
   }
@@ -553,8 +590,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.orange),
             onPressed: () => Navigator.pop(context, true),
@@ -568,9 +606,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       await api.archiveChannel(channel.id);
       if (!mounted) return;
       setState(() => _archived = true);
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Channel archived')),
-      );
+      messenger.showSnackBar(const SnackBar(content: Text('Channel archived')));
       navigator.pop();
     } catch (e) {
       if (mounted) {
@@ -587,11 +623,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       await context.read<ApiService>().unarchiveChannel(channel.id);
       if (!mounted) return;
       setState(() => _archived = false);
-      messenger
-          .showSnackBar(const SnackBar(content: Text('Channel unarchived')));
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Channel unarchived')),
+      );
     } catch (e) {
-      messenger
-          .showSnackBar(SnackBar(content: Text('Failed to unarchive: $e')));
+      messenger.showSnackBar(
+        SnackBar(content: Text('Failed to unarchive: $e')),
+      );
     }
   }
 
@@ -604,12 +642,14 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Delete Channel?'),
         content: Text(
-            'Permanently delete ${channel.name ?? 'this channel'} and all its '
-            'posts for everyone. This cannot be undone.'),
+          'Permanently delete ${channel.name ?? 'this channel'} and all its '
+          'posts for everyone. This cannot be undone.',
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -643,22 +683,30 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   radius: 40,
                   backgroundImage: channel.avatarUrl != null
                       ? CachedNetworkImageProvider(
-                          ApiConfig.resolveMedia(channel.avatarUrl!))
+                          ApiConfig.resolveMedia(channel.avatarUrl!),
+                        )
                       : null,
                   child: channel.avatarUrl == null
                       ? const Icon(Icons.campaign, size: 36)
                       : null,
                 ),
                 const SizedBox(height: 12),
-                Text(channel.name ?? 'Channel',
-                    style: Theme.of(context).textTheme.titleLarge),
+                Text(
+                  channel.name ?? 'Channel',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
                 if (channel.handle != null)
-                  Text('@${channel.handle}',
-                      style: TextStyle(
-                          color: Theme.of(context).colorScheme.primary)),
+                  Text(
+                    '@${channel.handle}',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
                 const SizedBox(height: 4),
-                Text(channel.isPublic ? 'Public channel' : 'Private channel',
-                    style: Theme.of(context).textTheme.bodySmall),
+                Text(
+                  channel.isPublic ? 'Public channel' : 'Private channel',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
                 if (channel.description != null &&
                     channel.description!.isNotEmpty) ...[
                   const SizedBox(height: 12),
@@ -724,12 +772,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                       children: [
                         CircleAvatar(
                           radius: 36,
-                          backgroundImage: (pendingAvatarUrl ??
-                                      channel.avatarUrl) !=
-                                  null
+                          backgroundImage:
+                              (pendingAvatarUrl ?? channel.avatarUrl) != null
                               ? CachedNetworkImageProvider(
                                   ApiConfig.resolveMedia(
-                                      pendingAvatarUrl ?? channel.avatarUrl!))
+                                    pendingAvatarUrl ?? channel.avatarUrl!,
+                                  ),
+                                )
                               : null,
                           child: (pendingAvatarUrl ?? channel.avatarUrl) == null
                               ? const Icon(Icons.campaign, size: 30)
@@ -741,8 +790,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                           child: CircleAvatar(
                             radius: 12,
                             backgroundColor: Theme.of(ctx).colorScheme.primary,
-                            child: const Icon(Icons.camera_alt,
-                                size: 14, color: Colors.white),
+                            child: const Icon(
+                              Icons.camera_alt,
+                              size: 14,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                       ],
@@ -775,7 +827,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   contentPadding: EdgeInsets.zero,
                   title: const Text('Public'),
                   subtitle: const Text(
-                      'Private channels lose their @handle and are hidden from search'),
+                    'Private channels lose their @handle and are hidden from search',
+                  ),
                   value: isPublic,
                   onChanged: (v) => setDlgState(() => isPublic = v),
                 ),
@@ -784,11 +837,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Cancel')),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
             FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Save')),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Save'),
+            ),
           ],
         ),
       ),
@@ -813,15 +868,15 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       if (mounted) {
         setState(() => _channel = updated);
         context.read<ChatProvider>().loadConversations();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Channel updated')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Channel updated')));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to update: $e')));
       }
     }
   }
@@ -857,12 +912,16 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       if (action == 'remove') {
         await api.setChannelBackground(channel.id, null);
       } else {
-        final picked = await ImagePicker()
-            .pickImage(source: ImageSource.gallery, imageQuality: 90);
+        final picked = await ImagePicker().pickImage(
+          source: ImageSource.gallery,
+          imageQuality: 90,
+        );
         if (picked == null) return;
         final bytes = await picked.readAsBytes();
-        final url =
-            await api.uploadAvatar(fileBytes: bytes, filename: picked.name);
+        final url = await api.uploadAvatar(
+          fileBytes: bytes,
+          filename: picked.name,
+        );
         await api.setChannelBackground(channel.id, url);
       }
       final updated = await api.getChannel(channel.id);
@@ -930,11 +989,15 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       final updated = await api.getChannel(channel.id);
       if (mounted) setState(() => _channel = updated);
       if (mounted) {
-        messenger.showSnackBar(SnackBar(
-          content: Text(chosen == 0
-              ? 'Disappearing messages turned off'
-              : 'Messages now disappear after ${options.firstWhere((o) => o.$2 == chosen).$1}'),
-        ));
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              chosen == 0
+                  ? 'Disappearing messages turned off'
+                  : 'Messages now disappear after ${options.firstWhere((o) => o.$2 == chosen).$1}',
+            ),
+          ),
+        );
       }
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
@@ -949,8 +1012,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title:
-            Text(nextEnabled ? 'Turn encryption on?' : 'Turn encryption off?'),
+        title: Text(
+          nextEnabled ? 'Turn encryption on?' : 'Turn encryption off?',
+        ),
         content: const Text(
           'Changing encryption wipes all current posts in this channel for everyone.',
         ),
@@ -977,10 +1041,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         });
       }
       await chat.loadConversations();
-      messenger.showSnackBar(SnackBar(
-        content: Text(
-            nextEnabled ? 'Encryption turned on' : 'Encryption turned off'),
-      ));
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            nextEnabled ? 'Encryption turned on' : 'Encryption turned off',
+          ),
+        ),
+      );
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
     }
@@ -1051,7 +1118,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   Future<void> _showChannelModerationMenu() async {
     final auth = context.read<AuthProvider>();
     final currentUserId = auth.currentUser?.id ?? '';
-    final canManageLifecycle = channel.createdBy == currentUserId ||
+    final canManageLifecycle =
+        channel.createdBy == currentUserId ||
         (auth.currentUser?.isSystemAdmin ?? false);
     final placement = ChannelActionPolicy.actionsFor(
       channel: channel,
@@ -1129,9 +1197,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   ChannelSettingsAction.edit => Icons.settings_outlined,
                   ChannelSettingsAction.background => Icons.wallpaper_outlined,
                   ChannelSettingsAction.autoDelete => Icons.timer_outlined,
-                  ChannelSettingsAction.encryption => channel.encryptionEnabled
-                      ? Icons.lock_outline
-                      : Icons.lock_open_outlined,
+                  ChannelSettingsAction.encryption =>
+                    channel.encryptionEnabled
+                        ? Icons.lock_outline
+                        : Icons.lock_open_outlined,
                   ChannelSettingsAction.deleteOwnMessages =>
                     Icons.delete_sweep_outlined,
                 }),
@@ -1141,9 +1210,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   ChannelSettingsAction.background =>
                     'Set chat background (Premium)',
                   ChannelSettingsAction.autoDelete => 'Disappearing messages',
-                  ChannelSettingsAction.encryption => channel.encryptionEnabled
-                      ? 'Turn encryption off'
-                      : 'Turn encryption on',
+                  ChannelSettingsAction.encryption =>
+                    channel.encryptionEnabled
+                        ? 'Turn encryption off'
+                        : 'Turn encryption on',
                   ChannelSettingsAction.deleteOwnMessages =>
                     'Delete my messages',
                 }),
@@ -1266,9 +1336,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       };
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Upload failed: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
       return;
     }
     if (pending == null) return;
@@ -1291,13 +1361,17 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final isOwner = channel.createdBy == currentUserId;
     final canManageLifecycle = isOwner || isSystemAdmin;
     final isArchived = _archived || channel.isArchived;
-    final chatStyle =
-        context.watch<SettingsProvider>().chatStyleFor(channel.id);
+    final chatStyle = context.watch<SettingsProvider>().chatStyleFor(
+      channel.id,
+    );
     final meBubbleColor = chatStyle.myBubbleColor != null
         ? Color(chatStyle.myBubbleColor!)
         : auth.currentUser?.bubbleColor != null
-            ? Color(auth.currentUser!.bubbleColor!)
-            : null;
+        ? Color(auth.currentUser!.bubbleColor!)
+        : null;
+    final callTopInset = context.select<CallProvider, double>(
+      (cp) => cp.minimizedContentTopInset,
+    );
     final actionPlacement = ChannelActionPolicy.actionsFor(
       channel: channel,
       isAdmin: _isAdmin,
@@ -1317,7 +1391,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                 radius: 18,
                 backgroundImage: channel.avatarUrl != null
                     ? CachedNetworkImageProvider(
-                        ApiConfig.resolveMedia(channel.avatarUrl!))
+                        ApiConfig.resolveMedia(channel.avatarUrl!),
+                      )
                     : null,
                 child: channel.avatarUrl == null
                     ? const Icon(Icons.campaign, size: 18)
@@ -1329,10 +1404,14 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(channel.name ?? 'Channel',
-                        style: const TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w600),
-                        overflow: TextOverflow.ellipsis),
+                    Text(
+                      channel.name ?? 'Channel',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                     ConversationEncryptionStatus(conversation: channel),
                   ],
                 ),
@@ -1359,14 +1438,16 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               tooltip: 'Unsubscribe',
               onPressed: _unsubscribe,
             )
-          else if (actionPlacement.topBar
-                  .contains(ChannelTopBarAction.subscribe) &&
+          else if (actionPlacement.topBar.contains(
+                ChannelTopBarAction.subscribe,
+              ) &&
               !isArchived)
             TextButton(onPressed: _subscribe, child: const Text('Subscribe')),
         ],
       ),
       body: Column(
         children: [
+          if (callTopInset > 0) SizedBox(height: callTopInset),
           if (_archived || channel.isArchived)
             Container(
               width: double.infinity,
@@ -1389,32 +1470,35 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
                   : _posts.isEmpty
-                      ? const Center(child: Text('No posts yet'))
-                      : ListView.builder(
-                          controller: _scrollCtrl,
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 8),
-                          itemCount: _posts.length,
-                          itemBuilder: (context, i) {
-                            final msg = _posts[i];
-                            final isMe = msg.senderId == currentUserId;
-                            final showAvatar = !isMe &&
-                                (i == _posts.length - 1 ||
-                                    _posts[i + 1].senderId != msg.senderId);
-                            return _AnimatedChannelPost(
-                              id: msg.id,
-                              child: MessageBubble(
-                                message: msg,
-                                isMe: isMe,
-                                showAvatar: showAvatar,
-                                meBubbleColor: meBubbleColor,
-                                onAvatarTap: msg.sender != null
-                                    ? () => _showChannelUserActions(msg)
-                                    : null,
-                              ),
-                            );
-                          },
-                        ),
+                  ? const Center(child: Text('No posts yet'))
+                  : ListView.builder(
+                      controller: _scrollCtrl,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 8,
+                      ),
+                      itemCount: _posts.length,
+                      itemBuilder: (context, i) {
+                        final msg = _posts[i];
+                        final isMe = msg.senderId == currentUserId;
+                        final showAvatar =
+                            !isMe &&
+                            (i == _posts.length - 1 ||
+                                _posts[i + 1].senderId != msg.senderId);
+                        return _AnimatedChannelPost(
+                          id: msg.id,
+                          child: MessageBubble(
+                            message: msg,
+                            isMe: isMe,
+                            showAvatar: showAvatar,
+                            meBubbleColor: meBubbleColor,
+                            onAvatarTap: msg.sender != null
+                                ? () => _showChannelUserActions(msg)
+                                : null,
+                          ),
+                        );
+                      },
+                    ),
             ),
           ),
 
@@ -1486,18 +1570,16 @@ class ChannelPostBar extends StatelessWidget {
       blur: 24,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       border: Border(
-        top: BorderSide(
-          color: scheme.outlineVariant.withValues(alpha: 0.35),
-        ),
+        top: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.35)),
       ),
       child: SafeArea(
         top: false,
         child: Row(
           children: [
             IconButton(
-              icon: Icon(showStickers
-                  ? Icons.keyboard
-                  : Icons.emoji_emotions_outlined),
+              icon: Icon(
+                showStickers ? Icons.keyboard : Icons.emoji_emotions_outlined,
+              ),
               tooltip: showStickers ? 'Keyboard' : 'Stickers',
               onPressed: onToggleStickers,
             ),
@@ -1514,10 +1596,13 @@ class ChannelPostBar extends StatelessWidget {
                     borderSide: BorderSide.none,
                   ),
                   filled: true,
-                  fillColor:
-                      scheme.surfaceContainerHighest.withValues(alpha: 0.45),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  fillColor: scheme.surfaceContainerHighest.withValues(
+                    alpha: 0.45,
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
                 ),
               ),
             ),

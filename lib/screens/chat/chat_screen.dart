@@ -41,8 +41,9 @@ String conversationExitMenuLabel(
 }) {
   if (conversation.isGroup) {
     final isOwner = conversation.createdBy == currentUserId;
-    final hasOtherAdmin = conversation.members
-        .any((member) => member.userId != currentUserId && member.isAdmin);
+    final hasOtherAdmin = conversation.members.any(
+      (member) => member.userId != currentUserId && member.isAdmin,
+    );
     if (isOwner && !hasOtherAdmin) return 'Leave group';
     return 'Leave group';
   }
@@ -140,10 +141,10 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     try {
       final sent = await context.read<ChatProvider>().sendMessage(
-            convID: conv.id,
-            plaintext: text,
-            replyTo: replyTo,
-          );
+        convID: conv.id,
+        plaintext: text,
+        replyTo: replyTo,
+      );
       if (!mounted) return;
       if (sent) {
         _scrollToBottom();
@@ -168,10 +169,10 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     try {
       final sent = await context.read<ChatProvider>().sendMessage(
-            convID: conv.id,
-            plaintext: stickerID,
-            messageType: 'sticker',
-          );
+        convID: conv.id,
+        plaintext: stickerID,
+        messageType: 'sticker',
+      );
       if (sent) {
         _scrollToBottom();
       } else if (mounted) {
@@ -218,7 +219,8 @@ class _ChatScreenState extends State<ChatScreen> {
     // image_picker's camera source is only implemented on mobile (and web);
     // on desktop it throws "requires a cameraDelegate", so only offer it where
     // it actually works.
-    final cameraSupported = kIsWeb ||
+    final cameraSupported =
+        kIsWeb ||
         defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.iOS;
 
@@ -271,9 +273,9 @@ class _ChatScreenState extends State<ChatScreen> {
       };
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Upload failed: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
       }
       return;
     }
@@ -282,9 +284,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
     try {
       final sent = await context.read<ChatProvider>().sendAttachment(
-            convID: conv.id,
-            attachment: pending,
-          );
+        convID: conv.id,
+        attachment: pending,
+      );
       if (sent) {
         _scrollToBottom();
       } else if (mounted) {
@@ -294,9 +296,9 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString())),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.toString())));
     }
   }
 
@@ -314,7 +316,8 @@ class _ChatScreenState extends State<ChatScreen> {
     if (otherMember == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text('Cannot start call in a group — open a DM first')),
+          content: Text('Cannot start call in a group — open a DM first'),
+        ),
       );
       return;
     }
@@ -339,9 +342,9 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not start call: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not start call: $e')));
     }
   }
 
@@ -352,8 +355,12 @@ class _ChatScreenState extends State<ChatScreen> {
     final messages = chat.messagesFor(conv.id);
     final currentUserID = auth.currentUser?.id ?? '';
     final typingUsers = chat.typingUsersFor(conv.id);
+    final callTopInset = context.select<CallProvider, double>(
+      (cp) => cp.minimizedContentTopInset,
+    );
     if (messages.length > _lastMessageCount) {
-      final wasNearBottom = !_scrollCtrl.hasClients ||
+      final wasNearBottom =
+          !_scrollCtrl.hasClients ||
           (_scrollCtrl.position.maxScrollExtent - _scrollCtrl.position.pixels) <
               180;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -368,12 +375,13 @@ class _ChatScreenState extends State<ChatScreen> {
     final meBubbleColor = chatStyle.myBubbleColor != null
         ? Color(chatStyle.myBubbleColor!)
         : auth.currentUser?.bubbleColor != null
-            ? Color(auth.currentUser!.bubbleColor!)
-            : null;
+        ? Color(auth.currentUser!.bubbleColor!)
+        : null;
     return Scaffold(
       appBar: _buildAppBar(context, typingUsers, currentUserID),
       body: Column(
         children: [
+          if (callTopInset > 0) SizedBox(height: callTopInset),
           Expanded(
             child: DecoratedBox(
               decoration: _chatBackground(chatStyle),
@@ -384,12 +392,15 @@ class _ChatScreenState extends State<ChatScreen> {
                     : ListView.builder(
                         controller: _scrollCtrl,
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 8),
+                          horizontal: 8,
+                          vertical: 8,
+                        ),
                         itemCount: messages.length,
                         itemBuilder: (context, i) {
                           final msg = messages[i];
                           final isMe = msg.senderId == currentUserID;
-                          final showAvatar = !isMe &&
+                          final showAvatar =
+                              !isMe &&
                               (i == messages.length - 1 ||
                                   messages[i + 1].senderId != msg.senderId);
                           return _AnimatedMessageEntry(
@@ -404,12 +415,13 @@ class _ChatScreenState extends State<ChatScreen> {
                                   _showMessageMenu(context, msg, isMe),
                               onAvatarTap: msg.sender != null
                                   ? () => Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) => UserProfileScreen(
-                                              user: msg.sender!),
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => UserProfileScreen(
+                                          user: msg.sender!,
                                         ),
-                                      )
+                                      ),
+                                    )
                                   : null,
                             ),
                           );
@@ -420,9 +432,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           if (_showStickers) StickerPicker(onStickerSelected: _sendSticker),
           if (typingUsers.isNotEmpty)
-            _TypingIndicator(
-              label: _typingLabel(typingUsers, currentUserID),
-            ),
+            _TypingIndicator(label: _typingLabel(typingUsers, currentUserID)),
           _buildInputBar(context),
         ],
       ),
@@ -471,8 +481,10 @@ class _ChatScreenState extends State<ChatScreen> {
       isScrollControlled: true,
       builder: (sheetCtx) => StatefulBuilder(
         builder: (sheetCtx, setSheet) {
-          Future<void> apply(ChatStyle next,
-              {bool publishBubble = false}) async {
+          Future<void> apply(
+            ChatStyle next, {
+            bool publishBubble = false,
+          }) async {
             style = next;
             await settings.setChatStyle(convID, next);
             if (publishBubble) {
@@ -495,8 +507,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   children: [
                     Row(
                       children: [
-                        Text('Chat appearance',
-                            style: Theme.of(sheetCtx).textTheme.titleMedium),
+                        Text(
+                          'Chat appearance',
+                          style: Theme.of(sheetCtx).textTheme.titleMedium,
+                        ),
                         const Spacer(),
                         TextButton(
                           onPressed: () =>
@@ -511,11 +525,14 @@ class _ChatScreenState extends State<ChatScreen> {
                       const SizedBox(height: 8),
                       ColorChoices(
                         selected: style.backgroundColor,
-                        onSelected: (c) => apply(c == null
-                            ? style.copyWith(clearBackgroundColor: true)
-                            : style.copyWith(
-                                backgroundColor: c,
-                                clearBackgroundImage: true)),
+                        onSelected: (c) => apply(
+                          c == null
+                              ? style.copyWith(clearBackgroundColor: true)
+                              : style.copyWith(
+                                  backgroundColor: c,
+                                  clearBackgroundImage: true,
+                                ),
+                        ),
                       ),
                       const SizedBox(height: 12),
                       Row(
@@ -525,19 +542,24 @@ class _ChatScreenState extends State<ChatScreen> {
                             label: const Text('Background image'),
                             onPressed: () async {
                               final picked = await ImagePicker().pickImage(
-                                  source: ImageSource.gallery,
-                                  imageQuality: 90);
+                                source: ImageSource.gallery,
+                                imageQuality: 90,
+                              );
                               if (picked != null) {
-                                apply(style.copyWith(
+                                apply(
+                                  style.copyWith(
                                     backgroundImagePath: picked.path,
-                                    clearBackgroundColor: true));
+                                    clearBackgroundColor: true,
+                                  ),
+                                );
                               }
                             },
                           ),
                           if (style.backgroundImagePath != null)
                             TextButton(
                               onPressed: () => apply(
-                                  style.copyWith(clearBackgroundImage: true)),
+                                style.copyWith(clearBackgroundImage: true),
+                              ),
                               child: const Text('Remove'),
                             ),
                         ],
@@ -549,10 +571,11 @@ class _ChatScreenState extends State<ChatScreen> {
                     ColorChoices(
                       selected: style.myBubbleColor,
                       onSelected: (c) => apply(
-                          c == null
-                              ? style.copyWith(clearMyBubbleColor: true)
-                              : style.copyWith(myBubbleColor: c),
-                          publishBubble: true),
+                        c == null
+                            ? style.copyWith(clearMyBubbleColor: true)
+                            : style.copyWith(myBubbleColor: c),
+                        publishBubble: true,
+                      ),
                     ),
                     const SizedBox(height: 16),
                     Row(
@@ -626,14 +649,18 @@ class _ChatScreenState extends State<ChatScreen> {
       if (action == 'remove') {
         await api.setConversationBackground(conv.id, null);
       } else {
-        final picked = await ImagePicker()
-            .pickImage(source: ImageSource.gallery, imageQuality: 90);
+        final picked = await ImagePicker().pickImage(
+          source: ImageSource.gallery,
+          imageQuality: 90,
+        );
         if (picked == null) return;
         final bytes = await picked.readAsBytes();
         // uploadAvatar re-encodes to WEBP with all metadata stripped, exactly
         // what a shared background needs.
-        final url =
-            await api.uploadAvatar(fileBytes: bytes, filename: picked.name);
+        final url = await api.uploadAvatar(
+          fileBytes: bytes,
+          filename: picked.name,
+        );
         await api.setConversationBackground(conv.id, url);
       }
       await chat.loadConversations();
@@ -646,15 +673,20 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   PreferredSizeWidget _buildAppBar(
-      BuildContext context, Set<String> typingUsers, String currentUserID) {
+    BuildContext context,
+    Set<String> typingUsers,
+    String currentUserID,
+  ) {
     final name = conv.displayName(currentUserID);
 
     final dmPartner = !conv.isGroup
         ? conv.members.where((m) => m.userId != currentUserID).firstOrNull?.user
         : null;
     final avatarUrl = conv.displayAvatar(currentUserID);
-    final exitLabel =
-        conversationExitMenuLabel(conv, currentUserId: currentUserID);
+    final exitLabel = conversationExitMenuLabel(
+      conv,
+      currentUserId: currentUserID,
+    );
 
     void openInfo() {
       if (dmPartner != null) {
@@ -677,12 +709,13 @@ class _ChatScreenState extends State<ChatScreen> {
               radius: 18,
               backgroundImage: avatarUrl != null
                   ? CachedNetworkImageProvider(
-                      ApiConfig.resolveMedia(avatarUrl))
+                      ApiConfig.resolveMedia(avatarUrl),
+                    )
                   : null,
               child: avatarUrl == null
                   ? (conv.isGroup
-                      ? const Icon(Icons.group, size: 18)
-                      : Text(name.isNotEmpty ? name[0].toUpperCase() : '?'))
+                        ? const Icon(Icons.group, size: 18)
+                        : Text(name.isNotEmpty ? name[0].toUpperCase() : '?'))
                   : null,
             ),
             const SizedBox(width: 10),
@@ -691,10 +724,14 @@ class _ChatScreenState extends State<ChatScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(name,
-                      style: const TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.w600),
-                      overflow: TextOverflow.ellipsis),
+                  Text(
+                    name,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                   ConversationEncryptionStatus(conversation: conv),
                 ],
               ),
@@ -741,34 +778,46 @@ class _ChatScreenState extends State<ChatScreen> {
           },
           itemBuilder: (_) => [
             const PopupMenuItem(
-                value: 'info', child: Text('Conversation info')),
+              value: 'info',
+              child: Text('Conversation info'),
+            ),
             if (conv.isDM ||
                 conv.members.any((m) => m.userId == currentUserID && m.isAdmin))
               const PopupMenuItem(
-                  value: 'disappearing', child: Text('Disappearing messages')),
+                value: 'disappearing',
+                child: Text('Disappearing messages'),
+              ),
             if (!conv.isDM &&
                 conv.members.any((m) => m.userId == currentUserID && m.isAdmin))
               PopupMenuItem(
                 value: 'encryption',
-                child: Text(conv.encryptionEnabled
-                    ? 'Turn encryption off'
-                    : 'Turn encryption on'),
+                child: Text(
+                  conv.encryptionEnabled
+                      ? 'Turn encryption off'
+                      : 'Turn encryption on',
+                ),
               ),
             if (conv.isGroup)
               const PopupMenuItem(value: 'edit', child: Text('Edit group')),
             if (conv.isGroup)
               const PopupMenuItem(value: 'members', child: Text('Members')),
             const PopupMenuItem(
-                value: 'appearance', child: Text('Chat appearance')),
+              value: 'appearance',
+              child: Text('Chat appearance'),
+            ),
             // Premium conversation-wide background, visible to everyone.
             if (_canSetConversationBackground(currentUserID))
               const PopupMenuItem(
-                  value: 'background', child: Text('Set chat background')),
+                value: 'background',
+                child: Text('Set chat background'),
+              ),
             if (conv.isGroup)
               const PopupMenuItem(
                 value: 'delete_messages',
-                child: Text('Delete messages',
-                    style: TextStyle(color: Colors.red)),
+                child: Text(
+                  'Delete messages',
+                  style: TextStyle(color: Colors.red),
+                ),
               ),
             PopupMenuItem(
               value: 'delete',
@@ -785,9 +834,7 @@ class _ChatScreenState extends State<ChatScreen> {
     return GlassSurface(
       blur: 24,
       border: Border(
-        top: BorderSide(
-          color: scheme.outlineVariant.withValues(alpha: 0.35),
-        ),
+        top: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.35)),
       ),
       child: SafeArea(
         top: false,
@@ -800,9 +847,11 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Row(
                 children: [
                   IconButton(
-                    icon: Icon(_showStickers
-                        ? Icons.keyboard
-                        : Icons.emoji_emotions_outlined),
+                    icon: Icon(
+                      _showStickers
+                          ? Icons.keyboard
+                          : Icons.emoji_emotions_outlined,
+                    ),
                     onPressed: () =>
                         setState(() => _showStickers = !_showStickers),
                   ),
@@ -820,10 +869,13 @@ class _ChatScreenState extends State<ChatScreen> {
                           borderSide: BorderSide.none,
                         ),
                         filled: true,
-                        fillColor: scheme.surfaceContainerHighest
-                            .withValues(alpha: 0.45),
+                        fillColor: scheme.surfaceContainerHighest.withValues(
+                          alpha: 0.45,
+                        ),
                         contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 8),
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
                       ),
                     ),
                   ),
@@ -860,7 +912,9 @@ class _ChatScreenState extends State<ChatScreen> {
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
         border: Border(
           left: BorderSide(
-              color: Theme.of(context).colorScheme.primary, width: 3),
+            color: Theme.of(context).colorScheme.primary,
+            width: 3,
+          ),
         ),
       ),
       child: Row(
@@ -914,7 +968,8 @@ class _ChatScreenState extends State<ChatScreen> {
               title: const Text('Copy text'),
               onTap: () {
                 Clipboard.setData(
-                    ClipboardData(text: msg.decryptedContent ?? ''));
+                  ClipboardData(text: msg.decryptedContent ?? ''),
+                );
                 Navigator.pop(context);
               },
             ),
@@ -990,11 +1045,15 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       await api.setMessageTtl(conv.id, chosen);
       await chat.loadConversations();
-      messenger.showSnackBar(SnackBar(
-        content: Text(chosen == 0
-            ? 'Disappearing messages turned off'
-            : 'Messages now disappear after ${options.firstWhere((o) => o.$2 == chosen).$1}'),
-      ));
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            chosen == 0
+                ? 'Disappearing messages turned off'
+                : 'Messages now disappear after ${options.firstWhere((o) => o.$2 == chosen).$1}',
+          ),
+        ),
+      );
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
     }
@@ -1008,8 +1067,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title:
-            Text(nextEnabled ? 'Turn encryption on?' : 'Turn encryption off?'),
+        title: Text(
+          nextEnabled ? 'Turn encryption on?' : 'Turn encryption off?',
+        ),
         content: const Text(
           'Changing encryption wipes all current messages in this chat for everyone.',
         ),
@@ -1030,10 +1090,13 @@ class _ChatScreenState extends State<ChatScreen> {
       await api.setEncryptionEnabled(conv.id, nextEnabled);
       await chat.loadConversations();
       await chat.loadMessages(conv.id);
-      messenger.showSnackBar(SnackBar(
-        content: Text(
-            nextEnabled ? 'Encryption turned on' : 'Encryption turned off'),
-      ));
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            nextEnabled ? 'Encryption turned on' : 'Encryption turned off',
+          ),
+        ),
+      );
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
     }
@@ -1055,7 +1118,9 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
             child: const Text('Save'),
@@ -1068,7 +1133,10 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     try {
       await chat.editMessage(
-          convID: conv.id, msgID: msg.id, newPlaintext: newText);
+        convID: conv.id,
+        msgID: msg.id,
+        newPlaintext: newText,
+      );
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Failed to edit: $e')));
     }
@@ -1094,8 +1162,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _editGroup(BuildContext context, String currentUserID) {
-    final isAdmin =
-        conv.members.any((m) => m.userId == currentUserID && m.isAdmin);
+    final isAdmin = conv.members.any(
+      (m) => m.userId == currentUserID && m.isAdmin,
+    );
     if (!isAdmin) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Only group admins can edit the group')),
@@ -1115,22 +1184,27 @@ class _ChatScreenState extends State<ChatScreen> {
           final api = context.read<ApiService>();
           final messenger = ScaffoldMessenger.of(context);
           Future<void> pickAvatar() async {
-            final picked = await ImagePicker()
-                .pickImage(source: ImageSource.gallery, imageQuality: 90);
+            final picked = await ImagePicker().pickImage(
+              source: ImageSource.gallery,
+              imageQuality: 90,
+            );
             if (picked == null) return;
             setSt(() => uploading = true);
             try {
               final bytes = await picked.readAsBytes();
               final url = await api.uploadAvatar(
-                  fileBytes: bytes, filename: picked.name);
+                fileBytes: bytes,
+                filename: picked.name,
+              );
               setSt(() {
                 pendingAvatar = url;
                 uploading = false;
               });
             } catch (e) {
               setSt(() => uploading = false);
-              messenger
-                  .showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+              messenger.showSnackBar(
+                SnackBar(content: Text('Upload failed: $e')),
+              );
             }
           }
 
@@ -1148,7 +1222,8 @@ class _ChatScreenState extends State<ChatScreen> {
                         radius: 40,
                         backgroundImage: pendingAvatar != null
                             ? CachedNetworkImageProvider(
-                                ApiConfig.resolveMedia(pendingAvatar!))
+                                ApiConfig.resolveMedia(pendingAvatar!),
+                              )
                             : null,
                         child: pendingAvatar == null
                             ? const Icon(Icons.group, size: 32)
@@ -1162,8 +1237,11 @@ class _ChatScreenState extends State<ChatScreen> {
                           child: CircleAvatar(
                             radius: 12,
                             backgroundColor: Theme.of(dctx).colorScheme.primary,
-                            child: const Icon(Icons.camera_alt,
-                                size: 14, color: Colors.white),
+                            child: const Icon(
+                              Icons.camera_alt,
+                              size: 14,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                     ],
@@ -1184,8 +1262,9 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
             actions: [
               TextButton(
-                  onPressed: () => Navigator.pop(dctx),
-                  child: const Text('Cancel')),
+                onPressed: () => Navigator.pop(dctx),
+                child: const Text('Cancel'),
+              ),
               FilledButton(
                 onPressed: uploading
                     ? null
@@ -1207,7 +1286,8 @@ class _ChatScreenState extends State<ChatScreen> {
                           await chat.loadConversationMembers(conv.id);
                         } catch (e) {
                           messenger.showSnackBar(
-                              SnackBar(content: Text('Failed to update: $e')));
+                            SnackBar(content: Text('Failed to update: $e')),
+                          );
                         }
                       },
                 child: const Text('Save'),
@@ -1220,8 +1300,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _showMembers(BuildContext context, String currentUserID) {
-    final isAdmin =
-        conv.members.any((m) => m.userId == currentUserID && m.isAdmin);
+    final isAdmin = conv.members.any(
+      (m) => m.userId == currentUserID && m.isAdmin,
+    );
 
     showModalBottomSheet(
       context: context,
@@ -1238,8 +1319,10 @@ class _ChatScreenState extends State<ChatScreen> {
                 padding: const EdgeInsets.fromLTRB(20, 16, 8, 8),
                 child: Row(
                   children: [
-                    Text('Members',
-                        style: Theme.of(context).textTheme.titleMedium),
+                    Text(
+                      'Members',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
                     const Spacer(),
                     if (isAdmin)
                       TextButton.icon(
@@ -1263,7 +1346,8 @@ class _ChatScreenState extends State<ChatScreen> {
                       leading: CircleAvatar(
                         backgroundImage: m.user?.avatarUrl != null
                             ? CachedNetworkImageProvider(
-                                ApiConfig.resolveMedia(m.user!.avatarUrl!))
+                                ApiConfig.resolveMedia(m.user!.avatarUrl!),
+                              )
                             : null,
                         child: m.user?.avatarUrl == null
                             ? Text(username[0].toUpperCase())
@@ -1308,8 +1392,10 @@ class _ChatScreenState extends State<ChatScreen> {
                                 const PopupMenuDivider(),
                                 const PopupMenuItem(
                                   value: 'remove',
-                                  child: Text('Remove member',
-                                      style: TextStyle(color: Colors.red)),
+                                  child: Text(
+                                    'Remove member',
+                                    style: TextStyle(color: Colors.red),
+                                  ),
                                 ),
                               ],
                             )
@@ -1346,112 +1432,138 @@ class _ChatScreenState extends State<ChatScreen> {
         // setStateDialog rebuild would re-initialise them and wipe the results.
         List<dynamic> results = [];
         bool searching = false;
-        return StatefulBuilder(builder: (ctx, setStateDialog) {
-          Future<void> search(String q) async {
-            if (q.trim().length < 2) return;
-            setStateDialog(() => searching = true);
-            try {
-              final users =
-                  await context.read<ApiService>().searchUsers(q.trim());
-              setStateDialog(() {
-                results = users;
-                searching = false;
-              });
-            } catch (_) {
-              setStateDialog(() => searching = false);
+        return StatefulBuilder(
+          builder: (ctx, setStateDialog) {
+            Future<void> search(String q) async {
+              if (q.trim().length < 2) return;
+              setStateDialog(() => searching = true);
+              try {
+                final users = await context.read<ApiService>().searchUsers(
+                  q.trim(),
+                );
+                setStateDialog(() {
+                  results = users;
+                  searching = false;
+                });
+              } catch (_) {
+                setStateDialog(() => searching = false);
+              }
             }
-          }
 
-          return AlertDialog(
-            title: const Text('Add Member'),
-            content: SizedBox(
-              width: 320,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: searchCtrl,
-                    decoration: InputDecoration(
-                      hintText: 'Search by username…',
-                      suffixIcon: searching
-                          ? const Padding(
-                              padding: EdgeInsets.all(12),
-                              child: SizedBox(
+            return AlertDialog(
+              title: const Text('Add Member'),
+              content: SizedBox(
+                width: 320,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: searchCtrl,
+                      decoration: InputDecoration(
+                        hintText: 'Search by username…',
+                        suffixIcon: searching
+                            ? const Padding(
+                                padding: EdgeInsets.all(12),
+                                child: SizedBox(
                                   width: 16,
                                   height: 16,
                                   child: CircularProgressIndicator(
-                                      strokeWidth: 2)),
-                            )
-                          : IconButton(
-                              icon: const Icon(Icons.search),
-                              onPressed: () => search(searchCtrl.text),
-                            ),
-                    ),
-                    onSubmitted: search,
-                  ),
-                  if (results.isNotEmpty)
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 220),
-                      child: ListView.builder(
-                        shrinkWrap: true,
-                        itemCount: results.length,
-                        itemBuilder: (_, i) {
-                          final u = results[i];
-                          final username = u.username as String;
-                          final alreadyIn =
-                              conv.members.any((m) => m.userId == u.id);
-                          return ListTile(
-                            dense: true,
-                            leading: CircleAvatar(
-                              radius: 16,
-                              child: Text(username[0].toUpperCase()),
-                            ),
-                            title: Text('@$username'),
-                            trailing: alreadyIn
-                                ? const Text('Already in group',
-                                    style: TextStyle(
-                                        fontSize: 11, color: Colors.grey))
-                                : TextButton(
-                                    child: const Text('Add'),
-                                    onPressed: () async {
-                                      Navigator.pop(ctx);
-                                      try {
-                                        await context
-                                            .read<ApiService>()
-                                            .addMember(conv.id, u.id as String);
-                                        if (context.mounted) {
-                                          context
-                                              .read<ChatProvider>()
-                                              .loadConversationMembers(conv.id);
-                                          ScaffoldMessenger.of(context)
-                                              .showSnackBar(SnackBar(
-                                                  content: Text(
-                                                      '@$username added')));
-                                        }
-                                      } catch (e) {
-                                        if (context.mounted) {
-                                          ScaffoldMessenger.of(context)
-                                              .showSnackBar(SnackBar(
-                                                  content: Text(
-                                                      'Failed to add: $e')));
-                                        }
-                                      }
-                                    },
+                                    strokeWidth: 2,
                                   ),
-                          );
-                        },
+                                ),
+                              )
+                            : IconButton(
+                                icon: const Icon(Icons.search),
+                                onPressed: () => search(searchCtrl.text),
+                              ),
                       ),
+                      onSubmitted: search,
                     ),
-                ],
+                    if (results.isNotEmpty)
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 220),
+                        child: ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: results.length,
+                          itemBuilder: (_, i) {
+                            final u = results[i];
+                            final username = u.username as String;
+                            final alreadyIn = conv.members.any(
+                              (m) => m.userId == u.id,
+                            );
+                            return ListTile(
+                              dense: true,
+                              leading: CircleAvatar(
+                                radius: 16,
+                                child: Text(username[0].toUpperCase()),
+                              ),
+                              title: Text('@$username'),
+                              trailing: alreadyIn
+                                  ? const Text(
+                                      'Already in group',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.grey,
+                                      ),
+                                    )
+                                  : TextButton(
+                                      child: const Text('Add'),
+                                      onPressed: () async {
+                                        Navigator.pop(ctx);
+                                        try {
+                                          await context
+                                              .read<ApiService>()
+                                              .addMember(
+                                                conv.id,
+                                                u.id as String,
+                                              );
+                                          if (context.mounted) {
+                                            context
+                                                .read<ChatProvider>()
+                                                .loadConversationMembers(
+                                                  conv.id,
+                                                );
+                                            ScaffoldMessenger.of(
+                                              context,
+                                            ).showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                  '@$username added',
+                                                ),
+                                              ),
+                                            );
+                                          }
+                                        } catch (e) {
+                                          if (context.mounted) {
+                                            ScaffoldMessenger.of(
+                                              context,
+                                            ).showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                  'Failed to add: $e',
+                                                ),
+                                              ),
+                                            );
+                                          }
+                                        }
+                                      },
+                                    ),
+                            );
+                          },
+                        ),
+                      ),
+                  ],
+                ),
               ),
-            ),
-            actions: [
-              TextButton(
+              actions: [
+                TextButton(
                   onPressed: () => Navigator.pop(ctx),
-                  child: const Text('Close')),
-            ],
-          );
-        });
+                  child: const Text('Close'),
+                ),
+              ],
+            );
+          },
+        );
       },
     );
   }
@@ -1477,8 +1589,9 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Confirm'),
@@ -1503,7 +1616,10 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _removeMember(
-      BuildContext context, String userID, String username) async {
+    BuildContext context,
+    String userID,
+    String username,
+  ) async {
     final api = context.read<ApiService>();
     final chat = context.read<ChatProvider>();
     final navigator = Navigator.of(context);
@@ -1515,8 +1631,9 @@ class _ChatScreenState extends State<ChatScreen> {
         content: Text('Remove @$username from this group?'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -1540,9 +1657,12 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _deleteGroupMessages(
-      BuildContext context, String currentUserId) async {
-    final isAdmin =
-        conv.members.any((m) => m.userId == currentUserId && m.isAdmin);
+    BuildContext context,
+    String currentUserId,
+  ) async {
+    final isAdmin = conv.members.any(
+      (m) => m.userId == currentUserId && m.isAdmin,
+    );
     final chat = context.read<ChatProvider>();
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
@@ -1557,7 +1677,9 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, 'mine'),
             child: const Text('Delete mine'),
@@ -1601,8 +1723,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
     if (conv.isGroup) {
       final isOwner = conv.createdBy == currentUserId;
-      final hasOtherAdmin =
-          conv.members.any((m) => m.userId != currentUserId && m.isAdmin);
+      final hasOtherAdmin = conv.members.any(
+        (m) => m.userId != currentUserId && m.isAdmin,
+      );
       if (isOwner && !hasOtherAdmin) {
         await showDialog<void>(
           context: context,
@@ -1628,7 +1751,8 @@ class _ChatScreenState extends State<ChatScreen> {
         builder: (ctx) => AlertDialog(
           title: const Text('Leave group?'),
           content: const Text(
-              'You can leave, or leave and delete your sent messages.'),
+            'You can leave, or leave and delete your sent messages.',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
@@ -1663,8 +1787,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final label = conv.isDM
         ? 'conversation'
         : conv.isGroup
-            ? 'group'
-            : 'channel';
+        ? 'group'
+        : 'channel';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1676,8 +1800,9 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -1773,7 +1898,7 @@ class _TypingIndicatorState extends State<_TypingIndicator>
 
 class _BouncingDots extends AnimatedWidget {
   const _BouncingDots({required AnimationController controller})
-      : super(listenable: controller);
+    : super(listenable: controller);
 
   @override
   Widget build(BuildContext context) {

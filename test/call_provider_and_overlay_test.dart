@@ -164,6 +164,89 @@ void main() {
       provider.dispose();
       service.dispose();
     });
+
+    test(
+      'notification actions answer dismiss and decline incoming calls',
+      () async {
+        final service = _FakeCallService();
+        final provider = CallProvider(service, audio: _FakeCallAudio());
+
+        service.emitIncoming(
+          CallSession(
+            callId: 'c-incoming-answer',
+            remoteUserId: 'u-incoming',
+            isVideo: false,
+            isIncoming: true,
+            state: CallState.ringing,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        NotificationService.debugHandleNotificationResponse(
+          const NotificationResponse(
+            id: 1,
+            actionId: 'openchat_call_answer',
+            notificationResponseType:
+                NotificationResponseType.selectedNotificationAction,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        expect(service.acceptIncomingCalls, 1);
+        expect(provider.incomingCall, isNull);
+
+        service.emitIncoming(
+          CallSession(
+            callId: 'c-incoming-dismiss',
+            remoteUserId: 'u-incoming',
+            isVideo: false,
+            isIncoming: true,
+            state: CallState.ringing,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        NotificationService.debugHandleNotificationResponse(
+          const NotificationResponse(
+            id: 1,
+            actionId: 'openchat_call_dismiss',
+            notificationResponseType:
+                NotificationResponseType.selectedNotificationAction,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        expect(service.rejectCalls, 0);
+        expect(provider.incomingCall, isNull);
+
+        service.emitIncoming(
+          CallSession(
+            callId: 'c-incoming-decline',
+            remoteUserId: 'u-incoming',
+            isVideo: false,
+            isIncoming: true,
+            state: CallState.ringing,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        NotificationService.debugHandleNotificationResponse(
+          const NotificationResponse(
+            id: 1,
+            actionId: 'openchat_call_decline',
+            notificationResponseType:
+                NotificationResponseType.selectedNotificationAction,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        expect(service.rejectCalls, 1);
+        expect(provider.incomingCall, isNull);
+
+        provider.dispose();
+        service.dispose();
+      },
+    );
   });
 
   group('Audio output controls', () {
@@ -458,6 +541,8 @@ class _FakeCallService extends CallService {
   final _endedController = StreamController<CallEndedEvent>.broadcast();
   CallSession? _session;
   int selectAudioOutputCalls = 0;
+  int acceptIncomingCalls = 0;
+  int rejectCalls = 0;
   int hangupCalls = 0;
   final List<bool> micMuteValues = [];
   final List<bool> cameraEnabledValues = [];
@@ -492,6 +577,18 @@ class _FakeCallService extends CallService {
     if (throwOnSelectAudioOutput) {
       throw UnsupportedError('unsupported');
     }
+  }
+
+  @override
+  Future<void> acceptIncomingCall(CallSession session) async {
+    acceptIncomingCalls += 1;
+    _session = session..state = CallState.calling;
+    _sessionController.add(_session);
+  }
+
+  @override
+  void rejectCall(CallSession session) {
+    rejectCalls += 1;
   }
 
   @override

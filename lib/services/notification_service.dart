@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:window_manager/window_manager.dart';
 
 @pragma('vm:entry-point')
 void openChatNotificationBackgroundHandler(NotificationResponse response) {
@@ -71,11 +73,20 @@ class NotificationService {
   static const int _activeCallNotificationId = 2;
   static const String _activeCallEndActionId = 'openchat_call_end';
   static const String _activeCallMuteActionId = 'openchat_call_mute';
+  static const int incomingCallNotificationId = 1;
+  static const String incomingCallAnswerActionId = 'openchat_call_answer';
+  static const String incomingCallDismissActionId = 'openchat_call_dismiss';
+  static const String incomingCallDeclineActionId = 'openchat_call_decline';
+  static const String _incomingCallCategory = 'openchat_incoming_call';
   static const String _activeCallCategoryUnmuted =
       'openchat_active_call_unmuted';
   static const String _activeCallCategoryMuted = 'openchat_active_call_muted';
   static VoidCallback? _activeCallEndHandler;
   static VoidCallback? _activeCallToggleMuteHandler;
+  static VoidCallback? _incomingCallAnswerHandler;
+  static VoidCallback? _incomingCallDismissHandler;
+  static VoidCallback? _incomingCallDeclineHandler;
+  static bool _appFocused = true;
 
   static bool get _supported =>
       !kIsWeb &&
@@ -85,7 +96,108 @@ class NotificationService {
           Platform.isMacOS ||
           Platform.isLinux);
 
+  static const NotificationDetails incomingCallNotificationDetails =
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          'calls',
+          'Calls',
+          channelDescription: 'Notifications for incoming calls',
+          importance: Importance.max,
+          priority: Priority.max,
+          actions: [
+            AndroidNotificationAction(
+              incomingCallAnswerActionId,
+              'Answer',
+              cancelNotification: true,
+              showsUserInterface: true,
+              semanticAction: SemanticAction.call,
+            ),
+            AndroidNotificationAction(
+              incomingCallDismissActionId,
+              'Dismiss',
+              cancelNotification: true,
+              showsUserInterface: true,
+            ),
+            AndroidNotificationAction(
+              incomingCallDeclineActionId,
+              'Decline',
+              cancelNotification: true,
+              showsUserInterface: true,
+            ),
+          ],
+        ),
+        iOS: DarwinNotificationDetails(
+          categoryIdentifier: _incomingCallCategory,
+          presentBanner: true,
+          presentList: true,
+          presentSound: true,
+        ),
+        macOS: DarwinNotificationDetails(
+          categoryIdentifier: _incomingCallCategory,
+          presentBanner: true,
+          presentList: true,
+          presentSound: true,
+        ),
+        linux: LinuxNotificationDetails(
+          actions: [
+            LinuxNotificationAction(
+              key: incomingCallAnswerActionId,
+              label: 'Answer',
+            ),
+            LinuxNotificationAction(
+              key: incomingCallDismissActionId,
+              label: 'Dismiss',
+            ),
+            LinuxNotificationAction(
+              key: incomingCallDeclineActionId,
+              label: 'Decline',
+            ),
+          ],
+        ),
+        windows: WindowsNotificationDetails(
+          scenario: WindowsNotificationScenario.incomingCall,
+          actions: [
+            WindowsAction(
+              content: 'Answer',
+              arguments: incomingCallAnswerActionId,
+              buttonStyle: WindowsButtonStyle.success,
+            ),
+            WindowsAction(
+              content: 'Dismiss',
+              arguments: incomingCallDismissActionId,
+            ),
+            WindowsAction(
+              content: 'Decline',
+              arguments: incomingCallDeclineActionId,
+              buttonStyle: WindowsButtonStyle.critical,
+            ),
+          ],
+        ),
+      );
+
   static void setActiveConversation(String? id) => _activeConversationId = id;
+  static void setAppFocused(bool focused) => _appFocused = focused;
+
+  static bool get _desktop =>
+      !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
+
+  static Future<bool> _isFocusedWindow() async {
+    if (!_appFocused) return false;
+    if (_desktop) {
+      try {
+        return await windowManager.isFocused();
+      } catch (_) {
+        return _appFocused;
+      }
+    }
+    return _appFocused;
+  }
+
+  static Future<bool> _shouldSuppressFocusedNotification() async {
+    if (!_supported) return true;
+    return _isFocusedWindow();
+  }
+
   static void setActiveCallHandlers({
     VoidCallback? onEnd,
     VoidCallback? onToggleMute,
@@ -94,12 +206,34 @@ class NotificationService {
     _activeCallToggleMuteHandler = onToggleMute;
   }
 
+  static void setIncomingCallHandlers({
+    VoidCallback? onAnswer,
+    VoidCallback? onDismiss,
+    VoidCallback? onDecline,
+  }) {
+    _incomingCallAnswerHandler = onAnswer;
+    _incomingCallDismissHandler = onDismiss;
+    _incomingCallDeclineHandler = onDecline;
+  }
+
   @visibleForTesting
   static void debugHandleNotificationResponse(NotificationResponse response) =>
       handleNotificationResponse(response);
 
   static void handleNotificationResponse(NotificationResponse response) {
     switch (response.actionId) {
+      case incomingCallAnswerActionId:
+        _incomingCallAnswerHandler?.call();
+        unawaited(cancelIncomingCall());
+        return;
+      case incomingCallDismissActionId:
+        _incomingCallDismissHandler?.call();
+        unawaited(cancelIncomingCall());
+        return;
+      case incomingCallDeclineActionId:
+        _incomingCallDeclineHandler?.call();
+        unawaited(cancelIncomingCall());
+        return;
       case _activeCallEndActionId:
         _activeCallEndHandler?.call();
         return;
@@ -114,6 +248,29 @@ class NotificationService {
   static Future<void> init() async {
     if (!_supported || _inited || !_available) return;
     final activeCallCategories = [
+      DarwinNotificationCategory(
+        _incomingCallCategory,
+        actions: [
+          DarwinNotificationAction.plain(
+            incomingCallAnswerActionId,
+            'Answer',
+            options: {DarwinNotificationActionOption.foreground},
+          ),
+          DarwinNotificationAction.plain(
+            incomingCallDismissActionId,
+            'Dismiss',
+            options: {DarwinNotificationActionOption.foreground},
+          ),
+          DarwinNotificationAction.plain(
+            incomingCallDeclineActionId,
+            'Decline',
+            options: {
+              DarwinNotificationActionOption.destructive,
+              DarwinNotificationActionOption.foreground,
+            },
+          ),
+        ],
+      ),
       DarwinNotificationCategory(
         _activeCallCategoryUnmuted,
         actions: [
@@ -251,6 +408,7 @@ class NotificationService {
     bool showSensitive = false,
   }) async {
     if (!_supported) return;
+    if (await _shouldSuppressFocusedNotification()) return;
     if (_activeConversationId == conversationId) return;
     await init();
     if (!_available) return;
@@ -280,28 +438,14 @@ class NotificationService {
 
   static Future<void> showIncomingCall({required String body}) async {
     if (!_supported) return;
+    if (await _shouldSuppressFocusedNotification()) return;
     await init();
     if (!_available) return;
-    const details = NotificationDetails(
-      android: AndroidNotificationDetails(
-        'calls',
-        'Calls',
-        channelDescription: 'Notifications for incoming calls',
-        importance: Importance.max,
-        priority: Priority.max,
-      ),
-      iOS: DarwinNotificationDetails(),
-      macOS: DarwinNotificationDetails(),
-      linux: LinuxNotificationDetails(),
-      windows: WindowsNotificationDetails(
-        scenario: WindowsNotificationScenario.incomingCall,
-      ),
-    );
     await _plugin.show(
-      id: 1,
+      id: incomingCallNotificationId,
       title: 'Incoming call',
       body: body,
-      notificationDetails: details,
+      notificationDetails: incomingCallNotificationDetails,
     );
   }
 
@@ -311,6 +455,10 @@ class NotificationService {
     bool muted = false,
   }) async {
     if (!_supported) return;
+    if (await _shouldSuppressFocusedNotification()) {
+      await cancelActiveCall();
+      return;
+    }
     await init();
     if (!_available) return;
     final details = NotificationDetails(
@@ -374,8 +522,16 @@ class NotificationService {
     await _plugin.cancel(id: _activeCallNotificationId);
   }
 
+  static Future<void> cancelIncomingCall() async {
+    if (!_supported) return;
+    await init();
+    if (!_available) return;
+    await _plugin.cancel(id: incomingCallNotificationId);
+  }
+
   static Future<void> showMissedCall({required String body}) async {
     if (!_supported) return;
+    if (await _shouldSuppressFocusedNotification()) return;
     await init();
     if (!_available) return;
     const details = NotificationDetails(

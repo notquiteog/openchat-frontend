@@ -54,12 +54,8 @@ class OpenChatApp extends StatelessWidget {
       home: const _AppRoot(),
       // Float the call UI above every route so incoming/active calls surface on
       // any screen, not just the chats list.
-      builder: (context, child) => Stack(
-        children: [
-          if (child != null) child,
-          const CallOverlay(),
-        ],
-      ),
+      builder: (context, child) =>
+          Stack(children: [if (child != null) child, const CallOverlay()]),
     );
   }
 }
@@ -92,8 +88,8 @@ class _AppRootState extends State<_AppRoot> {
         context.read<CallProvider>().handleIncomingCallPush(data);
       });
       _wsForegroundSub = context.read<WebSocketService>().events.listen(
-            _onForegroundWsEvent,
-          );
+        _onForegroundWsEvent,
+      );
 
       // Cache the app-lock preference.
       final storage = context.read<SecureStorageService>();
@@ -107,10 +103,13 @@ class _AppRootState extends State<_AppRoot> {
         onPause: _onBackground,
         onResume: _onForeground,
       );
+      NotificationService.setAppFocused(true);
     });
   }
 
   void _onBackground() {
+    NotificationService.setAppFocused(false);
+    context.read<CallProvider>().refreshActiveCallNotification();
     final storage = context.read<SecureStorageService>();
     storage.getAppLockEnabled().then((enabled) {
       if (!mounted) return;
@@ -127,6 +126,8 @@ class _AppRootState extends State<_AppRoot> {
   }
 
   void _onForeground() {
+    NotificationService.setAppFocused(true);
+    context.read<CallProvider>().refreshActiveCallNotification();
     final storage = context.read<SecureStorageService>();
     storage.getAppLockEnabled().then((enabled) {
       if (!mounted) return;
@@ -144,9 +145,7 @@ class _AppRootState extends State<_AppRoot> {
     _promptingAppUnlock = true;
     final auth = LocalAuthentication();
     try {
-      final ok = await auth.authenticate(
-        localizedReason: 'Unlock OpenChat',
-      );
+      final ok = await auth.authenticate(localizedReason: 'Unlock OpenChat');
       if (ok && mounted) setState(() => _appLocked = false);
     } catch (_) {
       // If biometrics fail (e.g. no enrolled biometrics), stay locked but
@@ -167,13 +166,15 @@ class _AppRootState extends State<_AppRoot> {
   }
 
   void _onForegroundWsEvent(WsEvent event) {
-    final isDesktop = !kIsWeb &&
+    final isDesktop =
+        !kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.windows ||
             defaultTargetPlatform == TargetPlatform.linux ||
             defaultTargetPlatform == TargetPlatform.macOS);
 
-    final showSensitive =
-        context.read<SettingsProvider>().notificationSensitiveContent;
+    final showSensitive = context
+        .read<SettingsProvider>()
+        .notificationSensitiveContent;
     final intent = ForegroundWsNotificationRouter.intentForEvent(
       event,
       showSensitive: showSensitive,
@@ -214,11 +215,11 @@ class _AppRootState extends State<_AppRoot> {
     if (ended != null) {
       call.clearEndedCall();
       context.read<ChatProvider>().postCallEvent(
-            convID: ended.conversationId,
-            answered: ended.answered,
-            isVideo: ended.isVideo,
-            durationSecs: ended.durationSecs,
-          );
+        convID: ended.conversationId,
+        answered: ended.answered,
+        isVideo: ended.isVideo,
+        durationSecs: ended.durationSecs,
+      );
     }
   }
 
@@ -276,8 +277,8 @@ class _AppRootState extends State<_AppRoot> {
 
     return switch (auth.state) {
       AuthState.unknown => const Scaffold(
-          body: Center(child: CircularProgressIndicator()),
-        ),
+        body: Center(child: CircularProgressIndicator()),
+      ),
       AuthState.unauthenticated => const LoginScreen(),
       AuthState.authenticated => const _HomeShell(),
     };
@@ -311,19 +312,23 @@ class _HomeShellState extends State<_HomeShell> {
     ];
     if (settings.channelsOwnTab) {
       screens.add(const ChannelListScreen());
-      destinations.add(const NavigationDestination(
-        icon: Icon(Icons.campaign_outlined),
-        selectedIcon: Icon(Icons.campaign),
-        label: 'Channels',
-      ));
+      destinations.add(
+        const NavigationDestination(
+          icon: Icon(Icons.campaign_outlined),
+          selectedIcon: Icon(Icons.campaign),
+          label: 'Channels',
+        ),
+      );
     }
     if (settings.botsOwnTab) {
       screens.add(const BotChatsScreen());
-      destinations.add(const NavigationDestination(
-        icon: Icon(Icons.smart_toy_outlined),
-        selectedIcon: Icon(Icons.smart_toy),
-        label: 'Bots',
-      ));
+      destinations.add(
+        const NavigationDestination(
+          icon: Icon(Icons.smart_toy_outlined),
+          selectedIcon: Icon(Icons.smart_toy),
+          label: 'Bots',
+        ),
+      );
     }
 
     // Clamp in case a tab was just turned off while it was selected.
@@ -335,7 +340,9 @@ class _HomeShellState extends State<_HomeShell> {
       body: Column(
         children: [
           if (user != null && user.isKeyExpired) _ExpiredKeyBanner(user: user),
-          Expanded(child: IndexedStack(index: _tab, children: screens)),
+          Expanded(
+            child: IndexedStack(index: _tab, children: screens),
+          ),
         ],
       ),
       // A single-entry nav bar carries no information, so hide it entirely.
@@ -345,7 +352,8 @@ class _HomeShellState extends State<_HomeShell> {
               blur: 22,
               border: Border(
                 top: BorderSide(
-                    color: scheme.outlineVariant.withValues(alpha: 0.35)),
+                  color: scheme.outlineVariant.withValues(alpha: 0.35),
+                ),
               ),
               child: NavigationBar(
                 selectedIndex: _tab,
@@ -369,16 +377,25 @@ class _AppLockScreen extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.lock_outline,
-                size: 72, color: theme.colorScheme.primary),
+            Icon(
+              Icons.lock_outline,
+              size: 72,
+              color: theme.colorScheme.primary,
+            ),
             const SizedBox(height: 24),
-            Text('OpenChat is locked',
-                style: theme.textTheme.headlineSmall
-                    ?.copyWith(fontWeight: FontWeight.w600)),
+            Text(
+              'OpenChat is locked',
+              style: theme.textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
             const SizedBox(height: 8),
-            Text('Authenticate to continue',
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            Text(
+              'Authenticate to continue',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
             const SizedBox(height: 32),
             FilledButton.icon(
               onPressed: onUnlock,
@@ -437,8 +454,10 @@ class _ExpiredKeyBanner extends StatelessWidget {
                   ],
                 ),
               ),
-              Icon(Icons.chevron_right,
-                  color: theme.colorScheme.onErrorContainer),
+              Icon(
+                Icons.chevron_right,
+                color: theme.colorScheme.onErrorContainer,
+              ),
             ],
           ),
         ),

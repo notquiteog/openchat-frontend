@@ -5,6 +5,7 @@ import '../../config/api_config.dart';
 import '../../models/conversation.dart';
 import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/call_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../services/api_service.dart';
 import '../chat/chat_screen.dart';
@@ -62,12 +63,16 @@ class _BotChatsScreenState extends State<BotChatsScreen> {
     final botChats = chat.conversations
         .where((c) => c.isBotDM(currentUserID))
         .toList();
+    final callTopInset = context.select<CallProvider, double>(
+      (cp) => cp.minimizedContentTopInset,
+    );
 
     return Scaffold(
       extendBodyBehindAppBar: false,
       appBar: AppBar(title: const Text('Bots')),
       body: Column(
         children: [
+          if (callTopInset > 0) SizedBox(height: callTopInset),
           Padding(
             padding: const EdgeInsets.all(12),
             child: TextField(
@@ -76,11 +81,14 @@ class _BotChatsScreenState extends State<BotChatsScreen> {
               decoration: InputDecoration(
                 hintText: 'Search bots by @username…',
                 prefixIcon: const Icon(Icons.search),
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(24)),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                ),
                 filled: true,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
               ),
             ),
           ),
@@ -98,17 +106,22 @@ class _BotChatsScreenState extends State<BotChatsScreen> {
   Widget _buildSearchResults() {
     if (_results.isEmpty) {
       return const Center(
-          child: Text('No bots found', style: TextStyle(color: Colors.grey)));
+        child: Text('No bots found', style: TextStyle(color: Colors.grey)),
+      );
     }
     return ListView.builder(
-      padding: EdgeInsets.only(bottom: MediaQuery.paddingOf(context).bottom + 8),
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.paddingOf(context).bottom + 8,
+      ),
       itemCount: _results.length,
       itemBuilder: (context, i) {
         final bot = _results[i];
         return ListTile(
           leading: CircleAvatar(
             backgroundImage: bot.avatarUrl != null
-                ? CachedNetworkImageProvider(ApiConfig.resolveMedia(bot.avatarUrl!))
+                ? CachedNetworkImageProvider(
+                    ApiConfig.resolveMedia(bot.avatarUrl!),
+                  )
                 : null,
             child: bot.avatarUrl == null
                 ? Text(bot.username[0].toUpperCase())
@@ -126,12 +139,16 @@ class _BotChatsScreenState extends State<BotChatsScreen> {
   Widget _buildBotChats(List<Conversation> chats, String currentUserID) {
     if (chats.isEmpty) {
       return const Center(
-        child: Text('Search for a bot above to start chatting',
-            style: TextStyle(color: Colors.grey)),
+        child: Text(
+          'Search for a bot above to start chatting',
+          style: TextStyle(color: Colors.grey),
+        ),
       );
     }
     return ListView.builder(
-      padding: EdgeInsets.only(bottom: MediaQuery.paddingOf(context).bottom + 8),
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.paddingOf(context).bottom + 8,
+      ),
       itemCount: chats.length,
       itemBuilder: (context, i) {
         final conv = chats[i];
@@ -148,8 +165,11 @@ class _BotChatsScreenState extends State<BotChatsScreen> {
           ),
           title: Text('@$name'),
           subtitle: conv.lastMessage != null && conv.lastMessage!.isDecrypted
-              ? Text(conv.lastMessage!.decryptedContent!,
-                  maxLines: 1, overflow: TextOverflow.ellipsis)
+              ? Text(
+                  conv.lastMessage!.decryptedContent!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                )
               : null,
           onTap: () => Navigator.push(
             context,

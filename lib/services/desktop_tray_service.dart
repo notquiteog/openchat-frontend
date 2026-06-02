@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:nativeapi/nativeapi.dart' as native;
 import 'package:window_manager/window_manager.dart';
 
+import 'notification_service.dart';
+
 class DesktopTrayService with WindowListener {
   static const _appIconAsset = 'assets/images/logo.png';
 
@@ -21,12 +23,18 @@ class DesktopTrayService with WindowListener {
   Future<void> init() async {
     if (!supported) return;
     if (_trayIcon != null) return;
-    if (!native.TrayManager.instance.isSupported) return;
 
     await windowManager.ensureInitialized();
     windowManager.addListener(this);
     await windowManager.setPreventClose(true);
     await windowManager.setTitle('OpenChat');
+    NotificationService.setAppFocused(await windowManager.isFocused());
+
+    if (!native.TrayManager.instance.isSupported) {
+      await windowManager.setPreventClose(false);
+      windowManager.removeListener(this);
+      return;
+    }
 
     final trayIcon = native.TrayIcon();
     final contextMenu = native.Menu();
@@ -72,18 +80,38 @@ class DesktopTrayService with WindowListener {
       await windowManager.destroy();
       return;
     }
+    final preventClose = await windowManager.isPreventClose();
+    if (!preventClose) return;
+    NotificationService.setAppFocused(false);
     await windowManager.hide();
     await windowManager.setSkipTaskbar(true);
+  }
+
+  @override
+  void onWindowFocus() {
+    NotificationService.setAppFocused(true);
+  }
+
+  @override
+  void onWindowBlur() {
+    NotificationService.setAppFocused(false);
+  }
+
+  @override
+  void onWindowMinimize() {
+    NotificationService.setAppFocused(false);
   }
 
   Future<void> _showWindow() async {
     await windowManager.setSkipTaskbar(false);
     await windowManager.show();
     await windowManager.focus();
+    NotificationService.setAppFocused(true);
   }
 
   Future<void> _quit() async {
     _quitting = true;
+    NotificationService.setAppFocused(false);
     await windowManager.setPreventClose(false);
     await windowManager.destroy();
   }

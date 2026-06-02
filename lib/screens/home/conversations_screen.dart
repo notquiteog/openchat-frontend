@@ -5,6 +5,7 @@ import 'package:timeago/timeago.dart' as timeago;
 import '../../models/conversation.dart';
 import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/call_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
@@ -36,6 +37,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final chat = context.watch<ChatProvider>();
     final settings = context.watch<SettingsProvider>();
     final currentUserID = auth.currentUser?.id ?? '';
+    final callTopInset = context.select<CallProvider, double>(
+      (cp) => cp.minimizedContentTopInset,
+    );
 
     // Channels and bot DMs are hidden here only when the user has given them
     // their own dedicated tab; otherwise everything lives in one Chats list.
@@ -51,9 +55,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Image.asset('assets/images/logo.png',
-                height: 28,
-                errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+            Image.asset(
+              'assets/images/logo.png',
+              height: 28,
+              errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+            ),
             const SizedBox(width: 8),
             const Text('OpenChat'),
           ],
@@ -75,31 +81,37 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       body: chat.isLoading
           ? const Center(child: CircularProgressIndicator())
           : conversations.isEmpty
-              ? _buildEmpty(context)
-              : RefreshIndicator(
-                  onRefresh: chat.loadConversations,
-                  // The list scrolls behind the translucent app bar
-                  // (extendBodyBehindAppBar), so drop the spinner below it
-                  // instead of letting it appear hidden under the bar.
-                  displacement:
-                      MediaQuery.paddingOf(context).top + kToolbarHeight,
-                  child: ListView.separated(
-                    padding: EdgeInsets.only(
-                        top: MediaQuery.paddingOf(context).top + kToolbarHeight,
-                        bottom: MediaQuery.paddingOf(context).bottom + 8),
-                    itemCount: conversations.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (context, index) {
-                      final conv = conversations[index];
-                      return _ConversationTile(
-                        conversation: conv,
-                        currentUserID: currentUserID,
-                        onTap: () => _openConversation(context, conv),
-                        onLongPress: () => _confirmDelete(context, conv),
-                      );
-                    },
-                  ),
+          ? _buildEmpty(context)
+          : RefreshIndicator(
+              onRefresh: chat.loadConversations,
+              // The list scrolls behind the translucent app bar
+              // (extendBodyBehindAppBar), so drop the spinner below it
+              // instead of letting it appear hidden under the bar.
+              displacement:
+                  MediaQuery.paddingOf(context).top +
+                  kToolbarHeight +
+                  callTopInset,
+              child: ListView.separated(
+                padding: EdgeInsets.only(
+                  top:
+                      MediaQuery.paddingOf(context).top +
+                      kToolbarHeight +
+                      callTopInset,
+                  bottom: MediaQuery.paddingOf(context).bottom + 8,
                 ),
+                itemCount: conversations.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final conv = conversations[index];
+                  return _ConversationTile(
+                    conversation: conv,
+                    currentUserID: currentUserID,
+                    onTap: () => _openConversation(context, conv),
+                    onLongPress: () => _confirmDelete(context, conv),
+                  );
+                },
+              ),
+            ),
       // Lift above the translucent glass nav bar. extendBody propagates the bar
       // height through MediaQuery.padding, but the FAB slot positions off
       // viewPadding (unaffected), so pad it up by the same inset.
@@ -150,11 +162,13 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           content: Text('Leave this $label or also delete your sent messages.'),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel')),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
             TextButton(
-                onPressed: () => Navigator.pop(ctx, 'leave'),
-                child: const Text('Leave')),
+              onPressed: () => Navigator.pop(ctx, 'leave'),
+              child: const Text('Leave'),
+            ),
             FilledButton(
               style: FilledButton.styleFrom(backgroundColor: Colors.red),
               onPressed: () => Navigator.pop(ctx, 'leave_delete'),
@@ -170,9 +184,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           deleteOwnMessages: action == 'leave_delete',
         );
       } catch (_) {
-        messenger.showSnackBar(const SnackBar(
-            content:
-                Text('Could not complete — you may not have permission.')));
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Could not complete — you may not have permission.'),
+          ),
+        );
       }
       return;
     }
@@ -184,8 +200,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         content: Text(body),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -198,8 +215,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     try {
       await chat.deleteConversation(conv.id);
     } catch (_) {
-      messenger.showSnackBar(const SnackBar(
-          content: Text('Could not complete — you may not have permission.')));
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Could not complete — you may not have permission.'),
+        ),
+      );
     }
   }
 
@@ -221,8 +241,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         children: [
           const Icon(Icons.chat_bubble_outline, size: 80, color: Colors.grey),
           const SizedBox(height: 16),
-          const Text('No conversations yet',
-              style: TextStyle(fontSize: 18, color: Colors.grey)),
+          const Text(
+            'No conversations yet',
+            style: TextStyle(fontSize: 18, color: Colors.grey),
+          ),
           const SizedBox(height: 8),
           TextButton(
             onPressed: () => _showSearch(context),
@@ -254,7 +276,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           Navigator.push(
             context,
             MaterialPageRoute(
-                builder: (_) => ChannelFeedScreen(channel: channel)),
+              builder: (_) => ChannelFeedScreen(channel: channel),
+            ),
           );
         },
       ),
@@ -294,7 +317,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                        builder: (_) => ChannelFeedScreen(channel: channel)),
+                      builder: (_) => ChannelFeedScreen(channel: channel),
+                    ),
                   );
                 }
               },
@@ -319,7 +343,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, nameCtrl.text),
             child: const Text('Create'),
@@ -333,8 +359,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         memberIDs: [],
       );
       if (context.mounted) {
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => ChatScreen(conversation: conv)));
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => ChatScreen(conversation: conv)),
+        );
       }
     }
   }
@@ -384,9 +412,11 @@ class _ConversationTile extends StatelessWidget {
               child: Icon(Icons.smart_toy, size: 14, color: Colors.grey),
             ),
           Flexible(
-            child: Text(name,
-                style: const TextStyle(fontWeight: FontWeight.w600),
-                overflow: TextOverflow.ellipsis),
+            child: Text(
+              name,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
         ],
       ),
@@ -442,13 +472,14 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
 
   @override
   List<Widget> buildActions(BuildContext context) => [
-        IconButton(icon: const Icon(Icons.clear), onPressed: () => query = ''),
-      ];
+    IconButton(icon: const Icon(Icons.clear), onPressed: () => query = ''),
+  ];
 
   @override
   Widget buildLeading(BuildContext context) => IconButton(
-      icon: const Icon(Icons.arrow_back),
-      onPressed: () => close(context, null));
+    icon: const Icon(Icons.arrow_back),
+    onPressed: () => close(context, null),
+  );
 
   @override
   Widget buildResults(BuildContext context) => _buildSuggestions();
@@ -481,7 +512,8 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
                 leading: CircleAvatar(
                   backgroundImage: u.avatarUrl != null
                       ? CachedNetworkImageProvider(
-                          ApiConfig.resolveMedia(u.avatarUrl!))
+                          ApiConfig.resolveMedia(u.avatarUrl!),
+                        )
                       : null,
                   child: u.avatarUrl == null
                       ? Text(u.username[0].toUpperCase())
@@ -493,8 +525,11 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
                     if (u.isBot)
                       const Padding(
                         padding: EdgeInsets.only(left: 6),
-                        child:
-                            Icon(Icons.smart_toy, size: 14, color: Colors.grey),
+                        child: Icon(
+                          Icons.smart_toy,
+                          size: 14,
+                          color: Colors.grey,
+                        ),
                       ),
                   ],
                 ),
@@ -505,7 +540,8 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
                   onPressed: () => Navigator.push(
                     context,
                     MaterialPageRoute(
-                        builder: (_) => UserProfileScreen(user: u)),
+                      builder: (_) => UserProfileScreen(user: u),
+                    ),
                   ),
                 ),
                 onTap: () {
@@ -518,15 +554,19 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
                 leading: CircleAvatar(
                   backgroundImage: ch.avatarUrl != null
                       ? CachedNetworkImageProvider(
-                          ApiConfig.resolveMedia(ch.avatarUrl!))
+                          ApiConfig.resolveMedia(ch.avatarUrl!),
+                        )
                       : null,
-                  child:
-                      ch.avatarUrl == null ? const Icon(Icons.campaign) : null,
+                  child: ch.avatarUrl == null
+                      ? const Icon(Icons.campaign)
+                      : null,
                 ),
                 title: Text(ch.name ?? 'Channel'),
-                subtitle: Text(ch.handle != null
-                    ? '@${ch.handle}'
-                    : (ch.description ?? 'Public channel')),
+                subtitle: Text(
+                  ch.handle != null
+                      ? '@${ch.handle}'
+                      : (ch.description ?? 'Public channel'),
+                ),
                 trailing: const Icon(Icons.campaign_outlined),
                 onTap: () {
                   close(context, null);

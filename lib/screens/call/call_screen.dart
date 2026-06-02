@@ -78,8 +78,15 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _pickAudioOutput() async {
     final cp = context.read<CallProvider>();
+    await cp.refreshAudioOutputs();
+    if (!mounted) return;
     final outputs = cp.audioOutputs;
-    if (outputs.isEmpty) return;
+    if (outputs.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No audio outputs are available')),
+      );
+      return;
+    }
     final selected = await showModalBottomSheet<String>(
       context: context,
       builder: (context) {
@@ -216,8 +223,10 @@ class _CallScreenState extends State<CallScreen> {
                     Text(
                       statusText,
                       textAlign: TextAlign.center,
-                      style:
-                          const TextStyle(color: Colors.white70, fontSize: 16),
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 16,
+                      ),
                     ),
                     Positioned(
                       left: 8,
@@ -225,8 +234,10 @@ class _CallScreenState extends State<CallScreen> {
                         key: const Key('minimize-call-button'),
                         tooltip: 'Minimize call',
                         onPressed: _minimize,
-                        icon: const Icon(Icons.expand_more,
-                            color: Colors.white70),
+                        icon: const Icon(
+                          Icons.expand_more,
+                          color: Colors.white70,
+                        ),
                       ),
                     ),
                   ],
@@ -307,25 +318,28 @@ class _ControlButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Material(
+          color: color ?? Colors.white24,
+          shape: const CircleBorder(),
+          child: SizedBox(
             width: 56,
             height: 56,
-            decoration: BoxDecoration(
-              color: color ?? Colors.white24,
-              shape: BoxShape.circle,
+            child: IconButton(
+              tooltip: label,
+              onPressed: onTap,
+              icon: Icon(icon, color: Colors.white, size: 26),
             ),
-            child: Icon(icon, color: Colors.white, size: 26),
           ),
-          const SizedBox(height: 6),
-          Text(label,
-              style: const TextStyle(color: Colors.white70, fontSize: 12)),
-        ],
-      ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          label,
+          style: const TextStyle(color: Colors.white70, fontSize: 12),
+        ),
+      ],
     );
   }
 }
@@ -375,7 +389,7 @@ class _MinimizedCallOverlay extends StatelessWidget {
             child: InkWell(
               onTap: () => cp.setCallMinimized(false),
               child: SizedBox(
-                height: 48,
+                height: CallProvider.minimizedCallBarHeight,
                 width: double.infinity,
                 child: Row(
                   children: [
@@ -424,8 +438,9 @@ class IncomingCallModal extends StatelessWidget {
     final name = incoming.remoteUsername != null
         ? '@${incoming.remoteUsername}'
         : 'Unknown caller';
-    final kind =
-        incoming.isVideo ? 'Incoming video call' : 'Incoming voice call';
+    final kind = incoming.isVideo
+        ? 'Incoming video call'
+        : 'Incoming voice call';
     final avatarUrl = incoming.remoteAvatarUrl;
     final initial = (incoming.remoteUsername?.isNotEmpty ?? false)
         ? incoming.remoteUsername!.substring(0, 1).toUpperCase()
@@ -445,21 +460,29 @@ class IncomingCallModal extends StatelessWidget {
                   radius: 64,
                   backgroundImage: avatarUrl != null
                       ? CachedNetworkImageProvider(
-                          ApiConfig.resolveMedia(avatarUrl))
+                          ApiConfig.resolveMedia(avatarUrl),
+                        )
                       : null,
                   child: avatarUrl == null
                       ? Text(initial, style: const TextStyle(fontSize: 48))
                       : null,
                 ),
                 const SizedBox(height: 20),
-                Text(name,
-                    style: const TextStyle(
-                        fontSize: 24, fontWeight: FontWeight.w600)),
+                Text(
+                  name,
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
                 const SizedBox(height: 6),
-                Text(kind,
-                    style: TextStyle(
-                        fontSize: 15,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                Text(
+                  kind,
+                  style: TextStyle(
+                    fontSize: 15,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
                 const Spacer(),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,

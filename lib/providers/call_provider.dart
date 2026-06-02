@@ -8,6 +8,8 @@ import '../services/notification_service.dart';
 
 /// Exposed to the UI; wraps CallService and notifies listeners on state changes.
 class CallProvider extends ChangeNotifier {
+  static const double minimizedCallBarHeight = 48;
+
   final CallService _callService;
   final CallAudioController _audio;
   final CallForegroundController _foreground;
@@ -96,6 +98,8 @@ class CallProvider extends ChangeNotifier {
   bool get isCameraEnabled => _cameraEnabled;
   List<CallAudioOutput> get audioOutputs => _audioOutputs;
   String? get selectedAudioOutputId => _selectedAudioOutputId;
+  double get minimizedContentTopInset =>
+      isInCall && _isCallMinimized ? minimizedCallBarHeight : 0;
 
   StreamSubscription? _sessionSub;
   StreamSubscription? _incomingSub;
@@ -159,6 +163,11 @@ class CallProvider extends ChangeNotifier {
       onEnd: hangup,
       onToggleMute: () => setMicMuted(!_micMuted),
     );
+    NotificationService.setIncomingCallHandlers(
+      onAnswer: () => unawaited(acceptIncomingCall()),
+      onDismiss: dismissIncomingCall,
+      onDecline: rejectIncomingCall,
+    );
   }
 
   void _handleForegroundAction(CallForegroundAction action) {
@@ -189,7 +198,9 @@ class CallProvider extends ChangeNotifier {
     final from = incoming.remoteUsername != null
         ? ' from @${incoming.remoteUsername}'
         : '';
-    NotificationService.showIncomingCall(body: 'Incoming $kind call$from');
+    unawaited(
+      NotificationService.showIncomingCall(body: 'Incoming $kind call$from'),
+    );
     _syncAudio();
     notifyListeners();
   }
@@ -203,7 +214,10 @@ class CallProvider extends ChangeNotifier {
     final from = missed.remoteUsername != null
         ? ' from @${missed.remoteUsername}'
         : '';
-    NotificationService.showMissedCall(body: 'Missed $kind call$from');
+    unawaited(NotificationService.cancelIncomingCall());
+    unawaited(
+      NotificationService.showMissedCall(body: 'Missed $kind call$from'),
+    );
     _syncAudio();
     notifyListeners();
   }
@@ -236,6 +250,7 @@ class CallProvider extends ChangeNotifier {
     if (incoming == null) return;
 
     _incomingCall = null;
+    unawaited(NotificationService.cancelIncomingCall());
     notifyListeners();
 
     await _callService.acceptIncomingCall(incoming);
@@ -251,6 +266,7 @@ class CallProvider extends ChangeNotifier {
     _incomingCall = null;
     _pendingOfferSdp = null;
     _callService.rejectCall(incoming);
+    unawaited(NotificationService.cancelIncomingCall());
     _syncAudio();
     notifyListeners();
   }
@@ -260,6 +276,7 @@ class CallProvider extends ChangeNotifier {
   /// times out into a missed call.
   void dismissIncomingCall() {
     _incomingCall = null;
+    unawaited(NotificationService.cancelIncomingCall());
     _syncAudio();
     notifyListeners();
   }
@@ -308,6 +325,13 @@ class CallProvider extends ChangeNotifier {
     if (_isCallMinimized == minimized) return;
     _isCallMinimized = minimized;
     notifyListeners();
+  }
+
+  void refreshActiveCallNotification() {
+    _activeCallNotificationSessionId = null;
+    _activeCallNotificationState = null;
+    _activeCallNotificationMuted = null;
+    _syncActiveCallNotification();
   }
 
   String get callStatusText {
@@ -366,6 +390,7 @@ class CallProvider extends ChangeNotifier {
     _foregroundActionSub?.cancel();
     _durationTicker?.cancel();
     NotificationService.setActiveCallHandlers();
+    NotificationService.setIncomingCallHandlers();
     unawaited(_foreground.stop());
     unawaited(NotificationService.cancelActiveCall());
     _audio.dispose();

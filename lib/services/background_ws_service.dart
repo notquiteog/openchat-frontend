@@ -10,6 +10,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config/api_config.dart';
 import 'background_notification_intent.dart' as intent_mapper;
 import 'background_notification_intent.dart' show NotificationIntent;
+import 'notification_service.dart';
 
 export 'background_notification_intent.dart'
     show NotificationIntent, NotificationIntentKind;
@@ -45,14 +46,13 @@ class BackgroundWsService {
     required bool isWeb,
     required bool isAndroid,
     required bool isIOS,
-  }) =>
-      !isWeb && isAndroid && !isIOS;
+  }) => !isWeb && isAndroid && !isIOS;
 
   static bool get _mobileOnly => supportsPersistentBackgroundWebSocket(
-        isWeb: kIsWeb,
-        isAndroid: !kIsWeb && Platform.isAndroid,
-        isIOS: !kIsWeb && Platform.isIOS,
-      );
+    isWeb: kIsWeb,
+    isAndroid: !kIsWeb && Platform.isAndroid,
+    isIOS: !kIsWeb && Platform.isIOS,
+  );
 
   static final _service = FlutterBackgroundService();
 
@@ -249,22 +249,20 @@ class BackgroundWsService {
   static NotificationIntent? notificationIntentFromRawLine(
     String rawLine, {
     required bool showSensitive,
-  }) =>
-      intent_mapper.notificationIntentFromRawLine(
-        rawLine,
-        showSensitive: showSensitive,
-      );
+  }) => intent_mapper.notificationIntentFromRawLine(
+    rawLine,
+    showSensitive: showSensitive,
+  );
 
   static NotificationIntent? notificationIntentFromEvent({
     required String type,
     required Map<String, dynamic> data,
     required bool showSensitive,
-  }) =>
-      intent_mapper.notificationIntentFromEvent(
-        type: type,
-        data: data,
-        showSensitive: showSensitive,
-      );
+  }) => intent_mapper.notificationIntentFromEvent(
+    type: type,
+    data: data,
+    showSensitive: showSensitive,
+  );
 
   static void _showIntent(
     FlutterLocalNotificationsPlugin notif,
@@ -294,17 +292,8 @@ class BackgroundWsService {
           id: intent.notificationId,
           title: intent.title,
           body: intent.body,
-          notificationDetails: const NotificationDetails(
-            android: AndroidNotificationDetails(
-              'bg_calls',
-              'Background Calls',
-              channelDescription:
-                  'Call notifications received while the app is in the background',
-              importance: Importance.max,
-              priority: Priority.max,
-            ),
-            iOS: DarwinNotificationDetails(),
-          ),
+          notificationDetails:
+              NotificationService.incomingCallNotificationDetails,
         );
         break;
     }
