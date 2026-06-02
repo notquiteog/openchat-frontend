@@ -78,6 +78,8 @@ class CallService {
   MediaStream? _localStream;
   MediaStream? _remoteStream;
   CallSession? _session;
+  bool _micMuted = false;
+  bool _cameraEnabled = true;
   final List<RTCIceCandidate> _pendingRemoteCandidates = [];
 
   final _sessionController = StreamController<CallSession?>.broadcast();
@@ -170,6 +172,7 @@ class CallService {
       await refreshIceServers();
       await _initPeerConnection(targetUserId, callId);
       await _captureLocalMedia(isVideo: isVideo);
+      _sessionController.add(_session);
 
       final offer = await _pc!.createOffer();
       await _pc!.setLocalDescription(offer);
@@ -219,6 +222,7 @@ class CallService {
       await refreshIceServers();
       await _initPeerConnection(session.remoteUserId, session.callId);
       await _captureLocalMedia(isVideo: session.isVideo);
+      _sessionController.add(_session);
 
       _ws.sendCallRinging(
         targetUserId: session.remoteUserId,
@@ -284,11 +288,11 @@ class CallService {
   void rejectCall(CallSession session) {
     _cancelRingTimer();
     _pendingIncoming = null;
+    _pendingOfferSdp = null;
     _ws.sendCallReject(
       targetUserId: session.remoteUserId,
       callId: session.callId,
     );
-    _incomingCallController.add(session..state = CallState.ended);
   }
 
   void hangup() {
@@ -305,10 +309,16 @@ class CallService {
   // ---- Media controls ----
 
   void setMicMuted(bool muted) {
-    _localStream?.getAudioTracks().forEach((t) => t.enabled = !muted);
+    _micMuted = muted;
+    final tracks = _localStream?.getAudioTracks() ?? const <MediaStreamTrack>[];
+    for (final track in tracks) {
+      track.enabled = !muted;
+      unawaited(Helper.setMicrophoneMute(muted, track).catchError((_) {}));
+    }
   }
 
   void setCameraEnabled(bool enabled) {
+    _cameraEnabled = enabled;
     _localStream?.getVideoTracks().forEach((t) => t.enabled = enabled);
   }
 
@@ -323,7 +333,7 @@ class CallService {
     try {
       final outputs = await Helper.audiooutputs;
       if (outputs.isNotEmpty) {
-        return outputs.where((d) => d.deviceId.isNotEmpty).map((d) {
+        final detected = outputs.where((d) => d.deviceId.isNotEmpty).map((d) {
           final label = _labelForAudioOutput(d.label);
           final deviceId = !kIsWeb &&
                   (defaultTargetPlatform == TargetPlatform.android ||
@@ -332,6 +342,12 @@ class CallService {
               : d.deviceId;
           return CallAudioOutput(deviceId: deviceId, label: label);
         }).toList(growable: false);
+        if (!kIsWeb &&
+            (defaultTargetPlatform == TargetPlatform.android ||
+                defaultTargetPlatform == TargetPlatform.iOS)) {
+          return _mergeMobileAudioOutputs(detected);
+        }
+        return detected;
       }
     } catch (_) {}
 
@@ -357,6 +373,10 @@ class CallService {
         }
         if (deviceId == 'earpiece') {
           await Helper.setSpeakerphoneOn(false);
+          return;
+        }
+        if (deviceId == 'bluetooth') {
+          await Helper.setSpeakerphoneOnButPreferBluetooth();
           return;
         }
       }
@@ -394,9 +414,27 @@ class CallService {
         return 'speaker';
       case 'Earpiece':
         return 'earpiece';
+      case 'Bluetooth':
+        return 'bluetooth';
+      case 'Headset':
+        return 'wired-headset';
       default:
         return fallback;
     }
+  }
+
+  List<CallAudioOutput> _mergeMobileAudioOutputs(
+    List<CallAudioOutput> detected,
+  ) {
+    final byId = <String, CallAudioOutput>{
+      'speaker': const CallAudioOutput(deviceId: 'speaker', label: 'Speaker'),
+      'earpiece':
+          const CallAudioOutput(deviceId: 'earpiece', label: 'Earpiece'),
+    };
+    for (final output in detected) {
+      byId[output.deviceId] = output;
+    }
+    return byId.values.toList(growable: false);
   }
 
   // ---- WebSocket events ----
@@ -404,46 +442,7 @@ class CallService {
   void _handleWsEvent(WsEvent event) {
     switch (event.type) {
       case WsEventType.callOffer:
-        final callId = event.data['call_id'] as String? ?? '';
-        final callerId = event.data['caller_id'] as String? ?? '';
-        final callerName = event.data['caller_username'] as String?;
-        final callerAvatar = event.data['caller_avatar'] as String?;
-        final conversationId = event.data['conversation_id'] as String?;
-        final sdp = event.data['sdp'] as String? ?? '';
-        final isVideo = event.data['is_video'] as bool? ?? false;
-
-        if (_session != null || _pendingIncoming != null) {
-          // Already in / handling a call — auto-reject the new one.
-          _ws.sendCallReject(targetUserId: callerId, callId: callId);
-          return;
-        }
-
-        final incoming = CallSession(
-          callId: callId,
-          remoteUserId: callerId,
-          remoteUsername: callerName,
-          remoteAvatarUrl: callerAvatar,
-          conversationId: conversationId,
-          isVideo: isVideo,
-          isIncoming: true,
-          state: CallState.ringing,
-        );
-        // Store the offer SDP so we can answer later
-        _pendingRemoteCandidates.clear();
-        _pendingOfferSdp = sdp;
-        _pendingIncoming = incoming;
-        _incomingCallController.add(incoming);
-
-        // Backstop: if the caller's hang-up never arrives, stop ringing on our
-        // side too and surface it as a missed call.
-        _ringTimer?.cancel();
-        _ringTimer = Timer(ringTimeout, () {
-          if (_session == null && _pendingIncoming == incoming) {
-            _pendingIncoming = null;
-            _pendingOfferSdp = null;
-            _missedCallController.add(incoming);
-          }
-        });
+        handleIncomingCallPayload(event.data);
 
       case WsEventType.callAnswer:
         final sdp = event.data['sdp'] as String? ?? '';
@@ -501,6 +500,51 @@ class CallService {
 
   String? _pendingOfferSdp;
   String? get pendingOfferSdp => _pendingOfferSdp;
+
+  bool handleIncomingCallPayload(Map<String, dynamic> data) {
+    final callId = data['call_id'] as String? ?? '';
+    final callerId = data['caller_id'] as String? ?? '';
+    final callerName = data['caller_username'] as String?;
+    final callerAvatar = data['caller_avatar'] as String?;
+    final conversationId = data['conversation_id'] as String?;
+    final sdp = data['sdp'] as String? ?? '';
+    final isVideo = switch (data['is_video']) {
+      true => true,
+      'true' => true,
+      _ => false,
+    };
+
+    if (callId.isEmpty || callerId.isEmpty || sdp.isEmpty) return false;
+    if (_session != null || _pendingIncoming != null) {
+      _ws.sendCallReject(targetUserId: callerId, callId: callId);
+      return false;
+    }
+
+    final incoming = CallSession(
+      callId: callId,
+      remoteUserId: callerId,
+      remoteUsername: callerName,
+      remoteAvatarUrl: callerAvatar,
+      conversationId: conversationId,
+      isVideo: isVideo,
+      isIncoming: true,
+      state: CallState.ringing,
+    );
+    _pendingRemoteCandidates.clear();
+    _pendingOfferSdp = sdp;
+    _pendingIncoming = incoming;
+    _incomingCallController.add(incoming);
+
+    _ringTimer?.cancel();
+    _ringTimer = Timer(ringTimeout, () {
+      if (_session == null && _pendingIncoming == incoming) {
+        _pendingIncoming = null;
+        _pendingOfferSdp = null;
+        _missedCallController.add(incoming);
+      }
+    });
+    return true;
+  }
 
   // ---- Internals ----
 
@@ -621,6 +665,8 @@ class CallService {
           : false,
     };
     _localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    setMicMuted(_micMuted);
+    setCameraEnabled(_cameraEnabled);
     // setSpeakerphoneOnButPreferBluetooth is mobile-only audio routing.
     // On Windows/desktop the underlying API does not exist, so skip it entirely
     // rather than relying on try/catch to absorb a potential native crash.
@@ -687,6 +733,8 @@ class CallService {
     _pendingOfferSdp = null;
     _pendingRemoteCandidates.clear();
     _session = null;
+    _micMuted = false;
+    _cameraEnabled = true;
 
     _sessionController.add(null);
     _remoteStreamController.add(null);

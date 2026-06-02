@@ -54,6 +54,27 @@ void main() {
   });
 
   group('Background websocket event notification mapping', () {
+    test('push failure messages identify the failed setup stage', () {
+      expect(
+        PushNotificationService.messageForInitFailure(
+          PushNotificationInitFailure.permissionDenied,
+        ),
+        contains('Notification permission'),
+      );
+      expect(
+        PushNotificationService.messageForInitFailure(
+          PushNotificationInitFailure.firebaseConfigMissing,
+        ),
+        contains('Firebase client config'),
+      );
+      expect(
+        PushNotificationService.messageForInitFailure(
+          PushNotificationInitFailure.backendRegistrationFailed,
+        ),
+        contains('backend'),
+      );
+    });
+
     test(
         'declares android notification channels used by push and background websocket',
         () {

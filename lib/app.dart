@@ -88,6 +88,9 @@ class _AppRootState extends State<_AppRoot> {
       auth.initialize();
       context.read<KeyProvider>().load();
       context.read<CallProvider>().addListener(_onCallChanged);
+      PushNotificationService.setForegroundIncomingCallHandler((data) {
+        context.read<CallProvider>().handleIncomingCallPush(data);
+      });
       _wsForegroundSub = context.read<WebSocketService>().events.listen(
             _onForegroundWsEvent,
           );
@@ -157,6 +160,7 @@ class _AppRootState extends State<_AppRoot> {
   void dispose() {
     _lifecycleListener?.dispose();
     _wsForegroundSub?.cancel();
+    PushNotificationService.setForegroundIncomingCallHandler(null);
     context.read<AuthProvider>().removeListener(_onAuthChanged);
     context.read<CallProvider>().removeListener(_onCallChanged);
     super.dispose();

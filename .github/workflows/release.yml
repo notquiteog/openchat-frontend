@@ -66,12 +66,13 @@ jobs:
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
           FIREBASE_OPTIONS_DART: ${{ secrets.FIREBASE_OPTIONS_DART }}
         run: |
-          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
-            echo "$GOOGLE_SERVICES_JSON" | base64 --decode > android/app/google-services.json
-          fi
-          if [ -n "$FIREBASE_OPTIONS_DART" ]; then
-            echo "$FIREBASE_OPTIONS_DART" | base64 --decode > lib/firebase_options.dart
-          fi
+          : "${GOOGLE_SERVICES_JSON:?GOOGLE_SERVICES_JSON secret is required for Android Firebase notifications}"
+          : "${FIREBASE_OPTIONS_DART:?FIREBASE_OPTIONS_DART secret is required for Firebase notifications}"
+          echo "$GOOGLE_SERVICES_JSON" | base64 --decode > android/app/google-services.json
+          echo "$FIREBASE_OPTIONS_DART" | base64 --decode > lib/firebase_options.dart
+          bash tool/validate_firebase_config.sh \
+            --firebase-options lib/firebase_options.dart \
+            --android-google-services android/app/google-services.json
 
       - name: Inject Android signing config
         env:
@@ -287,12 +288,13 @@ jobs:
           GOOGLE_SERVICE_INFO_PLIST: ${{ secrets.GOOGLE_SERVICE_INFO_PLIST }}
           FIREBASE_OPTIONS_DART: ${{ secrets.FIREBASE_OPTIONS_DART }}
         run: |
-          if [ -n "$GOOGLE_SERVICE_INFO_PLIST" ]; then
-            echo "$GOOGLE_SERVICE_INFO_PLIST" | base64 --decode > ios/Runner/GoogleService-Info.plist
-          fi
-          if [ -n "$FIREBASE_OPTIONS_DART" ]; then
-            echo "$FIREBASE_OPTIONS_DART" | base64 --decode > lib/firebase_options.dart
-          fi
+          : "${GOOGLE_SERVICE_INFO_PLIST:?GOOGLE_SERVICE_INFO_PLIST secret is required for iOS Firebase notifications}"
+          : "${FIREBASE_OPTIONS_DART:?FIREBASE_OPTIONS_DART secret is required for Firebase notifications}"
+          echo "$GOOGLE_SERVICE_INFO_PLIST" | base64 --decode > ios/Runner/GoogleService-Info.plist
+          echo "$FIREBASE_OPTIONS_DART" | base64 --decode > lib/firebase_options.dart
+          bash tool/validate_firebase_config.sh \
+            --firebase-options lib/firebase_options.dart \
+            --ios-google-service-info ios/Runner/GoogleService-Info.plist
 
       - name: Build iOS (no codesign)
         run: |

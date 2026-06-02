@@ -18,8 +18,6 @@ class CallScreen extends StatefulWidget {
 class _CallScreenState extends State<CallScreen> {
   final _localRenderer = RTCVideoRenderer();
   final _remoteRenderer = RTCVideoRenderer();
-  bool _micMuted = false;
-  bool _cameraOff = false;
   bool _renderersReady = false;
 
   @override
@@ -60,14 +58,12 @@ class _CallScreenState extends State<CallScreen> {
 
   void _toggleMic() {
     final callProvider = context.read<CallProvider>();
-    setState(() => _micMuted = !_micMuted);
-    callProvider.setMicMuted(_micMuted);
+    callProvider.setMicMuted(!callProvider.isMicMuted);
   }
 
   void _toggleCamera() {
     final callProvider = context.read<CallProvider>();
-    setState(() => _cameraOff = !_cameraOff);
-    callProvider.setCameraEnabled(!_cameraOff);
+    callProvider.setCameraEnabled(!callProvider.isCameraEnabled);
   }
 
   void _hangup() {
@@ -135,6 +131,8 @@ class _CallScreenState extends State<CallScreen> {
 
     final isVideo = session.isVideo;
     final statusText = callProvider.callStatusText;
+    final micMuted = callProvider.isMicMuted;
+    final cameraOff = !callProvider.isCameraEnabled;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -257,8 +255,8 @@ class _CallScreenState extends State<CallScreen> {
                   children: [
                     // Mic toggle
                     _ControlButton(
-                      icon: _micMuted ? Icons.mic_off : Icons.mic,
-                      label: _micMuted ? 'Unmute' : 'Mute',
+                      icon: micMuted ? Icons.mic_off : Icons.mic,
+                      label: micMuted ? 'Unmute' : 'Mute',
                       onTap: _toggleMic,
                     ),
 
@@ -271,8 +269,8 @@ class _CallScreenState extends State<CallScreen> {
                     // Camera toggle (video calls only)
                     if (isVideo)
                       _ControlButton(
-                        icon: _cameraOff ? Icons.videocam_off : Icons.videocam,
-                        label: _cameraOff ? 'Camera on' : 'Camera off',
+                        icon: cameraOff ? Icons.videocam_off : Icons.videocam,
+                        label: cameraOff ? 'Camera on' : 'Camera off',
                         onTap: _toggleCamera,
                       ),
 

@@ -2,6 +2,11 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
+@pragma('vm:entry-point')
+void openChatNotificationBackgroundHandler(NotificationResponse response) {
+  NotificationService.handleNotificationResponse(response);
+}
+
 /// Thin wrapper around flutter_local_notifications for OS-level notifications.
 /// The plugin has no Windows/web implementation, so every entry point is guarded
 /// by [_supported]; on unsupported platforms the call is a no-op.
@@ -64,6 +69,10 @@ class NotificationService {
   /// suppressed while the user is already reading it.
   static String? _activeConversationId;
   static const int _activeCallNotificationId = 2;
+  static const String _activeCallEndActionId = 'openchat_call_end';
+  static const String _activeCallMuteActionId = 'openchat_call_mute';
+  static VoidCallback? _activeCallEndHandler;
+  static VoidCallback? _activeCallToggleMuteHandler;
 
   static bool get _supported =>
       !kIsWeb &&
@@ -74,6 +83,30 @@ class NotificationService {
           Platform.isLinux);
 
   static void setActiveConversation(String? id) => _activeConversationId = id;
+  static void setActiveCallHandlers({
+    VoidCallback? onEnd,
+    VoidCallback? onToggleMute,
+  }) {
+    _activeCallEndHandler = onEnd;
+    _activeCallToggleMuteHandler = onToggleMute;
+  }
+
+  @visibleForTesting
+  static void debugHandleNotificationResponse(NotificationResponse response) =>
+      handleNotificationResponse(response);
+
+  static void handleNotificationResponse(NotificationResponse response) {
+    switch (response.actionId) {
+      case _activeCallEndActionId:
+        _activeCallEndHandler?.call();
+        return;
+      case _activeCallMuteActionId:
+        _activeCallToggleMuteHandler?.call();
+        return;
+      default:
+        return;
+    }
+  }
 
   static Future<void> init() async {
     if (!_supported || _inited || !_available) return;
@@ -88,9 +121,17 @@ class NotificationService {
             'openchat_active_call',
             actions: [
               DarwinNotificationAction.plain(
-                'openchat_call_end',
+                _activeCallMuteActionId,
+                'Mute',
+                options: {DarwinNotificationActionOption.foreground},
+              ),
+              DarwinNotificationAction.plain(
+                _activeCallEndActionId,
                 'End',
-                options: {DarwinNotificationActionOption.destructive},
+                options: {
+                  DarwinNotificationActionOption.destructive,
+                  DarwinNotificationActionOption.foreground,
+                },
               ),
             ],
           ),
@@ -109,7 +150,12 @@ class NotificationService {
       ),
     );
     try {
-      await _plugin.initialize(settings: settings);
+      await _plugin.initialize(
+        settings: settings,
+        onDidReceiveNotificationResponse: handleNotificationResponse,
+        onDidReceiveBackgroundNotificationResponse:
+            openChatNotificationBackgroundHandler,
+      );
       await _ensureAndroidChannels();
       _inited = true;
     } catch (e) {
@@ -156,11 +202,15 @@ class NotificationService {
       return granted ?? false;
     }
     if (Platform.isAndroid) {
-      final granted = await _plugin
-          .resolvePlatformSpecificImplementation<
-              AndroidFlutterLocalNotificationsPlugin>()
-          ?.requestNotificationsPermission();
-      return granted ?? true;
+      final android = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      if (android == null) return true;
+      final alreadyEnabled = await android.areNotificationsEnabled();
+      if (alreadyEnabled ?? false) return true;
+      final granted = await android.requestNotificationsPermission();
+      if (granted ?? false) return true;
+      final enabledAfterRequest = await android.areNotificationsEnabled();
+      return enabledAfterRequest ?? false;
     }
     return true;
   }
@@ -175,7 +225,7 @@ class NotificationService {
     if (_activeConversationId == conversationId) return;
     await init();
     if (!_available) return;
-    const details = NotificationDetails(
+    final details = NotificationDetails(
       android: AndroidNotificationDetails(
         'messages',
         'Messages',
@@ -228,11 +278,12 @@ class NotificationService {
   static Future<void> showActiveCall({
     required String title,
     required String body,
+    bool muted = false,
   }) async {
     if (!_supported) return;
     await init();
     if (!_available) return;
-    const details = NotificationDetails(
+    final details = NotificationDetails(
       android: AndroidNotificationDetails(
         'active_calls',
         'Active calls',
@@ -244,9 +295,17 @@ class NotificationService {
         usesChronometer: true,
         actions: [
           AndroidNotificationAction(
-            'openchat_call_end',
+            _activeCallMuteActionId,
+            muted ? 'Unmute' : 'Mute',
+            cancelNotification: false,
+            showsUserInterface: true,
+            semanticAction: muted ? SemanticAction.unmute : SemanticAction.mute,
+          ),
+          AndroidNotificationAction(
+            _activeCallEndActionId,
             'End',
             cancelNotification: false,
+            showsUserInterface: true,
           ),
         ],
       ),

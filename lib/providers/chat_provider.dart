@@ -48,16 +48,17 @@ class ChatProvider extends ChangeNotifier {
 
   StreamSubscription<WsEvent>? _wsSub;
   Timer? _pollTimer;
+  Future<void>? _conversationRefreshInFlight;
 
   ChatProvider(this._api, this._storage, this._ws, this._settings) {
     _wsSub = _ws.events.listen(_handleWsEvent);
     _ws.connect();
     _storage.getUserID().then((id) => _selfId = id);
-    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+    _pollTimer = Timer.periodic(const Duration(seconds: 8), (_) async {
       final token = await _storage.getAccessToken();
       if (token == null) return;
       unawaited(_ws.connect());
-      unawaited(loadConversations());
+      unawaited(refreshConversationsSilently());
     });
   }
 
@@ -71,31 +72,97 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> loadConversations() async {
-    _isLoading = true;
-    notifyListeners();
+  Future<void> loadConversations() => _loadConversations(silent: false);
+
+  Future<void> refreshConversationsSilently() {
+    _conversationRefreshInFlight ??= _loadConversations(
+      silent: true,
+    ).whenComplete(() {
+      _conversationRefreshInFlight = null;
+    });
+    return _conversationRefreshInFlight!;
+  }
+
+  Future<void> _loadConversations({required bool silent}) async {
+    if (!silent) {
+      _isLoading = true;
+      notifyListeners();
+    }
+    var changed = false;
     try {
       final convs = await _api.listConversations();
       final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
+      final next = <String, Conversation>{};
       for (final c in convs) {
+        var hydrated = c;
         final last = c.lastMessage;
         if (last != null) {
           _hydrateMessageSender(last);
           final cached = _cachedDecryptedMessage(last);
           if (cached != null) {
             _hydrateMessageSender(cached, fresh: last);
-            _conversations[c.id] = c.copyWith(lastMessage: cached);
+            hydrated = c.copyWith(lastMessage: cached);
+            next[c.id] = hydrated;
             continue;
           }
           await _tryDecrypt(last, privateKey);
         }
-        _conversations[c.id] = c;
+        next[c.id] = hydrated;
+      }
+      changed = hasConversationListChanges(
+        current: _conversations,
+        fresh: next.values,
+      );
+      if (changed || !silent) {
+        _conversations
+          ..clear()
+          ..addAll(next);
       }
     } finally {
-      _isLoading = false;
-      notifyListeners();
+      if (!silent) {
+        _isLoading = false;
+        notifyListeners();
+      } else if (changed) {
+        notifyListeners();
+      }
     }
   }
+
+  @visibleForTesting
+  static bool hasConversationListChanges({
+    required Map<String, Conversation> current,
+    required Iterable<Conversation> fresh,
+  }) {
+    final freshById = {for (final conv in fresh) conv.id: conv};
+    if (current.length != freshById.length) return true;
+    for (final entry in freshById.entries) {
+      final existing = current[entry.key];
+      if (existing == null) return true;
+      if (_conversationFingerprint(existing) !=
+          _conversationFingerprint(entry.value)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static Object _conversationFingerprint(Conversation conv) => (
+        conv.id,
+        conv.type,
+        conv.name,
+        conv.description,
+        conv.avatarUrl,
+        conv.backgroundUrl,
+        conv.archivedAt?.toIso8601String(),
+        conv.ownerOnlyPost,
+        conv.messageTtlSeconds,
+        conv.encryptionEnabled,
+        conv.unreadCount,
+        conv.members.length,
+        conv.lastMessage?.id,
+        conv.lastMessage?.encryptedPayload,
+        conv.lastMessage?.editedAt?.toIso8601String(),
+      );
 
   Future<void> loadMessages(String convID) async {
     try {
@@ -595,7 +662,7 @@ class ChatProvider extends ChangeNotifier {
         // the fresh conversation + members so it updates without a manual refresh.
         final convID = event.data['conversation_id'] as String?;
         if (convID != null) {
-          loadConversations();
+          unawaited(refreshConversationsSilently());
           if (_conversations.containsKey(convID)) {
             loadConversationMembers(convID);
           }
@@ -612,7 +679,7 @@ class ChatProvider extends ChangeNotifier {
             loadConversationMembers(convID);
           } else {
             // We were added to a new group — fetch the full list to surface it.
-            loadConversations();
+            unawaited(refreshConversationsSilently());
           }
         }
 
@@ -661,7 +728,7 @@ class ChatProvider extends ChangeNotifier {
       );
     } else if (!_isLoading) {
       // Message from a conversation we haven't seen yet (new DM or group).
-      loadConversations();
+      unawaited(refreshConversationsSilently());
     }
 
     if (_selfId != null &&

@@ -448,15 +448,15 @@ class _ImageBubbleState extends State<_ImageBubble> {
     return switch (_state) {
       _LoadState.done => GestureDetector(
           onTap: () => _showFullscreen(context),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: layout.maxImageHeight,
-            ),
+          child: SizedBox(
+            width: layout.maxBubbleWidth,
+            height: layout.reservedImageHeight,
             child: Stack(
               children: [
                 Image.memory(
                   _bytes!,
                   width: double.infinity,
+                  height: double.infinity,
                   fit: BoxFit.cover,
                   gaplessPlayback: true,
                 ),
@@ -486,12 +486,12 @@ class _ImageBubbleState extends State<_ImageBubble> {
           ),
         ),
       _LoadState.loading => Container(
-          height: 160,
+          height: layout.reservedImageHeight,
           color: Colors.black12,
           child: const Center(child: CircularProgressIndicator()),
         ),
       _LoadState.error => Container(
-          height: 100,
+          height: layout.reservedImageHeight,
           color: Colors.black12,
           child:
               const Center(child: Icon(Icons.broken_image, color: Colors.grey)),

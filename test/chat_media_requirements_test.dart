@@ -78,6 +78,9 @@ void main() {
     final layout = MessageImageLayout.forViewport(const Size(1440, 900));
     expect(layout.maxBubbleWidth, lessThanOrEqualTo(520));
     expect(layout.maxImageHeight, lessThanOrEqualTo(420));
+    expect(layout.reservedImageHeight, layout.maxBubbleWidth * 0.75);
+    expect(
+        layout.reservedImageHeight, lessThanOrEqualTo(layout.maxImageHeight));
     expect(MessageImageLayout.expandTooltip, 'Expand image');
   });
 

@@ -132,13 +132,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
         await settings.setWsBackgroundEnabled(false);
       }
 
-      final ok = await PushNotificationService.init(api: api);
+      final result = await PushNotificationService.initDetailed(api: api);
       if (!mounted) return;
-      if (!ok) {
-        messenger.showSnackBar(const SnackBar(
+      if (!result.success) {
+        messenger.showSnackBar(SnackBar(
           content: Text(
-            'Firebase is not configured on this server. '
-            'Ask your server operator to set up Firebase.',
+            PushNotificationService.messageForInitFailure(
+              result.failure ?? PushNotificationInitFailure.unsupported,
+            ),
           ),
         ));
         return;

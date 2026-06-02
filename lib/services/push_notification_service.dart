@@ -8,6 +8,30 @@ import 'api_service.dart';
 import 'background_notification_intent.dart';
 import 'notification_service.dart';
 
+enum PushNotificationInitFailure {
+  unsupported,
+  firebaseConfigMissing,
+  permissionDenied,
+  tokenUnavailable,
+  backendRegistrationFailed,
+}
+
+class PushNotificationInitResult {
+  final bool success;
+  final PushNotificationInitFailure? failure;
+
+  const PushNotificationInitResult._({
+    required this.success,
+    this.failure,
+  });
+
+  const PushNotificationInitResult.success()
+      : this._(success: true, failure: null);
+
+  const PushNotificationInitResult.failed(PushNotificationInitFailure failure)
+      : this._(success: false, failure: failure);
+}
+
 /// Firebase Cloud Messaging / APNs push notification service.
 ///
 /// Push notifications are OPTIONAL and off by default. They require:
@@ -28,12 +52,19 @@ class PushNotificationService {
 
   static StreamSubscription<RemoteMessage>? _foregroundSub;
   static StreamSubscription<String>? _tokenRefreshSub;
+  static void Function(Map<String, dynamic>)? _foregroundIncomingCallHandler;
 
   /// Push notifications are supported only on Android and iOS.
   /// Desktop platforms use the in-app WebSocket connection instead, and
   /// firebase_messaging does not support Linux.
   static bool get _supported =>
       !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+
+  static void setForegroundIncomingCallHandler(
+    void Function(Map<String, dynamic>)? handler,
+  ) {
+    _foregroundIncomingCallHandler = handler;
+  }
 
   // ── Startup ──────────────────────────────────────────────────────────────────
 
@@ -67,12 +98,27 @@ class PushNotificationService {
   ///  - the user denied notification permission
   ///  - the backend does not have FCM configured
   static Future<bool> init({required ApiService api}) async {
-    if (!_supported) return false;
+    final result = await initDetailed(api: api);
+    return result.success;
+  }
+
+  static Future<PushNotificationInitResult> initDetailed({
+    required ApiService api,
+  }) async {
+    if (!_supported) {
+      return const PushNotificationInitResult.failed(
+        PushNotificationInitFailure.unsupported,
+      );
+    }
 
     await NotificationService.init();
 
     final firebaseOk = await _initFirebase();
-    if (!firebaseOk) return false;
+    if (!firebaseOk) {
+      return const PushNotificationInitResult.failed(
+        PushNotificationInitFailure.firebaseConfigMissing,
+      );
+    }
 
     final messaging = FirebaseMessaging.instance;
 
@@ -87,7 +133,9 @@ class PushNotificationService {
     );
     if (settings.authorizationStatus != AuthorizationStatus.authorized &&
         settings.authorizationStatus != AuthorizationStatus.provisional) {
-      return false;
+      return const PushNotificationInitResult.failed(
+        PushNotificationInitFailure.permissionDenied,
+      );
     }
 
     // Obtain the FCM/APNs token. Fails when Firebase project ID is wrong or
@@ -97,9 +145,15 @@ class PushNotificationService {
       token = await messaging.getToken();
     } catch (e) {
       debugPrint('PushNotificationService: getToken failed — $e');
-      return false;
+      return const PushNotificationInitResult.failed(
+        PushNotificationInitFailure.tokenUnavailable,
+      );
     }
-    if (token == null) return false;
+    if (token == null) {
+      return const PushNotificationInitResult.failed(
+        PushNotificationInitFailure.tokenUnavailable,
+      );
+    }
 
     // Register with the OpenChat backend so it can send pushes to this device.
     try {
@@ -107,7 +161,9 @@ class PushNotificationService {
     } catch (e) {
       debugPrint(
           'PushNotificationService: backend token registration failed — $e');
-      return false;
+      return const PushNotificationInitResult.failed(
+        PushNotificationInitFailure.backendRegistrationFailed,
+      );
     }
 
     // Rotate the token on the backend whenever FCM issues a new one.
@@ -133,13 +189,31 @@ class PushNotificationService {
           );
           break;
         case NotificationIntentKind.incomingCall:
+          _foregroundIncomingCallHandler?.call(
+            Map<String, dynamic>.from(msg.data),
+          );
           NotificationService.showIncomingCall(body: intent.body);
           break;
       }
     });
 
     _registered = true;
-    return true;
+    return const PushNotificationInitResult.success();
+  }
+
+  static String messageForInitFailure(PushNotificationInitFailure failure) {
+    return switch (failure) {
+      PushNotificationInitFailure.unsupported =>
+        'Push notifications are only available on Android and iOS.',
+      PushNotificationInitFailure.firebaseConfigMissing =>
+        'Firebase client config is missing from this app build. Rebuild with the Firebase GitHub secrets injected.',
+      PushNotificationInitFailure.permissionDenied =>
+        'Notification permission is required before Firebase notifications can be enabled.',
+      PushNotificationInitFailure.tokenUnavailable =>
+        'Firebase could not issue a device token. Check the Firebase app IDs and google-services files.',
+      PushNotificationInitFailure.backendRegistrationFailed =>
+        'This device could not register with the OpenChat backend for push notifications.',
+    };
   }
 
   /// Unregister this device from push notifications. The backend stops sending

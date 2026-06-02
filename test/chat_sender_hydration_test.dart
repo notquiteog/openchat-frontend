@@ -99,4 +99,41 @@ void main() {
 
     expect(msg.sender?.bubbleColor, 0xFF42A5F5);
   });
+
+  test('silent conversation refresh ignores identical server snapshots', () {
+    final createdAt = DateTime.utc(2026, 6, 1);
+    final lastMessage = Message(
+      id: 'msg-1',
+      conversationId: 'conv-1',
+      senderId: 'user-2',
+      type: MessageType.text,
+      encryptedPayload: 'cipher',
+      signature: '',
+      createdAt: createdAt,
+    );
+    final current = Conversation(
+      id: 'conv-1',
+      type: ConversationType.dm,
+      createdAt: createdAt,
+      createdBy: 'user-1',
+      lastMessage: lastMessage,
+      unreadCount: 1,
+    );
+    final fresh = Conversation(
+      id: 'conv-1',
+      type: ConversationType.dm,
+      createdAt: createdAt,
+      createdBy: 'user-1',
+      lastMessage: lastMessage,
+      unreadCount: 1,
+    );
+
+    expect(
+      ChatProvider.hasConversationListChanges(
+        current: <String, Conversation>{'conv-1': current},
+        fresh: <Conversation>[fresh],
+      ),
+      isFalse,
+    );
+  });
 }

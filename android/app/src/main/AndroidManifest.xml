@@ -57,6 +57,11 @@
             android:foregroundServiceType="remoteMessaging"
             android:stopWithTask="false"
             tools:replace="android:exported" />
+        <service
+            android:name=".CallForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|camera"
+            android:stopWithTask="false" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

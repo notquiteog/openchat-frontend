@@ -12,6 +12,9 @@ class MessageImageLayout {
     required this.maxImageHeight,
   });
 
+  double get reservedImageHeight =>
+      math.min(maxImageHeight, maxBubbleWidth * 0.75);
+
   factory MessageImageLayout.forViewport(Size viewport) {
     final width = viewport.width;
     final height = viewport.height;

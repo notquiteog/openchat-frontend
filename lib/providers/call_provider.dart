@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../services/call_audio.dart';
+import '../services/call_foreground_service.dart';
 import '../services/call_service.dart';
 import '../services/notification_service.dart';
 
@@ -9,13 +10,18 @@ import '../services/notification_service.dart';
 class CallProvider extends ChangeNotifier {
   final CallService _callService;
   final CallAudioController _audio;
+  final CallForegroundController _foreground;
   final DateTime Function() _now;
   Timer? _durationTicker;
   bool _isCallMinimized = false;
+  bool _micMuted = false;
+  bool _cameraEnabled = true;
   List<CallAudioOutput> _audioOutputs = const [];
   String? _selectedAudioOutputId;
   CallState? _lastSessionState;
   String? _activeCallNotificationSessionId;
+  CallState? _activeCallNotificationState;
+  bool? _activeCallNotificationMuted;
   bool _disposed = false;
 
   /// Plays/stops the ringing/connecting tones to match the current call.
@@ -43,20 +49,32 @@ class CallProvider extends ChangeNotifier {
     if (s == null || s.state == CallState.ended) {
       if (_activeCallNotificationSessionId != null) {
         _activeCallNotificationSessionId = null;
+        _activeCallNotificationState = null;
+        _activeCallNotificationMuted = null;
+        unawaited(_foreground.stop());
         unawaited(NotificationService.cancelActiveCall());
       }
       return;
     }
 
     final shouldRefresh = _activeCallNotificationSessionId != s.callId ||
-        s.state != _lastSessionState;
+        _activeCallNotificationState != s.state ||
+        _activeCallNotificationMuted != _micMuted;
     if (!shouldRefresh) return;
     _activeCallNotificationSessionId = s.callId;
+    _activeCallNotificationState = s.state;
+    _activeCallNotificationMuted = _micMuted;
     final name = s.remoteUsername != null ? '@${s.remoteUsername}' : 'OpenChat';
     final kind = s.isVideo ? 'Video call' : 'Voice call';
+    unawaited(_foreground.start(
+      title: '$kind with $name',
+      body: callStatusText,
+      isVideo: s.isVideo,
+    ));
     unawaited(NotificationService.showActiveCall(
       title: '$kind with $name',
       body: callStatusText,
+      muted: _micMuted,
     ));
   }
 
@@ -64,6 +82,8 @@ class CallProvider extends ChangeNotifier {
   MediaStream? get localStream => _callService.currentLocalStream;
   MediaStream? get remoteStream => _callService.currentRemoteStream;
   bool get isCallMinimized => _isCallMinimized;
+  bool get isMicMuted => _micMuted;
+  bool get isCameraEnabled => _cameraEnabled;
   List<CallAudioOutput> get audioOutputs => _audioOutputs;
   String? get selectedAudioOutputId => _selectedAudioOutputId;
 
@@ -89,13 +109,23 @@ class CallProvider extends ChangeNotifier {
   CallProvider(
     this._callService, {
     CallAudioController? audio,
+    CallForegroundController? foreground,
     DateTime Function()? now,
   })  : _audio = audio ?? CallAudio(),
+        _foreground = foreground ?? const CallForegroundService(),
         _now = now ?? DateTime.now {
     _sessionSub = _callService.sessionStream.listen((_) {
       final s = session;
       if (s == null || s.state == CallState.ended) {
+        if (_micMuted) {
+          _callService.setMicMuted(false);
+        }
+        if (!_cameraEnabled) {
+          _callService.setCameraEnabled(true);
+        }
         _isCallMinimized = false;
+        _micMuted = false;
+        _cameraEnabled = true;
       }
       if (s?.state == CallState.connected &&
           _lastSessionState != CallState.connected) {
@@ -110,6 +140,10 @@ class CallProvider extends ChangeNotifier {
     _incomingSub = _callService.incomingCalls.listen(_onIncomingCall);
     _missedSub = _callService.missedCalls.listen(_onMissedCall);
     _endedSub = _callService.callEnded.listen(_onCallEnded);
+    NotificationService.setActiveCallHandlers(
+      onEnd: hangup,
+      onToggleMute: () => setMicMuted(!_micMuted),
+    );
   }
 
   void _onCallEnded(CallEndedEvent ev) {
@@ -121,6 +155,7 @@ class CallProvider extends ChangeNotifier {
   void clearEndedCall() => _lastEndedCall = null;
 
   void _onIncomingCall(CallSession incoming) {
+    if (incoming.state == CallState.ended) return;
     _incomingCall = incoming;
     _pendingOfferSdp = _callService.pendingOfferSdp;
     final kind = incoming.isVideo ? 'video' : 'voice';
@@ -186,6 +221,7 @@ class CallProvider extends ChangeNotifier {
     final incoming = _incomingCall;
     if (incoming == null) return;
     _incomingCall = null;
+    _pendingOfferSdp = null;
     _callService.rejectCall(incoming);
     _syncAudio();
     notifyListeners();
@@ -205,12 +241,34 @@ class CallProvider extends ChangeNotifier {
   void hangup() {
     _callService.hangup();
     _activeCallNotificationSessionId = null;
+    _activeCallNotificationState = null;
+    _activeCallNotificationMuted = null;
+    unawaited(_foreground.stop());
     unawaited(NotificationService.cancelActiveCall());
     notifyListeners();
   }
 
-  void setMicMuted(bool muted) => _callService.setMicMuted(muted);
-  void setCameraEnabled(bool enabled) => _callService.setCameraEnabled(enabled);
+  void setMicMuted(bool muted) {
+    if (_micMuted == muted) return;
+    _micMuted = muted;
+    _callService.setMicMuted(muted);
+    _syncActiveCallNotification();
+    notifyListeners();
+  }
+
+  void setCameraEnabled(bool enabled) {
+    if (_cameraEnabled == enabled) return;
+    _cameraEnabled = enabled;
+    _callService.setCameraEnabled(enabled);
+    notifyListeners();
+  }
+
+  bool handleIncomingCallPush(Map<String, dynamic> data) {
+    final handled = _callService.handleIncomingCallPayload(data);
+    if (!handled) return false;
+    notifyListeners();
+    return true;
+  }
 
   bool get isInCall => session != null && session!.state != CallState.ended;
 
@@ -278,6 +336,8 @@ class CallProvider extends ChangeNotifier {
     _missedSub?.cancel();
     _endedSub?.cancel();
     _durationTicker?.cancel();
+    NotificationService.setActiveCallHandlers();
+    unawaited(_foreground.stop());
     unawaited(NotificationService.cancelActiveCall());
     _audio.dispose();
     super.dispose();
