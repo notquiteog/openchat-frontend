@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -20,15 +19,15 @@ class DesktopStartupService {
     databaseFactory = databaseFactoryFfi;
   }
 
-  static void startTray({
+  static Future<void> startTray({
     DesktopTrayInitializer? initializer,
     Duration timeout = trayStartupTimeout,
-  }) {
+  }) async {
     if (!supported) return;
-    unawaited(runTrayInitializerWithTimeout(
+    await runTrayInitializerWithTimeout(
       initializer ?? DesktopTrayService().init,
       timeout,
-    ));
+    );
   }
 
   @visibleForTesting

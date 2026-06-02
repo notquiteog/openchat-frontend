@@ -500,6 +500,18 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> deleteOwnMessages(String convID) async {
+    await _api.deleteOwnMessages(convID);
+    _messages.remove(convID);
+    notifyListeners();
+  }
+
+  Future<void> deleteAllConversationMessages(String convID) async {
+    await _api.deleteAllConversationMessages(convID);
+    _messages.remove(convID);
+    notifyListeners();
+  }
+
   Future<void> leaveConversation(String convID,
       {bool deleteOwnMessages = false}) async {
     await _api.leaveConversation(

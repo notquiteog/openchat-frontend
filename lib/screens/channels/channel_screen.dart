@@ -274,6 +274,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   List<Message> _posts = [];
   bool _isSubscribed = false;
   bool _isAdmin = false;
+  bool _isModerator = false;
   bool _loading = true;
   bool _archived = false;
   bool _showStickers = false;
@@ -308,6 +309,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       final me = members.where((m) => m.userId == currentUserId).firstOrNull;
       _isSubscribed = me != null;
       _isAdmin = me?.isAdmin ?? false;
+      _isModerator = me?.isModerator ?? false;
 
       // Load posts
       final posts = await api.getChannelPosts(channel.id);
@@ -364,26 +366,177 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   Future<void> _unsubscribe() async {
     final api = context.read<ApiService>();
     final chat = context.read<ChatProvider>();
-    final confirmed = await showDialog<bool>(
+    final action = await showDialog<String>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Unsubscribe'),
         content: Text('Leave ${channel.name}?'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
+              onPressed: () => Navigator.pop(context),
               child: const Text('Cancel')),
           TextButton(
-              onPressed: () => Navigator.pop(context, true),
+              onPressed: () => Navigator.pop(context, 'leave'),
               child: const Text('Leave')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, 'leave_delete'),
+            child: const Text('Leave + delete mine'),
+          ),
         ],
       ),
     );
-    if (confirmed != true) return;
+    if (action == null) return;
+    if (action == 'leave_delete') {
+      await api.deleteOwnChannelMessages(channel.id);
+    }
     await api.unsubscribeChannel(channel.id);
     if (!mounted) return;
     setState(() => _isSubscribed = false);
     chat.loadConversations();
+  }
+
+  Future<void> _deleteOwnChannelMessages() async {
+    final api = context.read<ApiService>();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete your posts?'),
+        content:
+            const Text('This deletes all messages you sent in this channel.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete mine'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await api.deleteOwnChannelMessages(channel.id);
+      if (mounted) await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+      }
+    }
+  }
+
+  Future<void> _showChannelUserActions(Message msg) async {
+    final user = msg.sender;
+    if (user == null) return;
+    final canModerateUser = (_isAdmin || _isModerator) &&
+        msg.senderId != context.read<AuthProvider>().currentUser?.id;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.person_outline),
+              title: Text('@${user.username}'),
+              onTap: () => Navigator.pop(context, 'profile'),
+            ),
+            if (canModerateUser) ...[
+              ListTile(
+                leading: const Icon(Icons.delete_outline, color: Colors.red),
+                title: const Text('Delete their messages',
+                    style: TextStyle(color: Colors.red)),
+                onTap: () => Navigator.pop(context, 'delete_messages'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.block, color: Colors.red),
+                title: const Text('Ban from channel',
+                    style: TextStyle(color: Colors.red)),
+                onTap: () => Navigator.pop(context, 'ban'),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case 'profile':
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => UserProfileScreen(user: user)),
+        );
+      case 'delete_messages':
+        await _deleteChannelUserMessages(msg.senderId, user.username);
+      case 'ban':
+        await _banChannelUser(msg.senderId, user.username);
+    }
+  }
+
+  Future<void> _deleteChannelUserMessages(
+      String userID, String username) async {
+    final api = context.read<ApiService>();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Delete @$username\'s messages?'),
+        content: const Text('This removes all messages this user sent here.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await api.deleteChannelUserMessages(channel.id, userID);
+      if (mounted) await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+      }
+    }
+  }
+
+  Future<void> _banChannelUser(String userID, String username) async {
+    final api = context.read<ApiService>();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Ban @$username?'),
+        content: const Text('They will be removed and blocked from rejoining.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Ban'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await api.banChannelUser(channel.id, userID);
+      if (mounted) await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Ban failed: $e')));
+      }
+    }
   }
 
   Future<void> _archiveChannel() async {
@@ -979,6 +1132,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   ChannelSettingsAction.encryption => channel.encryptionEnabled
                       ? Icons.lock_outline
                       : Icons.lock_open_outlined,
+                  ChannelSettingsAction.deleteOwnMessages =>
+                    Icons.delete_sweep_outlined,
                 }),
                 title: Text(switch (item) {
                   ChannelSettingsAction.appearance => 'Chat appearance',
@@ -989,6 +1144,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   ChannelSettingsAction.encryption => channel.encryptionEnabled
                       ? 'Turn encryption off'
                       : 'Turn encryption on',
+                  ChannelSettingsAction.deleteOwnMessages =>
+                    'Delete my messages',
                 }),
                 onTap: () => Navigator.pop(context, item),
               ),
@@ -1008,6 +1165,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         _setDisappearing();
       case ChannelSettingsAction.encryption:
         _setEncryption();
+      case ChannelSettingsAction.deleteOwnMessages:
+        _deleteOwnChannelMessages();
     }
   }
 
@@ -1250,13 +1409,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                                 showAvatar: showAvatar,
                                 meBubbleColor: meBubbleColor,
                                 onAvatarTap: msg.sender != null
-                                    ? () => Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder: (_) => UserProfileScreen(
-                                                user: msg.sender!),
-                                          ),
-                                        )
+                                    ? () => _showChannelUserActions(msg)
                                     : null,
                               ),
                             );

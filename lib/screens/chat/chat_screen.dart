@@ -733,6 +733,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 _setDisappearing(context);
               case 'encryption':
                 _setEncryption(context);
+              case 'delete_messages':
+                _deleteGroupMessages(context, currentUserID);
               case 'delete':
                 _deleteConversation(context);
             }
@@ -762,6 +764,12 @@ class _ChatScreenState extends State<ChatScreen> {
             if (_canSetConversationBackground(currentUserID))
               const PopupMenuItem(
                   value: 'background', child: Text('Set chat background')),
+            if (conv.isGroup)
+              const PopupMenuItem(
+                value: 'delete_messages',
+                child: Text('Delete messages',
+                    style: TextStyle(color: Colors.red)),
+              ),
             PopupMenuItem(
               value: 'delete',
               child: Text(exitLabel, style: const TextStyle(color: Colors.red)),
@@ -1262,21 +1270,50 @@ class _ChatScreenState extends State<ChatScreen> {
                             : null,
                       ),
                       title: Text(isSelf ? '$username (you)' : username),
-                      trailing: m.isAdmin
-                          ? const Chip(
-                              label: Text('Admin'),
-                              padding: EdgeInsets.zero,
-                              visualDensity: VisualDensity.compact,
+                      subtitle: m.isAdmin ? const Text('Admin') : null,
+                      trailing: isAdmin && !isSelf
+                          ? PopupMenuButton<String>(
+                              icon: const Icon(Icons.more_vert),
+                              onSelected: (value) {
+                                switch (value) {
+                                  case 'make_admin':
+                                    _setGroupMemberRole(
+                                      context,
+                                      m.userId,
+                                      username,
+                                      MemberRole.admin,
+                                    );
+                                  case 'make_member':
+                                    _setGroupMemberRole(
+                                      context,
+                                      m.userId,
+                                      username,
+                                      MemberRole.member,
+                                    );
+                                  case 'remove':
+                                    _removeMember(context, m.userId, username);
+                                }
+                              },
+                              itemBuilder: (_) => [
+                                if (!m.isAdmin)
+                                  const PopupMenuItem(
+                                    value: 'make_admin',
+                                    child: Text('Make admin'),
+                                  ),
+                                if (m.isAdmin)
+                                  const PopupMenuItem(
+                                    value: 'make_member',
+                                    child: Text('Remove admin'),
+                                  ),
+                                const PopupMenuDivider(),
+                                const PopupMenuItem(
+                                  value: 'remove',
+                                  child: Text('Remove member',
+                                      style: TextStyle(color: Colors.red)),
+                                ),
+                              ],
                             )
-                          : (isAdmin && !isSelf)
-                              ? IconButton(
-                                  icon: const Icon(Icons.remove_circle_outline,
-                                      color: Colors.red, size: 20),
-                                  tooltip: 'Remove member',
-                                  onPressed: () => _removeMember(
-                                      context, m.userId, username),
-                                )
-                              : null,
+                          : null,
                       onTap: m.user != null
                           ? () {
                               Navigator.pop(context);
@@ -1419,6 +1456,52 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Future<void> _setGroupMemberRole(
+    BuildContext context,
+    String userID,
+    String username,
+    MemberRole role,
+  ) async {
+    final api = context.read<ApiService>();
+    final chat = context.read<ChatProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    final roleLabel = role == MemberRole.admin ? 'admin' : 'member';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Make @$username $roleLabel?'),
+        content: Text(
+          role == MemberRole.admin
+              ? 'They will be able to manage group members and settings.'
+              : 'They will lose group admin permissions.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await api.setConversationMemberRole(conv.id, userID, roleLabel);
+      if (mounted) {
+        await chat.loadConversationMembers(conv.id);
+        messenger.showSnackBar(
+          SnackBar(content: Text('@$username is now a $roleLabel')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+      }
+    }
+  }
+
   Future<void> _removeMember(
       BuildContext context, String userID, String username) async {
     final api = context.read<ApiService>();
@@ -1453,6 +1536,60 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) {
         messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
       }
+    }
+  }
+
+  Future<void> _deleteGroupMessages(
+      BuildContext context, String currentUserId) async {
+    final isAdmin =
+        conv.members.any((m) => m.userId == currentUserId && m.isAdmin);
+    final chat = context.read<ChatProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete messages'),
+        content: Text(
+          isAdmin
+              ? 'Choose which messages to remove from this group.'
+              : 'Delete all messages you have sent in this group?',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'mine'),
+            child: const Text('Delete mine'),
+          ),
+          if (isAdmin)
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () => Navigator.pop(ctx, 'all'),
+              child: const Text('Delete everyone'),
+            ),
+          if (isAdmin)
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              onPressed: () => Navigator.pop(ctx, 'group'),
+              child: const Text('Delete group'),
+            ),
+        ],
+      ),
+    );
+    if (action == null || !mounted) return;
+    try {
+      switch (action) {
+        case 'mine':
+          await chat.deleteOwnMessages(conv.id);
+        case 'all':
+          await chat.deleteAllConversationMessages(conv.id);
+        case 'group':
+          await chat.deleteConversation(conv.id);
+          if (mounted) navigator.pop();
+      }
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
     }
   }
 

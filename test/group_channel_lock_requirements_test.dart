@@ -111,6 +111,8 @@ void main() {
           placement.moderationMenu, contains(ChannelModerationAction.archive));
       expect(
           placement.settingsMenu, contains(ChannelSettingsAction.appearance));
+      expect(placement.settingsMenu,
+          contains(ChannelSettingsAction.deleteOwnMessages));
       expect(
           placement.settingsMenu, contains(ChannelSettingsAction.autoDelete));
       expect(
@@ -127,7 +129,10 @@ void main() {
       );
 
       expect(placement.topBar, contains(ChannelTopBarAction.settings));
-      expect(placement.settingsMenu, [ChannelSettingsAction.appearance]);
+      expect(placement.settingsMenu, [
+        ChannelSettingsAction.appearance,
+        ChannelSettingsAction.deleteOwnMessages,
+      ]);
     });
 
     test('archived channel exposes unarchive and delete in moderation menu',

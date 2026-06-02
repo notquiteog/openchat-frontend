@@ -15,6 +15,7 @@ class CallProvider extends ChangeNotifier {
   List<CallAudioOutput> _audioOutputs = const [];
   String? _selectedAudioOutputId;
   CallState? _lastSessionState;
+  String? _activeCallNotificationSessionId;
   bool _disposed = false;
 
   /// Plays/stops the ringing/connecting tones to match the current call.
@@ -35,6 +36,28 @@ class CallProvider extends ChangeNotifier {
         if (!_disposed) notifyListeners();
       });
     }
+  }
+
+  void _syncActiveCallNotification() {
+    final s = session;
+    if (s == null || s.state == CallState.ended) {
+      if (_activeCallNotificationSessionId != null) {
+        _activeCallNotificationSessionId = null;
+        unawaited(NotificationService.cancelActiveCall());
+      }
+      return;
+    }
+
+    final shouldRefresh = _activeCallNotificationSessionId != s.callId ||
+        s.state != _lastSessionState;
+    if (!shouldRefresh) return;
+    _activeCallNotificationSessionId = s.callId;
+    final name = s.remoteUsername != null ? '@${s.remoteUsername}' : 'OpenChat';
+    final kind = s.isVideo ? 'Video call' : 'Voice call';
+    unawaited(NotificationService.showActiveCall(
+      title: '$kind with $name',
+      body: callStatusText,
+    ));
   }
 
   CallSession? get session => _callService.currentSession;
@@ -78,9 +101,10 @@ class CallProvider extends ChangeNotifier {
           _lastSessionState != CallState.connected) {
         unawaited(refreshAudioOutputs());
       }
-      _lastSessionState = s?.state;
       _syncAudio();
       _syncDurationTicker();
+      _syncActiveCallNotification();
+      _lastSessionState = s?.state;
       notifyListeners();
     });
     _incomingSub = _callService.incomingCalls.listen(_onIncomingCall);
@@ -100,7 +124,9 @@ class CallProvider extends ChangeNotifier {
     _incomingCall = incoming;
     _pendingOfferSdp = _callService.pendingOfferSdp;
     final kind = incoming.isVideo ? 'video' : 'voice';
-    final from = incoming.remoteUsername != null ? ' from @${incoming.remoteUsername}' : '';
+    final from = incoming.remoteUsername != null
+        ? ' from @${incoming.remoteUsername}'
+        : '';
     NotificationService.showIncomingCall(body: 'Incoming $kind call$from');
     _syncAudio();
     notifyListeners();
@@ -178,6 +204,8 @@ class CallProvider extends ChangeNotifier {
 
   void hangup() {
     _callService.hangup();
+    _activeCallNotificationSessionId = null;
+    unawaited(NotificationService.cancelActiveCall());
     notifyListeners();
   }
 
@@ -250,6 +278,7 @@ class CallProvider extends ChangeNotifier {
     _missedSub?.cancel();
     _endedSub?.cancel();
     _durationTicker?.cancel();
+    unawaited(NotificationService.cancelActiveCall());
     _audio.dispose();
     super.dispose();
   }

@@ -19,6 +19,7 @@ enum ChannelSettingsAction {
   background,
   autoDelete,
   encryption,
+  deleteOwnMessages,
 }
 
 class ChannelActionPlacement {
@@ -65,6 +66,7 @@ class ChannelActionPolicy {
     if (isSubscribed || isAdmin) {
       topBar.add(ChannelTopBarAction.settings);
       settings.add(ChannelSettingsAction.appearance);
+      settings.add(ChannelSettingsAction.deleteOwnMessages);
     }
 
     if (isAdmin) {

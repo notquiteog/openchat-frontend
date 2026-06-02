@@ -9,6 +9,7 @@ class NotificationService {
   static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
   static bool _inited = false;
+  static bool _available = true;
   static const List<AndroidNotificationChannel> _androidChannels = [
     AndroidNotificationChannel(
       'messages',
@@ -27,6 +28,12 @@ class NotificationService {
       'Missed calls',
       description: 'Notifications for missed voice and video calls',
       importance: Importance.high,
+    ),
+    AndroidNotificationChannel(
+      'active_calls',
+      'Active calls',
+      description: 'Ongoing OpenChat voice and video calls',
+      importance: Importance.low,
     ),
     AndroidNotificationChannel(
       'bg_messages',
@@ -56,6 +63,7 @@ class NotificationService {
   /// Set to the currently open conversation ID so notifications for it are
   /// suppressed while the user is already reading it.
   static String? _activeConversationId;
+  static const int _activeCallNotificationId = 2;
 
   static bool get _supported =>
       !kIsWeb &&
@@ -68,29 +76,46 @@ class NotificationService {
   static void setActiveConversation(String? id) => _activeConversationId = id;
 
   static Future<void> init() async {
-    if (!_supported || _inited) return;
-    const settings = InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+    if (!_supported || _inited || !_available) return;
+    final settings = InitializationSettings(
+      android: const AndroidInitializationSettings('@mipmap/ic_launcher'),
       iOS: DarwinInitializationSettings(
         requestAlertPermission: false,
         requestBadgePermission: false,
         requestSoundPermission: false,
+        notificationCategories: [
+          DarwinNotificationCategory(
+            'openchat_active_call',
+            actions: [
+              DarwinNotificationAction.plain(
+                'openchat_call_end',
+                'End',
+                options: {DarwinNotificationActionOption.destructive},
+              ),
+            ],
+          ),
+        ],
       ),
-      macOS: DarwinInitializationSettings(
+      macOS: const DarwinInitializationSettings(
         requestAlertPermission: false,
         requestBadgePermission: false,
         requestSoundPermission: false,
       ),
-      linux: LinuxInitializationSettings(defaultActionName: 'Open'),
-      windows: WindowsInitializationSettings(
+      linux: const LinuxInitializationSettings(defaultActionName: 'Open'),
+      windows: const WindowsInitializationSettings(
         appName: 'OpenChat',
         appUserModelId: 'OpenChat.Client.Desktop',
         guid: '4f8aa98f-306e-4f6d-84ee-e1206cd6b623',
       ),
     );
-    await _plugin.initialize(settings: settings);
-    await _ensureAndroidChannels();
-    _inited = true;
+    try {
+      await _plugin.initialize(settings: settings);
+      await _ensureAndroidChannels();
+      _inited = true;
+    } catch (e) {
+      _available = false;
+      debugPrint('NotificationService unavailable: $e');
+    }
   }
 
   static Future<void> _ensureAndroidChannels() async {
@@ -115,6 +140,7 @@ class NotificationService {
   static Future<bool> requestPermission() async {
     if (!_supported) return true;
     await init();
+    if (!_available) return false;
     if (Platform.isIOS) {
       final granted = await _plugin
           .resolvePlatformSpecificImplementation<
@@ -148,6 +174,7 @@ class NotificationService {
     if (!_supported) return;
     if (_activeConversationId == conversationId) return;
     await init();
+    if (!_available) return;
     const details = NotificationDetails(
       android: AndroidNotificationDetails(
         'messages',
@@ -175,6 +202,7 @@ class NotificationService {
   static Future<void> showIncomingCall({required String body}) async {
     if (!_supported) return;
     await init();
+    if (!_available) return;
     const details = NotificationDetails(
       android: AndroidNotificationDetails(
         'calls',
@@ -197,9 +225,61 @@ class NotificationService {
         notificationDetails: details);
   }
 
+  static Future<void> showActiveCall({
+    required String title,
+    required String body,
+  }) async {
+    if (!_supported) return;
+    await init();
+    if (!_available) return;
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'active_calls',
+        'Active calls',
+        channelDescription: 'Ongoing OpenChat voice and video calls',
+        importance: Importance.low,
+        priority: Priority.low,
+        ongoing: true,
+        autoCancel: false,
+        usesChronometer: true,
+        actions: [
+          AndroidNotificationAction(
+            'openchat_call_end',
+            'End',
+            cancelNotification: false,
+          ),
+        ],
+      ),
+      iOS: DarwinNotificationDetails(
+        categoryIdentifier: 'openchat_active_call',
+        presentSound: false,
+      ),
+      macOS: DarwinNotificationDetails(
+        categoryIdentifier: 'openchat_active_call',
+        presentSound: false,
+      ),
+      linux: LinuxNotificationDetails(),
+      windows: WindowsNotificationDetails(),
+    );
+    await _plugin.show(
+      id: _activeCallNotificationId,
+      title: title,
+      body: body,
+      notificationDetails: details,
+    );
+  }
+
+  static Future<void> cancelActiveCall() async {
+    if (!_supported) return;
+    await init();
+    if (!_available) return;
+    await _plugin.cancel(id: _activeCallNotificationId);
+  }
+
   static Future<void> showMissedCall({required String body}) async {
     if (!_supported) return;
     await init();
+    if (!_available) return;
     const details = NotificationDetails(
       android: AndroidNotificationDetails(
         'missed_calls',

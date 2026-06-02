@@ -297,6 +297,12 @@ class ApiService {
     await _delete('/api/v1/conversations/$convID/members/$userID');
   }
 
+  Future<void> setConversationMemberRole(
+      String convID, String userID, String role) async {
+    await _put(
+        '/api/v1/conversations/$convID/members/$userID/role', {'role': role});
+  }
+
   // ---- Channels ----
 
   Future<List<Conversation>> searchChannels(String query) async {
@@ -424,6 +430,24 @@ class ApiService {
 
   Future<void> deleteMessage(String convID, String msgID) async {
     await _delete('/api/v1/conversations/$convID/messages/$msgID');
+  }
+
+  Future<void> deleteOwnMessages(String convID) async {
+    await _delete('/api/v1/conversations/$convID/messages?scope=mine');
+  }
+
+  Future<void> deleteAllConversationMessages(String convID) async {
+    await _delete('/api/v1/conversations/$convID/messages?scope=all');
+  }
+
+  Future<void> deleteChannelUserMessages(String chanID, String userID) async {
+    await _delete(
+      '/api/v1/channels/$chanID/posts?scope=user&user_id=$userID',
+    );
+  }
+
+  Future<void> deleteOwnChannelMessages(String chanID) async {
+    await _delete('/api/v1/channels/$chanID/posts?scope=mine');
   }
 
   /// Set the disappearing-messages timer (seconds; 0 = off).

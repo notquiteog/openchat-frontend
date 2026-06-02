@@ -218,7 +218,8 @@ class _CallScreenState extends State<CallScreen> {
                     Text(
                       statusText,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white70, fontSize: 16),
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 16),
                     ),
                     Positioned(
                       left: 8,
@@ -226,7 +227,8 @@ class _CallScreenState extends State<CallScreen> {
                         key: const Key('minimize-call-button'),
                         tooltip: 'Minimize call',
                         onPressed: _minimize,
-                        icon: const Icon(Icons.expand_more, color: Colors.white70),
+                        icon: const Icon(Icons.expand_more,
+                            color: Colors.white70),
                       ),
                     ),
                   ],
@@ -364,38 +366,41 @@ class _MinimizedCallOverlay extends StatelessWidget {
     if (session == null) return const SizedBox.shrink();
     final name = session.remoteUsername ?? 'Unknown';
     return SafeArea(
-      child: Align(
-        alignment: Alignment.topCenter,
-        child: Padding(
-          padding: const EdgeInsets.only(top: 8),
+      child: Padding(
+        padding: const EdgeInsets.only(top: kToolbarHeight),
+        child: Align(
+          alignment: Alignment.topCenter,
           child: Material(
             key: const Key('minimized-call-overlay'),
-            color: Colors.black.withValues(alpha: 0.78),
-            borderRadius: BorderRadius.circular(24),
+            color: Theme.of(context).colorScheme.surface,
+            elevation: 3,
             child: InkWell(
-              borderRadius: BorderRadius.circular(24),
               onTap: () => cp.setCallMinimized(false),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: SizedBox(
+                height: 48,
+                width: double.infinity,
                 child: Row(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
+                    const SizedBox(width: 8),
                     IconButton(
                       key: const Key('expand-call-button'),
                       tooltip: 'Expand call',
                       onPressed: () => cp.setCallMinimized(false),
-                      icon: const Icon(Icons.open_in_full, color: Colors.white),
+                      icon: const Icon(Icons.open_in_full),
                     ),
-                    Text(
-                      '$name • ${cp.callStatusText}',
-                      style: const TextStyle(color: Colors.white),
+                    Expanded(
+                      child: Text(
+                        '$name · ${cp.callStatusText}',
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
                     ),
-                    const SizedBox(width: 4),
                     IconButton(
                       tooltip: 'End call',
                       onPressed: cp.hangup,
-                      icon: const Icon(Icons.call_end, color: Colors.redAccent),
+                      icon: const Icon(Icons.call_end, color: Colors.red),
                     ),
+                    const SizedBox(width: 8),
                   ],
                 ),
               ),

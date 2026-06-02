@@ -59,7 +59,13 @@ void main() {
         () {
       expect(
         NotificationService.androidNotificationChannelIds,
-        containsAll(<String>{'messages', 'calls', 'bg_messages', 'bg_calls'}),
+        containsAll(<String>{
+          'messages',
+          'calls',
+          'active_calls',
+          'bg_messages',
+          'bg_calls',
+        }),
       );
     });
 
