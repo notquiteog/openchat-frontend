@@ -49,7 +49,7 @@ copy_runtime_lib() {
   cp -L "$path" "$SOURCE_DIR/openchat-bundle/lib/$soname"
 }
 
-copy_runtime_lib libayatana-appindicator3.so.1
+copy_runtime_lib libayatana-appindicator-glib.so.2
 copy_runtime_lib libayatana-indicator3.so.7
 copy_runtime_lib libayatana-ido3-0.4.so.0
 copy_runtime_lib libdbusmenu-glib.so.4

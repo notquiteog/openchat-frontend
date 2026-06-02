@@ -75,3 +75,6 @@ CLAUDE.md
 # Local clone of the openpgp package — the app pulls it from a git URL in
 # pubspec.yaml, so this directory must not be tracked as a submodule.
 /packages/
+
+# FVM Version Cache
+.fvm/

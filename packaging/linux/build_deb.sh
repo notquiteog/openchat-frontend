@@ -42,7 +42,7 @@ Section: net
 Priority: optional
 Architecture: ${ARCH}
 Maintainer: OpenChat <support@openchat.win>
-Depends: libc6 (>= 2.31), libstdc++6, zlib1g, libgtk-3-0, libsecret-1-0, libayatana-appindicator3-1 | libappindicator3-1, libgstreamer1.0-0, libgstreamer-plugins-base1.0-0
+Depends: libc6 (>= 2.31), libstdc++6, zlib1g, libgtk-3-0, libsecret-1-0, libayatana-appindicator-glib2, libgstreamer1.0-0, libgstreamer-plugins-base1.0-0
 Homepage: https://openchat.win
 Description: Open-source E2E encrypted messenger with PGP
  OpenChat is an end-to-end encrypted messenger with PGP-based identity,
