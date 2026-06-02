@@ -12,7 +12,6 @@ BUILD_DIR="$WORK_ROOT/build-dir"
 REPO_DIR="$WORK_ROOT/repo"
 MANIFEST="$WORK_ROOT/${APP_ID}.yml"
 FLATPAK_PATH="$OUTPUT_DIR/openchat-${VERSION}-linux-x86_64.flatpak"
-LDCONFIG="${LDCONFIG:-$(command -v ldconfig || command -v /sbin/ldconfig || true)}"
 
 if [ ! -x "$BUNDLE_DIR/openchat" ]; then
   echo "Linux bundle not found at $BUNDLE_DIR. Run flutter build linux --release first." >&2
@@ -29,31 +28,9 @@ if ! command -v flatpak >/dev/null 2>&1; then
   exit 1
 fi
 
-if [ -z "$LDCONFIG" ] || [ ! -x "$LDCONFIG" ]; then
-  echo "ldconfig is required to locate bundled tray libraries." >&2
-  exit 1
-fi
-
 rm -rf "$WORK_ROOT"
 mkdir -p "$SOURCE_DIR/openchat-bundle" "$OUTPUT_DIR"
 cp -a "$BUNDLE_DIR/." "$SOURCE_DIR/openchat-bundle/"
-
-copy_runtime_lib() {
-  local soname="$1"
-  local path
-  path="$("$LDCONFIG" -p | awk -v lib="$soname" '$1 == lib {print $NF; exit}')"
-  if [ -z "$path" ] || [ ! -e "$path" ]; then
-    echo "Required Flatpak-bundled library not found: $soname" >&2
-    exit 1
-  fi
-  cp -L "$path" "$SOURCE_DIR/openchat-bundle/lib/$soname"
-}
-
-copy_runtime_lib libayatana-appindicator-glib.so.2
-copy_runtime_lib libayatana-indicator3.so.7
-copy_runtime_lib libayatana-ido3-0.4.so.0
-copy_runtime_lib libdbusmenu-glib.so.4
-copy_runtime_lib libdbusmenu-gtk3.so.4
 
 install -Dm644 "$ROOT_DIR/packaging/linux/shared/${APP_ID}.desktop" \
   "$SOURCE_DIR/${APP_ID}.desktop"
@@ -96,6 +73,12 @@ finish-args:
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.freedesktop.secrets
   - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=com.canonical.StatusNotifierWatcher
+  # nativeapi 0.1.3 owns a dynamic StatusNotifierItem name like
+  # org.kde.StatusNotifierItem-<pid>-<index>. Flatpak only supports wildcard
+  # bus permissions that end in .*, so org.kde.* is the narrowest valid rule
+  # that keeps tray icons working inside the sandbox.
+  - --own-name=org.kde.*
 modules:
   - name: openchat
     buildsystem: simple

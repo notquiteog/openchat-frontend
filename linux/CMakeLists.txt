@@ -54,6 +54,19 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0)
 
+# nativeapi 0.1.3 implements Linux tray icons with StatusNotifierItem over
+# D-Bus, but its CMake still probes the old Ayatana AppIndicator pkg-config
+# name. Prepend a local compatibility shim so builds do not link the deprecated
+# GTK AppIndicator library.
+set(OPENCHAT_PKG_CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/pkgconfig")
+if(EXISTS "${OPENCHAT_PKG_CONFIG_DIR}/ayatana-appindicator3-0.1.pc")
+  if(DEFINED ENV{PKG_CONFIG_PATH} AND NOT "$ENV{PKG_CONFIG_PATH}" STREQUAL "")
+    set(ENV{PKG_CONFIG_PATH} "${OPENCHAT_PKG_CONFIG_DIR}:$ENV{PKG_CONFIG_PATH}")
+  else()
+    set(ENV{PKG_CONFIG_PATH} "${OPENCHAT_PKG_CONFIG_DIR}")
+  endif()
+endif()
+
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 

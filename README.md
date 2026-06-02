@@ -87,17 +87,17 @@ For source builds:
 sudo apt update
 sudo apt install -y clang cmake ninja-build pkg-config \
   libgtk-3-dev libstdc++-12-dev liblzma-dev libsecret-1-dev \
-  libayatana-appindicator3-dev libunwind-dev \
+  libx11-dev libxi-dev libunwind-dev \
   libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 
 # Fedora
 sudo dnf install -y clang cmake ninja-build pkgconf-pkg-config \
-  gtk3-devel xz-devel libsecret-devel libayatana-appindicator-gtk3-devel \
+  gtk3-devel xz-devel libsecret-devel libX11-devel libXi-devel \
   libunwind-devel gstreamer1-devel gstreamer1-plugins-base-devel
 
 # Arch / CachyOS
 sudo pacman -S --needed base-devel clang cmake ninja pkgconf gtk3 xz \
-  libsecret libayatana-appindicator libunwind gstreamer gst-plugins-base
+  libsecret libx11 libxi libunwind gstreamer gst-plugins-base
 ```
 
 For Debian packages and Flatpak bundles on Debian/Ubuntu builders, also install:

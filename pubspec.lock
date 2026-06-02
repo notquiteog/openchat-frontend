@@ -225,6 +225,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.1.2"
+  cnativeapi:
+    dependency: transitive
+    description:
+      name: cnativeapi
+      sha256: "2217a6adc6153b86c2dcb5b2cfbf6c9714ecf78562f095d3e5ea0a8968eff21b"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.1.3"
   code_assets:
     dependency: transitive
     description:
@@ -968,14 +976,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.13.0"
-  menu_base:
-    dependency: transitive
-    description:
-      name: menu_base
-      sha256: "820368014a171bd1241030278e6c2617354f492f5c703d7b7d4570a6b8b84405"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.1.1"
   meta:
     dependency: transitive
     description:
@@ -1000,6 +1000,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.19.1"
+  nativeapi:
+    dependency: "direct main"
+    description:
+      name: nativeapi
+      sha256: "3270fa9de65fa183bd622766a667e9e079814d135d5167d5da049ad547233721"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.1.3"
   nested:
     dependency: transitive
     description:
@@ -1345,14 +1353,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.0"
-  shortid:
-    dependency: transitive
-    description:
-      name: shortid
-      sha256: d0b40e3dbb50497dad107e19c54ca7de0d1a274eb9b4404991e443dadb9ebedb
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.1.2"
   sky_engine:
     dependency: transitive
     description: flutter
@@ -1510,14 +1510,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.11.0"
-  tray_manager:
-    dependency: "direct main"
-    description:
-      name: tray_manager
-      sha256: c5fd83b0ae4d80be6eaedfad87aaefab8787b333b8ebd064b0e442a81006035b
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.5.2"
   typed_data:
     dependency: transitive
     description:
