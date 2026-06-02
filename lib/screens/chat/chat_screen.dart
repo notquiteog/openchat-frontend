@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -182,8 +183,14 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _showSendOptions() async {
+    final minimumSchedule = DateTime.now().add(const Duration(minutes: 1));
+    var draftSchedule =
+        _scheduledFor != null && _scheduledFor!.isAfter(minimumSchedule)
+        ? _scheduledFor!
+        : minimumSchedule;
     await showModalBottomSheet<void>(
       context: context,
+      showDragHandle: true,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) => SafeArea(
           child: Column(
@@ -198,39 +205,60 @@ class _ChatScreenState extends State<ChatScreen> {
                   setSheetState(() {});
                 },
               ),
-              ListTile(
-                leading: const Icon(Icons.schedule_outlined),
-                title: const Text('Schedule in 5 minutes'),
-                onTap: () {
-                  setState(
-                    () => _scheduledFor = DateTime.now().add(
-                      const Duration(minutes: 5),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: Row(
+                  children: [
+                    const Icon(Icons.schedule_outlined),
+                    const SizedBox(width: 12),
+                    Text(
+                      'Schedule delivery',
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
-                  );
-                  Navigator.pop(ctx);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.more_time_outlined),
-                title: const Text('Schedule in 1 hour'),
-                onTap: () {
-                  setState(
-                    () => _scheduledFor = DateTime.now().add(
-                      const Duration(hours: 1),
-                    ),
-                  );
-                  Navigator.pop(ctx);
-                },
-              ),
-              if (_scheduledFor != null)
-                ListTile(
-                  leading: const Icon(Icons.event_busy_outlined),
-                  title: const Text('Clear schedule'),
-                  onTap: () {
-                    setState(() => _scheduledFor = null);
-                    Navigator.pop(ctx);
-                  },
+                  ],
                 ),
+              ),
+              SizedBox(
+                height: 216,
+                child: CupertinoDatePicker(
+                  mode: CupertinoDatePickerMode.dateAndTime,
+                  minimumDate: minimumSchedule,
+                  initialDateTime: draftSchedule,
+                  minuteInterval: 1,
+                  onDateTimeChanged: (value) =>
+                      setSheetState(() => draftSchedule = value),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                child: Row(
+                  children: [
+                    if (_scheduledFor != null)
+                      TextButton.icon(
+                        icon: const Icon(Icons.event_busy_outlined),
+                        label: const Text('Clear'),
+                        onPressed: () {
+                          setState(() => _scheduledFor = null);
+                          Navigator.pop(ctx);
+                        },
+                      ),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Done'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton.icon(
+                      icon: const Icon(Icons.schedule_send_outlined),
+                      label: const Text('Set'),
+                      onPressed: () {
+                        setState(() => _scheduledFor = draftSchedule);
+                        Navigator.pop(ctx);
+                      },
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
@@ -494,6 +522,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               showAvatar: showAvatar,
                               meBubbleColor: meBubbleColor,
                               bubbleRadius: chatStyle.bubbleRadius,
+                              onTap: () => _showReactionMenu(context, msg),
                               onLongPress: () =>
                                   _showMessageMenu(context, msg, isMe),
                               onAvatarTap: msg.sender != null
@@ -969,31 +998,30 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   const SizedBox(width: 4),
                   IconButton(
-                    tooltip: 'Send options',
-                    icon: Icon(
-                      _scheduledFor != null
-                          ? Icons.schedule_send_outlined
-                          : _sendSilent
-                          ? Icons.notifications_off_outlined
-                          : Icons.tune_outlined,
-                    ),
-                    color: (_sendSilent || _scheduledFor != null)
-                        ? scheme.primary
-                        : null,
-                    onPressed: _showSendOptions,
-                  ),
-                  IconButton(
                     icon: const Icon(Icons.attach_file_outlined),
                     onPressed: _showAttachmentPicker,
                   ),
-                  FilledButton(
-                    onPressed: _sendMessage,
-                    style: FilledButton.styleFrom(
-                      shape: const CircleBorder(),
-                      padding: const EdgeInsets.all(12),
-                      minimumSize: Size.zero,
+                  Tooltip(
+                    message: 'Hold for send options',
+                    child: GestureDetector(
+                      onLongPress: _showSendOptions,
+                      child: FilledButton(
+                        onPressed: _sendMessage,
+                        style: FilledButton.styleFrom(
+                          shape: const CircleBorder(),
+                          padding: const EdgeInsets.all(12),
+                          minimumSize: Size.zero,
+                        ),
+                        child: Icon(
+                          _scheduledFor != null
+                              ? Icons.schedule_send_outlined
+                              : _sendSilent
+                              ? Icons.notifications_off_outlined
+                              : Icons.send,
+                          size: 18,
+                        ),
+                      ),
                     ),
-                    child: const Icon(Icons.send, size: 18),
                   ),
                 ],
               ),
@@ -1054,6 +1082,36 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  void _showReactionMenu(BuildContext context, Message msg) {
+    if (msg.type == MessageType.system) return;
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+          child: Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 10,
+            children: [
+              for (final emoji in const ['👍', '❤️', '😂', '🔥', '🎉', '👀'])
+                InkWell(
+                  borderRadius: BorderRadius.circular(22),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _reactToMessage(msg, emoji);
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Text(emoji, style: const TextStyle(fontSize: 26)),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   void _showMessageMenu(BuildContext context, Message msg, bool isMe) {
     // Call events (and other system messages) carry no user text to copy or
     // reply to — only offer deletion. In a DM either participant can delete any
@@ -1064,37 +1122,6 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       builder: (_) => SimpleDialog(
         children: [
-          if (!isSystem)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-              child: Wrap(
-                spacing: 8,
-                children: [
-                  for (final emoji in const [
-                    '👍',
-                    '❤️',
-                    '😂',
-                    '🔥',
-                    '🎉',
-                    '👀',
-                  ])
-                    InkWell(
-                      borderRadius: BorderRadius.circular(18),
-                      onTap: () {
-                        Navigator.pop(context);
-                        _reactToMessage(msg, emoji);
-                      },
-                      child: Padding(
-                        padding: const EdgeInsets.all(6),
-                        child: Text(
-                          emoji,
-                          style: const TextStyle(fontSize: 22),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
           if (!isSystem && msg.isDecrypted)
             ListTile(
               leading: const Icon(Icons.copy),

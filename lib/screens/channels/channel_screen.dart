@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
@@ -1326,8 +1328,14 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }
 
   Future<void> _showSendOptions() async {
+    final minimumSchedule = DateTime.now().add(const Duration(minutes: 1));
+    var draftSchedule =
+        _scheduledFor != null && _scheduledFor!.isAfter(minimumSchedule)
+        ? _scheduledFor!
+        : minimumSchedule;
     await showModalBottomSheet<void>(
       context: context,
+      showDragHandle: true,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) => SafeArea(
           child: Column(
@@ -1342,44 +1350,149 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   setSheetState(() {});
                 },
               ),
-              ListTile(
-                leading: const Icon(Icons.schedule_outlined),
-                title: const Text('Schedule in 5 minutes'),
-                onTap: () {
-                  setState(
-                    () => _scheduledFor = DateTime.now().add(
-                      const Duration(minutes: 5),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: Row(
+                  children: [
+                    const Icon(Icons.schedule_outlined),
+                    const SizedBox(width: 12),
+                    Text(
+                      'Schedule delivery',
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
-                  );
-                  Navigator.pop(ctx);
-                },
+                  ],
+                ),
               ),
-              ListTile(
-                leading: const Icon(Icons.more_time_outlined),
-                title: const Text('Schedule in 1 hour'),
-                onTap: () {
-                  setState(
-                    () => _scheduledFor = DateTime.now().add(
-                      const Duration(hours: 1),
+              SizedBox(
+                height: 216,
+                child: CupertinoDatePicker(
+                  mode: CupertinoDatePickerMode.dateAndTime,
+                  minimumDate: minimumSchedule,
+                  initialDateTime: draftSchedule,
+                  minuteInterval: 1,
+                  onDateTimeChanged: (value) =>
+                      setSheetState(() => draftSchedule = value),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                child: Row(
+                  children: [
+                    if (_scheduledFor != null)
+                      TextButton.icon(
+                        icon: const Icon(Icons.event_busy_outlined),
+                        label: const Text('Clear'),
+                        onPressed: () {
+                          setState(() => _scheduledFor = null);
+                          Navigator.pop(ctx);
+                        },
+                      ),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Done'),
                     ),
-                  );
-                  Navigator.pop(ctx);
-                },
+                    const SizedBox(width: 8),
+                    FilledButton.icon(
+                      icon: const Icon(Icons.schedule_send_outlined),
+                      label: const Text('Set'),
+                      onPressed: () {
+                        setState(() => _scheduledFor = draftSchedule);
+                        Navigator.pop(ctx);
+                      },
+                    ),
+                  ],
+                ),
               ),
-              if (_scheduledFor != null)
-                ListTile(
-                  leading: const Icon(Icons.event_busy_outlined),
-                  title: const Text('Clear schedule'),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showReactionMenu(Message msg) {
+    if (msg.type == MessageType.system) return;
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+          child: Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 10,
+            children: [
+              for (final emoji in const ['👍', '❤️', '😂', '🔥', '🎉', '👀'])
+                InkWell(
+                  borderRadius: BorderRadius.circular(22),
                   onTap: () {
-                    setState(() => _scheduledFor = null);
                     Navigator.pop(ctx);
+                    _reactToMessage(msg, emoji);
                   },
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Text(emoji, style: const TextStyle(fontSize: 26)),
+                  ),
                 ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  void _showPostMenu(Message msg, bool isMe) {
+    final isSystem = msg.type == MessageType.system;
+    final canDelete = isMe || _isAdmin;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        children: [
+          if (!isSystem && msg.isDecrypted)
+            ListTile(
+              leading: const Icon(Icons.copy),
+              title: const Text('Copy text'),
+              onTap: () {
+                Clipboard.setData(
+                  ClipboardData(text: msg.decryptedContent ?? ''),
+                );
+                Navigator.pop(ctx);
+              },
+            ),
+          if (canDelete)
+            ListTile(
+              leading: const Icon(Icons.delete_outline, color: Colors.red),
+              title: const Text('Delete', style: TextStyle(color: Colors.red)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _deletePost(msg);
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _reactToMessage(Message msg, String emoji) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await context.read<ApiService>().reactToMessage(msg.id, emoji);
+      if (mounted) await _load();
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(content: Text('Reaction failed: $e')));
+      }
+    }
+  }
+
+  Future<void> _deletePost(Message msg) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await context.read<ApiService>().deleteMessage(channel.id, msg.id);
+      if (mounted) setState(() => _posts.removeWhere((p) => p.id == msg.id));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+    }
   }
 
   Future<void> _sendSticker(String stickerID) async {
@@ -1587,6 +1700,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                             isMe: isMe,
                             showAvatar: showAvatar,
                             meBubbleColor: meBubbleColor,
+                            onTap: () => _showReactionMenu(msg),
+                            onLongPress: () => _showPostMenu(msg, isMe),
                             onAvatarTap: msg.sender != null
                                 ? () => _showChannelUserActions(msg)
                                 : null,
@@ -1709,26 +1824,27 @@ class ChannelPostBar extends StatelessWidget {
             ),
             const SizedBox(width: 4),
             IconButton(
-              icon: Icon(
-                hasOptions ? Icons.schedule_send_outlined : Icons.tune_outlined,
-              ),
-              color: hasOptions ? scheme.primary : null,
-              tooltip: 'Post options',
-              onPressed: onOptions,
-            ),
-            IconButton(
               icon: const Icon(Icons.attach_file_outlined),
               tooltip: 'Attach file',
               onPressed: onAttach,
             ),
-            FilledButton(
-              onPressed: onPost,
-              style: FilledButton.styleFrom(
-                shape: const CircleBorder(),
-                padding: const EdgeInsets.all(12),
-                minimumSize: Size.zero,
+            Tooltip(
+              message: 'Hold for post options',
+              child: GestureDetector(
+                onLongPress: onOptions,
+                child: FilledButton(
+                  onPressed: onPost,
+                  style: FilledButton.styleFrom(
+                    shape: const CircleBorder(),
+                    padding: const EdgeInsets.all(12),
+                    minimumSize: Size.zero,
+                  ),
+                  child: Icon(
+                    hasOptions ? Icons.schedule_send_outlined : Icons.send,
+                    size: 18,
+                  ),
+                ),
               ),
-              child: const Icon(Icons.send, size: 18),
             ),
           ],
         ),

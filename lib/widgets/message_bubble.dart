@@ -17,6 +17,7 @@ class MessageBubble extends StatelessWidget {
   final Message message;
   final bool isMe;
   final bool showAvatar;
+  final VoidCallback? onTap;
   final VoidCallback? onLongPress;
   final VoidCallback? onAvatarTap;
   // The current user's own bubble can be previewed locally while the published
@@ -29,6 +30,7 @@ class MessageBubble extends StatelessWidget {
     required this.message,
     required this.isMe,
     this.showAvatar = false,
+    this.onTap,
     this.onLongPress,
     this.onAvatarTap,
     this.meBubbleColor,
@@ -62,6 +64,7 @@ class MessageBubble extends StatelessWidget {
       return _CallEventChip(
         event: callEvent,
         time: message.createdAt,
+        onTap: onTap,
         onLongPress: onLongPress,
       );
     }
@@ -100,6 +103,7 @@ class MessageBubble extends StatelessWidget {
             const SizedBox(width: 34),
           Flexible(
             child: GestureDetector(
+              onTap: onTap,
               onLongPress: onLongPress,
               child: _buildBubble(context),
             ),
@@ -205,11 +209,13 @@ class MessageBubble extends StatelessWidget {
 class _CallEventChip extends StatelessWidget {
   final CallEventInfo event;
   final DateTime time;
+  final VoidCallback? onTap;
   final VoidCallback? onLongPress;
 
   const _CallEventChip({
     required this.event,
     required this.time,
+    this.onTap,
     this.onLongPress,
   });
 
@@ -224,6 +230,7 @@ class _CallEventChip extends StatelessWidget {
 
     return Center(
       child: GestureDetector(
+        onTap: onTap,
         onLongPress: onLongPress,
         child: Container(
           margin: const EdgeInsets.symmetric(vertical: 6),
