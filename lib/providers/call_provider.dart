@@ -57,7 +57,8 @@ class CallProvider extends ChangeNotifier {
       return;
     }
 
-    final shouldRefresh = _activeCallNotificationSessionId != s.callId ||
+    final shouldRefresh =
+        _activeCallNotificationSessionId != s.callId ||
         _activeCallNotificationState != s.state ||
         _activeCallNotificationMuted != _micMuted;
     if (!shouldRefresh) return;
@@ -66,16 +67,25 @@ class CallProvider extends ChangeNotifier {
     _activeCallNotificationMuted = _micMuted;
     final name = s.remoteUsername != null ? '@${s.remoteUsername}' : 'OpenChat';
     final kind = s.isVideo ? 'Video call' : 'Voice call';
-    unawaited(_foreground.start(
-      title: '$kind with $name',
-      body: callStatusText,
-      isVideo: s.isVideo,
-    ));
-    unawaited(NotificationService.showActiveCall(
-      title: '$kind with $name',
-      body: callStatusText,
-      muted: _micMuted,
-    ));
+    unawaited(
+      _foreground.start(
+        title: '$kind with $name',
+        body: callStatusText,
+        isVideo: s.isVideo,
+        muted: _micMuted,
+      ),
+    );
+    unawaited(
+      (() async {
+        final granted = await NotificationService.requestPermission();
+        if (!granted) return;
+        await NotificationService.showActiveCall(
+          title: '$kind with $name',
+          body: callStatusText,
+          muted: _micMuted,
+        );
+      })(),
+    );
   }
 
   CallSession? get session => _callService.currentSession;
@@ -91,6 +101,7 @@ class CallProvider extends ChangeNotifier {
   StreamSubscription? _incomingSub;
   StreamSubscription? _missedSub;
   StreamSubscription? _endedSub;
+  StreamSubscription<CallForegroundAction>? _foregroundActionSub;
 
   // Pending incoming call waiting for user accept/reject
   CallSession? _incomingCall;
@@ -111,9 +122,13 @@ class CallProvider extends ChangeNotifier {
     CallAudioController? audio,
     CallForegroundController? foreground,
     DateTime Function()? now,
-  })  : _audio = audio ?? CallAudio(),
-        _foreground = foreground ?? const CallForegroundService(),
-        _now = now ?? DateTime.now {
+  }) : _audio = audio ?? CallAudio(),
+       _foreground = foreground ?? const CallForegroundService(),
+       _now = now ?? DateTime.now {
+    CallForegroundService.init();
+    _foregroundActionSub = CallForegroundService.actions.listen(
+      _handleForegroundAction,
+    );
     _sessionSub = _callService.sessionStream.listen((_) {
       final s = session;
       if (s == null || s.state == CallState.ended) {
@@ -146,6 +161,18 @@ class CallProvider extends ChangeNotifier {
     );
   }
 
+  void _handleForegroundAction(CallForegroundAction action) {
+    if (_disposed || !isInCall) return;
+    switch (action) {
+      case CallForegroundAction.toggleMute:
+        setMicMuted(!_micMuted);
+        return;
+      case CallForegroundAction.end:
+        hangup();
+        return;
+    }
+  }
+
   void _onCallEnded(CallEndedEvent ev) {
     _lastEndedCall = ev;
     notifyListeners();
@@ -173,8 +200,9 @@ class CallProvider extends ChangeNotifier {
     _incomingCall = null;
     _lastMissedCall = missed;
     final kind = missed.isVideo ? 'video' : 'voice';
-    final from =
-        missed.remoteUsername != null ? ' from @${missed.remoteUsername}' : '';
+    final from = missed.remoteUsername != null
+        ? ' from @${missed.remoteUsername}'
+        : '';
     NotificationService.showMissedCall(body: 'Missed $kind call$from');
     _syncAudio();
     notifyListeners();
@@ -335,6 +363,7 @@ class CallProvider extends ChangeNotifier {
     _incomingSub?.cancel();
     _missedSub?.cancel();
     _endedSub?.cancel();
+    _foregroundActionSub?.cancel();
     _durationTicker?.cancel();
     NotificationService.setActiveCallHandlers();
     unawaited(_foreground.stop());

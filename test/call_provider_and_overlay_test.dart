@@ -15,44 +15,46 @@ import 'package:provider/provider.dart';
 
 void main() {
   group('CallProvider audio sync', () {
-    test('stops connecting tone when session becomes connected then null',
-        () async {
-      final service = _FakeCallService();
-      final audio = _FakeCallAudio();
-      final provider = CallProvider(service, audio: audio);
+    test(
+      'stops connecting tone when session becomes connected then null',
+      () async {
+        final service = _FakeCallService();
+        final audio = _FakeCallAudio();
+        final provider = CallProvider(service, audio: audio);
 
-      final connecting = CallSession(
-        callId: 'c1',
-        remoteUserId: 'u2',
-        remoteUsername: 'alice',
-        isVideo: false,
-        isIncoming: false,
-        state: CallState.connecting,
-      );
+        final connecting = CallSession(
+          callId: 'c1',
+          remoteUserId: 'u2',
+          remoteUsername: 'alice',
+          isVideo: false,
+          isIncoming: false,
+          state: CallState.connecting,
+        );
 
-      service.emitSession(connecting);
-      await Future<void>.delayed(Duration.zero);
-      expect(audio.lastTone, 'connecting');
+        service.emitSession(connecting);
+        await Future<void>.delayed(Duration.zero);
+        expect(audio.lastTone, 'connecting');
 
-      final connected = CallSession(
-        callId: 'c1',
-        remoteUserId: 'u2',
-        remoteUsername: 'alice',
-        isVideo: false,
-        isIncoming: false,
-        state: CallState.connected,
-      );
-      service.emitSession(connected);
-      await Future<void>.delayed(Duration.zero);
-      expect(audio.stopCalls, 1);
+        final connected = CallSession(
+          callId: 'c1',
+          remoteUserId: 'u2',
+          remoteUsername: 'alice',
+          isVideo: false,
+          isIncoming: false,
+          state: CallState.connected,
+        );
+        service.emitSession(connected);
+        await Future<void>.delayed(Duration.zero);
+        expect(audio.stopCalls, 1);
 
-      service.emitSession(null);
-      await Future<void>.delayed(Duration.zero);
-      expect(audio.stopCalls, 2);
+        service.emitSession(null);
+        await Future<void>.delayed(Duration.zero);
+        expect(audio.stopCalls, 2);
 
-      provider.dispose();
-      service.dispose();
-    });
+        provider.dispose();
+        service.dispose();
+      },
+    );
   });
 
   group('Call status timer', () {
@@ -84,8 +86,9 @@ void main() {
   });
 
   group('Call overlay minimize and expand', () {
-    testWidgets('shows compact affordance and expands back to full',
-        (tester) async {
+    testWidgets('shows compact affordance and expands back to full', (
+      tester,
+    ) async {
       final service = _FakeCallService();
       final provider = CallProvider(service, audio: _FakeCallAudio());
       final session = CallSession(
@@ -124,13 +127,15 @@ void main() {
       var emitted = false;
       final sub = service.incomingCalls.listen((_) => emitted = true);
 
-      service.rejectCall(CallSession(
-        callId: 'c-reject',
-        remoteUserId: 'u-reject',
-        isVideo: false,
-        isIncoming: true,
-        state: CallState.ringing,
-      ));
+      service.rejectCall(
+        CallSession(
+          callId: 'c-reject',
+          remoteUserId: 'u-reject',
+          isVideo: false,
+          isIncoming: true,
+          state: CallState.ringing,
+        ),
+      );
       await Future<void>.delayed(Duration.zero);
 
       expect(emitted, isFalse);
@@ -143,13 +148,15 @@ void main() {
       final service = _FakeCallService();
       final provider = CallProvider(service, audio: _FakeCallAudio());
 
-      service.emitIncoming(CallSession(
-        callId: 'c-ended',
-        remoteUserId: 'u-ended',
-        isVideo: false,
-        isIncoming: true,
-        state: CallState.ended,
-      ));
+      service.emitIncoming(
+        CallSession(
+          callId: 'c-ended',
+          remoteUserId: 'u-ended',
+          isVideo: false,
+          isIncoming: true,
+          state: CallState.ended,
+        ),
+      );
       await Future<void>.delayed(Duration.zero);
 
       expect(provider.incomingCall, isNull);
@@ -160,17 +167,19 @@ void main() {
   });
 
   group('Audio output controls', () {
-    test('provider routes selection call and swallows unsupported errors',
-        () async {
-      final service = _FakeCallService(throwOnSelectAudioOutput: true);
-      final provider = CallProvider(service, audio: _FakeCallAudio());
+    test(
+      'provider routes selection call and swallows unsupported errors',
+      () async {
+        final service = _FakeCallService(throwOnSelectAudioOutput: true);
+        final provider = CallProvider(service, audio: _FakeCallAudio());
 
-      await provider.selectAudioOutput('speaker');
-      expect(service.selectAudioOutputCalls, 1);
+        await provider.selectAudioOutput('speaker');
+        expect(service.selectAudioOutputCalls, 1);
 
-      provider.dispose();
-      service.dispose();
-    });
+        provider.dispose();
+        service.dispose();
+      },
+    );
 
     test('provider keeps mute state in sync with the call service', () {
       final service = _FakeCallService();
@@ -190,13 +199,15 @@ void main() {
       final service = _FakeCallService();
       final provider = CallProvider(service, audio: _FakeCallAudio());
 
-      service.emitSession(CallSession(
-        callId: 'c3',
-        remoteUserId: 'u4',
-        isVideo: true,
-        isIncoming: false,
-        state: CallState.connected,
-      ));
+      service.emitSession(
+        CallSession(
+          callId: 'c3',
+          remoteUserId: 'u4',
+          isVideo: true,
+          isIncoming: false,
+          state: CallState.connected,
+        ),
+      );
       await Future<void>.delayed(Duration.zero);
 
       provider.setMicMuted(true);
@@ -223,14 +234,16 @@ void main() {
         audio: _FakeCallAudio(),
         foreground: _FakeCallForeground(),
       );
-      service.emitSession(CallSession(
-        callId: 'c4',
-        remoteUserId: 'u5',
-        remoteUsername: 'dana',
-        isVideo: false,
-        isIncoming: false,
-        state: CallState.connected,
-      ));
+      service.emitSession(
+        CallSession(
+          callId: 'c4',
+          remoteUserId: 'u5',
+          remoteUsername: 'dana',
+          isVideo: false,
+          isIncoming: false,
+          state: CallState.connected,
+        ),
+      );
       await Future<void>.delayed(Duration.zero);
 
       NotificationService.debugHandleNotificationResponse(
@@ -248,40 +261,44 @@ void main() {
       service.dispose();
     });
 
-    test('mute action toggles provider mute state without hanging up',
-        () async {
-      final service = _FakeCallService();
-      final provider = CallProvider(
-        service,
-        audio: _FakeCallAudio(),
-        foreground: _FakeCallForeground(),
-      );
-      service.emitSession(CallSession(
-        callId: 'c5',
-        remoteUserId: 'u6',
-        remoteUsername: 'erin',
-        isVideo: false,
-        isIncoming: false,
-        state: CallState.connected,
-      ));
-      await Future<void>.delayed(Duration.zero);
+    test(
+      'mute action toggles provider mute state without hanging up',
+      () async {
+        final service = _FakeCallService();
+        final provider = CallProvider(
+          service,
+          audio: _FakeCallAudio(),
+          foreground: _FakeCallForeground(),
+        );
+        service.emitSession(
+          CallSession(
+            callId: 'c5',
+            remoteUserId: 'u6',
+            remoteUsername: 'erin',
+            isVideo: false,
+            isIncoming: false,
+            state: CallState.connected,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
 
-      NotificationService.debugHandleNotificationResponse(
-        const NotificationResponse(
-          id: 2,
-          actionId: 'openchat_call_mute',
-          notificationResponseType:
-              NotificationResponseType.selectedNotificationAction,
-        ),
-      );
+        NotificationService.debugHandleNotificationResponse(
+          const NotificationResponse(
+            id: 2,
+            actionId: 'openchat_call_mute',
+            notificationResponseType:
+                NotificationResponseType.selectedNotificationAction,
+          ),
+        );
 
-      expect(provider.isMicMuted, isTrue);
-      expect(service.micMuteValues, <bool>[true]);
-      expect(service.hangupCalls, 0);
+        expect(provider.isMicMuted, isTrue);
+        expect(service.micMuteValues, <bool>[true]);
+        expect(service.hangupCalls, 0);
 
-      provider.dispose();
-      service.dispose();
-    });
+        provider.dispose();
+        service.dispose();
+      },
+    );
 
     test('tapping active call notification body does not hang up', () async {
       final service = _FakeCallService();
@@ -290,14 +307,16 @@ void main() {
         audio: _FakeCallAudio(),
         foreground: _FakeCallForeground(),
       );
-      service.emitSession(CallSession(
-        callId: 'c6',
-        remoteUserId: 'u7',
-        remoteUsername: 'finn',
-        isVideo: false,
-        isIncoming: false,
-        state: CallState.connected,
-      ));
+      service.emitSession(
+        CallSession(
+          callId: 'c6',
+          remoteUserId: 'u7',
+          remoteUsername: 'finn',
+          isVideo: false,
+          isIncoming: false,
+          state: CallState.connected,
+        ),
+      );
       await Future<void>.delayed(Duration.zero);
 
       NotificationService.debugHandleNotificationResponse(
@@ -323,18 +342,27 @@ void main() {
         foreground: foreground,
       );
 
-      service.emitSession(CallSession(
-        callId: 'c7',
-        remoteUserId: 'u8',
-        remoteUsername: 'gail',
-        isVideo: true,
-        isIncoming: false,
-        state: CallState.connected,
-      ));
+      service.emitSession(
+        CallSession(
+          callId: 'c7',
+          remoteUserId: 'u8',
+          remoteUsername: 'gail',
+          isVideo: true,
+          isIncoming: false,
+          state: CallState.connected,
+        ),
+      );
       await Future<void>.delayed(Duration.zero);
 
       expect(foreground.starts.length, 1);
       expect(foreground.starts.single.isVideo, isTrue);
+      expect(foreground.starts.single.muted, isFalse);
+
+      provider.setMicMuted(true);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(foreground.starts.length, 2);
+      expect(foreground.starts.last.muted, isTrue);
 
       provider.hangup();
       await Future<void>.delayed(Duration.zero);
@@ -381,11 +409,13 @@ class _ForegroundStart {
   final String title;
   final String body;
   final bool isVideo;
+  final bool muted;
 
   const _ForegroundStart({
     required this.title,
     required this.body,
     required this.isVideo,
+    required this.muted,
   });
 }
 
@@ -398,8 +428,16 @@ class _FakeCallForeground implements CallForegroundController {
     required String title,
     required String body,
     required bool isVideo,
+    required bool muted,
   }) async {
-    starts.add(_ForegroundStart(title: title, body: body, isVideo: isVideo));
+    starts.add(
+      _ForegroundStart(
+        title: title,
+        body: body,
+        isVideo: isVideo,
+        muted: muted,
+      ),
+    );
     return true;
   }
 
@@ -411,7 +449,7 @@ class _FakeCallForeground implements CallForegroundController {
 
 class _FakeCallService extends CallService {
   _FakeCallService({this.throwOnSelectAudioOutput = false})
-      : super(WebSocketService(SecureStorageService()));
+    : super(WebSocketService(SecureStorageService()));
 
   final bool throwOnSelectAudioOutput;
   final _sessionController = StreamController<CallSession?>.broadcast();

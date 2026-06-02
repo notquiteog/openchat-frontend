@@ -163,7 +163,7 @@ class BackgroundWsService {
     final notif = FlutterLocalNotificationsPlugin();
     await notif.initialize(
       settings: const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        android: AndroidInitializationSettings('@mipmap/launcher_icon'),
         iOS: DarwinInitializationSettings(),
       ),
     );

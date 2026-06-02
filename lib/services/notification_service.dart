@@ -71,6 +71,9 @@ class NotificationService {
   static const int _activeCallNotificationId = 2;
   static const String _activeCallEndActionId = 'openchat_call_end';
   static const String _activeCallMuteActionId = 'openchat_call_mute';
+  static const String _activeCallCategoryUnmuted =
+      'openchat_active_call_unmuted';
+  static const String _activeCallCategoryMuted = 'openchat_active_call_muted';
   static VoidCallback? _activeCallEndHandler;
   static VoidCallback? _activeCallToggleMuteHandler;
 
@@ -110,37 +113,57 @@ class NotificationService {
 
   static Future<void> init() async {
     if (!_supported || _inited || !_available) return;
+    final activeCallCategories = [
+      DarwinNotificationCategory(
+        _activeCallCategoryUnmuted,
+        actions: [
+          DarwinNotificationAction.plain(
+            _activeCallMuteActionId,
+            'Mute',
+            options: {DarwinNotificationActionOption.foreground},
+          ),
+          DarwinNotificationAction.plain(
+            _activeCallEndActionId,
+            'End',
+            options: {
+              DarwinNotificationActionOption.destructive,
+              DarwinNotificationActionOption.foreground,
+            },
+          ),
+        ],
+      ),
+      DarwinNotificationCategory(
+        _activeCallCategoryMuted,
+        actions: [
+          DarwinNotificationAction.plain(
+            _activeCallMuteActionId,
+            'Unmute',
+            options: {DarwinNotificationActionOption.foreground},
+          ),
+          DarwinNotificationAction.plain(
+            _activeCallEndActionId,
+            'End',
+            options: {
+              DarwinNotificationActionOption.destructive,
+              DarwinNotificationActionOption.foreground,
+            },
+          ),
+        ],
+      ),
+    ];
     final settings = InitializationSettings(
-      android: const AndroidInitializationSettings('@mipmap/ic_launcher'),
+      android: const AndroidInitializationSettings('@mipmap/launcher_icon'),
       iOS: DarwinInitializationSettings(
         requestAlertPermission: false,
         requestBadgePermission: false,
         requestSoundPermission: false,
-        notificationCategories: [
-          DarwinNotificationCategory(
-            'openchat_active_call',
-            actions: [
-              DarwinNotificationAction.plain(
-                _activeCallMuteActionId,
-                'Mute',
-                options: {DarwinNotificationActionOption.foreground},
-              ),
-              DarwinNotificationAction.plain(
-                _activeCallEndActionId,
-                'End',
-                options: {
-                  DarwinNotificationActionOption.destructive,
-                  DarwinNotificationActionOption.foreground,
-                },
-              ),
-            ],
-          ),
-        ],
+        notificationCategories: activeCallCategories,
       ),
-      macOS: const DarwinInitializationSettings(
+      macOS: DarwinInitializationSettings(
         requestAlertPermission: false,
         requestBadgePermission: false,
         requestSoundPermission: false,
+        notificationCategories: activeCallCategories,
       ),
       linux: const LinuxInitializationSettings(defaultActionName: 'Open'),
       windows: const WindowsInitializationSettings(
@@ -166,8 +189,10 @@ class NotificationService {
 
   static Future<void> _ensureAndroidChannels() async {
     if (!Platform.isAndroid) return;
-    final android = _plugin.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>();
+    final android = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
     if (android == null) return;
     for (final channel in _androidChannels) {
       await android.createNotificationChannel(channel);
@@ -190,20 +215,24 @@ class NotificationService {
     if (Platform.isIOS) {
       final granted = await _plugin
           .resolvePlatformSpecificImplementation<
-              IOSFlutterLocalNotificationsPlugin>()
+            IOSFlutterLocalNotificationsPlugin
+          >()
           ?.requestPermissions(alert: true, badge: true, sound: true);
       return granted ?? false;
     }
     if (Platform.isMacOS) {
       final granted = await _plugin
           .resolvePlatformSpecificImplementation<
-              MacOSFlutterLocalNotificationsPlugin>()
+            MacOSFlutterLocalNotificationsPlugin
+          >()
           ?.requestPermissions(alert: true, badge: true, sound: true);
       return granted ?? false;
     }
     if (Platform.isAndroid) {
-      final android = _plugin.resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>();
+      final android = _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >();
       if (android == null) return true;
       final alreadyEnabled = await android.areNotificationsEnabled();
       if (alreadyEnabled ?? false) return true;
@@ -269,10 +298,11 @@ class NotificationService {
       ),
     );
     await _plugin.show(
-        id: 1,
-        title: 'Incoming call',
-        body: body,
-        notificationDetails: details);
+      id: 1,
+      title: 'Incoming call',
+      body: body,
+      notificationDetails: details,
+    );
   }
 
   static Future<void> showActiveCall({
@@ -288,6 +318,7 @@ class NotificationService {
         'active_calls',
         'Active calls',
         channelDescription: 'Ongoing OpenChat voice and video calls',
+        icon: '@mipmap/launcher_icon',
         importance: Importance.low,
         priority: Priority.low,
         ongoing: true,
@@ -310,12 +341,20 @@ class NotificationService {
         ],
       ),
       iOS: DarwinNotificationDetails(
-        categoryIdentifier: 'openchat_active_call',
+        categoryIdentifier: muted
+            ? _activeCallCategoryMuted
+            : _activeCallCategoryUnmuted,
         presentSound: false,
+        presentBanner: true,
+        presentList: true,
       ),
       macOS: DarwinNotificationDetails(
-        categoryIdentifier: 'openchat_active_call',
+        categoryIdentifier: muted
+            ? _activeCallCategoryMuted
+            : _activeCallCategoryUnmuted,
         presentSound: false,
+        presentBanner: true,
+        presentList: true,
       ),
       linux: LinuxNotificationDetails(),
       windows: WindowsNotificationDetails(),

@@ -6,6 +6,8 @@ import 'package:nativeapi/nativeapi.dart' as native;
 import 'package:window_manager/window_manager.dart';
 
 class DesktopTrayService with WindowListener {
+  static const _appIconAsset = 'assets/images/logo.png';
+
   native.Image? _trayIconImage;
   native.Menu? _contextMenu;
   native.MenuItem? _showItem;
@@ -19,6 +21,7 @@ class DesktopTrayService with WindowListener {
   Future<void> init() async {
     if (!supported) return;
     if (_trayIcon != null) return;
+    if (!native.TrayManager.instance.isSupported) return;
 
     await windowManager.ensureInitialized();
     windowManager.addListener(this);
@@ -41,7 +44,7 @@ class DesktopTrayService with WindowListener {
     contextMenu.addSeparator();
     contextMenu.addItem(quitItem);
 
-    _trayIconImage = native.Image.fromAsset('assets/images/logo.png');
+    _trayIconImage = native.Image.fromAsset(_appIconAsset);
     if (_trayIconImage != null) {
       trayIcon.icon = _trayIconImage;
     }
