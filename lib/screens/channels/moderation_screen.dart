@@ -71,7 +71,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
     final api = context.read<ApiService>();
     final dur = await showDialog<int?>(
       context: context,
-      builder: (ctx) => SimpleDialog(
+      builder: (ctx) => GlassSimpleDialog(
         title: Text('Mute @${m.user?.username ?? "user"}?'),
         children: [
           for (final opt in const [
@@ -140,7 +140,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: Text('Ban @${m.user?.username ?? "user"}?'),
         content: const Text(
             'They will be removed from the channel and blocked from rejoining '
@@ -248,41 +248,75 @@ class _ModerationScreenState extends State<ModerationScreen> {
                       leading: const Icon(Icons.person_outline),
                       title: Text('@${m.user?.username ?? "user"}'),
                       subtitle: Text(_roleLabel(m.role)),
-                      trailing: PopupMenuButton<String>(
+                      trailing: IconButton(
                         icon: const Icon(Icons.more_vert),
-                        onSelected: (v) {
-                          switch (v) {
-                            case 'admin':
-                              _setRole(m, MemberRole.admin);
-                            case 'moderator':
-                              _setRole(m, MemberRole.moderator);
-                            case 'member':
-                              _setRole(m, MemberRole.member);
-                            case 'ban':
-                              _ban(m);
-                          }
-                        },
-                        itemBuilder: (_) => [
-                          if (m.role != MemberRole.admin)
-                            const PopupMenuItem(
-                                value: 'admin', child: Text('Make admin')),
-                          if (m.role != MemberRole.moderator)
-                            const PopupMenuItem(
-                                value: 'moderator', child: Text('Make moderator')),
-                          if (m.role != MemberRole.member)
-                            const PopupMenuItem(
-                                value: 'member', child: Text('Make member')),
-                          const PopupMenuDivider(),
-                          const PopupMenuItem(
-                            value: 'ban',
-                            child: Text('Ban', style: TextStyle(color: Colors.red)),
-                          ),
-                        ],
+                        onPressed: () => _showMemberMenu(context, m),
                       ),
                     ),
                 ],
               ],
             ),
+    );
+  }
+
+  void _showMemberMenu(BuildContext context, ConversationMember m) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          child: LiquidGlass(
+            blur: 56,
+            borderRadius: const BorderRadius.all(Radius.circular(28)),
+            padding: EdgeInsets.zero,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 8),
+                if (m.role != MemberRole.admin)
+                  _ModTile(
+                    icon: Icons.star_outline_rounded,
+                    label: 'Make admin',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _setRole(m, MemberRole.admin);
+                    },
+                  ),
+                if (m.role != MemberRole.moderator)
+                  _ModTile(
+                    icon: Icons.shield_outlined,
+                    label: 'Make moderator',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _setRole(m, MemberRole.moderator);
+                    },
+                  ),
+                if (m.role != MemberRole.member)
+                  _ModTile(
+                    icon: Icons.person_outline_rounded,
+                    label: 'Make member',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _setRole(m, MemberRole.member);
+                    },
+                  ),
+                _ModTile(
+                  icon: Icons.block_rounded,
+                  label: 'Ban',
+                  color: Colors.red,
+                  onTap: () {
+                    Navigator.pop(context);
+                    _ban(m);
+                  },
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -306,5 +340,60 @@ class _ModerationScreenState extends State<ModerationScreen> {
     parts.add(until == null ? 'Indefinitely' : 'Until ${DateTime.parse(until).toLocal().toString().split(".").first}');
     if (reason != null && reason.isNotEmpty) parts.add('· $reason');
     return parts.join(' ');
+  }
+}
+
+class _ModTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final Color? color;
+
+  const _ModTile({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final tint = color ?? scheme.primary;
+    return ClipRRect(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: tint.withValues(alpha: 0.12),
+                  ),
+                  child: Icon(icon, size: 18, color: tint),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 15,
+                      color: color,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

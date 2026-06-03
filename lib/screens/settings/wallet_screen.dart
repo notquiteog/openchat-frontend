@@ -77,7 +77,7 @@ class _WalletScreenState extends State<WalletScreen> {
     try {
       final confirmed = await showDialog<bool>(
         context: context,
-        builder: (dialogCtx) => AlertDialog(
+        builder: (dialogCtx) => GlassAlertDialog(
           title: Text('Deposit ${provider.toUpperCase()}'),
           content: TextField(
             controller: amountCtrl,
@@ -123,7 +123,7 @@ class _WalletScreenState extends State<WalletScreen> {
     final address = dep['crypto_address'] as String? ?? '';
     showDialog<void>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => GlassAlertDialog(
         title: Text('Send ${dep['provider'].toString().toUpperCase()}'),
         content: SelectableText(address),
         actions: [
@@ -155,7 +155,7 @@ class _WalletScreenState extends State<WalletScreen> {
             final amount = double.tryParse(amountCtrl.text.trim()) ?? 0;
             final net = amount * (1 - _feeRate);
             final fee = amount - net;
-            return AlertDialog(
+            return GlassAlertDialog(
               title: Text('Withdraw ${provider.toUpperCase()}'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,

@@ -58,7 +58,7 @@ class _StickerPackScreenState extends State<StickerPackScreen> {
     final descCtrl = TextEditingController();
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('New Sticker Pack'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -301,7 +301,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
   Future<void> _removeFromLibrary() async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Remove pack?'),
         content: const Text(
           'This pack will be removed from your library. You can add it again later.',
@@ -349,7 +349,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
 
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Add Sticker'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -403,7 +403,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
   Future<void> _deleteSticker(String stickerID) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Delete sticker?'),
         content: const Text(
           'This sticker will be removed from the pack permanently.',
@@ -467,7 +467,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
     );
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Edit Pack'),
         content: Column(
           mainAxisSize: MainAxisSize.min,

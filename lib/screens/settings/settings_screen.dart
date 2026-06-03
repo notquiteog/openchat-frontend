@@ -112,7 +112,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // Show privacy warning before enabling.
       final confirmed = await showDialog<bool>(
         context: context,
-        builder: (ctx) => AlertDialog(
+        builder: (ctx) => GlassAlertDialog(
           title: const Text('Privacy notice'),
           content: const Text(
             'Push notifications route metadata (sender, device ID) through '
@@ -169,7 +169,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // Show battery warning before enabling.
       final confirmed = await showDialog<bool>(
         context: context,
-        builder: (ctx) => AlertDialog(
+        builder: (ctx) => GlassAlertDialog(
           title: const Text('Battery notice'),
           content: const Text(
             'Background WebSocket keeps a persistent connection to the server '
@@ -279,7 +279,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             }
           }
 
-          return AlertDialog(
+          return GlassAlertDialog(
             title: const Text('Edit Profile'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
@@ -376,7 +376,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   ) async {
     await showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Accent color'),
         content: Wrap(
           spacing: 12,
@@ -430,7 +430,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await showDialog<void>(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlg) => AlertDialog(
+        builder: (ctx, setDlg) => GlassAlertDialog(
           title: const Text('Change Password'),
           content: Form(
             key: formKey,
@@ -532,7 +532,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await showDialog<void>(
         context: context,
         builder: (ctx) => StatefulBuilder(
-          builder: (ctx, setDlg) => AlertDialog(
+          builder: (ctx, setDlg) => GlassAlertDialog(
             title: const Text('2FA password'),
             content: TextField(
               controller: twoFactorCtrl,
@@ -648,7 +648,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await showDialog<void>(
         context: context,
         builder: (ctx) => StatefulBuilder(
-          builder: (ctx, setDlg) => AlertDialog(
+          builder: (ctx, setDlg) => GlassAlertDialog(
             title: const Text('Delete account when inactive for'),
             content: SizedBox(
               width: double.maxFinite,
@@ -738,7 +738,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) return;
     await showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Active sessions'),
         content: SizedBox(
           width: double.maxFinite,
@@ -804,7 +804,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await showDialog<void>(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlg) => AlertDialog(
+        builder: (ctx, setDlg) => GlassAlertDialog(
           title: const Text('Business profile'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -867,7 +867,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Clear all local data?'),
         content: const Text(
           'This permanently removes everything stored on this device: '
@@ -1137,10 +1137,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               value: user?.allowGroupAdd ?? true,
               onChanged: (value) async {
                 final api = context.read<ApiService>();
+                final auth = context.read<AuthProvider>();
                 final messenger = ScaffoldMessenger.of(context);
                 try {
                   await api.updatePreferences(allowGroupAdd: value);
-                  if (mounted) context.read<AuthProvider>().refreshCurrentUser();
+                  if (mounted) auth.refreshCurrentUser();
                 } catch (e) {
                   if (mounted) {
                     messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
@@ -1370,7 +1371,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: () async {
                     final confirmed = await showDialog<bool>(
                       context: context,
-                      builder: (ctx) => AlertDialog(
+                      builder: (ctx) => GlassAlertDialog(
                         title: const Text('Sign Out'),
                         content: const Text(
                           'Your PGP keys will remain on this device.',
@@ -1535,7 +1536,6 @@ class _GlassTile extends StatelessWidget {
 /// A switch row inside a glass card.
 class _GlassSwitchTile extends StatelessWidget {
   final IconData icon;
-  final Color? iconColor;
   final String title;
   final String? subtitle;
   final bool value;
@@ -1544,7 +1544,6 @@ class _GlassSwitchTile extends StatelessWidget {
 
   const _GlassSwitchTile({
     required this.icon,
-    this.iconColor,
     required this.title,
     this.subtitle,
     required this.value,
@@ -1572,12 +1571,12 @@ class _GlassSwitchTile extends StatelessWidget {
                   height: 36,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: (iconColor ?? scheme.primary).withValues(alpha: 0.12),
+                    color: scheme.primary.withValues(alpha: 0.12),
                   ),
                   child: Icon(
                     icon,
                     size: 18,
-                    color: iconColor ?? scheme.primary,
+                    color: scheme.primary,
                   ),
                 ),
                 const SizedBox(width: 14),

@@ -17,6 +17,7 @@ import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
+import 'glass.dart';
 import 'message_image_layout.dart';
 
 class MessageBubble extends StatelessWidget {
@@ -480,7 +481,7 @@ class _LocationBubble extends StatelessWidget {
                     width: double.infinity,
                     placeholder: (context, url) =>
                         const Center(child: CircularProgressIndicator()),
-                    errorWidget: (_, __, ___) => Container(
+                    errorWidget: (_, _, _) => Container(
                       color: Colors.black26,
                       alignment: Alignment.center,
                       child: const Icon(Icons.map_outlined, size: 32),
@@ -1032,7 +1033,7 @@ class _PaymentBubbleState extends State<_PaymentBubble> {
     if (_paying) return;
     final ok = await showDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => GlassAlertDialog(
         title: const Text('Pay request'),
         content: Text('Send ${widget.payment.amountLabel}?'),
         actions: [
@@ -1094,7 +1095,7 @@ class _PaymentBubbleState extends State<_PaymentBubble> {
         : '\n\nSend at least ${_formatPaymentAmount(_PaymentEnvelope._readDouble(amount), provider)}.';
     showDialog<void>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => GlassAlertDialog(
         title: Text('Pay with ${provider.toUpperCase()}'),
         content: SelectableText('$address$amountText'),
         actions: [

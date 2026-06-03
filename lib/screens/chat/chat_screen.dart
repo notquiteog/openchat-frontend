@@ -991,7 +991,7 @@ class _ChatScreenState extends State<ChatScreen> {
     ];
     return showDialog<Duration>(
       context: context,
-      builder: (ctx) => SimpleDialog(
+      builder: (ctx) => GlassSimpleDialog(
         title: const Text('Live location duration'),
         children: [
           for (final option in options)
@@ -1043,9 +1043,9 @@ class _ChatScreenState extends State<ChatScreen> {
                         child: CachedNetworkImage(
                           imageUrl: location.mapUrl,
                           fit: BoxFit.contain,
-                          placeholder: (_, __) =>
+                          placeholder: (_, _) =>
                               const Center(child: CircularProgressIndicator()),
-                          errorWidget: (_, __, ___) => const Center(
+                          errorWidget: (_, _, _) => const Center(
                             child: Icon(
                               Icons.map_outlined,
                               color: Colors.white54,
@@ -1122,7 +1122,7 @@ class _ChatScreenState extends State<ChatScreen> {
         : '\n\nSend at least ${_formatCrypto(_asDouble(amount), provider)}.';
     showDialog<void>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => GlassAlertDialog(
         title: Text('Pay with ${provider.toUpperCase()}'),
         content: SelectableText('$address$amountText'),
         actions: [
@@ -1184,7 +1184,7 @@ class _ChatScreenState extends State<ChatScreen> {
               }
             }
 
-            return AlertDialog(
+            return GlassAlertDialog(
               title: const Text('New poll'),
               content: SingleChildScrollView(
                 child: Column(
@@ -1844,84 +1844,142 @@ class _ChatScreenState extends State<ChatScreen> {
             onPressed: () => _startCall(isVideo: true),
           ),
         ],
-        PopupMenuButton<String>(
-          onSelected: (v) {
-            switch (v) {
-              case 'info':
-                _showConversationInfo(context, currentUserID);
-              case 'edit':
-                _editGroup(context, currentUserID);
-              case 'members':
-                _showMembers(context, currentUserID);
-              case 'appearance':
-                _showChatAppearance(context);
-              case 'background':
-                _setConversationBackground(context);
-              case 'disappearing':
-                _setDisappearing(context);
-              case 'slow_mode':
-                _setSlowMode(context);
-              case 'encryption':
-                _setEncryption(context);
-              case 'delete_messages':
-                _deleteGroupMessages(context, currentUserID);
-              case 'delete':
-                _deleteConversation(context);
-            }
-          },
-          itemBuilder: (_) => [
-            const PopupMenuItem(
-              value: 'info',
-              child: Text('Conversation info'),
-            ),
-            if (conv.isDM ||
-                conv.members.any((m) => m.userId == currentUserID && m.isAdmin))
-              const PopupMenuItem(
-                value: 'disappearing',
-                child: Text('Disappearing messages'),
-              ),
-            if (!conv.isDM &&
-                conv.members.any((m) => m.userId == currentUserID && m.isAdmin))
-              const PopupMenuItem(value: 'slow_mode', child: Text('Slow mode')),
-            if (!conv.isDM &&
-                conv.members.any((m) => m.userId == currentUserID && m.isAdmin))
-              PopupMenuItem(
-                value: 'encryption',
-                child: Text(
-                  conv.encryptionEnabled
-                      ? 'Turn encryption off'
-                      : 'Turn encryption on',
-                ),
-              ),
-            if (conv.isGroup)
-              const PopupMenuItem(value: 'edit', child: Text('Edit group')),
-            if (conv.isGroup)
-              const PopupMenuItem(value: 'members', child: Text('Members')),
-            const PopupMenuItem(
-              value: 'appearance',
-              child: Text('Chat appearance'),
-            ),
-            // Premium conversation-wide background, visible to everyone.
-            if (_canSetConversationBackground(currentUserID))
-              const PopupMenuItem(
-                value: 'background',
-                child: Text('Set chat background'),
-              ),
-            if (conv.isGroup)
-              const PopupMenuItem(
-                value: 'delete_messages',
-                child: Text(
-                  'Delete messages',
-                  style: TextStyle(color: Colors.red),
-                ),
-              ),
-            PopupMenuItem(
-              value: 'delete',
-              child: Text(exitLabel, style: const TextStyle(color: Colors.red)),
-            ),
-          ],
+        IconButton(
+          icon: const Icon(Icons.more_vert),
+          tooltip: 'More options',
+          onPressed: () => _showChatMenu(
+            context,
+            conv,
+            currentUserID,
+            exitLabel,
+          ),
         ),
       ],
+    );
+  }
+
+  void _showChatMenu(
+    BuildContext context,
+    Conversation conv,
+    String currentUserID,
+    String exitLabel,
+  ) {
+    final isAdmin =
+        conv.members.any((m) => m.userId == currentUserID && m.isAdmin);
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          child: LiquidGlass(
+            blur: 56,
+            borderRadius: const BorderRadius.all(Radius.circular(28)),
+            padding: EdgeInsets.zero,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 8),
+                _MenuTile(
+                  icon: Icons.info_outline_rounded,
+                  label: 'Conversation info',
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showConversationInfo(context, currentUserID);
+                  },
+                ),
+                if (conv.isDM || isAdmin)
+                  _MenuTile(
+                    icon: Icons.timer_outlined,
+                    label: 'Disappearing messages',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _setDisappearing(context);
+                    },
+                  ),
+                if (!conv.isDM && isAdmin)
+                  _MenuTile(
+                    icon: Icons.hourglass_empty_rounded,
+                    label: 'Slow mode',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _setSlowMode(context);
+                    },
+                  ),
+                if (!conv.isDM && isAdmin)
+                  _MenuTile(
+                    icon: Icons.lock_outline_rounded,
+                    label: conv.encryptionEnabled
+                        ? 'Turn encryption off'
+                        : 'Turn encryption on',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _setEncryption(context);
+                    },
+                  ),
+                if (conv.isGroup)
+                  _MenuTile(
+                    icon: Icons.edit_outlined,
+                    label: 'Edit group',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _editGroup(context, currentUserID);
+                    },
+                  ),
+                if (conv.isGroup)
+                  _MenuTile(
+                    icon: Icons.group_outlined,
+                    label: 'Members',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _showMembers(context, currentUserID);
+                    },
+                  ),
+                _MenuTile(
+                  icon: Icons.palette_outlined,
+                  label: 'Chat appearance',
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showChatAppearance(context);
+                  },
+                ),
+                if (_canSetConversationBackground(currentUserID))
+                  _MenuTile(
+                    icon: Icons.wallpaper_rounded,
+                    label: 'Set chat background',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _setConversationBackground(context);
+                    },
+                  ),
+                if (conv.isGroup)
+                  _MenuTile(
+                    icon: Icons.delete_sweep_outlined,
+                    label: 'Delete messages',
+                    color: Colors.red,
+                    onTap: () {
+                      Navigator.pop(context);
+                      _deleteGroupMessages(context, currentUserID);
+                    },
+                  ),
+                _MenuTile(
+                  icon: conv.isDM
+                      ? Icons.delete_outline_rounded
+                      : Icons.exit_to_app_rounded,
+                  label: exitLabel,
+                  color: Colors.red,
+                  onTap: () {
+                    Navigator.pop(context);
+                    _deleteConversation(context);
+                  },
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -2140,7 +2198,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final canDelete = isMe || conv.isDM;
     showDialog<void>(
       context: context,
-      builder: (_) => SimpleDialog(
+      builder: (_) => GlassSimpleDialog(
         children: [
           if (!isSystem && msg.isDecrypted)
             ListTile(
@@ -2255,7 +2313,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final current = conv.slowModeSeconds;
     final chosen = await showDialog<int>(
       context: context,
-      builder: (ctx) => SimpleDialog(
+      builder: (ctx) => GlassSimpleDialog(
         title: const Text('Slow mode'),
         children: [
           for (final (label, secs) in options)
@@ -2298,7 +2356,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final nextEnabled = !conv.encryptionEnabled;
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: Text(
           nextEnabled ? 'Turn encryption on?' : 'Turn encryption off?',
         ),
@@ -2340,7 +2398,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final newText = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Edit message'),
         content: TextField(
           controller: ctrl,
@@ -2377,7 +2435,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void _showConversationInfo(BuildContext context, String currentUserID) {
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: Text(conv.displayName(currentUserID)),
         content: ConversationInfoPanel(
           conversation: conv,
@@ -2440,7 +2498,7 @@ class _ChatScreenState extends State<ChatScreen> {
             }
           }
 
-          return AlertDialog(
+          return GlassAlertDialog(
             title: const Text('Edit group'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
@@ -2588,48 +2646,72 @@ class _ChatScreenState extends State<ChatScreen> {
                       title: Text(isSelf ? '$username (you)' : username),
                       subtitle: m.isAdmin ? const Text('Admin') : null,
                       trailing: isAdmin && !isSelf
-                          ? PopupMenuButton<String>(
+                          ? IconButton(
                               icon: const Icon(Icons.more_vert),
-                              onSelected: (value) {
-                                switch (value) {
-                                  case 'make_admin':
-                                    _setGroupMemberRole(
-                                      context,
-                                      m.userId,
-                                      username,
-                                      MemberRole.admin,
-                                    );
-                                  case 'make_member':
-                                    _setGroupMemberRole(
-                                      context,
-                                      m.userId,
-                                      username,
-                                      MemberRole.member,
-                                    );
-                                  case 'remove':
-                                    _removeMember(context, m.userId, username);
-                                }
+                              onPressed: () {
+                                showModalBottomSheet<void>(
+                                  context: context,
+                                  backgroundColor: Colors.transparent,
+                                  builder: (_) => SafeArea(
+                                    top: false,
+                                    child: Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                          14, 0, 14, 14),
+                                      child: LiquidGlass(
+                                        blur: 56,
+                                        borderRadius: const BorderRadius.all(
+                                            Radius.circular(28)),
+                                        padding: EdgeInsets.zero,
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const SizedBox(height: 8),
+                                            if (!m.isAdmin)
+                                              _MenuTile(
+                                                icon: Icons.star_outline_rounded,
+                                                label: 'Make admin',
+                                                onTap: () {
+                                                  Navigator.pop(context);
+                                                  _setGroupMemberRole(
+                                                    context,
+                                                    m.userId,
+                                                    username,
+                                                    MemberRole.admin,
+                                                  );
+                                                },
+                                              ),
+                                            if (m.isAdmin)
+                                              _MenuTile(
+                                                icon: Icons.star_border_rounded,
+                                                label: 'Remove admin',
+                                                onTap: () {
+                                                  Navigator.pop(context);
+                                                  _setGroupMemberRole(
+                                                    context,
+                                                    m.userId,
+                                                    username,
+                                                    MemberRole.member,
+                                                  );
+                                                },
+                                              ),
+                                            _MenuTile(
+                                              icon: Icons.person_remove_outlined,
+                                              label: 'Remove member',
+                                              color: Colors.red,
+                                              onTap: () {
+                                                Navigator.pop(context);
+                                                _removeMember(
+                                                    context, m.userId, username);
+                                              },
+                                            ),
+                                            const SizedBox(height: 8),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
                               },
-                              itemBuilder: (_) => [
-                                if (!m.isAdmin)
-                                  const PopupMenuItem(
-                                    value: 'make_admin',
-                                    child: Text('Make admin'),
-                                  ),
-                                if (m.isAdmin)
-                                  const PopupMenuItem(
-                                    value: 'make_member',
-                                    child: Text('Remove admin'),
-                                  ),
-                                const PopupMenuDivider(),
-                                const PopupMenuItem(
-                                  value: 'remove',
-                                  child: Text(
-                                    'Remove member',
-                                    style: TextStyle(color: Colors.red),
-                                  ),
-                                ),
-                              ],
                             )
                           : null,
                       onTap: m.user != null
@@ -2682,7 +2764,7 @@ class _ChatScreenState extends State<ChatScreen> {
               }
             }
 
-            return AlertDialog(
+            return GlassAlertDialog(
               title: const Text('Add Member'),
               content: SizedBox(
                 width: 320,
@@ -2812,7 +2894,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final roleLabel = role == MemberRole.admin ? 'admin' : 'member';
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: Text('Make @$username $roleLabel?'),
         content: Text(
           role == MemberRole.admin
@@ -2858,7 +2940,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Remove member?'),
         content: Text('Remove @$username from this group?'),
         actions: [
@@ -2900,7 +2982,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final navigator = Navigator.of(context);
     final action = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Delete messages'),
         content: Text(
           isAdmin
@@ -2961,7 +3043,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (isOwner && !hasOtherAdmin) {
         await showDialog<void>(
           context: context,
-          builder: (ctx) => AlertDialog(
+          builder: (ctx) => GlassAlertDialog(
             title: const Text('Promote another admin first'),
             content: const Text(
               'Group owners can leave after another member is an admin. '
@@ -2980,7 +3062,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
       final action = await showDialog<String>(
         context: context,
-        builder: (ctx) => AlertDialog(
+        builder: (ctx) => GlassAlertDialog(
           title: const Text('Leave group?'),
           content: const Text(
             'You can leave, or leave and delete your sent messages.',
@@ -3023,7 +3105,7 @@ class _ChatScreenState extends State<ChatScreen> {
         : 'channel';
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: Text('Delete $label?'),
         content: Text(
           conv.isDM
@@ -3208,6 +3290,63 @@ class _BouncingDots extends AnimatedWidget {
           ),
         );
       }),
+    );
+  }
+}
+
+/// Glass action-sheet tile — used in the chat overflow menu and member menus.
+/// Pass [color] to render a destructive/warning action in red (or any colour).
+class _MenuTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final Color? color;
+
+  const _MenuTile({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final tint = color ?? scheme.primary;
+    return ClipRRect(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: tint.withValues(alpha: 0.12),
+                  ),
+                  child: Icon(icon, size: 18, color: tint),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 15,
+                      color: color,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

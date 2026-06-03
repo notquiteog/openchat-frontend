@@ -2,6 +2,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../utils/disappearing_message_duration.dart';
+import 'glass.dart';
 
 Future<int?> showDisappearingMessagesPickerDialog(
   BuildContext context, {
@@ -67,7 +68,7 @@ class _DisappearingMessagesPickerDialogState
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
+    return GlassAlertDialog(
       title: const Text('Disappearing messages'),
       content: SizedBox(
         width: double.maxFinite,

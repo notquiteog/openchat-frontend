@@ -276,7 +276,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
     try {
       final confirmed = await showDialog<bool>(
         context: context,
-        builder: (dialogCtx) => AlertDialog(
+        builder: (dialogCtx) => GlassAlertDialog(
           title: Text('Deposit ${provider.toUpperCase()}'),
           content: TextField(
             controller: amountCtrl,
@@ -322,7 +322,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
     final address = deposit['crypto_address'] as String? ?? '';
     showDialog<void>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => GlassAlertDialog(
         title: Text('Send ${deposit['provider'].toString().toUpperCase()}'),
         content: SelectableText(address),
         actions: [
@@ -355,7 +355,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
             final amount = double.tryParse(amountCtrl.text.trim()) ?? 0;
             final fee = amount * feeRate;
             final net = amount - fee;
-            return AlertDialog(
+            return GlassAlertDialog(
               title: Text('Withdraw ${provider.toUpperCase()}'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -1191,7 +1191,7 @@ class _InvoiceTile extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (trailing != null) trailing!,
+                  ?trailing,
                 ],
               ),
             ),
@@ -1274,7 +1274,7 @@ class _InvoiceWaitDialogState extends State<_InvoiceWaitDialog> {
         : (provider == 'btc' ? 2 : 0);
     final detected = _invoice['detected_txid'] != null;
 
-    return AlertDialog(
+    return GlassAlertDialog(
       title: Text(status == 'paid' ? 'Payment confirmed' : 'Awaiting payment'),
       content: Column(
         mainAxisSize: MainAxisSize.min,

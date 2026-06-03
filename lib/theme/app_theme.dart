@@ -185,17 +185,16 @@ class AppTheme {
         shape: const CircleBorder(),
       ),
 
-      // Dialogs are glass panels in iOS 26 — no opaque card, just blur + border.
+      // Dialogs use GlassAlertDialog which manages its own surface — set the
+      // container to transparent so the LiquidGlass blur shows through.
+      // barrierColor is lightened so the frosted glass reads clearly.
       dialogTheme: DialogThemeData(
         elevation: 0,
-        backgroundColor: scheme.surface.withValues(alpha: isDark ? 0.55 : 0.72),
+        backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(32),
-          side: BorderSide(
-            color: Colors.white.withValues(alpha: isDark ? 0.14 : 0.40),
-            width: 0.7,
-          ),
+        barrierColor: Colors.black.withValues(alpha: 0.35),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(28)),
         ),
         titleTextStyle: TextStyle(
           color: scheme.onSurface,

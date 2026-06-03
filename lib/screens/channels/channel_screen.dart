@@ -45,7 +45,7 @@ Future<Conversation?> showCreateChannelDialog(BuildContext context) async {
   final result = await showDialog<Map<String, dynamic>>(
     context: context,
     builder: (ctx) => StatefulBuilder(
-      builder: (ctx, setDlgState) => AlertDialog(
+      builder: (ctx, setDlgState) => GlassAlertDialog(
         title: const Text('New channel'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -511,7 +511,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final chat = context.read<ChatProvider>();
     final action = await showDialog<String>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (_) => GlassAlertDialog(
         title: const Text('Unsubscribe'),
         content: Text('Leave ${channel.name}?'),
         actions: [
@@ -545,7 +545,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final api = context.read<ApiService>();
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (_) => GlassAlertDialog(
         title: const Text('Delete your posts?'),
         content: const Text(
           'This deletes all messages you sent in this channel.',
@@ -636,7 +636,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final api = context.read<ApiService>();
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (_) => GlassAlertDialog(
         title: Text('Delete @$username\'s messages?'),
         content: const Text('This removes all messages this user sent here.'),
         actions: [
@@ -669,7 +669,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final api = context.read<ApiService>();
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (_) => GlassAlertDialog(
         title: Text('Ban @$username?'),
         content: const Text('They will be removed and blocked from rejoining.'),
         actions: [
@@ -704,7 +704,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final navigator = Navigator.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (_) => GlassAlertDialog(
         title: const Text('Archive Channel?'),
         content: Text(
           'Archive ${channel.name ?? 'this channel'}? '
@@ -761,7 +761,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final api = context.read<ApiService>();
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Delete Channel?'),
         content: Text(
           'Permanently delete ${channel.name ?? 'this channel'} and all its '
@@ -792,7 +792,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   void _showChannelInfo() {
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: Text(channel.name ?? 'Channel'),
         content: SingleChildScrollView(
           child: Padding(
@@ -858,7 +858,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final saved = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlgState) => AlertDialog(
+        builder: (ctx, setDlgState) => GlassAlertDialog(
           title: const Text('Channel Settings'),
           content: SingleChildScrollView(
             child: Column(
@@ -1107,7 +1107,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final nextEnabled = !channel.encryptionEnabled;
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: Text(
           nextEnabled ? 'Turn encryption on?' : 'Turn encryption off?',
         ),
@@ -1549,7 +1549,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final canDelete = isMe || _isAdmin;
     showDialog<void>(
       context: context,
-      builder: (ctx) => SimpleDialog(
+      builder: (ctx) => GlassSimpleDialog(
         children: [
           if (!isSystem && msg.isDecrypted)
             ListTile(

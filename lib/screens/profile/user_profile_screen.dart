@@ -46,6 +46,77 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   bool get _viewerIsAdmin =>
       context.read<AuthProvider>().currentUser?.isSystemAdmin ?? false;
 
+  void _showAdminMenu(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          child: LiquidGlass(
+            blur: 56,
+            borderRadius: const BorderRadius.all(Radius.circular(28)),
+            padding: EdgeInsets.zero,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 8),
+                if (!_user.isBanned)
+                  _ProfileMenuTile(
+                    icon: Icons.block_rounded,
+                    label: 'Ban user',
+                    color: Colors.red,
+                    onTap: () {
+                      Navigator.pop(context);
+                      _ban();
+                    },
+                  )
+                else
+                  _ProfileMenuTile(
+                    icon: Icons.check_circle_outline_rounded,
+                    label: 'Unban user',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _unban();
+                    },
+                  ),
+                if (!_user.isFlaggedScammer)
+                  _ProfileMenuTile(
+                    icon: Icons.flag_outlined,
+                    label: 'Flag as scammer',
+                    color: Colors.orange,
+                    onTap: () {
+                      Navigator.pop(context);
+                      _flagScammer();
+                    },
+                  )
+                else
+                  _ProfileMenuTile(
+                    icon: Icons.flag_outlined,
+                    label: 'Remove scammer flag',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _unflagScammer();
+                    },
+                  ),
+                _ProfileMenuTile(
+                  icon: Icons.workspace_premium_outlined,
+                  label: 'Give Premium for 1 month',
+                  onTap: () {
+                    Navigator.pop(context);
+                    _grantPremiumMonth();
+                  },
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _ban() async {
     final api = context.read<ApiService>();
     final confirmed = await _confirm(
@@ -370,7 +441,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         : '\n\nSend at least ${_formatCrypto(_asDouble(amount), provider)}.';
     showDialog<void>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
+      builder: (dialogCtx) => GlassAlertDialog(
         title: Text('Pay with ${provider.toUpperCase()}'),
         content: SelectableText('$address$amountText'),
         actions: [
@@ -393,7 +464,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   Future<bool> _confirm(String title, String content) async {
     return await showDialog<bool>(
           context: context,
-          builder: (_) => AlertDialog(
+          builder: (_) => GlassAlertDialog(
             title: Text(title),
             content: Text(content),
             actions: [
@@ -420,7 +491,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   void _showFingerprintQR() {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (_) => GlassAlertDialog(
         title: Text('PGP Fingerprint'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -480,35 +551,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         title: Text('@${_user.username}'),
         actions: [
           if (isAdmin && !_isOwnProfile)
-            PopupMenuButton<String>(
-              onSelected: (v) {
-                switch (v) {
-                  case 'ban':
-                    _ban();
-                  case 'unban':
-                    _unban();
-                  case 'flag':
-                    _flagScammer();
-                  case 'unflag':
-                    _unflagScammer();
-                  case 'premium_month':
-                    _grantPremiumMonth();
-                }
-              },
-              itemBuilder: (_) => [
-                if (!_user.isBanned)
-                  const PopupMenuItem(value: 'ban', child: Text('Ban user'))
-                else
-                  const PopupMenuItem(value: 'unban', child: Text('Unban user')),
-                if (!_user.isFlaggedScammer)
-                  const PopupMenuItem(value: 'flag', child: Text('Flag as scammer'))
-                else
-                  const PopupMenuItem(value: 'unflag', child: Text('Remove scammer flag')),
-                const PopupMenuItem(
-                  value: 'premium_month',
-                  child: Text('Give Premium for 1 month'),
-                ),
-              ],
+            IconButton(
+              icon: const Icon(Icons.more_vert),
+              tooltip: 'Admin actions',
+              onPressed: () => _showAdminMenu(context),
             ),
         ],
       ),
@@ -1030,4 +1076,59 @@ double _asDouble(Object? value) {
 String _formatCrypto(double amount, String provider) {
   final decimals = provider == 'btc' ? 8 : 12;
   return '${amount.toStringAsFixed(decimals)} ${provider.toUpperCase()}';
+}
+
+class _ProfileMenuTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final Color? color;
+
+  const _ProfileMenuTile({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final tint = color ?? scheme.primary;
+    return ClipRRect(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: tint.withValues(alpha: 0.12),
+                  ),
+                  child: Icon(icon, size: 18, color: tint),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 15,
+                      color: color,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

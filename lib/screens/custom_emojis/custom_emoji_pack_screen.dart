@@ -58,7 +58,7 @@ class _CustomEmojiPackScreenState extends State<CustomEmojiPackScreen> {
     final descCtrl = TextEditingController();
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('New Custom Emoji Pack'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -295,7 +295,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
   Future<void> _removeFromLibrary() async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Remove pack?'),
         content: const Text(
           'This pack will be removed from your library. You can add it again later.',
@@ -344,7 +344,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
 
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Add Custom Emoji'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -405,7 +405,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
   Future<void> _deleteCustomEmoji(String emojiID) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Delete custom emoji?'),
         content: const Text(
           'This custom emoji will be removed from the pack permanently.',
@@ -467,7 +467,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
     );
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Edit Pack'),
         content: Column(
           mainAxisSize: MainAxisSize.min,

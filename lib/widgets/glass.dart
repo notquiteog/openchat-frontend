@@ -418,6 +418,172 @@ class GlassCard extends StatelessWidget {
   }
 }
 
+// ── GlassAlertDialog ─────────────────────────────────────────────────────────
+
+/// iOS 26 glass alert dialog — drop-in replacement for [AlertDialog].
+///
+/// Renders as a transparent [Dialog] backed by [LiquidGlass] so the
+/// backdrop blur punches through the modal barrier for a true frosted effect.
+class GlassAlertDialog extends StatelessWidget {
+  final Widget? icon;
+  final Widget? title;
+  final Widget? content;
+  final List<Widget>? actions;
+  final EdgeInsetsGeometry? iconPadding;
+  final EdgeInsetsGeometry? titlePadding;
+  final EdgeInsetsGeometry? contentPadding;
+  final EdgeInsetsGeometry? actionsPadding;
+  final MainAxisAlignment actionsAlignment;
+
+  const GlassAlertDialog({
+    super.key,
+    this.icon,
+    this.title,
+    this.content,
+    this.actions,
+    this.iconPadding,
+    this.titlePadding,
+    this.contentPadding,
+    this.actionsPadding,
+    this.actionsAlignment = MainAxisAlignment.end,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+      child: LiquidGlass(
+        blur: 56,
+        borderRadius: const BorderRadius.all(Radius.circular(28)),
+        padding: EdgeInsets.zero,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (icon != null)
+              Padding(
+                padding: iconPadding ?? const EdgeInsets.fromLTRB(0, 24, 0, 0),
+                child: IconTheme(
+                  data: IconThemeData(color: scheme.primary, size: 32),
+                  child: Align(alignment: Alignment.center, child: icon!),
+                ),
+              ),
+            if (title != null)
+              Padding(
+                padding: titlePadding ??
+                    EdgeInsets.fromLTRB(24, icon != null ? 12 : 24, 24, 0),
+                child: DefaultTextStyle(
+                  style: textTheme.headlineSmall!.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                  textAlign: TextAlign.center,
+                  child: title!,
+                ),
+              ),
+            if (content != null)
+              Padding(
+                padding: contentPadding ??
+                    const EdgeInsets.fromLTRB(24, 16, 24, 24),
+                child: DefaultTextStyle(
+                  style: textTheme.bodyMedium!.copyWith(
+                    color: scheme.onSurface.withValues(alpha: 0.80),
+                  ),
+                  child: content!,
+                ),
+              ),
+            if (actions != null && actions!.isNotEmpty) ...[
+              Divider(
+                height: 1,
+                thickness: 0.5,
+                color: scheme.outlineVariant.withValues(alpha: 0.40),
+              ),
+              Padding(
+                padding: actionsPadding ??
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: Row(
+                  mainAxisAlignment: actionsAlignment,
+                  children: actions!,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── GlassSimpleDialog ─────────────────────────────────────────────────────────
+
+/// iOS 26 glass simple dialog — drop-in replacement for [SimpleDialog].
+///
+/// Uses [LiquidGlass] as its container so the backdrop blur is applied through
+/// the modal barrier, giving a true frosted-glass appearance.
+class GlassSimpleDialog extends StatelessWidget {
+  final Widget? title;
+  final List<Widget>? children;
+  final EdgeInsetsGeometry? titlePadding;
+  final EdgeInsetsGeometry? contentPadding;
+
+  const GlassSimpleDialog({
+    super.key,
+    this.title,
+    this.children,
+    this.titlePadding,
+    this.contentPadding,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+      child: LiquidGlass(
+        blur: 56,
+        borderRadius: const BorderRadius.all(Radius.circular(28)),
+        padding: EdgeInsets.zero,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (title != null)
+              Padding(
+                padding: titlePadding ??
+                    const EdgeInsets.fromLTRB(24, 20, 24, 8),
+                child: DefaultTextStyle(
+                  style: textTheme.titleMedium!.copyWith(
+                    color: scheme.onSurface.withValues(alpha: 0.55),
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.4,
+                  ),
+                  child: title!,
+                ),
+              ),
+            if (children != null)
+              Padding(
+                padding: contentPadding ?? const EdgeInsets.symmetric(vertical: 8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: children!,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ── LiquidMeshBackground ─────────────────────────────────────────────────────
 
 /// A rich gradient background used behind glass surfaces on auth and lock

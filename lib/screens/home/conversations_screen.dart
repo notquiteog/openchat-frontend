@@ -148,7 +148,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     if (leaveOnly) {
       final chosenAction = await showDialog<String>(
         context: context,
-        builder: (ctx) => AlertDialog(
+        builder: (ctx) => GlassAlertDialog(
           title: Text('Leave $label?'),
           content: Text('Leave this $label or also delete your sent messages.'),
           actions: [
@@ -186,7 +186,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: Text(title),
         content: Text(body),
         actions: [
@@ -376,7 +376,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final nameCtrl = TextEditingController();
     final result = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('New Group'),
         content: TextField(
           controller: nameCtrl,

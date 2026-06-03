@@ -243,7 +243,7 @@ class PgpKeysScreen extends StatelessWidget {
     if (!context.mounted) return;
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Export Private Key'),
         content: const Text(
           'Your private key will be copied to the clipboard in plain text.\n\n'
@@ -280,7 +280,7 @@ class PgpKeysScreen extends StatelessWidget {
       BuildContext context, KeyProvider keys) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Delete Local Keys?',
             style: TextStyle(color: Colors.red)),
         content: const Text(
@@ -313,7 +313,7 @@ class PgpKeysScreen extends StatelessWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
+        builder: (ctx, setDialogState) => GlassAlertDialog(
           title: const Text('Rotate PGP Key?'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -388,7 +388,7 @@ class PgpKeysScreen extends StatelessWidget {
 
     await showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Import Private Key'),
         content: SingleChildScrollView(
           child: Column(
@@ -488,7 +488,7 @@ class _FingerprintDisplay extends StatelessWidget {
   void _showQR(BuildContext context, String fp) {
     showDialog<void>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (_) => GlassAlertDialog(
         title: const Text('Your PGP Fingerprint'),
         content: Column(
           mainAxisSize: MainAxisSize.min,

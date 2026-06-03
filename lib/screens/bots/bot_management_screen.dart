@@ -58,7 +58,7 @@ class _BotManagementScreenState extends State<BotManagementScreen> {
     showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Bot Created'),
         content: SingleChildScrollView(
           child: Column(
@@ -342,7 +342,7 @@ class _CreateBotDialogState extends State<_CreateBotDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
+    return GlassAlertDialog(
       title: const Text('Create Bot'),
       content: SingleChildScrollView(
         child: Column(
@@ -457,7 +457,7 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
   Future<void> _regenerateToken() async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Regenerate API token?'),
         content: const Text(
             'A new token will be issued and the current one will stop working '
@@ -489,7 +489,7 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
   void _showNewToken(String token) {
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('New API Token'),
         content: SingleChildScrollView(
           child: Column(
@@ -527,7 +527,7 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
     );
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Edit Bot'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -613,7 +613,7 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
   Future<void> _deleteBot() async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Delete bot?'),
         content: Text(
             'This will permanently delete @$_username. This cannot be undone.'),
@@ -856,7 +856,7 @@ class _BotDetailTile extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (trailing case final w?) w,
+                ?trailing,
                 if (trailingIcon != null)
                   Icon(trailingIcon, size: 18,
                       color: scheme.onSurface.withValues(alpha: 0.35)),
