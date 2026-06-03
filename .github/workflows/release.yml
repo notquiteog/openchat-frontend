@@ -18,7 +18,7 @@ defaults:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  FLUTTER_VERSION: '3.44.0'
+  FLUTTER_VERSION: '3.44.1'
   DART_DEFINES: >-
     --dart-define=OPENCHAT_HOST=openchat.win
     --dart-define=OPENCHAT_PORT=443
@@ -50,7 +50,7 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '26'
 
       - uses: subosito/flutter-action@v2
         with:
