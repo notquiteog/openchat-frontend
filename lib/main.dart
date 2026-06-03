@@ -35,7 +35,6 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  DesktopStartupService.configureDatabaseFactory();
   await DesktopStartupService.startTray();
   // Register Firebase background message handler before runApp so the
   // messaging plugin can dispatch messages when the app is terminated.

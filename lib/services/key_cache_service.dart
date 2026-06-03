@@ -1,5 +1,6 @@
-import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:sqlite3/sqlite3.dart' as sqlite;
 
 /// SQLite-backed local cache for remote users' public keys.
 ///
@@ -8,29 +9,54 @@ import 'package:path/path.dart' as p;
 /// Invalidate manually after a key-rotation event.
 class KeyCacheService {
   static const _ttl = Duration(hours: 24);
-  static Database? _db;
+  static sqlite.Database? _db;
+  static Future<sqlite.Database>? _opening;
 
-  static Future<Database> _open() async {
-    _db ??= await openDatabase(
-      p.join(await getDatabasesPath(), 'key_cache.db'),
-      version: 2,
-      onCreate: (db, _) => db.execute('''
-        CREATE TABLE key_cache (
-          user_id        TEXT PRIMARY KEY,
-          public_key     TEXT NOT NULL,
-          fingerprint    TEXT NOT NULL,
-          expires_at_ms  INTEGER,
-          cached_at      INTEGER NOT NULL
-        )
-      '''),
-      onUpgrade: (db, oldVersion, _) async {
-        if (oldVersion < 2) {
-          await db.execute(
-              'ALTER TABLE key_cache ADD COLUMN expires_at_ms INTEGER');
-        }
-      },
-    );
-    return _db!;
+  static Future<sqlite.Database> _open() async {
+    final existing = _db;
+    if (existing != null) return existing;
+
+    final inFlight = _opening;
+    if (inFlight != null) return inFlight;
+
+    final opening = _openDatabase();
+    _opening = opening;
+    try {
+      final db = await opening;
+      _db = db;
+      return db;
+    } finally {
+      _opening = null;
+    }
+  }
+
+  static Future<sqlite.Database> _openDatabase() async {
+    final dir = await getApplicationSupportDirectory();
+    await dir.create(recursive: true);
+    final db = sqlite.sqlite3.open(p.join(dir.path, 'key_cache.db'));
+    _migrate(db);
+    return db;
+  }
+
+  static void _migrate(sqlite.Database db) {
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS key_cache (
+        user_id        TEXT PRIMARY KEY,
+        public_key     TEXT NOT NULL,
+        fingerprint    TEXT NOT NULL,
+        expires_at_ms  INTEGER,
+        cached_at      INTEGER NOT NULL
+      )
+    ''');
+
+    final columns = db
+        .select('PRAGMA table_info(key_cache)')
+        .map((row) => row['name'] as String)
+        .toSet();
+    if (!columns.contains('expires_at_ms')) {
+      db.execute('ALTER TABLE key_cache ADD COLUMN expires_at_ms INTEGER');
+    }
+    db.execute('PRAGMA user_version = 2');
   }
 
   /// Returns the cached entry for [userId], or null if missing, expired by
@@ -38,20 +64,26 @@ class KeyCacheService {
   /// passed its PGP expiry. Callers encrypting outbound messages should
   /// always pass excludeExpiredKeys: true so they never address a recipient
   /// who can't decrypt.
-  static Future<CachedKey?> get(String userId,
-      {bool excludeExpiredKeys = true}) async {
+  static Future<CachedKey?> get(
+    String userId, {
+    bool excludeExpiredKeys = true,
+  }) async {
     final db = await _open();
-    final rows = await db.query(
-      'key_cache',
-      columns: ['public_key', 'fingerprint', 'expires_at_ms', 'cached_at'],
-      where: 'user_id = ?',
-      whereArgs: [userId],
-    );
+    final stmt = db.prepare('''
+      SELECT public_key, fingerprint, expires_at_ms, cached_at
+      FROM key_cache
+      WHERE user_id = ?
+      LIMIT 1
+    ''');
+    final rows = stmt.select([userId]);
+    stmt.close();
     if (rows.isEmpty) return null;
     final row = rows.first;
-    final cachedAt = DateTime.fromMillisecondsSinceEpoch(row['cached_at'] as int);
+    final cachedAt = DateTime.fromMillisecondsSinceEpoch(
+      row['cached_at'] as int,
+    );
     if (DateTime.now().difference(cachedAt) > _ttl) {
-      await db.delete('key_cache', where: 'user_id = ?', whereArgs: [userId]);
+      _delete(db, userId);
       return null;
     }
     DateTime? expiresAt;
@@ -83,28 +115,41 @@ class KeyCacheService {
     DateTime? expiresAt,
   }) async {
     final db = await _open();
-    await db.insert(
-      'key_cache',
-      {
-        'user_id': userId,
-        'public_key': publicKey,
-        'fingerprint': fingerprint,
-        'expires_at_ms': expiresAt?.millisecondsSinceEpoch,
-        'cached_at': DateTime.now().millisecondsSinceEpoch,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    final stmt = db.prepare('''
+      INSERT INTO key_cache (
+        user_id, public_key, fingerprint, expires_at_ms, cached_at
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET
+        public_key = excluded.public_key,
+        fingerprint = excluded.fingerprint,
+        expires_at_ms = excluded.expires_at_ms,
+        cached_at = excluded.cached_at
+    ''');
+    stmt.execute([
+      userId,
+      publicKey,
+      fingerprint,
+      expiresAt?.millisecondsSinceEpoch,
+      DateTime.now().millisecondsSinceEpoch,
+    ]);
+    stmt.close();
   }
 
   /// Remove a single entry — call after a contact's key rotation is detected.
   static Future<void> invalidate(String userId) async {
     final db = await _open();
-    await db.delete('key_cache', where: 'user_id = ?', whereArgs: [userId]);
+    _delete(db, userId);
   }
 
   static Future<void> clear() async {
     final db = await _open();
-    await db.delete('key_cache');
+    db.execute('DELETE FROM key_cache');
+  }
+
+  static void _delete(sqlite.Database db, String userId) {
+    final stmt = db.prepare('DELETE FROM key_cache WHERE user_id = ?');
+    stmt.execute([userId]);
+    stmt.close();
   }
 }
 

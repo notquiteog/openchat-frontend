@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
-import 'package:file_picker/file_picker.dart';
+import 'package:file_selector/file_selector.dart' as fs;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
@@ -102,20 +102,35 @@ class AttachmentService {
   }
 
   Future<PendingAttachment?> pickFile() async {
-    final result = await FilePicker.pickFiles();
-    if (result == null || result.files.isEmpty) return null;
-    final pf = result.files.first;
-    if (pf.path == null) return null;
-    final prepared = await prepareFileForUpload(File(pf.path!));
+    final file = await fs.openFile();
+    if (file == null) return null;
+    final prepared = await prepareSelectedFileForUpload(file);
     return _processPrepared(prepared);
   }
 
   Future<PendingAttachment?> pickVoice() async {
-    final result = await FilePicker.pickFiles(type: FileType.audio);
-    if (result == null || result.files.isEmpty) return null;
-    final pf = result.files.first;
-    if (pf.path == null) return null;
-    final prepared = await prepareFileForUpload(File(pf.path!));
+    final file = await fs.openFile(
+      acceptedTypeGroups: const [
+        fs.XTypeGroup(
+          label: 'Audio',
+          mimeTypes: ['audio/*'],
+          extensions: [
+            'aac',
+            'aiff',
+            'flac',
+            'm4a',
+            'mp3',
+            'oga',
+            'ogg',
+            'opus',
+            'wav',
+            'webm',
+          ],
+        ),
+      ],
+    );
+    if (file == null) return null;
+    final prepared = await prepareSelectedFileForUpload(file);
     return _processPrepared(
       PreparedAttachmentInput(
         bytes: prepared.bytes,
@@ -163,6 +178,25 @@ class AttachmentService {
       mimeType: 'image/webp',
       messageType: MessageType.image,
       originalFileSize: originalBytes.length,
+    );
+  }
+
+  static Future<PreparedAttachmentInput> prepareSelectedFileForUpload(
+    XFile file,
+  ) async {
+    final bytes = await file.readAsBytes();
+    final fileName = file.name.isNotEmpty ? file.name : p.basename(file.path);
+    final mimeType =
+        file.mimeType ??
+        lookupMimeType(fileName, headerBytes: bytes) ??
+        lookupMimeType(file.path, headerBytes: bytes) ??
+        'application/octet-stream';
+    return PreparedAttachmentInput(
+      bytes: bytes,
+      fileName: fileName,
+      mimeType: mimeType,
+      messageType: _mimeToMessageTypeStatic(mimeType),
+      originalFileSize: bytes.length,
     );
   }
 

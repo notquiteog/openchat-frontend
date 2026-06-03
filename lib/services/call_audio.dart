@@ -1,4 +1,7 @@
-import 'package:audioplayers/audioplayers.dart';
+import 'dart:async';
+
+import 'package:just_audio/just_audio.dart';
+
 import 'call_service.dart';
 
 abstract class CallAudioController {
@@ -27,13 +30,11 @@ class CallAudio implements CallAudioController {
   @override
   Future<void> update({CallState? state, bool incoming = false}) {
     if (incoming) return _enqueue('ringing');
-    return _enqueue(
-      switch (state) {
-        CallState.calling || CallState.ringing => 'ringing',
-        CallState.connecting => 'connecting',
-        _ => null,
-      },
-    );
+    return _enqueue(switch (state) {
+      CallState.calling || CallState.ringing => 'ringing',
+      CallState.connecting => 'connecting',
+      _ => null,
+    });
   }
 
   Future<void> _enqueue(String? tone) {
@@ -57,9 +58,11 @@ class CallAudio implements CallAudioController {
     try {
       await _player.stop();
       if (op != _op || _current != tone) return;
-      await _player.setReleaseMode(ReleaseMode.loop);
+      await _player.setLoopMode(LoopMode.one);
       if (op != _op || _current != tone) return;
-      await _player.play(AssetSource('sounds/$tone.mp3'));
+      await _player.setAsset('assets/sounds/$tone.mp3');
+      if (op != _op || _current != tone) return;
+      await _player.play();
     } catch (_) {
       // No audio device / unsupported — fail quietly, the call still works.
     }
@@ -67,6 +70,6 @@ class CallAudio implements CallAudioController {
 
   @override
   void dispose() {
-    _player.dispose();
+    unawaited(_player.dispose());
   }
 }

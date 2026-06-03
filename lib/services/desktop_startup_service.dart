@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'desktop_tray_service.dart';
 
@@ -12,12 +11,6 @@ class DesktopStartupService {
 
   static bool get supported =>
       !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
-
-  static void configureDatabaseFactory() {
-    if (!supported) return;
-    sqfliteFfiInit();
-    databaseFactory = databaseFactoryFfi;
-  }
 
   static Future<void> startTray({
     DesktopTrayInitializer? initializer,

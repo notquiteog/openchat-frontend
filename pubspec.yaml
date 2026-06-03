@@ -35,9 +35,8 @@ dependencies:
   dio: ^5.9.2
 
   # Local database (message cache)
-  sqflite: ^2.4.2+1
-  sqflite_common_ffi: ^2.3.4+4
   drift: ^2.33.0
+  sqlite3: ^3.3.2
 
   # Storage
   path_provider: ^2.1.5
@@ -46,7 +45,7 @@ dependencies:
 
   # File / media
   image_picker: ^1.2.2
-  file_picker: ^12.0.0-beta.5
+  file_selector: ^1.1.0
   cached_network_image: ^3.4.1
   flutter_svg: ^2.3.0
   video_player: ^2.11.1
@@ -57,7 +56,7 @@ dependencies:
   flutter_webrtc: ^1.4.1
 
   # Call ringtone / connecting tones
-  audioplayers: ^6.1.0
+  just_audio: ^0.10.5
 
   # QR code generation (fingerprint verification)
   qr_flutter: ^4.1.0
