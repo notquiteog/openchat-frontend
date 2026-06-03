@@ -127,7 +127,7 @@ class CallService {
   ];
 
   CallService(this._ws, {Future<List<IceServer>> Function()? iceServerLoader})
-      : _iceServerLoader = iceServerLoader {
+    : _iceServerLoader = iceServerLoader {
     _wsSub = _ws.events.listen(_handleWsEvent);
   }
 
@@ -313,8 +313,17 @@ class CallService {
     final tracks = _localStream?.getAudioTracks() ?? const <MediaStreamTrack>[];
     for (final track in tracks) {
       track.enabled = !muted;
-      unawaited(Helper.setMicrophoneMute(muted, track).catchError((_) {}));
+      if (_supportsNativeMicrophoneMute) {
+        unawaited(Helper.setMicrophoneMute(muted, track).catchError((_) {}));
+      }
     }
+  }
+
+  bool get _supportsNativeMicrophoneMute {
+    if (kIsWeb) return false;
+    return defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.macOS;
   }
 
   void setCameraEnabled(bool enabled) {
@@ -333,15 +342,19 @@ class CallService {
     try {
       final outputs = await Helper.audiooutputs;
       if (outputs.isNotEmpty) {
-        final detected = outputs.where((d) => d.deviceId.isNotEmpty).map((d) {
-          final label = _labelForAudioOutput(d.label);
-          final deviceId = !kIsWeb &&
-                  (defaultTargetPlatform == TargetPlatform.android ||
-                      defaultTargetPlatform == TargetPlatform.iOS)
-              ? _mobileAudioOutputId(label, d.deviceId)
-              : d.deviceId;
-          return CallAudioOutput(deviceId: deviceId, label: label);
-        }).toList(growable: false);
+        final detected = outputs
+            .where((d) => d.deviceId.isNotEmpty)
+            .map((d) {
+              final label = _labelForAudioOutput(d.label);
+              final deviceId =
+                  !kIsWeb &&
+                      (defaultTargetPlatform == TargetPlatform.android ||
+                          defaultTargetPlatform == TargetPlatform.iOS)
+                  ? _mobileAudioOutputId(label, d.deviceId)
+                  : d.deviceId;
+              return CallAudioOutput(deviceId: deviceId, label: label);
+            })
+            .toList(growable: false);
         if (!kIsWeb &&
             (defaultTargetPlatform == TargetPlatform.android ||
                 defaultTargetPlatform == TargetPlatform.iOS)) {
@@ -428,8 +441,10 @@ class CallService {
   ) {
     final byId = <String, CallAudioOutput>{
       'speaker': const CallAudioOutput(deviceId: 'speaker', label: 'Speaker'),
-      'earpiece':
-          const CallAudioOutput(deviceId: 'earpiece', label: 'Earpiece'),
+      'earpiece': const CallAudioOutput(
+        deviceId: 'earpiece',
+        label: 'Earpiece',
+      ),
     };
     for (final output in detected) {
       byId[output.deviceId] = output;
@@ -652,7 +667,8 @@ class CallService {
   }
 
   Future<void> _captureLocalMedia({required bool isVideo}) async {
-    final isMobile = !kIsWeb &&
+    final isMobile =
+        !kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.android ||
             defaultTargetPlatform == TargetPlatform.iOS);
 
@@ -660,8 +676,8 @@ class CallService {
       'audio': true,
       'video': isVideo
           ? (isMobile
-              ? {'facingMode': 'user', 'width': 640, 'height': 480}
-              : {'width': 1280, 'height': 720})
+                ? {'facingMode': 'user', 'width': 640, 'height': 480}
+                : {'width': 1280, 'height': 720})
           : false,
     };
     _localStream = await navigator.mediaDevices.getUserMedia(constraints);

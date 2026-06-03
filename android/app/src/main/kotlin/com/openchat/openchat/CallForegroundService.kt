@@ -25,9 +25,14 @@ class CallForegroundService : Service() {
         val body = intent?.getStringExtra(EXTRA_BODY) ?: "Call in progress"
         val isVideo = intent?.getBooleanExtra(EXTRA_IS_VIDEO, false) ?: false
         val muted = intent?.getBooleanExtra(EXTRA_MUTED, false) ?: false
+        val connectedAtMillis = if (intent?.hasExtra(EXTRA_CONNECTED_AT_MILLIS) == true) {
+            intent.getLongExtra(EXTRA_CONNECTED_AT_MILLIS, 0L)
+        } else {
+            null
+        }
         ensureChannel()
 
-        val notification = buildNotification(title, body, muted)
+        val notification = buildNotification(title, body, muted, connectedAtMillis)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             var foregroundType = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
             if (isVideo) {
@@ -55,7 +60,12 @@ class CallForegroundService : Service() {
         manager.createNotificationChannel(channel)
     }
 
-    private fun buildNotification(title: String, body: String, muted: Boolean): Notification =
+    private fun buildNotification(
+        title: String,
+        body: String,
+        muted: Boolean,
+        connectedAtMillis: Long?,
+    ): Notification =
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(applicationInfo.icon)
             .setContentTitle(title)
@@ -65,7 +75,10 @@ class CallForegroundService : Service() {
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOnlyAlertOnce(true)
-            .setUsesChronometer(true)
+            .setShowWhen(connectedAtMillis != null)
+            .setWhen(connectedAtMillis ?: System.currentTimeMillis())
+            .setUsesChronometer(connectedAtMillis != null)
+            .setChronometerCountDown(false)
             .addAction(
                 android.R.drawable.ic_btn_speak_now,
                 if (muted) "Unmute" else "Mute",
@@ -103,6 +116,7 @@ class CallForegroundService : Service() {
         const val EXTRA_BODY = "body"
         const val EXTRA_IS_VIDEO = "isVideo"
         const val EXTRA_MUTED = "muted"
+        const val EXTRA_CONNECTED_AT_MILLIS = "connectedAtMillis"
         private const val CHANNEL_ID = "active_calls"
         private const val NOTIFICATION_ID = 2
         private const val REQUEST_OPEN = 20

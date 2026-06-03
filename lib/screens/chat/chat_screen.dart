@@ -26,6 +26,7 @@ import '../../widgets/color_choices.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/message_bubble.dart';
 import '../../widgets/sticker_picker.dart';
+import '../../widgets/voice_note_recorder.dart';
 import '../profile/user_profile_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -469,13 +470,19 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     PendingAttachment? pending;
+    VoiceNoteRecording? voiceNote;
     try {
       pending = switch (choice) {
         'gallery_image' => await attachmentService.pickImage(),
         'camera_image' => await attachmentService.pickImage(fromCamera: true),
         'gallery_video' => await attachmentService.pickVideo(),
         'file' => await attachmentService.pickFile(),
-        'voice' => await attachmentService.pickVoice(),
+        'voice' => await (() async {
+          voiceNote = await showVoiceNoteRecorder(context);
+          final note = voiceNote;
+          if (note == null) return null;
+          return attachmentService.uploadVoiceNote(note.file);
+        })(),
         _ => null,
       };
     } catch (e) {
@@ -485,6 +492,13 @@ class _ChatScreenState extends State<ChatScreen> {
         ).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
       }
       return;
+    } finally {
+      final file = voiceNote?.file;
+      if (file != null) {
+        try {
+          await file.delete();
+        } catch (_) {}
+      }
     }
 
     if (pending == null || !mounted) return;

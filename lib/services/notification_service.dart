@@ -453,6 +453,7 @@ class NotificationService {
     required String title,
     required String body,
     bool muted = false,
+    int? connectedAtMillis,
   }) async {
     if (!_supported) return;
     if (await _shouldSuppressFocusedNotification()) {
@@ -471,7 +472,9 @@ class NotificationService {
         priority: Priority.low,
         ongoing: true,
         autoCancel: false,
-        usesChronometer: true,
+        showWhen: connectedAtMillis != null,
+        when: connectedAtMillis,
+        usesChronometer: connectedAtMillis != null,
         actions: [
           AndroidNotificationAction(
             _activeCallMuteActionId,

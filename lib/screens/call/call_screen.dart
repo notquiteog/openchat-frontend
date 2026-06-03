@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -25,7 +27,7 @@ class _CallScreenState extends State<CallScreen> {
   @override
   void initState() {
     super.initState();
-    if (!_isLinuxAudioOnly(context.read<CallProvider>().session)) {
+    if (_shouldUseVideoRenderers(context.read<CallProvider>().session)) {
       _initRenderers();
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -40,18 +42,13 @@ class _CallScreenState extends State<CallScreen> {
       await _remoteRenderer.initialize();
       _renderersInitialized = true;
     } catch (_) {
-      try {
-        _localRenderer.dispose();
-      } catch (_) {}
-      try {
-        _remoteRenderer.dispose();
-      } catch (_) {}
+      await _disposeRenderer(_localRenderer);
+      await _disposeRenderer(_remoteRenderer);
       if (mounted) setState(() => _renderersReady = false);
       return;
     }
     if (!mounted) {
-      _localRenderer.dispose();
-      _remoteRenderer.dispose();
+      await _disposeRenderers();
       return;
     }
     final ready =
@@ -66,18 +63,42 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   void dispose() {
-    if (_renderersInitialized) {
-      _localRenderer.dispose();
-      _remoteRenderer.dispose();
-    }
+    unawaited(_disposeRenderers());
     super.dispose();
   }
 
-  bool _isLinuxAudioOnly(CallSession? session) =>
-      session != null &&
-      !session.isVideo &&
-      !kIsWeb &&
-      defaultTargetPlatform == TargetPlatform.linux;
+  bool get _isLinuxDesktop =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.linux;
+
+  bool _shouldUseVideoRenderers(CallSession? session) {
+    if (session == null) return false;
+    // Linux flutter_webrtc textures can sit above Flutter controls and can
+    // crash during teardown. Keep the media call alive, but do not mount them.
+    return !_isLinuxDesktop;
+  }
+
+  Future<void> _disposeRenderers() async {
+    if (!_renderersInitialized) return;
+    _renderersInitialized = false;
+    _renderersReady = false;
+    await _clearRenderer(_localRenderer);
+    await _clearRenderer(_remoteRenderer);
+    await _disposeRenderer(_localRenderer);
+    await _disposeRenderer(_remoteRenderer);
+  }
+
+  Future<void> _clearRenderer(RTCVideoRenderer renderer) async {
+    if (renderer.textureId == null) return;
+    try {
+      await renderer.setSrcObject(stream: null);
+    } catch (_) {}
+  }
+
+  Future<void> _disposeRenderer(RTCVideoRenderer renderer) async {
+    try {
+      await renderer.dispose();
+    } catch (_) {}
+  }
 
   void _toggleMic() {
     final callProvider = context.read<CallProvider>();
@@ -150,10 +171,10 @@ class _CallScreenState extends State<CallScreen> {
     }
 
     final isVideo = session.isVideo;
-    final linuxAudioOnly = _isLinuxAudioOnly(session);
+    final useVideoRenderers = _shouldUseVideoRenderers(session);
 
     // Keep renderers in sync whenever streams change (guard: must be initialized first)
-    if (_renderersReady && !linuxAudioOnly) {
+    if (_renderersReady && useVideoRenderers) {
       if (callProvider.localStream != null) {
         _localRenderer.srcObject = callProvider.localStream;
       }
@@ -172,7 +193,7 @@ class _CallScreenState extends State<CallScreen> {
         children: [
           // Audio-only calls still attach the remote stream to a renderer so
           // platforms that route audio through RTCVideoRenderer will play it.
-          if (!isVideo && !linuxAudioOnly && _renderersReady)
+          if (!isVideo && useVideoRenderers && _renderersReady)
             Positioned(
               left: 0,
               top: 0,
@@ -187,11 +208,13 @@ class _CallScreenState extends State<CallScreen> {
             ),
 
           // Remote video (full screen) or avatar for audio call
-          if (isVideo && _renderersReady)
+          if (isVideo && useVideoRenderers && _renderersReady)
             Positioned.fill(
-              child: RTCVideoView(
-                _remoteRenderer,
-                objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+              child: IgnorePointer(
+                child: RTCVideoView(
+                  _remoteRenderer,
+                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                ),
               ),
             )
           else
@@ -218,7 +241,7 @@ class _CallScreenState extends State<CallScreen> {
             ),
 
           // Local video (picture-in-picture)
-          if (isVideo && _renderersReady)
+          if (isVideo && useVideoRenderers && _renderersReady)
             Positioned(
               top: 60,
               right: 16,
@@ -226,10 +249,12 @@ class _CallScreenState extends State<CallScreen> {
               height: 140,
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(8),
-                child: RTCVideoView(
-                  _localRenderer,
-                  mirror: true,
-                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                child: IgnorePointer(
+                  child: RTCVideoView(
+                    _localRenderer,
+                    mirror: true,
+                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                  ),
                 ),
               ),
             ),

@@ -102,7 +102,7 @@ class AttachmentService {
   }
 
   Future<PendingAttachment?> pickFile() async {
-    final result = await FilePicker.pickFiles(withData: false);
+    final result = await FilePicker.pickFiles();
     if (result == null || result.files.isEmpty) return null;
     final pf = result.files.first;
     if (pf.path == null) return null;
@@ -111,10 +111,7 @@ class AttachmentService {
   }
 
   Future<PendingAttachment?> pickVoice() async {
-    final result = await FilePicker.pickFiles(
-      type: FileType.audio,
-      withData: false,
-    );
+    final result = await FilePicker.pickFiles(type: FileType.audio);
     if (result == null || result.files.isEmpty) return null;
     final pf = result.files.first;
     if (pf.path == null) return null;
@@ -124,6 +121,21 @@ class AttachmentService {
         bytes: prepared.bytes,
         fileName: prepared.fileName,
         mimeType: prepared.mimeType,
+        messageType: MessageType.voice,
+        originalFileSize: prepared.originalFileSize,
+      ),
+    );
+  }
+
+  Future<PendingAttachment> uploadVoiceNote(File file) async {
+    final prepared = await prepareFileForUpload(file);
+    return _processPrepared(
+      PreparedAttachmentInput(
+        bytes: prepared.bytes,
+        fileName: prepared.fileName,
+        mimeType: prepared.mimeType == 'application/octet-stream'
+            ? 'audio/mp4'
+            : prepared.mimeType,
         messageType: MessageType.voice,
         originalFileSize: prepared.originalFileSize,
       ),

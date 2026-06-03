@@ -123,6 +123,48 @@ void main() {
       }
     });
 
+    testWidgets('does not mount RTC renderers for Linux video calls', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+
+      final service = _FakeCallService();
+      final provider = CallProvider(service, audio: _FakeCallAudio());
+      try {
+        final session = CallSession(
+          callId: 'c-linux-video',
+          remoteUserId: 'u-linux',
+          remoteUsername: 'linux',
+          isVideo: true,
+          isIncoming: false,
+          state: CallState.connected,
+        )..connectedAt = DateTime.now();
+
+        service.emitSession(session);
+
+        await tester.pumpWidget(
+          ChangeNotifierProvider<CallProvider>.value(
+            value: provider,
+            child: const MaterialApp(home: Scaffold(body: CallOverlay())),
+          ),
+        );
+
+        expect(find.byType(CallScreen), findsOneWidget);
+        expect(find.byType(RTCVideoView), findsNothing);
+        await tester.tap(find.byTooltip('Mute'));
+        await tester.pump();
+        expect(provider.isMicMuted, isTrue);
+        expect(service.micMuteValues, <bool>[true]);
+        await tester.tap(find.byTooltip('End'));
+        await tester.pump();
+        expect(service.hangupCalls, 1);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+        provider.dispose();
+        service.dispose();
+      }
+    });
+
     testWidgets('shows compact affordance and expands back to full', (
       tester,
     ) async {
@@ -344,6 +386,28 @@ void main() {
       provider.dispose();
       service.dispose();
     });
+
+    test('provider swallows native control errors', () {
+      final service = _FakeCallService(
+        throwOnSetMicMuted: true,
+        throwOnSetCameraEnabled: true,
+        throwOnHangup: true,
+      );
+      final provider = CallProvider(service, audio: _FakeCallAudio());
+
+      provider.setMicMuted(true);
+      provider.setCameraEnabled(false);
+      provider.hangup();
+
+      expect(provider.isMicMuted, isTrue);
+      expect(provider.isCameraEnabled, isFalse);
+      expect(service.micMuteValues, <bool>[true]);
+      expect(service.cameraEnabledValues, <bool>[false]);
+      expect(service.hangupCalls, 1);
+
+      provider.dispose();
+      service.dispose();
+    });
   });
 
   group('Active call notification controls', () {
@@ -456,6 +520,7 @@ void main() {
     test('active calls start and stop android foreground service', () async {
       final foreground = _FakeCallForeground();
       final service = _FakeCallService();
+      final connectedAt = DateTime.utc(2026, 6, 3, 12, 0);
       final provider = CallProvider(
         service,
         audio: _FakeCallAudio(),
@@ -470,19 +535,28 @@ void main() {
           isVideo: true,
           isIncoming: false,
           state: CallState.connected,
-        ),
+        )..connectedAt = connectedAt,
       );
       await Future<void>.delayed(Duration.zero);
 
       expect(foreground.starts.length, 1);
       expect(foreground.starts.single.isVideo, isTrue);
       expect(foreground.starts.single.muted, isFalse);
+      expect(foreground.starts.single.body, 'Call in progress');
+      expect(
+        foreground.starts.single.connectedAtMillis,
+        connectedAt.millisecondsSinceEpoch,
+      );
 
       provider.setMicMuted(true);
       await Future<void>.delayed(Duration.zero);
 
       expect(foreground.starts.length, 2);
       expect(foreground.starts.last.muted, isTrue);
+      expect(
+        foreground.starts.last.connectedAtMillis,
+        connectedAt.millisecondsSinceEpoch,
+      );
 
       provider.hangup();
       await Future<void>.delayed(Duration.zero);
@@ -530,12 +604,14 @@ class _ForegroundStart {
   final String body;
   final bool isVideo;
   final bool muted;
+  final int? connectedAtMillis;
 
   const _ForegroundStart({
     required this.title,
     required this.body,
     required this.isVideo,
     required this.muted,
+    this.connectedAtMillis,
   });
 }
 
@@ -549,6 +625,7 @@ class _FakeCallForeground implements CallForegroundController {
     required String body,
     required bool isVideo,
     required bool muted,
+    int? connectedAtMillis,
   }) async {
     starts.add(
       _ForegroundStart(
@@ -556,6 +633,7 @@ class _FakeCallForeground implements CallForegroundController {
         body: body,
         isVideo: isVideo,
         muted: muted,
+        connectedAtMillis: connectedAtMillis,
       ),
     );
     return true;
@@ -568,10 +646,17 @@ class _FakeCallForeground implements CallForegroundController {
 }
 
 class _FakeCallService extends CallService {
-  _FakeCallService({this.throwOnSelectAudioOutput = false})
-    : super(WebSocketService(SecureStorageService()));
+  _FakeCallService({
+    this.throwOnSelectAudioOutput = false,
+    this.throwOnSetMicMuted = false,
+    this.throwOnSetCameraEnabled = false,
+    this.throwOnHangup = false,
+  }) : super(WebSocketService(SecureStorageService()));
 
   final bool throwOnSelectAudioOutput;
+  final bool throwOnSetMicMuted;
+  final bool throwOnSetCameraEnabled;
+  final bool throwOnHangup;
   final _sessionController = StreamController<CallSession?>.broadcast();
   final _incomingController = StreamController<CallSession>.broadcast();
   final _missedController = StreamController<CallSession>.broadcast();
@@ -631,16 +716,21 @@ class _FakeCallService extends CallService {
   @override
   void setMicMuted(bool muted) {
     micMuteValues.add(muted);
+    if (throwOnSetMicMuted) throw UnsupportedError('unsupported mic');
   }
 
   @override
   void hangup() {
     hangupCalls += 1;
+    if (throwOnHangup) throw UnsupportedError('unsupported hangup');
   }
 
   @override
   void setCameraEnabled(bool enabled) {
     cameraEnabledValues.add(enabled);
+    if (throwOnSetCameraEnabled) {
+      throw UnsupportedError('unsupported camera');
+    }
   }
 
   @override

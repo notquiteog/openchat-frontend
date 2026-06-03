@@ -50,14 +50,14 @@ flutter run          # uses localhost:8080 by default
 
 ## Push notifications (optional)
 
-Push notifications require a Firebase project. The files `android/app/google-services.json`, `ios/Runner/GoogleService-Info.plist`, and `lib/firebase_options.dart` are committed as placeholder templates so the project compiles without Firebase. To enable push:
+Push notifications require a Firebase project. Release CI injects `android/app/google-services.json` and `lib/firebase_options.dart` from GitHub secrets; iOS Firebase builds should inject `ios/Runner/GoogleService-Info.plist` the same way. To enable push:
 
 1. Create a Firebase project at <https://console.firebase.google.com/>
 2. Add Android (`com.openchat.openchat`) and iOS (`com.openchat.openchat`) apps
 3. Run `flutterfire configure` — it overwrites the three files above with real values
 4. On the server, set `FIREBASE_SERVICE_ACCOUNT_JSON` so the backend can send FCM messages
 
-> **Security:** Once you have real Firebase credentials, add the three config files to your local `.gitignore` so you don't accidentally commit them.
+> **Security:** Once you have real Firebase credentials, keep the platform config files out of git and inject them from secrets.
 
 ## Building releases
 

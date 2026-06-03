@@ -28,12 +28,16 @@ class MainActivity : FlutterFragmentActivity() {
                     val body = call.argument<String>("body") ?: "Call in progress"
                     val isVideo = call.argument<Boolean>("isVideo") ?: false
                     val muted = call.argument<Boolean>("muted") ?: false
+                    val connectedAtMillis = call.argument<Long>("connectedAtMillis")
                     val intent = Intent(this, CallForegroundService::class.java).apply {
                         action = CallForegroundService.ACTION_START
                         putExtra(CallForegroundService.EXTRA_TITLE, title)
                         putExtra(CallForegroundService.EXTRA_BODY, body)
                         putExtra(CallForegroundService.EXTRA_IS_VIDEO, isVideo)
                         putExtra(CallForegroundService.EXTRA_MUTED, muted)
+                        if (connectedAtMillis != null) {
+                            putExtra(CallForegroundService.EXTRA_CONNECTED_AT_MILLIS, connectedAtMillis)
+                        }
                     }
                     try {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

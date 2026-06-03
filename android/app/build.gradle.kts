@@ -2,8 +2,17 @@ import java.util.Properties
 
 plugins {
     id("com.android.application")
-    id("com.google.gms.google-services")
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+val googleServicesFiles = listOf(
+    file("google-services.json"),
+    file("src/debug/google-services.json"),
+    file("src/release/google-services.json"),
+    file("src/main/google-services.json"),
+)
+if (googleServicesFiles.any { it.exists() }) {
+    apply(plugin = "com.google.gms.google-services")
 }
 
 // CI writes android/key.properties before invoking Gradle.
@@ -65,5 +74,5 @@ flutter {
 }
 
 dependencies {
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 }

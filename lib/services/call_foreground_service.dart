@@ -10,6 +10,7 @@ abstract class CallForegroundController {
     required String body,
     required bool isVideo,
     required bool muted,
+    int? connectedAtMillis,
   });
 
   Future<void> stop();
@@ -79,20 +80,20 @@ class CallForegroundService implements CallForegroundController {
     required String body,
     required bool isVideo,
     required bool muted,
+    int? connectedAtMillis,
   }) async {
     if (kIsWeb || !(Platform.isAndroid || Platform.isIOS)) {
       return true;
     }
     try {
-      final started = await _channel.invokeMethod<bool>(
-        'start',
-        <String, Object>{
-          'title': title,
-          'body': body,
-          'isVideo': isVideo,
-          'muted': muted,
-        },
-      );
+      final started = await _channel
+          .invokeMethod<bool>('start', <String, Object?>{
+            'title': title,
+            'body': body,
+            'isVideo': isVideo,
+            'muted': muted,
+            'connectedAtMillis': connectedAtMillis,
+          });
       return started ?? false;
     } catch (_) {
       return false;

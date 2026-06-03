@@ -31,6 +31,6 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Camera access is required for video calls.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Microphone access is required for voice and video calls.</string>
+	<string>Microphone access is required for voice notes and calls.</string>
 </dict>
 </plist>

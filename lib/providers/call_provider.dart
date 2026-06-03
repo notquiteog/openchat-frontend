@@ -69,12 +69,17 @@ class CallProvider extends ChangeNotifier {
     _activeCallNotificationMuted = _micMuted;
     final name = s.remoteUsername != null ? '@${s.remoteUsername}' : 'OpenChat';
     final kind = s.isVideo ? 'Video call' : 'Voice call';
+    final connectedAtMillis = s.connectedAt?.millisecondsSinceEpoch;
+    final notificationBody = s.state == CallState.connected
+        ? 'Call in progress'
+        : callStatusText;
     unawaited(
       _foreground.start(
         title: '$kind with $name',
-        body: callStatusText,
+        body: notificationBody,
         isVideo: s.isVideo,
         muted: _micMuted,
+        connectedAtMillis: connectedAtMillis,
       ),
     );
     unawaited(
@@ -83,8 +88,9 @@ class CallProvider extends ChangeNotifier {
         if (!granted) return;
         await NotificationService.showActiveCall(
           title: '$kind with $name',
-          body: callStatusText,
+          body: notificationBody,
           muted: _micMuted,
+          connectedAtMillis: connectedAtMillis,
         );
       })(),
     );
@@ -137,10 +143,14 @@ class CallProvider extends ChangeNotifier {
       final s = session;
       if (s == null || s.state == CallState.ended) {
         if (_micMuted) {
-          _callService.setMicMuted(false);
+          try {
+            _callService.setMicMuted(false);
+          } catch (_) {}
         }
         if (!_cameraEnabled) {
-          _callService.setCameraEnabled(true);
+          try {
+            _callService.setCameraEnabled(true);
+          } catch (_) {}
         }
         _isCallMinimized = false;
         _micMuted = false;
@@ -284,7 +294,9 @@ class CallProvider extends ChangeNotifier {
   // ---- Controls ----
 
   void hangup() {
-    _callService.hangup();
+    try {
+      _callService.hangup();
+    } catch (_) {}
     _activeCallNotificationSessionId = null;
     _activeCallNotificationState = null;
     _activeCallNotificationMuted = null;
@@ -296,7 +308,9 @@ class CallProvider extends ChangeNotifier {
   void setMicMuted(bool muted) {
     if (_micMuted == muted) return;
     _micMuted = muted;
-    _callService.setMicMuted(muted);
+    try {
+      _callService.setMicMuted(muted);
+    } catch (_) {}
     _syncActiveCallNotification();
     notifyListeners();
   }
@@ -304,7 +318,9 @@ class CallProvider extends ChangeNotifier {
   void setCameraEnabled(bool enabled) {
     if (_cameraEnabled == enabled) return;
     _cameraEnabled = enabled;
-    _callService.setCameraEnabled(enabled);
+    try {
+      _callService.setCameraEnabled(enabled);
+    } catch (_) {}
     notifyListeners();
   }
 
