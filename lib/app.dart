@@ -372,7 +372,6 @@ class _HomeShellState extends State<_HomeShell> {
   Widget build(BuildContext context) {
     final user = context.watch<AuthProvider>().currentUser;
     final settings = context.watch<SettingsProvider>();
-    final scheme = Theme.of(context).colorScheme;
 
     // Chats is always present. Channels and Bots get their own tab only when the
     // user opts in; otherwise those conversations surface inside Chats.
@@ -420,19 +419,29 @@ class _HomeShellState extends State<_HomeShell> {
         ],
       ),
       // A single-entry nav bar carries no information, so hide it entirely.
+      // Otherwise it floats as a detached Liquid Glass capsule (16dp side
+      // margins) so the conversation canvas refracts beneath it as it scrolls.
       bottomNavigationBar: destinations.length < 2
           ? null
-          : GlassSurface(
-              blur: 22,
-              border: Border(
-                top: BorderSide(
-                  color: scheme.outlineVariant.withValues(alpha: 0.35),
-                ),
+          : Padding(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                0,
+                16,
+                MediaQuery.viewPaddingOf(context).bottom + 10,
               ),
-              child: NavigationBar(
-                selectedIndex: _tab,
-                onDestinationSelected: (i) => setState(() => _tab = i),
-                destinations: destinations,
+              child: LiquidGlass.capsule(
+                // The capsule already clears the home-bar inset, so stop the
+                // NavigationBar from adding its own and double-padding.
+                child: MediaQuery.removePadding(
+                  context: context,
+                  removeBottom: true,
+                  child: NavigationBar(
+                    selectedIndex: _tab,
+                    onDestinationSelected: (i) => setState(() => _tab = i),
+                    destinations: destinations,
+                  ),
+                ),
               ),
             ),
     );

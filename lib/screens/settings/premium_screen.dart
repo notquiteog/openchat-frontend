@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
+import '../../widgets/glass.dart';
 
 class PremiumScreen extends StatefulWidget {
   const PremiumScreen({super.key});
@@ -153,7 +154,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('OpenChat Premium')),
+      appBar: const GlassAppBar(title: Text('OpenChat Premium')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _loadError != null

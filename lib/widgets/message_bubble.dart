@@ -17,7 +17,6 @@ import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
-import 'glass.dart';
 import 'message_image_layout.dart';
 
 class MessageBubble extends StatelessWidget {
@@ -326,35 +325,28 @@ class _BubbleShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tintOpacity =
-        ThemeData.estimateBrightnessForColor(color) == Brightness.dark
-        ? 0.38
-        : 0.34;
-    return GlassSurface(
-      blur: 30,
-      borderRadius: radii,
-      border: Border.all(
-        color: Colors.white.withValues(alpha: 0.42),
-        width: 0.75,
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    // Content layer: a solid, standard-material bubble with no backdrop blur.
+    // Keeping bubbles off the Liquid Glass layer protects text legibility and
+    // stops overlapping refractions from muddying the stream (and drops one
+    // BackdropFilter per message). A soft ambient shadow lifts it off the canvas.
+    return Container(
+      constraints: BoxConstraints(
+        maxWidth: MediaQuery.of(context).size.width * 0.75,
       ),
-      boxShadow: [
-        BoxShadow(
-          color: color.withValues(alpha: 0.18),
-          blurRadius: 20,
-          offset: const Offset(0, 10),
-        ),
-      ],
-      child: Container(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
-        ),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: tintOpacity),
-          borderRadius: radii,
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: child,
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: radii,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.32 : 0.07),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: child,
     );
   }
 }
@@ -2286,9 +2278,6 @@ class _StickerBubbleState extends State<_StickerBubble> {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
       builder: (_) =>
           _StickerPackSheet(packID: packId, api: context.read<ApiService>()),
     );

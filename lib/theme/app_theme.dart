@@ -48,12 +48,13 @@ class AppTheme {
         ),
       ),
       navigationBarTheme: NavigationBarThemeData(
-        // Transparent so the frosted-glass surface underneath shows through.
+        // Transparent so the floating Liquid Glass pill underneath shows through.
         backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
-        height: 68,
-        indicatorColor: scheme.primary.withValues(alpha: 0.16),
+        height: 62,
+        indicatorShape: const StadiumBorder(),
+        indicatorColor: scheme.primary.withValues(alpha: 0.22),
         labelTextStyle: WidgetStateProperty.resolveWith(
           (states) => TextStyle(
             fontSize: 12,
@@ -82,10 +83,13 @@ class AppTheme {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       ),
+      // Liquid Glass leans on the specular rim and gradient to separate
+      // surfaces, so dividers stay barely-there hairlines rather than harsh
+      // lines slicing across the canvas.
       dividerTheme: DividerThemeData(
-        color: scheme.outlineVariant.withValues(alpha: 0.4),
-        thickness: 1,
-        space: 1,
+        color: scheme.outlineVariant.withValues(alpha: 0.18),
+        thickness: 0.5,
+        space: 0.5,
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,

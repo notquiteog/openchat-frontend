@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
+import '../../widgets/glass.dart';
 
 class WalletScreen extends StatefulWidget {
   const WalletScreen({super.key});
@@ -282,7 +283,7 @@ class _WalletScreenState extends State<WalletScreen> {
     final currentUserID = context.watch<AuthProvider>().currentUser?.id;
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Wallet')),
+      appBar: const GlassAppBar(title: Text('Wallet')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null

@@ -18,6 +18,7 @@ import '../../services/push_notification_service.dart';
 import '../../services/secure_storage_service.dart';
 import '../../utils/account_security_duration.dart';
 import '../../utils/device_label.dart';
+import '../../widgets/glass.dart';
 import '../bots/bot_management_screen.dart';
 import '../custom_emojis/custom_emoji_pack_screen.dart';
 import '../stickers/sticker_pack_screen.dart';
@@ -920,7 +921,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final settings = context.watch<SettingsProvider>();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: const GlassAppBar(title: Text('Settings')),
       body: ListView(
         children: [
           // ── Profile header ──────────────────────────────────────────────────

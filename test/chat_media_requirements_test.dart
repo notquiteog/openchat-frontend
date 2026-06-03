@@ -181,7 +181,9 @@ void main() {
     expect(pending.toPayloadJson()['duration_ms'], 3600);
   });
 
-  testWidgets('message bubbles render a glass blur shell', (tester) async {
+  testWidgets('message bubbles stay on the content layer (no backdrop blur)', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -190,7 +192,9 @@ void main() {
       ),
     );
 
-    expect(find.byType(BackdropFilter), findsWidgets);
+    // Liquid Glass keeps bubbles off the refractive layer so text stays crisp
+    // and overlapping bubbles never muddy each other.
+    expect(find.byType(BackdropFilter), findsNothing);
   });
 
   testWidgets('voice notes render an inline player before playback', (
@@ -228,7 +232,7 @@ void main() {
     expect(text.style?.color, Colors.white);
   });
 
-  testWidgets('message bubbles use a highly translucent glass tint', (
+  testWidgets('outgoing bubbles use a solid (opaque) accent fill', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -239,20 +243,19 @@ void main() {
       ),
     );
 
-    final tintedDecorations = tester
+    final fillAlphas = tester
         .widgetList<Container>(find.byType(Container))
         .map((container) => container.decoration)
         .whereType<BoxDecoration>()
         .map((decoration) => decoration.color)
         .whereType<Color>()
-        .where((color) => color.a < 1)
+        .map((color) => color.a)
         .toList();
 
-    expect(tintedDecorations, isNotEmpty);
-    expect(
-      tintedDecorations.map((color) => color.a).reduce((a, b) => a > b ? a : b),
-      lessThanOrEqualTo(0.38),
-    );
+    // The bubble now paints a fully-opaque brand-accent fill on the content
+    // layer rather than a translucent glass tint.
+    expect(fillAlphas, isNotEmpty);
+    expect(fillAlphas.reduce((a, b) => a > b ? a : b), 1.0);
   });
 
   testWidgets('incoming sender bubble colors keep readable text', (

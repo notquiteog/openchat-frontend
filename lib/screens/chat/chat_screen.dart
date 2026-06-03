@@ -1684,20 +1684,22 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _buildInputBar(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return GlassSurface(
-      blur: 24,
-      border: Border(
-        top: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.35)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (_replyingTo != null) _buildReplyPreview(context),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              child: Row(
+    // The composer is an active control, so it lives in the Liquid Glass layer:
+    // a free-floating capsule hovering above the bottom boundary with the chat
+    // canvas peeking around it.
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 2, 12, 14),
+        child: LiquidGlass(
+          blur: 28,
+          borderRadius: const BorderRadius.all(Radius.circular(28)),
+          padding: const EdgeInsets.fromLTRB(4, 4, 6, 4),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_replyingTo != null) _buildReplyPreview(context),
+              Row(
                 children: [
                   IconButton(
                     icon: Icon(
@@ -1730,20 +1732,23 @@ class _ChatScreenState extends State<ChatScreen> {
                       onSubmitted: (_) => _sendMessage(),
                       maxLines: null,
                       textInputAction: TextInputAction.send,
+                      // Punchier weight to stay legible over the refracting glass.
+                      style: const TextStyle(fontWeight: FontWeight.w500),
                       decoration: InputDecoration(
                         hintText: 'Message',
                         border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(24),
+                          borderRadius: BorderRadius.circular(22),
                           borderSide: BorderSide.none,
                         ),
                         filled: true,
                         fillColor: scheme.surfaceContainerHighest.withValues(
-                          alpha: 0.45,
+                          alpha: 0.30,
                         ),
                         contentPadding: const EdgeInsets.symmetric(
                           horizontal: 16,
-                          vertical: 8,
+                          vertical: 10,
                         ),
+                        isDense: true,
                       ),
                     ),
                   ),
@@ -1776,30 +1781,38 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ],
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 
   Widget _buildReplyPreview(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final msg = _replyingTo!;
     final senderName = msg.sender?.username ?? 'Unknown';
     final preview = msg.decryptedContent ?? 'Encrypted message';
+    // A rounded chip nested inside the composer capsule. The accent is a
+    // standalone bar (not a one-sided border) so it can coexist with rounding.
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 8, 8, 4),
+      margin: const EdgeInsets.fromLTRB(6, 4, 6, 2),
+      padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        border: Border(
-          left: BorderSide(
-            color: Theme.of(context).colorScheme.primary,
-            width: 3,
-          ),
-        ),
+        color: scheme.primary.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(18),
       ),
       child: Row(
         children: [
+          Container(
+            width: 3,
+            height: 32,
+            decoration: BoxDecoration(
+              color: scheme.primary,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1808,8 +1821,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 Text(
                   senderName,
                   style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w700,
+                    color: scheme.primary,
                     fontSize: 13,
                   ),
                 ),

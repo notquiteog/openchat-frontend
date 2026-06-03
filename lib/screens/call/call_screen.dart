@@ -9,6 +9,10 @@ import '../../providers/call_provider.dart';
 import '../../services/call_service.dart';
 import '../../widgets/glass.dart';
 
+const _callEndColor = Color(0xFFFF453A);
+const _callAnswerColor = Color(0xFF30D158);
+const _callDismissColor = Color(0xFFE5E5EA);
+
 @visibleForTesting
 bool shouldUseCallVideoRenderersForTesting(CallSession? session) {
   return session != null;
@@ -279,7 +283,7 @@ class _CallScreenState extends State<CallScreen> {
                     Positioned(
                       left: 8,
                       child: _CallIconButton(
-                        key: const Key('minimize-call-button'),
+                        buttonKey: const Key('minimize-call-button'),
                         tooltip: 'Minimize call',
                         icon: Icons.expand_more,
                         iconColor: Colors.white70,
@@ -315,6 +319,7 @@ class _CallScreenState extends State<CallScreen> {
                       buttonKey: const Key('call-control-mute'),
                       icon: micMuted ? Icons.mic_off : Icons.mic,
                       label: micMuted ? 'Unmute' : 'Mute',
+                      active: micMuted,
                       onTap: _toggleMic,
                     ),
 
@@ -331,6 +336,7 @@ class _CallScreenState extends State<CallScreen> {
                         buttonKey: const Key('call-control-camera'),
                         icon: cameraOff ? Icons.videocam_off : Icons.videocam,
                         label: cameraOff ? 'Camera on' : 'Camera off',
+                        active: cameraOff,
                         onTap: _toggleCamera,
                       ),
 
@@ -340,7 +346,7 @@ class _CallScreenState extends State<CallScreen> {
                       icon: Icons.call_end,
                       label: 'End',
                       onTap: _hangup,
-                      color: Colors.red,
+                      color: _callEndColor,
                     ),
                   ],
                 ),
@@ -354,17 +360,66 @@ class _CallScreenState extends State<CallScreen> {
 }
 
 class _CallIconButton extends StatelessWidget {
+  final Key? buttonKey;
   final String tooltip;
   final IconData icon;
   final Color iconColor;
   final VoidCallback onTap;
 
   const _CallIconButton({
-    super.key,
+    this.buttonKey,
     required this.tooltip,
     required this.icon,
     required this.iconColor,
     required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _GlassCircleButton(
+      buttonKey: buttonKey,
+      tooltip: tooltip,
+      icon: icon,
+      iconColor: iconColor,
+      onTap: onTap,
+      size: 44,
+      iconSize: 24,
+      blur: 24,
+      tint: Colors.white,
+      boxShadow: const [
+        BoxShadow(
+          color: Color(0x33000000),
+          blurRadius: 14,
+          offset: Offset(0, 6),
+        ),
+      ],
+    );
+  }
+}
+
+class _GlassCircleButton extends StatelessWidget {
+  final Key? buttonKey;
+  final String tooltip;
+  final IconData icon;
+  final Color iconColor;
+  final VoidCallback onTap;
+  final double size;
+  final double iconSize;
+  final double blur;
+  final Color tint;
+  final List<BoxShadow>? boxShadow;
+
+  const _GlassCircleButton({
+    required this.tooltip,
+    required this.icon,
+    required this.iconColor,
+    required this.onTap,
+    required this.size,
+    required this.iconSize,
+    required this.tint,
+    this.buttonKey,
+    this.blur = 26,
+    this.boxShadow,
   });
 
   @override
@@ -375,14 +430,23 @@ class _CallIconButton extends StatelessWidget {
         button: true,
         label: tooltip,
         child: GestureDetector(
+          key: buttonKey,
           behavior: HitTestBehavior.opaque,
           onTap: onTap,
           child: MouseRegion(
             cursor: SystemMouseCursors.click,
             child: SizedBox(
-              width: 48,
-              height: 48,
-              child: Center(child: Icon(icon, color: iconColor, size: 26)),
+              width: size,
+              height: size,
+              child: LiquidGlass(
+                blur: blur,
+                borderRadius: BorderRadius.circular(size / 2),
+                tint: tint,
+                boxShadow: boxShadow,
+                child: Center(
+                  child: Icon(icon, color: iconColor, size: iconSize),
+                ),
+              ),
             ),
           ),
         ),
@@ -395,7 +459,14 @@ class _ControlButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+
+  /// When set, renders a solid semantic circle (e.g. red for End) instead of
+  /// glass so vivid, irreversible actions stay unmistakable.
   final Color? color;
+
+  /// Toggled-on state (muted, camera off). The glass inverts to a bright solid
+  /// fill with a dark glyph so the active state reads at a glance.
+  final bool active;
   final Key? buttonKey;
 
   const _ControlButton({
@@ -403,50 +474,40 @@ class _ControlButton extends StatelessWidget {
     required this.label,
     required this.onTap,
     this.color,
+    this.active = false,
     this.buttonKey,
   });
 
   @override
   Widget build(BuildContext context) {
-    final fill = color ?? Colors.white.withValues(alpha: 0.18);
+    const double size = 60;
+    final tint = active ? Colors.white : color ?? Colors.white;
+    final iconColor = active ? Colors.black87 : Colors.white;
+    final shadowColor =
+        color?.withValues(alpha: 0.42) ?? const Color(0x38000000);
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Tooltip(
-          message: label,
-          child: Semantics(
-            button: true,
-            label: label,
-            child: GestureDetector(
-              key: buttonKey,
-              behavior: HitTestBehavior.opaque,
-              onTap: onTap,
-              child: MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: Container(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    color: fill,
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.16),
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.22),
-                        blurRadius: 18,
-                        offset: const Offset(0, 8),
-                      ),
-                    ],
-                  ),
-                  child: Icon(icon, color: Colors.white, size: 26),
-                ),
-              ),
+        _GlassCircleButton(
+          buttonKey: buttonKey,
+          tooltip: label,
+          icon: icon,
+          iconColor: iconColor,
+          onTap: onTap,
+          size: size,
+          iconSize: 26,
+          tint: tint,
+          boxShadow: [
+            BoxShadow(
+              color: shadowColor,
+              blurRadius: color == null ? 18 : 22,
+              spreadRadius: color == null ? 0 : -2,
+              offset: const Offset(0, 8),
             ),
-          ),
+          ],
         ),
-        const SizedBox(height: 6),
+        const SizedBox(height: 8),
         Text(
           label,
           style: const TextStyle(color: Colors.white70, fontSize: 12),
@@ -489,40 +550,77 @@ class _MinimizedCallOverlay extends StatelessWidget {
     final session = cp.session;
     if (session == null) return const SizedBox.shrink();
     final name = session.remoteUsername ?? 'Unknown';
+    final scheme = Theme.of(context).colorScheme;
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.only(top: kToolbarHeight),
+        padding: const EdgeInsets.only(
+          left: 12,
+          top: kToolbarHeight,
+          right: 12,
+        ),
         child: Align(
           alignment: Alignment.topCenter,
-          child: Material(
+          child: GestureDetector(
             key: const Key('minimized-call-overlay'),
-            color: Theme.of(context).colorScheme.surface,
-            elevation: 3,
-            child: InkWell(
-              onTap: () => cp.setCallMinimized(false),
+            behavior: HitTestBehavior.opaque,
+            onTap: () => cp.setCallMinimized(false),
+            child: LiquidGlass.capsule(
+              blur: 28,
+              tint: scheme.surface,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.18),
+                  blurRadius: 22,
+                  spreadRadius: -4,
+                  offset: const Offset(0, 10),
+                ),
+              ],
               child: SizedBox(
                 height: CallProvider.minimizedCallBarHeight,
                 width: double.infinity,
                 child: Row(
                   children: [
                     const SizedBox(width: 8),
-                    IconButton(
-                      key: const Key('expand-call-button'),
+                    _GlassCircleButton(
+                      buttonKey: const Key('expand-call-button'),
                       tooltip: 'Expand call',
-                      onPressed: () => cp.setCallMinimized(false),
-                      icon: const Icon(Icons.open_in_full),
+                      icon: Icons.open_in_full,
+                      iconColor: scheme.onSurface,
+                      onTap: () => cp.setCallMinimized(false),
+                      size: 40,
+                      iconSize: 20,
+                      blur: 22,
+                      tint: Colors.white,
+                      boxShadow: const [],
                     ),
+                    const SizedBox(width: 10),
                     Expanded(
                       child: Text(
                         '$name · ${cp.callStatusText}',
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                          color: scheme.onSurface,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
-                    IconButton(
+                    _GlassCircleButton(
                       tooltip: 'End call',
-                      onPressed: cp.hangup,
-                      icon: const Icon(Icons.call_end, color: Colors.red),
+                      icon: Icons.call_end,
+                      iconColor: Colors.white,
+                      onTap: cp.hangup,
+                      size: 40,
+                      iconSize: 21,
+                      blur: 22,
+                      tint: _callEndColor,
+                      boxShadow: [
+                        BoxShadow(
+                          color: _callEndColor.withValues(alpha: 0.34),
+                          blurRadius: 16,
+                          spreadRadius: -3,
+                          offset: const Offset(0, 7),
+                        ),
+                      ],
                     ),
                     const SizedBox(width: 8),
                   ],
@@ -602,19 +700,20 @@ class IncomingCallModal extends StatelessWidget {
                     _CallAction(
                       icon: Icons.call_end,
                       label: 'Decline',
-                      color: Colors.red,
+                      color: _callEndColor,
                       onTap: cp.rejectIncomingCall,
                     ),
                     _CallAction(
                       icon: Icons.close,
                       label: 'Dismiss',
-                      color: Colors.grey,
+                      color: _callDismissColor,
+                      iconColor: Colors.black87,
                       onTap: cp.dismissIncomingCall,
                     ),
                     _CallAction(
                       icon: incoming.isVideo ? Icons.videocam : Icons.call,
                       label: 'Answer',
-                      color: Colors.green,
+                      color: _callAnswerColor,
                       onTap: cp.acceptIncomingCall,
                     ),
                   ],
@@ -633,6 +732,7 @@ class _CallAction extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color color;
+  final Color iconColor;
   final VoidCallback onTap;
 
   const _CallAction({
@@ -640,6 +740,7 @@ class _CallAction extends StatelessWidget {
     required this.label,
     required this.color,
     required this.onTap,
+    this.iconColor = Colors.white,
   });
 
   @override
@@ -647,14 +748,23 @@ class _CallAction extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        GestureDetector(
+        _GlassCircleButton(
+          tooltip: label,
+          icon: icon,
+          iconColor: iconColor,
           onTap: onTap,
-          child: Container(
-            width: 64,
-            height: 64,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-            child: Icon(icon, color: Colors.white, size: 30),
-          ),
+          size: 66,
+          iconSize: 30,
+          blur: 28,
+          tint: color,
+          boxShadow: [
+            BoxShadow(
+              color: color.withValues(alpha: 0.36),
+              blurRadius: 22,
+              spreadRadius: -3,
+              offset: const Offset(0, 10),
+            ),
+          ],
         ),
         const SizedBox(height: 8),
         Text(label, style: const TextStyle(fontSize: 13)),

@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../config/api_config.dart';
 import '../../crypto/pgp_service.dart';
 import '../../services/api_service.dart';
+import '../../widgets/glass.dart';
 
 class BotManagementScreen extends StatefulWidget {
   const BotManagementScreen({super.key});
@@ -116,7 +117,7 @@ class _BotManagementScreenState extends State<BotManagementScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+      appBar: GlassAppBar(
         title: const Text('My Bots'),
         actions: [
           IconButton(
@@ -578,7 +579,7 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+      appBar: GlassAppBar(
         title: Text('@$_username'),
         actions: [
           IconButton(

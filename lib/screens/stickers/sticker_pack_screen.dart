@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../config/api_config.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
+import '../../widgets/glass.dart';
 
 const _stickerPackNameMax = 128;
 const _stickerPackDescriptionMax = 2048;
@@ -116,7 +117,7 @@ class _StickerPackScreenState extends State<StickerPackScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+      appBar: GlassAppBar(
         title: const Text('Sticker Packs'),
         actions: [
           IconButton(
@@ -472,7 +473,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
         currentUserId != null && _pack['creator_id'] == currentUserId;
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: GlassAppBar(
         title: Text(_pack['name'] as String? ?? 'Pack'),
         actions: isOwner
             ? [

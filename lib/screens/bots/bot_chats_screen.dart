@@ -8,6 +8,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/call_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../services/api_service.dart';
+import '../../widgets/glass.dart';
 import '../chat/chat_screen.dart';
 
 /// Bots tab: lists the user's existing bot conversations and lets them search
@@ -69,7 +70,7 @@ class _BotChatsScreenState extends State<BotChatsScreen> {
 
     return Scaffold(
       extendBodyBehindAppBar: false,
-      appBar: AppBar(title: const Text('Bots')),
+      appBar: const GlassAppBar(title: Text('Bots')),
       body: Column(
         children: [
           if (callTopInset > 0) SizedBox(height: callTopInset),

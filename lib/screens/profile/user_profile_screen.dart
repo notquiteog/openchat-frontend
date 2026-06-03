@@ -8,6 +8,7 @@ import '../../models/conversation.dart';
 import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
+import '../../widgets/glass.dart';
 
 /// Public profile screen — shown when tapping a user's name/avatar anywhere in the app.
 class UserProfileScreen extends StatefulWidget {
@@ -475,7 +476,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     final cs = Theme.of(context).colorScheme;
     final isAdmin = _viewerIsAdmin;
     return Scaffold(
-      appBar: AppBar(
+      appBar: GlassAppBar(
         title: Text('@${_user.username}'),
         actions: [
           if (isAdmin && !_isOwnProfile)

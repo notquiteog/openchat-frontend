@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../models/conversation.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
+import '../../widgets/glass.dart';
 
 /// Owner-side moderation for a channel or group. Two controls:
 ///
@@ -184,7 +185,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
         : <ConversationMember>[];
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Moderation')),
+      appBar: const GlassAppBar(title: Text('Moderation')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(

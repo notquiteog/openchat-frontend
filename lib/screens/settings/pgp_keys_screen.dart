@@ -7,6 +7,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/key_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/secure_storage_service.dart';
+import '../../widgets/glass.dart';
 
 class PgpKeysScreen extends StatelessWidget {
   const PgpKeysScreen({super.key});
@@ -20,7 +21,7 @@ class PgpKeysScreen extends StatelessWidget {
     final hasFiniteExpiry = expiresAt != null;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('PGP Key Management')),
+      appBar: const GlassAppBar(title: Text('PGP Key Management')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [

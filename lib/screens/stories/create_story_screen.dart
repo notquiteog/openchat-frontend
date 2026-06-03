@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../models/message.dart';
 import '../../services/api_service.dart';
 import '../../services/attachment_service.dart';
+import '../../widgets/glass.dart';
 
 class CreateStoryScreen extends StatefulWidget {
   const CreateStoryScreen({super.key});
@@ -93,7 +94,7 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
     final theme = Theme.of(context);
     final pending = _pending;
     return Scaffold(
-      appBar: AppBar(title: const Text('New story')),
+      appBar: const GlassAppBar(title: Text('New story')),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(16),

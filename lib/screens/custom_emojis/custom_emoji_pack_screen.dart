@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../config/api_config.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
+import '../../widgets/glass.dart';
 
 const _customEmojiPackNameMax = 128;
 const _customEmojiPackDescriptionMax = 2048;
@@ -115,7 +116,7 @@ class _CustomEmojiPackScreenState extends State<CustomEmojiPackScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+      appBar: GlassAppBar(
         title: const Text('Custom Emoji Packs'),
         actions: [
           IconButton(
@@ -472,7 +473,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
         currentUserId != null && _pack['creator_id'] == currentUserId;
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: GlassAppBar(
         title: Text(_pack['name'] as String? ?? 'Pack'),
         actions: isOwner
             ? [

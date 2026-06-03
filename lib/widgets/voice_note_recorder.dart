@@ -186,10 +186,10 @@ class _VoiceNoteRecorderSheetState extends State<VoiceNoteRecorderSheet> {
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-        child: GlassSurface(
+        child: LiquidGlass(
           blur: 32,
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-          borderRadius: BorderRadius.circular(28),
+          borderRadius: const BorderRadius.all(Radius.circular(28)),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [

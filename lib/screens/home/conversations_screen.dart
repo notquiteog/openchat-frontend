@@ -106,7 +106,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 ),
                 children: [
                   StoriesStrip(key: ValueKey(_storiesRefreshKey)),
-                  const Divider(height: 1),
+                  const SizedBox(height: 6),
+                  // No hard dividers between rows — the canvas reads as one
+                  // continuous content surface under the floating chrome, with
+                  // the tile's own ink/rounding marking selection on tap.
                   if (conversations.isEmpty)
                     SizedBox(height: 360, child: _buildEmpty(context))
                   else
@@ -114,8 +117,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                       var index = 0;
                       index < conversations.length;
                       index++
-                    ) ...[
-                      if (index > 0) const Divider(height: 1),
+                    )
                       _ConversationTile(
                         conversation: conversations[index],
                         currentUserID: currentUserID,
@@ -124,7 +126,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                         onLongPress: () =>
                             _confirmDelete(context, conversations[index]),
                       ),
-                    ],
                 ],
               ),
             ),

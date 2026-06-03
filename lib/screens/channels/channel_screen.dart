@@ -183,7 +183,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     );
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: GlassAppBar(
         title: const Text('Channels'),
         actions: [
           IconButton(icon: const Icon(Icons.add), onPressed: _createChannel),
@@ -1890,78 +1890,85 @@ class ChannelPostBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return GlassSurface(
-      blur: 24,
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      border: Border(
-        top: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.35)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Row(
-          children: [
-            IconButton(
-              icon: Icon(
-                showCustomEmojis ? Icons.keyboard : Icons.add_reaction_outlined,
+    // Mirror the chat composer: an active control on the Liquid Glass layer,
+    // free-floating above the bottom boundary with the canvas peeking around it.
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 2, 12, 14),
+        child: LiquidGlass(
+          blur: 28,
+          borderRadius: const BorderRadius.all(Radius.circular(28)),
+          padding: const EdgeInsets.fromLTRB(4, 4, 6, 4),
+          child: Row(
+            children: [
+              IconButton(
+                icon: Icon(
+                  showCustomEmojis
+                      ? Icons.keyboard
+                      : Icons.add_reaction_outlined,
+                ),
+                tooltip: showCustomEmojis ? 'Keyboard' : 'Custom emoji',
+                onPressed: onToggleCustomEmojis,
               ),
-              tooltip: showCustomEmojis ? 'Keyboard' : 'Custom emoji',
-              onPressed: onToggleCustomEmojis,
-            ),
-            IconButton(
-              icon: Icon(
-                showStickers ? Icons.keyboard : Icons.sticky_note_2_outlined,
+              IconButton(
+                icon: Icon(
+                  showStickers ? Icons.keyboard : Icons.sticky_note_2_outlined,
+                ),
+                tooltip: showStickers ? 'Keyboard' : 'Stickers',
+                onPressed: onToggleStickers,
               ),
-              tooltip: showStickers ? 'Keyboard' : 'Stickers',
-              onPressed: onToggleStickers,
-            ),
-            Expanded(
-              child: TextField(
-                controller: controller,
-                maxLines: null,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => onPost(),
-                decoration: InputDecoration(
-                  hintText: 'Write a post…',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide.none,
-                  ),
-                  filled: true,
-                  fillColor: scheme.surfaceContainerHighest.withValues(
-                    alpha: 0.45,
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
+              Expanded(
+                child: TextField(
+                  controller: controller,
+                  maxLines: null,
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => onPost(),
+                  style: const TextStyle(fontWeight: FontWeight.w500),
+                  decoration: InputDecoration(
+                    hintText: 'Write a post…',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: BorderSide.none,
+                    ),
+                    filled: true,
+                    fillColor: scheme.surfaceContainerHighest.withValues(
+                      alpha: 0.30,
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
+                    isDense: true,
                   ),
                 ),
               ),
-            ),
-            const SizedBox(width: 4),
-            IconButton(
-              icon: const Icon(Icons.attach_file_outlined),
-              tooltip: 'Attach file',
-              onPressed: onAttach,
-            ),
-            Tooltip(
-              message: 'Hold for post options',
-              child: GestureDetector(
-                onLongPress: onOptions,
-                child: FilledButton(
-                  onPressed: onPost,
-                  style: FilledButton.styleFrom(
-                    shape: const CircleBorder(),
-                    padding: const EdgeInsets.all(12),
-                    minimumSize: Size.zero,
-                  ),
-                  child: Icon(
-                    hasOptions ? Icons.schedule_send_outlined : Icons.send,
-                    size: 18,
+              const SizedBox(width: 4),
+              IconButton(
+                icon: const Icon(Icons.attach_file_outlined),
+                tooltip: 'Attach file',
+                onPressed: onAttach,
+              ),
+              Tooltip(
+                message: 'Hold for post options',
+                child: GestureDetector(
+                  onLongPress: onOptions,
+                  child: FilledButton(
+                    onPressed: onPost,
+                    style: FilledButton.styleFrom(
+                      shape: const CircleBorder(),
+                      padding: const EdgeInsets.all(12),
+                      minimumSize: Size.zero,
+                    ),
+                    child: Icon(
+                      hasOptions ? Icons.schedule_send_outlined : Icons.send,
+                      size: 18,
+                    ),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
