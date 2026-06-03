@@ -26,6 +26,7 @@ import '../../widgets/conversation_encryption_status.dart';
 import '../../widgets/conversation_info_panel.dart';
 import '../../widgets/color_choices.dart';
 import '../../widgets/custom_emoji_picker.dart';
+import '../../widgets/custom_emoji_text_controller.dart';
 import '../../widgets/disappearing_messages_picker.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/message_bubble.dart';
@@ -59,7 +60,7 @@ String conversationExitMenuLabel(
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  final _inputCtrl = TextEditingController();
+  final _inputCtrl = CustomEmojiTextEditingController();
   final _scrollCtrl = ScrollController();
   bool _showStickers = false;
   bool _showCustomEmojis = false;
@@ -104,12 +105,20 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onInputTextChanged() {
     if (_suppressInputEntityShift) return;
     final text = _inputCtrl.text;
-    _customEmojiEntities = shiftCustomEmojiEntitiesForTextEdit(
+    final shifted = shiftCustomEmojiEntitiesForTextEdit(
       oldText: _lastInputText,
       newText: text,
       entities: _customEmojiEntities,
     );
+    _syncCustomEmojiEntities(shifted);
     _lastInputText = text;
+  }
+
+  void _syncCustomEmojiEntities(List<CustomEmojiEntity> entities) {
+    _customEmojiEntities = entities;
+    _suppressInputEntityShift = true;
+    _inputCtrl.setCustomEmojiEntities(entities);
+    _suppressInputEntityShift = false;
   }
 
   void _onScroll() {
@@ -188,7 +197,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _showStickers = false;
       _showCustomEmojis = false;
       _replyingTo = null;
-      _customEmojiEntities = [];
+      _syncCustomEmojiEntities(const []);
     });
     try {
       final sent = await context.read<ChatProvider>().sendMessage(
@@ -445,9 +454,8 @@ class _ChatScreenState extends State<ChatScreen> {
       fileUrl: emojiData['file_url'] as String?,
       isAnimated: emojiData['is_animated'] as bool? ?? false,
     );
-    setState(() {
-      _customEmojiEntities = [...shifted, entity];
-    });
+    final nextEntities = [...shifted, entity];
+    setState(() => _syncCustomEmojiEntities(nextEntities));
     _setComposerValue(
       TextEditingValue(
         text: newText,
@@ -479,7 +487,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     setState(() {
       _replyingTo = replyingTo;
-      _customEmojiEntities = entities;
+      _syncCustomEmojiEntities(entities);
     });
   }
 
@@ -521,7 +529,7 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
           child: LiquidGlass(
-            blur: 32,
+            blur: 56,
             borderRadius: const BorderRadius.all(Radius.circular(28)),
             padding: EdgeInsets.zero,
             child: Column(
@@ -1927,7 +1935,7 @@ class _ChatScreenState extends State<ChatScreen> {
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 2, 12, 14),
         child: LiquidGlass(
-          blur: 28,
+          blur: 50,
           borderRadius: const BorderRadius.all(Radius.circular(28)),
           padding: const EdgeInsets.fromLTRB(4, 4, 6, 4),
           child: Column(

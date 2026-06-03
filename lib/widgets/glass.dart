@@ -86,7 +86,7 @@ class LiquidGlass extends StatelessWidget {
   const LiquidGlass({
     super.key,
     required this.child,
-    this.blur = 32,
+    this.blur = 64,
     this.borderRadius = const BorderRadius.all(Radius.circular(28)),
     this.padding,
     this.boxShadow,
@@ -98,7 +98,7 @@ class LiquidGlass extends StatelessWidget {
   const LiquidGlass.capsule({
     super.key,
     required this.child,
-    this.blur = 32,
+    this.blur = 64,
     this.padding,
     this.boxShadow,
     this.tint,
@@ -176,9 +176,9 @@ class LiquidGlass extends StatelessWidget {
                       end: Alignment.bottomCenter,
                       stops: const [0.0, 0.6, 1.0],
                       colors: [
-                        base.withValues(alpha: isDark ? 0.42 : 0.58),
-                        base.withValues(alpha: isDark ? 0.22 : 0.36),
-                        base.withValues(alpha: isDark ? 0.18 : 0.28),
+                        base.withValues(alpha: isDark ? 0.78 : 0.88),
+                        base.withValues(alpha: isDark ? 0.66 : 0.80),
+                        base.withValues(alpha: isDark ? 0.58 : 0.74),
                       ],
                     ),
                   ),
@@ -202,7 +202,7 @@ class LiquidGlass extends StatelessWidget {
                           end: Alignment.bottomCenter,
                           colors: [
                             Colors.white.withValues(
-                              alpha: isDark ? 0.18 : 0.36,
+                              alpha: isDark ? 0.28 : 0.48,
                             ),
                             Colors.transparent,
                           ],
@@ -248,7 +248,7 @@ class GlassSurface extends StatelessWidget {
   const GlassSurface({
     super.key,
     required this.child,
-    this.blur = 28,
+    this.blur = 60,
     this.borderRadius = BorderRadius.zero,
     this.padding,
     this.border,
@@ -307,8 +307,8 @@ class GlassSurface extends StatelessWidget {
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    scheme.surface.withValues(alpha: isDark ? 0.48 : 0.60),
-                    scheme.surface.withValues(alpha: isDark ? 0.28 : 0.44),
+                    scheme.surface.withValues(alpha: isDark ? 0.76 : 0.86),
+                    scheme.surface.withValues(alpha: isDark ? 0.68 : 0.80),
                   ],
                 ),
               ),
@@ -349,7 +349,7 @@ class GlassAppBar extends StatelessWidget implements PreferredSizeWidget {
   @override
   Widget build(BuildContext context) {
     return GlassSurface(
-      blur: 30,
+      blur: 60,
       child: AppBar(
         backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
@@ -385,7 +385,7 @@ class GlassCard extends StatelessWidget {
     this.padding = const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
     this.margin,
     this.borderRadius = const BorderRadius.all(Radius.circular(22)),
-    this.blur = 24,
+    this.blur = 50,
     this.tint,
   });
 

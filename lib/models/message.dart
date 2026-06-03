@@ -630,6 +630,21 @@ class Poll {
   );
 
   bool isSelected(String optionId) => voterOptionIds.contains(optionId);
+
+  Poll copyWith({List<String>? voterOptionIds}) => Poll(
+    id: id,
+    messageId: messageId,
+    question: question,
+    description: description,
+    type: type,
+    isAnonymous: isAnonymous,
+    allowsMultipleAnswers: allowsMultipleAnswers,
+    allowsRevoting: allowsRevoting,
+    isClosed: isClosed,
+    totalVoterCount: totalVoterCount,
+    options: options,
+    voterOptionIds: voterOptionIds ?? this.voterOptionIds,
+  );
 }
 
 class PollOption {

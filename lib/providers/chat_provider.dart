@@ -341,7 +341,9 @@ class ChatProvider extends ChangeNotifier {
   }) async {
     await _ensureLocationPermission(background: true);
     if (duration <= Duration.zero) {
-      throw const ChatSendException('Live location duration must be greater than 0');
+      throw const ChatSendException(
+        'Live location duration must be greater than 0',
+      );
     }
     final now = DateTime.now();
     final expiresAt = now.add(duration);
@@ -771,7 +773,7 @@ class ChatProvider extends ChangeNotifier {
       if (permission != LocationPermission.always) {
         throw const ChatSendException(
           'Enable Always location access for background live sharing.',
-      );
+        );
       }
     }
     return true;
@@ -779,7 +781,7 @@ class ChatProvider extends ChangeNotifier {
 
   Future<Position> _getCurrentPosition() async {
     return Geolocator.getCurrentPosition(
-      desiredAccuracy: LocationAccuracy.best,
+      locationSettings: const LocationSettings(accuracy: LocationAccuracy.best),
     );
   }
 
@@ -1088,12 +1090,10 @@ class ChatProvider extends ChangeNotifier {
         _handleEditedMessage(Message.fromJson(event.data));
 
       case WsEventType.messageReaction:
-        final convID = event.data['conversation_id'] as String?;
-        if (convID != null) unawaited(loadMessages(convID));
+        _handleMessageReactionUpdate(event.data);
 
       case WsEventType.pollUpdated:
-        final convID = event.data['conversation_id'] as String?;
-        if (convID != null) unawaited(loadMessages(convID));
+        _handlePollUpdate(event.data);
 
       case WsEventType.conversationUpdated:
         // Name / description / avatar (and for channels, handle) changed. Pull
@@ -1133,6 +1133,76 @@ class ChatProvider extends ChangeNotifier {
       default:
         break;
     }
+  }
+
+  void _handleMessageReactionUpdate(Map<String, dynamic> data) {
+    final convID = data['conversation_id']?.toString();
+    final msgID = data['message_id']?.toString();
+    if (convID == null || msgID == null) return;
+
+    final rawReactions = data['reactions'];
+    if (rawReactions is! List) return;
+    final reactions = rawReactions
+        .whereType<Map>()
+        .map(
+          (raw) =>
+              MessageReactionSummary.fromJson(Map<String, dynamic>.from(raw)),
+        )
+        .toList(growable: false);
+    _updateMessageInMemory(
+      convID: convID,
+      msgID: msgID,
+      update: (msg) => msg.copyWith(reactions: reactions),
+    );
+  }
+
+  void _handlePollUpdate(Map<String, dynamic> data) {
+    final convID = data['conversation_id']?.toString();
+    var msgID = data['message_id']?.toString();
+    final rawPoll = data['poll'];
+    if (convID == null || rawPoll is! Map) return;
+
+    final poll = Poll.fromJson(Map<String, dynamic>.from(rawPoll));
+    msgID ??= poll.messageId;
+    if (msgID == null) return;
+    _updateMessageInMemory(
+      convID: convID,
+      msgID: msgID,
+      update: (msg) {
+        var nextPoll = poll;
+        final currentPoll = msg.poll;
+        if (currentPoll?.id == poll.id &&
+            poll.voterOptionIds.isEmpty &&
+            currentPoll!.voterOptionIds.isNotEmpty) {
+          nextPoll = poll.copyWith(voterOptionIds: currentPoll.voterOptionIds);
+        }
+        return msg.copyWith(poll: nextPoll);
+      },
+    );
+  }
+
+  bool _updateMessageInMemory({
+    required String convID,
+    required String msgID,
+    required Message Function(Message msg) update,
+  }) {
+    final list = _messages[convID];
+    if (list == null) return false;
+    final idx = list.indexWhere((m) => m.id == msgID);
+    if (idx == -1) return false;
+
+    final updatedMessage = update(list[idx]);
+    final updated = List<Message>.from(list);
+    updated[idx] = updatedMessage;
+    _messages[convID] = updated;
+
+    final conv = _conversations[convID];
+    if (conv?.lastMessage?.id == msgID) {
+      _conversations[convID] = conv!.copyWith(lastMessage: updatedMessage);
+    }
+
+    notifyListeners();
+    return true;
   }
 
   Future<void> _handleIncomingMessage(Message msg) async {

@@ -21,6 +21,7 @@ import '../../utils/disappearing_message_duration.dart';
 import '../../widgets/conversation_encryption_status.dart';
 import '../../widgets/color_choices.dart';
 import '../../widgets/custom_emoji_picker.dart';
+import '../../widgets/custom_emoji_text_controller.dart';
 import '../../widgets/disappearing_messages_picker.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/message_bubble.dart';
@@ -373,7 +374,7 @@ class ChannelFeedScreen extends StatefulWidget {
 }
 
 class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
-  final _inputCtrl = TextEditingController();
+  final _inputCtrl = CustomEmojiTextEditingController();
   final _scrollCtrl = ScrollController();
   List<Message> _posts = [];
   bool _isSubscribed = false;
@@ -404,12 +405,20 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   void _onInputTextChanged() {
     if (_suppressInputEntityShift) return;
     final text = _inputCtrl.text;
-    _customEmojiEntities = shiftCustomEmojiEntitiesForTextEdit(
+    final shifted = shiftCustomEmojiEntitiesForTextEdit(
       oldText: _lastInputText,
       newText: text,
       entities: _customEmojiEntities,
     );
+    _syncCustomEmojiEntities(shifted);
     _lastInputText = text;
+  }
+
+  void _syncCustomEmojiEntities(List<CustomEmojiEntity> entities) {
+    _customEmojiEntities = entities;
+    _suppressInputEntityShift = true;
+    _inputCtrl.setCustomEmojiEntities(entities);
+    _suppressInputEntityShift = false;
   }
 
   @override
@@ -1349,7 +1358,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           selection: TextSelection.collapsed(offset: 0),
         ),
       );
-      _customEmojiEntities = [];
+      _syncCustomEmojiEntities(const []);
     }
     setState(() {
       _showStickers = false;
@@ -1626,9 +1635,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       fileUrl: emojiData['file_url'] as String?,
       isAnimated: emojiData['is_animated'] as bool? ?? false,
     );
-    setState(() {
-      _customEmojiEntities = [...shifted, entity];
-    });
+    final nextEntities = [...shifted, entity];
+    setState(() => _syncCustomEmojiEntities(nextEntities));
     _setComposerValue(
       TextEditingValue(
         text: newText,
@@ -1651,7 +1659,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         selection: TextSelection.collapsed(offset: text.length),
       ),
     );
-    setState(() => _customEmojiEntities = entities);
+    setState(() => _syncCustomEmojiEntities(entities));
   }
 
   Future<void> _showAttachmentPicker() async {
@@ -2017,7 +2025,7 @@ class ChannelPostBar extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 2, 12, 14),
         child: LiquidGlass(
-          blur: 28,
+          blur: 50,
           borderRadius: const BorderRadius.all(Radius.circular(28)),
           padding: const EdgeInsets.fromLTRB(4, 4, 6, 4),
           child: Row(

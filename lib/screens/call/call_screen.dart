@@ -135,7 +135,7 @@ class _CallScreenState extends State<CallScreen> {
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
           child: LiquidGlass(
-            blur: 32,
+            blur: 56,
             borderRadius: const BorderRadius.all(Radius.circular(28)),
             padding: const EdgeInsets.fromLTRB(0, 20, 0, 8),
             child: Column(
@@ -265,7 +265,7 @@ class _CallScreenState extends State<CallScreen> {
                     const Spacer(),
                     // Status chip
                     LiquidGlass.capsule(
-                      blur: 20,
+                      blur: 36,
                       padding: const EdgeInsets.symmetric(
                         horizontal: 14,
                         vertical: 7,
@@ -319,7 +319,7 @@ class _CallScreenState extends State<CallScreen> {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                 child: LiquidGlass(
-                  blur: 30,
+                  blur: 56,
                   borderRadius: const BorderRadius.all(Radius.circular(36)),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 8,
@@ -509,7 +509,7 @@ class _CallIconButton extends StatelessWidget {
       child: GestureDetector(
         onTap: onTap,
         child: LiquidGlass(
-          blur: 22,
+          blur: 36,
           borderRadius: BorderRadius.circular(22),
           child: SizedBox(
             width: 44,
@@ -557,7 +557,7 @@ class _ControlButton extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             LiquidGlass(
-              blur: 26,
+              blur: 40,
               borderRadius: BorderRadius.circular(30),
               tint: tint,
               boxShadow: [
@@ -646,7 +646,7 @@ class _MinimizedCallOverlay extends StatelessWidget {
             key: const Key('minimized-call-overlay'),
             onTap: () => cp.setCallMinimized(false),
             child: LiquidGlass.capsule(
-              blur: 30,
+              blur: 50,
               tint: scheme.surface,
               boxShadow: [
                 BoxShadow(
@@ -701,7 +701,7 @@ class _MinimizedCallOverlay extends StatelessWidget {
                       key: const Key('expand-call-button'),
                       onTap: () => cp.setCallMinimized(false),
                       child: LiquidGlass(
-                        blur: 20,
+                        blur: 36,
                         borderRadius: BorderRadius.circular(18),
                         child: const SizedBox(
                           width: 32,
@@ -719,7 +719,7 @@ class _MinimizedCallOverlay extends StatelessWidget {
                     GestureDetector(
                       onTap: cp.hangup,
                       child: LiquidGlass(
-                        blur: 20,
+                        blur: 36,
                         borderRadius: BorderRadius.circular(18),
                         tint: _callEndColor,
                         boxShadow: [
@@ -815,7 +815,7 @@ class IncomingCallModal extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   LiquidGlass.capsule(
-                    blur: 20,
+                    blur: 36,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 16,
                       vertical: 6,
@@ -948,7 +948,7 @@ class _CallAction extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           LiquidGlass(
-            blur: 28,
+            blur: 44,
             borderRadius: BorderRadius.circular(38),
             tint: color,
             boxShadow: [

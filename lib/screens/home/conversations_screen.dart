@@ -316,7 +316,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
           child: LiquidGlass(
-            blur: 32,
+            blur: 56,
             borderRadius: const BorderRadius.all(Radius.circular(28)),
             padding: EdgeInsets.zero,
             child: Column(
@@ -440,7 +440,7 @@ class _GlassFab extends StatelessWidget {
     return GestureDetector(
       onTap: onPressed,
       child: LiquidGlass(
-        blur: 28,
+        blur: 50,
         borderRadius: const BorderRadius.all(Radius.circular(24)),
         tint: scheme.primary,
         boxShadow: [
@@ -479,7 +479,6 @@ class _ConversationTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final name = conversation.displayName(currentUserID);
     final avatar = conversation.displayAvatar(currentUserID);
     final last = conversation.lastMessage;
