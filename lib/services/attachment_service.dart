@@ -291,6 +291,27 @@ class AttachmentService {
     return bytes;
   }
 
+  Future<Uint8List> downloadRaw({required String attachmentId}) async {
+    final cached = _decryptedCache[attachmentId];
+    if (cached != null) {
+      _decryptedCache.remove(attachmentId);
+      _decryptedCache[attachmentId] = cached;
+      return cached;
+    }
+
+    final info = await _api.getDownloadUrl(attachmentId);
+    final httpClient = HttpClient();
+    final request = await httpClient.getUrl(Uri.parse(info.downloadUrl));
+    final response = await request.close();
+    final bytes = await _readResponse(response);
+
+    _decryptedCache[attachmentId] = bytes;
+    if (_decryptedCache.length > _maxCacheEntries) {
+      _decryptedCache.remove(_decryptedCache.keys.first);
+    }
+    return bytes;
+  }
+
   Future<Uint8List> _readResponse(HttpClientResponse resp) async {
     final builder = BytesBuilder(copy: false);
     await for (final chunk in resp) {

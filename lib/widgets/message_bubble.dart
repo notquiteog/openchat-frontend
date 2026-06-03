@@ -761,18 +761,22 @@ class _ImageBubbleState extends State<_ImageBubble> {
 
   Future<void> _load() async {
     final c = widget.content;
-    if (c.attachmentId == null || c.fileKey == null || c.fileNonce == null) {
+    if (c.attachmentId == null) {
       setState(() => _state = _LoadState.error);
       return;
     }
     setState(() => _state = _LoadState.loading);
     try {
       final svc = AttachmentService(context.read<ApiService>());
-      final bytes = await svc.downloadAndDecrypt(
-        attachmentId: c.attachmentId!,
-        fileKeyB64: c.fileKey!,
-        fileNonceB64: c.fileNonce!,
-      );
+      final bytes = c.fileKey != null && c.fileNonce != null
+          ? await svc.downloadAndDecrypt(
+              attachmentId: c.attachmentId!,
+              fileKeyB64: c.fileKey!,
+              fileNonceB64: c.fileNonce!,
+            )
+          : !widget.message.isEncrypted
+          ? await svc.downloadRaw(attachmentId: c.attachmentId!)
+          : throw StateError('missing attachment key');
       if (mounted) {
         setState(() {
           _bytes = bytes;
@@ -928,18 +932,22 @@ class _VideoBubbleState extends State<_VideoBubble> {
 
   Future<void> _load() async {
     final c = widget.content;
-    if (c.attachmentId == null || c.fileKey == null || c.fileNonce == null) {
+    if (c.attachmentId == null) {
       setState(() => _state = _LoadState.error);
       return;
     }
     setState(() => _state = _LoadState.loading);
     try {
       final svc = AttachmentService(context.read<ApiService>());
-      final bytes = await svc.downloadAndDecrypt(
-        attachmentId: c.attachmentId!,
-        fileKeyB64: c.fileKey!,
-        fileNonceB64: c.fileNonce!,
-      );
+      final bytes = c.fileKey != null && c.fileNonce != null
+          ? await svc.downloadAndDecrypt(
+              attachmentId: c.attachmentId!,
+              fileKeyB64: c.fileKey!,
+              fileNonceB64: c.fileNonce!,
+            )
+          : !widget.message.isEncrypted
+          ? await svc.downloadRaw(attachmentId: c.attachmentId!)
+          : throw StateError('missing attachment key');
 
       // Write decrypted bytes to a temp file for the video player.
       final dir = await getTemporaryDirectory();
@@ -1101,17 +1109,21 @@ class _FileBubbleState extends State<_FileBubble> {
 
   Future<void> _download() async {
     final c = widget.content;
-    if (c.attachmentId == null || c.fileKey == null || c.fileNonce == null) {
+    if (c.attachmentId == null) {
       return;
     }
     setState(() => _state = _LoadState.loading);
     try {
       final svc = AttachmentService(context.read<ApiService>());
-      final bytes = await svc.downloadAndDecrypt(
-        attachmentId: c.attachmentId!,
-        fileKeyB64: c.fileKey!,
-        fileNonceB64: c.fileNonce!,
-      );
+      final bytes = c.fileKey != null && c.fileNonce != null
+          ? await svc.downloadAndDecrypt(
+              attachmentId: c.attachmentId!,
+              fileKeyB64: c.fileKey!,
+              fileNonceB64: c.fileNonce!,
+            )
+          : !widget.message.isEncrypted
+          ? await svc.downloadRaw(attachmentId: c.attachmentId!)
+          : throw StateError('missing attachment key');
 
       final dir = await getApplicationDocumentsDirectory();
       final fileName = c.fileName ?? 'file_${c.attachmentId}';
