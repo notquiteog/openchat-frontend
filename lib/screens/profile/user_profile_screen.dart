@@ -32,8 +32,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _sharedConversationsFuture ??=
-        context.read<ApiService>().getSharedConversations(_user.id);
+    _sharedConversationsFuture ??= context
+        .read<ApiService>()
+        .getSharedConversations(_user.id);
   }
 
   bool get _isOwnProfile {
@@ -46,8 +47,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
 
   Future<void> _ban() async {
     final api = context.read<ApiService>();
-    final confirmed = await _confirm('Ban @${_user.username}?',
-        'Banned users cannot log in or send messages.');
+    final confirmed = await _confirm(
+      'Ban @${_user.username}?',
+      'Banned users cannot log in or send messages.',
+    );
     if (!confirmed) return;
     setState(() => _loading = true);
     try {
@@ -76,8 +79,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
 
   Future<void> _flagScammer() async {
     final api = context.read<ApiService>();
-    final confirmed = await _confirm('Flag @${_user.username} as scammer?',
-        'A warning will be shown to everyone who views this profile.');
+    final confirmed = await _confirm(
+      'Flag @${_user.username} as scammer?',
+      'A warning will be shown to everyone who views this profile.',
+    );
     if (!confirmed) return;
     setState(() => _loading = true);
     try {
@@ -106,8 +111,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
 
   Future<void> _grantPremiumMonth() async {
     final api = context.read<ApiService>();
-    final confirmed = await _confirm('Give @${_user.username} Premium?',
-        'This adds one month of Premium to the user account.');
+    final confirmed = await _confirm(
+      'Give @${_user.username} Premium?',
+      'This adds one month of Premium to the user account.',
+    );
     if (!confirmed) return;
     setState(() => _loading = true);
     try {
@@ -116,10 +123,11 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         final now = DateTime.now();
         final base =
             _user.premiumUntil != null && _user.premiumUntil!.isAfter(now)
-                ? _user.premiumUntil!
-                : now;
-        _user =
-            _user.copyWith(premiumUntil: base.add(const Duration(days: 30)));
+            ? _user.premiumUntil!
+            : now;
+        _user = _user.copyWith(
+          premiumUntil: base.add(const Duration(days: 30)),
+        );
       });
       _snack('Premium granted for one month.');
     } catch (e) {
@@ -127,6 +135,258 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     } finally {
       setState(() => _loading = false);
     }
+  }
+
+  Future<void> _showPaymentSheet() async {
+    final api = context.read<ApiService>();
+    var providers = <String>['btc', 'xmr'];
+    var balances = <Map<String, dynamic>>[];
+    try {
+      final status = await api.getBillingStatus();
+      final enabled = ((status['providers'] as List?) ?? const [])
+          .whereType<String>()
+          .where((p) => p == 'btc' || p == 'xmr')
+          .toList();
+      if (enabled.isNotEmpty) providers = enabled;
+      balances = (await api.getPaymentBalances())
+          .whereType<Map<String, dynamic>>()
+          .toList();
+    } catch (_) {}
+    if (!mounted || !context.mounted) return;
+
+    var payMode = true;
+    var paymentSource = 'wallet';
+    var provider = providers.first;
+    var submitting = false;
+    final amountCtrl = TextEditingController();
+    final noteCtrl = TextEditingController();
+
+    double balanceFor(String provider) {
+      for (final balance in balances) {
+        if (balance['provider'] == provider) {
+          return _asDouble(balance['available']);
+        }
+      }
+      return 0;
+    }
+
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        builder: (sheetCtx) => StatefulBuilder(
+          builder: (sheetCtx, setSheet) {
+            Future<void> submit() async {
+              if (submitting) return;
+              final amount = double.tryParse(amountCtrl.text.trim()) ?? 0;
+              if (amount <= 0) {
+                _snack('Enter an amount.');
+                return;
+              }
+              setSheet(() => submitting = true);
+              try {
+                if (payMode) {
+                  if (paymentSource == 'wallet') {
+                    if (amount > balanceFor(provider)) {
+                      _snack('Not enough app wallet balance.');
+                      return;
+                    }
+                    await api.sendPaymentTransfer(
+                      toUserID: _user.id,
+                      provider: provider,
+                      amount: amount,
+                      note: noteCtrl.text,
+                    );
+                  } else {
+                    final result = await api.createExternalPaymentTransfer(
+                      toUserID: _user.id,
+                      provider: provider,
+                      amount: amount,
+                      note: noteCtrl.text,
+                    );
+                    if (!mounted || !sheetCtx.mounted) return;
+                    Navigator.pop(sheetCtx);
+                    final deposit = result['deposit'] as Map<String, dynamic>?;
+                    if (deposit != null) _showExternalPaymentAddress(deposit);
+                    return;
+                  }
+                } else {
+                  await api.createPaymentRequest(
+                    payerID: _user.id,
+                    provider: provider,
+                    amount: amount,
+                    title: 'Payment request',
+                    note: noteCtrl.text,
+                  );
+                }
+                if (!mounted || !sheetCtx.mounted) return;
+                Navigator.pop(sheetCtx);
+                _snack(payMode ? 'Payment sent.' : 'Request sent.');
+              } catch (e) {
+                if (!mounted) return;
+                _snack('Payment failed: $e');
+              } finally {
+                if (mounted) setSheet(() => submitting = false);
+              }
+            }
+
+            final bottomInset = MediaQuery.of(sheetCtx).viewInsets.bottom;
+            final amount = double.tryParse(amountCtrl.text.trim()) ?? 0;
+            final available = balanceFor(provider);
+            final canUseWallet =
+                !payMode || (amount > 0 && available >= amount);
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(16, 14, 16, 16 + bottomInset),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        SegmentedButton<bool>(
+                          segments: const [
+                            ButtonSegment(
+                              value: true,
+                              label: Text('Pay'),
+                              icon: Icon(Icons.arrow_upward),
+                            ),
+                            ButtonSegment(
+                              value: false,
+                              label: Text('Request'),
+                              icon: Icon(Icons.arrow_downward),
+                            ),
+                          ],
+                          selected: {payMode},
+                          onSelectionChanged: (next) =>
+                              setSheet(() => payMode = next.first),
+                        ),
+                        const Spacer(),
+                        Text(
+                          _formatCrypto(available, provider),
+                          style: Theme.of(context).textTheme.labelMedium,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    SegmentedButton<String>(
+                      segments: [
+                        for (final p in providers)
+                          ButtonSegment(value: p, label: Text(p.toUpperCase())),
+                      ],
+                      selected: {provider},
+                      onSelectionChanged: (next) =>
+                          setSheet(() => provider = next.first),
+                    ),
+                    const SizedBox(height: 12),
+                    if (payMode) ...[
+                      SegmentedButton<String>(
+                        segments: [
+                          ButtonSegment(
+                            value: 'wallet',
+                            label: const Text('App wallet'),
+                            icon: const Icon(Icons.account_balance_wallet),
+                            enabled: canUseWallet,
+                          ),
+                          const ButtonSegment(
+                            value: 'external',
+                            label: Text('External'),
+                            icon: Icon(Icons.qr_code_2),
+                          ),
+                        ],
+                        selected: {canUseWallet ? paymentSource : 'external'},
+                        onSelectionChanged: (next) =>
+                            setSheet(() => paymentSource = next.first),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    TextField(
+                      controller: amountCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      onChanged: (_) {
+                        final nextAmount =
+                            double.tryParse(amountCtrl.text.trim()) ?? 0;
+                        setSheet(() {
+                          if (payMode &&
+                              paymentSource == 'wallet' &&
+                              nextAmount > balanceFor(provider)) {
+                            paymentSource = 'external';
+                          }
+                        });
+                      },
+                      decoration: InputDecoration(
+                        labelText: 'Amount ${provider.toUpperCase()}',
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: noteCtrl,
+                      maxLength: 160,
+                      decoration: const InputDecoration(
+                        labelText: 'Note',
+                        border: OutlineInputBorder(),
+                        counterText: '',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed: submitting ? null : submit,
+                      icon: submitting
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.payments_outlined),
+                      label: Text(
+                        payMode
+                            ? 'Pay @${_user.username}'
+                            : 'Request from @${_user.username}',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      );
+    } finally {
+      amountCtrl.dispose();
+      noteCtrl.dispose();
+    }
+  }
+
+  void _showExternalPaymentAddress(Map<String, dynamic> deposit) {
+    final address = deposit['crypto_address'] as String? ?? '';
+    final provider = deposit['provider'] as String? ?? '';
+    final amount = deposit['expected_amount'];
+    final amountText = amount == null
+        ? ''
+        : '\n\nSend at least ${_formatCrypto(_asDouble(amount), provider)}.';
+    showDialog<void>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: Text('Pay with ${provider.toUpperCase()}'),
+        content: SelectableText('$address$amountText'),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: address));
+              if (mounted && dialogCtx.mounted) Navigator.pop(dialogCtx);
+            },
+            child: const Text('Copy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<bool> _confirm(String title, String content) async {
@@ -137,11 +397,13 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             content: Text(content),
             actions: [
               TextButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: const Text('Cancel')),
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
               FilledButton(
-                  onPressed: () => Navigator.pop(context, true),
-                  child: const Text('Confirm')),
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Confirm'),
+              ),
             ],
           ),
         ) ??
@@ -189,8 +451,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close')),
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
         ],
       ),
     );
@@ -241,16 +504,23 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                   const PopupMenuItem(value: 'ban', child: Text('Ban user'))
                 else
                   const PopupMenuItem(
-                      value: 'unban', child: Text('Unban user')),
+                    value: 'unban',
+                    child: Text('Unban user'),
+                  ),
                 if (!_user.isFlaggedScammer)
                   const PopupMenuItem(
-                      value: 'flag', child: Text('Flag as scammer'))
+                    value: 'flag',
+                    child: Text('Flag as scammer'),
+                  )
                 else
                   const PopupMenuItem(
-                      value: 'unflag', child: Text('Remove scammer flag')),
+                    value: 'unflag',
+                    child: Text('Remove scammer flag'),
+                  ),
                 const PopupMenuItem(
-                    value: 'premium_month',
-                    child: Text('Give Premium for 1 month')),
+                  value: 'premium_month',
+                  child: Text('Give Premium for 1 month'),
+                ),
               ],
             ),
         ],
@@ -265,7 +535,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                   Container(
                     color: Colors.red[700],
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 10),
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
                     child: const Row(
                       children: [
                         Icon(Icons.warning_amber, color: Colors.white),
@@ -274,8 +546,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                           child: Text(
                             'This user has been flagged as a scammer. Exercise caution.',
                             style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w600),
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ),
                       ],
@@ -287,13 +560,17 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                   Container(
                     color: Colors.grey[800],
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 10),
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
                     child: const Row(
                       children: [
                         Icon(Icons.block, color: Colors.white70),
                         SizedBox(width: 8),
-                        Text('This account has been banned.',
-                            style: TextStyle(color: Colors.white70)),
+                        Text(
+                          'This account has been banned.',
+                          style: TextStyle(color: Colors.white70),
+                        ),
                       ],
                     ),
                   ),
@@ -308,14 +585,17 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                         radius: 50,
                         backgroundImage: _user.avatarUrl != null
                             ? CachedNetworkImageProvider(
-                                ApiConfig.resolveMedia(_user.avatarUrl!))
+                                ApiConfig.resolveMedia(_user.avatarUrl!),
+                              )
                             : null,
                         backgroundColor: cs.primaryContainer,
                         child: _user.avatarUrl == null
                             ? Text(
                                 _user.username[0].toUpperCase(),
                                 style: TextStyle(
-                                    fontSize: 36, color: cs.onPrimaryContainer),
+                                  fontSize: 36,
+                                  color: cs.onPrimaryContainer,
+                                ),
                               )
                             : null,
                       ),
@@ -326,15 +606,20 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                           Text(
                             '@${_user.username}',
                             style: const TextStyle(
-                                fontSize: 22, fontWeight: FontWeight.bold),
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                           if (_user.isSystemAdmin)
                             Padding(
                               padding: const EdgeInsets.only(left: 6),
                               child: Tooltip(
                                 message: 'System admin',
-                                child: Icon(Icons.verified,
-                                    color: cs.primary, size: 20),
+                                child: Icon(
+                                  Icons.verified,
+                                  color: cs.primary,
+                                  size: 20,
+                                ),
                               ),
                             ),
                           if (_user.isBot)
@@ -342,16 +627,21 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                               padding: const EdgeInsets.only(left: 6),
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 6, vertical: 2),
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
                                 decoration: BoxDecoration(
                                   color: cs.secondaryContainer,
                                   borderRadius: BorderRadius.circular(4),
                                 ),
-                                child: Text('BOT',
-                                    style: TextStyle(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
-                                        color: cs.onSecondaryContainer)),
+                                child: Text(
+                                  'BOT',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: cs.onSecondaryContainer,
+                                  ),
+                                ),
                               ),
                             ),
                         ],
@@ -362,11 +652,20 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                           child: Text(
                             _user.bio!,
                             style: TextStyle(
-                                color: cs.onSurface.withValues(alpha: 0.7),
-                                fontSize: 14),
+                              color: cs.onSurface.withValues(alpha: 0.7),
+                              fontSize: 14,
+                            ),
                             textAlign: TextAlign.center,
                           ),
                         ),
+                      if (!_isOwnProfile) ...[
+                        const SizedBox(height: 16),
+                        FilledButton.icon(
+                          onPressed: _showPaymentSheet,
+                          icon: const Icon(Icons.payments_outlined),
+                          label: const Text('Pay or request'),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -432,12 +731,15 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                         children: [
                           for (final conv in sharedConversations.take(8))
                             ListTile(
-                              leading: Icon(conv.isChannel
-                                  ? Icons.campaign_outlined
-                                  : Icons.group_outlined),
+                              leading: Icon(
+                                conv.isChannel
+                                    ? Icons.campaign_outlined
+                                    : Icons.group_outlined,
+                              ),
                               title: Text(conv.displayName('')),
-                              subtitle:
-                                  Text(conv.isChannel ? 'Channel' : 'Group'),
+                              subtitle: Text(
+                                conv.isChannel ? 'Channel' : 'Group',
+                              ),
                               dense: true,
                             ),
                         ],
@@ -468,4 +770,15 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             ),
     );
   }
+}
+
+double _asDouble(Object? value) {
+  if (value is num) return value.toDouble();
+  if (value is String) return double.tryParse(value) ?? 0;
+  return 0;
+}
+
+String _formatCrypto(double amount, String provider) {
+  final decimals = provider == 'btc' ? 8 : 12;
+  return '${amount.toStringAsFixed(decimals)} ${provider.toUpperCase()}';
 }

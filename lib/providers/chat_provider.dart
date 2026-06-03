@@ -49,9 +49,11 @@ class ChatProvider extends ChangeNotifier {
   StreamSubscription<WsEvent>? _wsSub;
   Timer? _pollTimer;
   Future<void>? _conversationRefreshInFlight;
+  bool _wasWsMonitoring = false;
 
   ChatProvider(this._api, this._storage, this._ws, this._settings) {
     _wsSub = _ws.events.listen(_handleWsEvent);
+    _ws.addListener(_onWsConnectionChanged);
     _ws.connect();
     _storage.getUserID().then((id) => _selfId = id);
     _pollTimer = Timer.periodic(const Duration(seconds: 8), (_) async {
@@ -68,8 +70,25 @@ class ChatProvider extends ChangeNotifier {
     _messages.clear();
     _conversations.clear();
     _typingUsers.clear();
+    _wasWsMonitoring = false;
     _ws.disconnect();
     notifyListeners();
+  }
+
+  void _onWsConnectionChanged() {
+    final monitoring = _ws.isMonitoring;
+    if (monitoring && !_wasWsMonitoring) {
+      unawaited(_catchUpAfterReconnect());
+    }
+    _wasWsMonitoring = monitoring;
+  }
+
+  Future<void> _catchUpAfterReconnect() async {
+    final token = await _storage.getAccessToken();
+    if (token == null) return;
+    await refreshConversationsSilently();
+    final loadedConversationIds = _messages.keys.toList(growable: false);
+    await Future.wait(loadedConversationIds.map(loadMessages));
   }
 
   Future<void> loadConversations() => _loadConversations(silent: false);
@@ -194,9 +213,9 @@ class ChatProvider extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> loadMoreMessages(String convID) async {
+  Future<int?> loadMoreMessages(String convID) async {
     final existing = _messages[convID];
-    if (existing == null || existing.isEmpty) return;
+    if (existing == null || existing.isEmpty) return 0;
     final oldest = existing.first;
     try {
       final older = await _api.getMessages(
@@ -204,6 +223,7 @@ class ChatProvider extends ChangeNotifier {
         beforeID: oldest.id,
         limit: 20,
       );
+      if (older.isEmpty) return 0;
       for (final msg in older) {
         _hydrateMessageSender(msg);
       }
@@ -211,7 +231,9 @@ class ChatProvider extends ChangeNotifier {
       await Future.wait(older.map((msg) => _tryDecrypt(msg, privateKey)));
       _messages[convID] = [...older.reversed, ...existing];
       notifyListeners();
+      return older.length;
     } catch (_) {}
+    return null;
   }
 
   /// Send a plain text message, encrypted for all conversation members.
@@ -937,6 +959,7 @@ class ChatProvider extends ChangeNotifier {
   void dispose() {
     _wsSub?.cancel();
     _pollTimer?.cancel();
+    _ws.removeListener(_onWsConnectionChanged);
     _ws.disconnect();
     super.dispose();
   }

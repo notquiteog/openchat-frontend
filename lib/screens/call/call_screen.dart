@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
@@ -9,6 +8,11 @@ import '../../config/api_config.dart';
 import '../../providers/call_provider.dart';
 import '../../services/call_service.dart';
 import '../../widgets/glass.dart';
+
+@visibleForTesting
+bool shouldUseCallVideoRenderersForTesting(CallSession? session) {
+  return session != null;
+}
 
 /// Full-screen audio/video call UI.
 class CallScreen extends StatefulWidget {
@@ -67,14 +71,8 @@ class _CallScreenState extends State<CallScreen> {
     super.dispose();
   }
 
-  bool get _isLinuxDesktop =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.linux;
-
   bool _shouldUseVideoRenderers(CallSession? session) {
-    if (session == null) return false;
-    // Linux flutter_webrtc textures can sit above Flutter controls and can
-    // crash during teardown. Keep the media call alive, but do not mount them.
-    return !_isLinuxDesktop;
+    return shouldUseCallVideoRenderersForTesting(session);
   }
 
   Future<void> _disposeRenderers() async {
@@ -280,14 +278,12 @@ class _CallScreenState extends State<CallScreen> {
                     ),
                     Positioned(
                       left: 8,
-                      child: IconButton(
+                      child: _CallIconButton(
                         key: const Key('minimize-call-button'),
                         tooltip: 'Minimize call',
-                        onPressed: _minimize,
-                        icon: const Icon(
-                          Icons.expand_more,
-                          color: Colors.white70,
-                        ),
+                        icon: Icons.expand_more,
+                        iconColor: Colors.white70,
+                        onTap: _minimize,
                       ),
                     ),
                   ],
@@ -316,12 +312,14 @@ class _CallScreenState extends State<CallScreen> {
                   children: [
                     // Mic toggle
                     _ControlButton(
+                      buttonKey: const Key('call-control-mute'),
                       icon: micMuted ? Icons.mic_off : Icons.mic,
                       label: micMuted ? 'Unmute' : 'Mute',
                       onTap: _toggleMic,
                     ),
 
                     _ControlButton(
+                      buttonKey: const Key('call-control-audio-output'),
                       icon: Icons.volume_up,
                       label: 'Audio',
                       onTap: _pickAudioOutput,
@@ -330,6 +328,7 @@ class _CallScreenState extends State<CallScreen> {
                     // Camera toggle (video calls only)
                     if (isVideo)
                       _ControlButton(
+                        buttonKey: const Key('call-control-camera'),
                         icon: cameraOff ? Icons.videocam_off : Icons.videocam,
                         label: cameraOff ? 'Camera on' : 'Camera off',
                         onTap: _toggleCamera,
@@ -337,6 +336,7 @@ class _CallScreenState extends State<CallScreen> {
 
                     // Hang up
                     _ControlButton(
+                      buttonKey: const Key('call-control-end'),
                       icon: Icons.call_end,
                       label: 'End',
                       onTap: _hangup,
@@ -353,34 +353,96 @@ class _CallScreenState extends State<CallScreen> {
   }
 }
 
+class _CallIconButton extends StatelessWidget {
+  final String tooltip;
+  final IconData icon;
+  final Color iconColor;
+  final VoidCallback onTap;
+
+  const _CallIconButton({
+    super.key,
+    required this.tooltip,
+    required this.icon,
+    required this.iconColor,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: Semantics(
+        button: true,
+        label: tooltip,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: SizedBox(
+              width: 48,
+              height: 48,
+              child: Center(child: Icon(icon, color: iconColor, size: 26)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ControlButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
   final Color? color;
+  final Key? buttonKey;
 
   const _ControlButton({
     required this.icon,
     required this.label,
     required this.onTap,
     this.color,
+    this.buttonKey,
   });
 
   @override
   Widget build(BuildContext context) {
+    final fill = color ?? Colors.white.withValues(alpha: 0.18);
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Material(
-          color: color ?? Colors.white24,
-          shape: const CircleBorder(),
-          child: SizedBox(
-            width: 56,
-            height: 56,
-            child: IconButton(
-              tooltip: label,
-              onPressed: onTap,
-              icon: Icon(icon, color: Colors.white, size: 26),
+        Tooltip(
+          message: label,
+          child: Semantics(
+            button: true,
+            label: label,
+            child: GestureDetector(
+              key: buttonKey,
+              behavior: HitTestBehavior.opaque,
+              onTap: onTap,
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: fill,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.16),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.22),
+                        blurRadius: 18,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Icon(icon, color: Colors.white, size: 26),
+                ),
+              ),
             ),
           ),
         ),

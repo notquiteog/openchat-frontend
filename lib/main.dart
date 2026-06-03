@@ -17,12 +17,12 @@ import 'services/secure_storage_service.dart';
 import 'services/websocket_service.dart';
 
 /// Background FCM handler — runs in a separate isolate when the app is
-/// terminated. Regular messages carry a notification payload so the system
-/// shows them automatically. Incoming-call pushes are data-only (no
-/// notification payload) so we display a local notification here.
+/// terminated. Release pushes include a notification payload so the OS can show
+/// them automatically. This handler remains a data-only fallback for incoming
+/// calls so older servers still surface a local call notification.
 @pragma('vm:entry-point')
 Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
-  if (message.data['type'] == 'incoming_call') {
+  if (message.notification == null && message.data['type'] == 'incoming_call') {
     await NotificationService.init();
     final caller = message.data['caller_username'] as String? ?? 'Unknown';
     final isVideo = message.data['is_video'] == 'true';
@@ -61,7 +61,7 @@ class _Providers extends StatelessWidget {
       providers: [
         Provider<SecureStorageService>.value(value: storage),
         Provider<ApiService>.value(value: api),
-        Provider<WebSocketService>.value(value: ws),
+        ChangeNotifierProvider<WebSocketService>.value(value: ws),
         Provider<CallService>.value(value: callService),
         ChangeNotifierProvider(create: (_) => SettingsProvider()..load()),
         ChangeNotifierProvider(create: (_) => AuthProvider(api, storage)),

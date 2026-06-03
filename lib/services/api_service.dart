@@ -5,8 +5,10 @@ import '../config/api_config.dart' show ApiConfig, IceServer;
 import '../models/user.dart';
 import '../models/message.dart';
 import '../models/conversation.dart';
+import '../models/story.dart';
 import '../services/secure_storage_service.dart';
 import '../services/key_cache_service.dart';
+import '../utils/device_label.dart';
 
 class ApiException implements Exception {
   final int statusCode;
@@ -96,6 +98,7 @@ class ApiService {
       'username': username,
       'password': password,
       'public_key': publicKey,
+      'device_name': openChatDeviceName(),
     }, authenticated: false);
     return AuthResponse.fromJson(resp['data'] as Map<String, dynamic>);
   }
@@ -110,6 +113,7 @@ class ApiService {
       'password': password,
       if (twoFactorPassword != null && twoFactorPassword.isNotEmpty)
         'two_factor_password': twoFactorPassword,
+      'device_name': openChatDeviceName(),
     }, authenticated: false);
     return AuthResponse.fromJson(resp['data'] as Map<String, dynamic>);
   }
@@ -121,6 +125,7 @@ class ApiService {
     }
     final resp = await _post('/api/v1/auth/refresh', {
       'refresh_token': refreshToken,
+      'device_name': openChatDeviceName(),
     }, authenticated: false);
     final data = resp['data'] as Map<String, dynamic>;
     await _storage.updateTokens(
@@ -278,7 +283,7 @@ class ApiService {
   }) async {
     final resp = await _post('/api/v1/conversations', {
       'name': name,
-      if (description != null) 'description': description,
+      'description': ?description,
       'member_ids': memberIDs,
     });
     return Conversation.fromJson(resp['data'] as Map<String, dynamic>);
@@ -332,7 +337,7 @@ class ApiService {
     final resp = await _post('/api/v1/channels', {
       'name': name,
       if (handle != null && handle.isNotEmpty) 'handle': handle,
-      if (description != null) 'description': description,
+      'description': ?description,
       'is_public': isPublic,
     });
     return Conversation.fromJson(resp['data'] as Map<String, dynamic>);
@@ -368,7 +373,7 @@ class ApiService {
   }) async {
     await _post('/api/v1/channels/$chanID/bans', {
       'user_id': userID,
-      if (reason != null) 'reason': reason,
+      'reason': ?reason,
     });
   }
 
@@ -416,7 +421,7 @@ class ApiService {
       'encrypted_payload': encryptedPayload,
       'signature': signature,
       'message_type': messageType,
-      if (attachmentId != null) 'attachment_id': attachmentId,
+      'attachment_id': ?attachmentId,
       if (silent) 'silent': true,
       if (scheduledFor != null)
         'scheduled_for': scheduledFor.toUtc().toIso8601String(),
@@ -454,9 +459,9 @@ class ApiService {
       'encrypted_payload': encryptedPayload,
       'signature': signature,
       'message_type': messageType,
-      if (replyTo != null) 'reply_to': replyTo,
-      if (attachmentId != null) 'attachment_id': attachmentId,
-      if (topicId != null) 'topic_id': topicId,
+      'reply_to': ?replyTo,
+      'attachment_id': ?attachmentId,
+      'topic_id': ?topicId,
       if (silent) 'silent': true,
       if (scheduledFor != null)
         'scheduled_for': scheduledFor.toUtc().toIso8601String(),
@@ -590,6 +595,102 @@ class ApiService {
     });
   }
 
+  // ---- Stories ----
+
+  Future<List<Story>> getStories({
+    bool archive = false,
+    bool pinned = false,
+    String? userId,
+    String? conversationId,
+    int limit = 100,
+  }) async {
+    final params = <String>[
+      'limit=$limit',
+      if (archive) 'archive=true',
+      if (pinned) 'pinned=true',
+      if (userId != null) 'user_id=${Uri.encodeComponent(userId)}',
+      if (conversationId != null)
+        'conversation_id=${Uri.encodeComponent(conversationId)}',
+    ];
+    final resp = await _get('/api/v1/stories?${params.join('&')}');
+    return (resp['data'] as List? ?? [])
+        .map((e) => Story.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<Story> createStory({
+    required String attachmentId,
+    required String fileName,
+    required int fileSize,
+    required String mimeType,
+    required String fileKey,
+    required String fileNonce,
+    required String mediaType,
+    String caption = '',
+    String privacy = 'contacts',
+    String? conversationId,
+    int expiresInSeconds = 24 * 60 * 60,
+    bool pinned = false,
+    bool noForwards = false,
+    List<Map<String, dynamic>> entities = const [],
+  }) async {
+    final resp = await _post('/api/v1/stories', {
+      'attachment_id': attachmentId,
+      'file_name': fileName,
+      'file_size': fileSize,
+      'mime_type': mimeType,
+      'file_key': fileKey,
+      'file_nonce': fileNonce,
+      'media_type': mediaType,
+      'caption': caption,
+      'entities': entities,
+      'privacy': privacy,
+      'conversation_id': ?conversationId,
+      'expires_in_seconds': expiresInSeconds,
+      if (pinned) 'pinned': true,
+      if (noForwards) 'no_forwards': true,
+    });
+    return Story.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<Story> getStory(String storyId) async {
+    final resp = await _get('/api/v1/stories/$storyId');
+    return Story.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<Story> viewStory(String storyId) async {
+    final resp = await _post('/api/v1/stories/$storyId/view', {});
+    return Story.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<Story> reactToStory(String storyId, String emoji) async {
+    final resp = await _post('/api/v1/stories/$storyId/reactions', {
+      'emoji': emoji,
+    });
+    return Story.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<Story> deleteStoryReaction(String storyId) async {
+    await _delete('/api/v1/stories/$storyId/reactions');
+    return getStory(storyId);
+  }
+
+  Future<void> deleteStory(String storyId) async {
+    await _delete('/api/v1/stories/$storyId');
+  }
+
+  Future<Story> pinStory(String storyId, bool pinned) async {
+    final resp = await _put('/api/v1/stories/$storyId/pin', {'pinned': pinned});
+    return Story.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<Story> archiveStory(String storyId, bool archived) async {
+    final resp = await _put('/api/v1/stories/$storyId/archive', {
+      'archived': archived,
+    });
+    return Story.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
   // ---- Attachments ----
 
   /// Request a presigned PUT URL and create an attachment record.
@@ -666,8 +767,8 @@ class ApiService {
     bool clearBubbleColor = false,
   }) async {
     await _put('/api/v1/users/me', {
-      if (bio != null) 'bio': bio,
-      if (avatarUrl != null) 'avatar_url': avatarUrl,
+      'bio': ?bio,
+      'avatar_url': ?avatarUrl,
       if (clearBubbleColor)
         'bubble_color': ''
       else if (bubbleColor != null)
@@ -677,7 +778,7 @@ class ApiService {
 
   Future<void> updatePreferences({bool? allowGroupAdd}) async {
     await _put('/api/v1/users/me/preferences', {
-      if (allowGroupAdd != null) 'allow_group_add': allowGroupAdd,
+      'allow_group_add': ?allowGroupAdd,
     });
   }
 
@@ -692,10 +793,9 @@ class ApiService {
     int? accountSelfDestructDays,
   }) async {
     final resp = await _put('/api/v1/me/security', {
-      if (twoFactorPassword != null) 'two_factor_password': twoFactorPassword,
+      'two_factor_password': ?twoFactorPassword,
       if (disableTwoFactor) 'disable_two_factor': true,
-      if (accountSelfDestructDays != null)
-        'account_self_destruct_days': accountSelfDestructDays,
+      'account_self_destruct_days': ?accountSelfDestructDays,
     });
     return resp['data'] as Map<String, dynamic>;
   }
@@ -756,9 +856,9 @@ class ApiService {
     String? avatarUrl,
   }) async {
     await _put('/api/v1/conversations/$convID', {
-      if (name != null) 'name': name,
-      if (description != null) 'description': description,
-      if (avatarUrl != null) 'avatar_url': avatarUrl,
+      'name': ?name,
+      'description': ?description,
+      'avatar_url': ?avatarUrl,
     });
   }
 
@@ -811,7 +911,7 @@ class ApiService {
   }) async {
     final resp = await _post('/api/v1/stickers/packs', {
       'name': name,
-      if (description != null) 'description': description,
+      'description': ?description,
     });
     return resp['data'] as Map<String, dynamic>;
   }
@@ -843,9 +943,9 @@ class ApiService {
     String? coverUrl,
   }) async {
     await _put('/api/v1/stickers/packs/$packID', {
-      if (name != null) 'name': name,
-      if (description != null) 'description': description,
-      if (coverUrl != null) 'cover_url': coverUrl,
+      'name': ?name,
+      'description': ?description,
+      'cover_url': ?coverUrl,
     });
   }
 
@@ -855,6 +955,75 @@ class ApiService {
 
   Future<void> removeStickerPackFromLibrary(String packID) async {
     await _delete('/api/v1/stickers/packs/$packID/library');
+  }
+
+  // ---- Custom emoji ----
+
+  Future<List<dynamic>> getCustomEmojiPacks() async {
+    final resp = await _get('/api/v1/custom-emoji/packs');
+    return resp['data'] as List;
+  }
+
+  Future<Map<String, dynamic>> getCustomEmojiPack(String packID) async {
+    final resp = await _get('/api/v1/custom-emoji/packs/$packID');
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> getCustomEmoji(String emojiID) async {
+    final resp = await _get('/api/v1/custom-emoji/$emojiID');
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> createCustomEmojiPack({
+    required String name,
+    String? description,
+  }) async {
+    final resp = await _post('/api/v1/custom-emoji/packs', {
+      'name': name,
+      'description': ?description,
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> addCustomEmojiToPack({
+    required String packID,
+    required Uint8List fileBytes,
+    required String filename,
+    required String name,
+    required String emoji,
+  }) async {
+    return await _multipartPost(
+      '/api/v1/custom-emoji/packs/$packID/emojis',
+      fileField: 'file',
+      fileBytes: fileBytes,
+      filename: filename,
+      fields: {'name': name, 'emoji': emoji},
+    );
+  }
+
+  Future<void> deleteCustomEmojiFromPack(String packID, String emojiID) async {
+    await _delete('/api/v1/custom-emoji/packs/$packID/emojis/$emojiID');
+  }
+
+  Future<void> updateCustomEmojiPack(
+    String packID, {
+    String? name,
+    String? description,
+    String? coverUrl,
+  }) async {
+    await _put('/api/v1/custom-emoji/packs/$packID', {
+      'name': ?name,
+      'description': ?description,
+      'cover_url': ?coverUrl,
+    });
+  }
+
+  Future<void> addCustomEmojiPackToLibrary(String packID) async {
+    await _post('/api/v1/custom-emoji/packs/$packID/library', {});
+  }
+
+  Future<void> removeCustomEmojiPackFromLibrary(String packID) async {
+    await _delete('/api/v1/custom-emoji/packs/$packID/library');
   }
 
   /// Uploads an image and returns the public URL for use as an avatar.
@@ -883,13 +1052,13 @@ class ApiService {
     bool? isPublic,
   }) async {
     await _put('/api/v1/channels/$channelID', {
-      if (name != null) 'name': name,
-      if (description != null) 'description': description,
-      if (avatarUrl != null) 'avatar_url': avatarUrl,
+      'name': ?name,
+      'description': ?description,
+      'avatar_url': ?avatarUrl,
       // Empty string is meaningful here: it tells the server to clear the
       // handle. Only omit the field entirely when handle is null (no change).
-      if (handle != null) 'handle': handle,
-      if (isPublic != null) 'is_public': isPublic,
+      'handle': ?handle,
+      'is_public': ?isPublic,
     });
   }
 
@@ -909,8 +1078,8 @@ class ApiService {
     final resp = await _post('/api/v1/bots', {
       'username': username,
       'public_key': publicKey,
-      if (description != null) 'description': description,
-      if (avatarUrl != null) 'avatar_url': avatarUrl,
+      'description': ?description,
+      'avatar_url': ?avatarUrl,
     });
     return resp['data'] as Map<String, dynamic>;
   }
@@ -922,9 +1091,9 @@ class ApiService {
     String? webhookUrl,
   }) async {
     await _put('/api/v1/bots/$botID', {
-      if (description != null) 'description': description,
-      if (avatarUrl != null) 'avatar_url': avatarUrl,
-      if (webhookUrl != null) 'webhook_url': webhookUrl,
+      'description': ?description,
+      'avatar_url': ?avatarUrl,
+      'webhook_url': ?webhookUrl,
     });
   }
 
@@ -952,10 +1121,12 @@ class ApiService {
   Future<Map<String, dynamic>> createCheckout({
     required String plan,
     required String provider,
+    String source = 'external',
   }) async {
     final resp = await _post('/api/v1/billing/checkout', {
       'plan': plan,
       'provider': provider,
+      'source': source,
     });
     return resp['data'] as Map<String, dynamic>;
   }
@@ -975,6 +1146,147 @@ class ApiService {
     await _delete('/api/v1/billing/invoices/$invoiceID');
   }
 
+  Future<List<dynamic>> getPaymentBalances() async {
+    final resp = await _get('/api/v1/billing/balances');
+    return (resp['data'] as List?) ?? const [];
+  }
+
+  Future<Map<String, dynamic>> createPaymentDeposit({
+    required String provider,
+    double? expectedAmount,
+  }) async {
+    final resp = await _post('/api/v1/billing/deposits', {
+      'provider': provider,
+      'expected_amount': ?expectedAmount,
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<List<dynamic>> listPaymentDeposits() async {
+    final resp = await _get('/api/v1/billing/deposits');
+    return (resp['data'] as List?) ?? const [];
+  }
+
+  Future<Map<String, dynamic>> getPaymentDeposit(String depositID) async {
+    final resp = await _get('/api/v1/billing/deposits/$depositID');
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> sendPaymentTransfer({
+    required String toUserID,
+    required String provider,
+    required double amount,
+    String? conversationID,
+    String? note,
+  }) async {
+    final resp = await _post('/api/v1/billing/transfers', {
+      'to_user_id': toUserID,
+      'provider': provider,
+      'amount': amount,
+      'conversation_id': ?conversationID,
+      if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> createExternalPaymentTransfer({
+    required String toUserID,
+    required String provider,
+    required double amount,
+    String? conversationID,
+    String? note,
+  }) async {
+    final resp = await _post('/api/v1/billing/transfers/external', {
+      'to_user_id': toUserID,
+      'provider': provider,
+      'amount': amount,
+      'conversation_id': ?conversationID,
+      if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> createPaymentRequest({
+    String? payerID,
+    String? conversationID,
+    required String provider,
+    required double amount,
+    String? title,
+    String? note,
+  }) async {
+    final resp = await _post('/api/v1/billing/payment-requests', {
+      'provider': provider,
+      'amount': amount,
+      'payer_id': ?payerID,
+      'conversation_id': ?conversationID,
+      if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
+      if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> payPaymentRequest(String requestID) async {
+    final resp = await _post(
+      '/api/v1/billing/payment-requests/$requestID/pay',
+      {},
+    );
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> payPaymentRequestAmount({
+    required String requestID,
+    required double amount,
+  }) async {
+    final resp = await _post(
+      '/api/v1/billing/payment-requests/$requestID/pay',
+      {'amount': amount},
+    );
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> payPaymentRequestExternally({
+    required String requestID,
+    double? amount,
+  }) async {
+    final resp = await _post(
+      '/api/v1/billing/payment-requests/$requestID/pay-external',
+      {'amount': ?amount},
+    );
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<List<dynamic>> listPaymentTransfers() async {
+    final resp = await _get('/api/v1/billing/transfers');
+    return (resp['data'] as List?) ?? const [];
+  }
+
+  Future<List<dynamic>> listPaymentRequests() async {
+    final resp = await _get('/api/v1/billing/payment-requests');
+    return (resp['data'] as List?) ?? const [];
+  }
+
+  Future<void> cancelPaymentRequest(String requestID) async {
+    await _delete('/api/v1/billing/payment-requests/$requestID');
+  }
+
+  Future<Map<String, dynamic>> withdrawPaymentFunds({
+    required String provider,
+    required String address,
+    required double amount,
+  }) async {
+    final resp = await _post('/api/v1/billing/withdrawals', {
+      'provider': provider,
+      'address': address,
+      'amount': amount,
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<List<dynamic>> listPaymentWithdrawals() async {
+    final resp = await _get('/api/v1/billing/withdrawals');
+    return (resp['data'] as List?) ?? const [];
+  }
+
   // ---- Channel / conversation moderation ----
 
   /// Mute a user in [convID]. durationMinutes=0 (default) is indefinite.
@@ -987,7 +1299,7 @@ class ApiService {
     await _post('/api/v1/conversations/$convID/mutes', {
       'user_id': userID,
       'duration_minutes': durationMinutes,
-      if (reason != null) 'reason': reason,
+      'reason': ?reason,
     });
   }
 
@@ -1040,7 +1352,10 @@ class ApiService {
       final token = await _storage.getAccessToken();
       final uri = Uri.parse('${ApiConfig.baseUrl}$path');
       final req = http.MultipartRequest('POST', uri)
-        ..headers['Authorization'] = 'Bearer ${token ?? ""}'
+        ..headers.addAll({
+          if (token != null) 'Authorization': 'Bearer $token',
+          'X-OpenChat-Device': openChatDeviceName(),
+        })
         ..fields.addAll(fields)
         ..files.add(
           http.MultipartFile.fromBytes(
@@ -1114,6 +1429,7 @@ class ApiService {
 
   Map<String, String> _headers(String? token) => {
     'Content-Type': 'application/json',
+    'X-OpenChat-Device': openChatDeviceName(),
     if (token != null) 'Authorization': 'Bearer $token',
   };
 

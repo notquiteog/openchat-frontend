@@ -1,6 +1,11 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart'
-    show defaultTargetPlatform, kIsWeb, TargetPlatform;
+    show
+        debugPrint,
+        defaultTargetPlatform,
+        kIsWeb,
+        TargetPlatform,
+        visibleForTesting;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:uuid/uuid.dart';
 import '../config/api_config.dart' show IceServer;
@@ -67,6 +72,118 @@ class CallAudioOutput {
   final String label;
 
   const CallAudioOutput({required this.deviceId, required this.label});
+}
+
+@visibleForTesting
+List<Map<String, dynamic>> buildCallMediaCaptureAttemptsForTesting({
+  required bool isVideo,
+  required bool isMobile,
+  required bool isWeb,
+  required bool isLinuxDesktop,
+  List<MediaDeviceInfo> videoInputs = const [],
+}) {
+  if (!isVideo) {
+    return const [
+      {'audio': true, 'video': false},
+    ];
+  }
+
+  final profiles = isLinuxDesktop
+      ? const [
+          _VideoProfile(width: 1280, height: 720, frameRate: 30),
+          _VideoProfile(width: 640, height: 480, frameRate: 30),
+          _VideoProfile(width: 320, height: 240, frameRate: 15),
+        ]
+      : isMobile
+      ? const [_VideoProfile(width: 640, height: 480, frameRate: 30)]
+      : const [_VideoProfile(width: 1280, height: 720, frameRate: 30)];
+
+  final videoDeviceIds = isMobile
+      ? const <String?>[null]
+      : [
+          for (final device in _preferredVideoInputs(videoInputs))
+            if (device.deviceId.isNotEmpty) device.deviceId,
+          null,
+        ];
+  final effectiveDeviceIds = videoDeviceIds.isEmpty
+      ? const <String?>[null]
+      : videoDeviceIds;
+
+  return [
+    for (final deviceId in effectiveDeviceIds)
+      for (final profile in profiles)
+        {
+          'audio': true,
+          'video': _videoConstraints(
+            deviceId: deviceId,
+            profile: profile,
+            isMobile: isMobile,
+            isWeb: isWeb,
+          ),
+        },
+  ];
+}
+
+class _VideoProfile {
+  final int width;
+  final int height;
+  final int frameRate;
+
+  const _VideoProfile({
+    required this.width,
+    required this.height,
+    required this.frameRate,
+  });
+}
+
+Map<String, dynamic> _videoConstraints({
+  required String? deviceId,
+  required _VideoProfile profile,
+  required bool isMobile,
+  required bool isWeb,
+}) {
+  return {
+    if (deviceId != null && isWeb) 'deviceId': deviceId,
+    if (deviceId != null && !isWeb)
+      'optional': [
+        {'sourceId': deviceId},
+      ],
+    if (isMobile && deviceId == null) 'facingMode': 'user',
+    'width': profile.width,
+    'height': profile.height,
+    'frameRate': profile.frameRate,
+  };
+}
+
+List<MediaDeviceInfo> _preferredVideoInputs(List<MediaDeviceInfo> devices) {
+  final indexed = devices
+      .where((device) => device.kind == 'videoinput')
+      .indexed
+      .toList(growable: false);
+  indexed.sort((a, b) {
+    final byScore = _videoDeviceScore(a.$2).compareTo(_videoDeviceScore(b.$2));
+    if (byScore != 0) return byScore;
+    return a.$1.compareTo(b.$1);
+  });
+  return [for (final entry in indexed) entry.$2];
+}
+
+int _videoDeviceScore(MediaDeviceInfo device) {
+  final label = device.label.toLowerCase();
+  if (label.contains('razer') || label.contains('kiyo')) return 0;
+  if (label.contains('usb') ||
+      label.contains('webcam') ||
+      label.contains('camera') ||
+      label.contains('cam')) {
+    return 1;
+  }
+  if (label.trim().isEmpty) return 2;
+  if (label.contains('virtual') ||
+      label.contains('obs') ||
+      label.contains('screen')) {
+    return 4;
+  }
+  return 3;
 }
 
 /// Manages a single WebRTC call. Handles offer/answer, ICE candidates,
@@ -672,15 +789,10 @@ class CallService {
         (defaultTargetPlatform == TargetPlatform.android ||
             defaultTargetPlatform == TargetPlatform.iOS);
 
-    final constraints = <String, dynamic>{
-      'audio': true,
-      'video': isVideo
-          ? (isMobile
-                ? {'facingMode': 'user', 'width': 640, 'height': 480}
-                : {'width': 1280, 'height': 720})
-          : false,
-    };
-    _localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    _localStream = await _createLocalMediaStream(
+      isVideo: isVideo,
+      isMobile: isMobile,
+    );
     setMicMuted(_micMuted);
     setCameraEnabled(_cameraEnabled);
     // setSpeakerphoneOnButPreferBluetooth is mobile-only audio routing.
@@ -696,6 +808,83 @@ class CallService {
     for (final track in _localStream!.getTracks()) {
       _pc!.addTrack(track, _localStream!);
     }
+  }
+
+  Future<MediaStream> _createLocalMediaStream({
+    required bool isVideo,
+    required bool isMobile,
+  }) async {
+    final attempts = await _captureConstraintAttempts(
+      isVideo: isVideo,
+      isMobile: isMobile,
+    );
+    Object? lastError;
+    for (final constraints in attempts) {
+      MediaStream? stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        if (!isVideo || stream.getVideoTracks().isNotEmpty) {
+          return stream;
+        }
+        lastError = StateError('camera opened without a video track');
+      } catch (e) {
+        lastError = e;
+      }
+
+      await _releaseMediaStream(stream);
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.linux) {
+        debugPrint('OpenChat call media retry: $lastError');
+      }
+    }
+
+    if (isVideo) {
+      throw StateError('Could not open a camera for the video call');
+    }
+    throw StateError('Could not open local media: $lastError');
+  }
+
+  Future<List<Map<String, dynamic>>> _captureConstraintAttempts({
+    required bool isVideo,
+    required bool isMobile,
+  }) async {
+    final isLinuxDesktop =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.linux;
+    final videoInputs = isVideo && !isMobile
+        ? await _safeVideoInputs()
+        : const <MediaDeviceInfo>[];
+    return buildCallMediaCaptureAttemptsForTesting(
+      isVideo: isVideo,
+      isMobile: isMobile,
+      isWeb: kIsWeb,
+      isLinuxDesktop: isLinuxDesktop,
+      videoInputs: videoInputs,
+    );
+  }
+
+  Future<List<MediaDeviceInfo>> _safeVideoInputs() async {
+    try {
+      final devices = await navigator.mediaDevices.enumerateDevices();
+      return devices
+          .where(
+            (device) =>
+                device.kind == 'videoinput' && device.deviceId.isNotEmpty,
+          )
+          .toList(growable: false);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> _releaseMediaStream(MediaStream? stream) async {
+    if (stream == null) return;
+    for (final track in stream.getTracks()) {
+      try {
+        await track.stop();
+      } catch (_) {}
+    }
+    try {
+      await stream.dispose();
+    } catch (_) {}
   }
 
   bool _isCleaningUp = false;

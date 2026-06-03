@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -49,6 +50,30 @@ Message _incomingTextMessageWithBubble(int bubbleColor) {
   return msg;
 }
 
+Message _voiceMessage() {
+  final msg = Message(
+    id: 'voice-msg-1',
+    conversationId: 'conv-1',
+    senderId: 'user-a',
+    type: MessageType.voice,
+    encryptedPayload: 'cipher',
+    signature: '',
+    isEncrypted: false,
+    createdAt: DateTime.utc(2026, 1, 1),
+  );
+  msg.setDecryptedContent(
+    jsonEncode({
+      'text': '',
+      'attachment_id': 'voice-attachment-1',
+      'file_name': 'voice.m4a',
+      'file_size': 2048,
+      'mime_type': 'audio/mp4',
+      'duration_ms': 3600,
+    }),
+  );
+  return msg;
+}
+
 void main() {
   testWidgets('DM header shows encrypted/off status labels', (tester) async {
     await tester.pumpWidget(
@@ -80,48 +105,51 @@ void main() {
     expect(layout.maxImageHeight, lessThanOrEqualTo(420));
     expect(layout.reservedImageHeight, layout.maxBubbleWidth * 0.75);
     expect(
-        layout.reservedImageHeight, lessThanOrEqualTo(layout.maxImageHeight));
+      layout.reservedImageHeight,
+      lessThanOrEqualTo(layout.maxImageHeight),
+    );
     expect(MessageImageLayout.expandTooltip, 'Expand image');
   });
 
-  test('gallery image conversion outputs webp and strips marker bytes',
-      () async {
-    final dir = await Directory.systemTemp.createTemp('chat-media-test');
-    addTearDown(() async {
-      await dir.delete(recursive: true);
-    });
+  test(
+    'gallery image conversion outputs webp and strips marker bytes',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('chat-media-test');
+      addTearDown(() async {
+        await dir.delete(recursive: true);
+      });
 
-    final fixture = File('${dir.path}/photo.jpg');
-    final raw = img.Image(width: 5, height: 5);
-    raw.setPixelRgba(0, 0, 255, 0, 0, 255);
-    final encoded = img.encodeJpg(raw);
-    const marker = 'GPS-META-MARKER';
-    final withMarker = Uint8List.fromList([
-      ...encoded,
-      ...marker.codeUnits,
-    ]);
-    await fixture.writeAsBytes(withMarker);
+      final fixture = File('${dir.path}/photo.jpg');
+      final raw = img.Image(width: 5, height: 5);
+      raw.setPixelRgba(0, 0, 255, 0, 0, 255);
+      final encoded = img.encodeJpg(raw);
+      const marker = 'GPS-META-MARKER';
+      final withMarker = Uint8List.fromList([...encoded, ...marker.codeUnits]);
+      await fixture.writeAsBytes(withMarker);
 
-    final prepared = await AttachmentService.prepareGalleryPhotoForUpload(
-      fixture,
-      webpEncoder: (_, __) async => Uint8List.fromList([
-        ...'RIFF'.codeUnits,
-        1,
-        0,
-        0,
-        0,
-        ...'WEBP'.codeUnits,
-        0,
-      ]),
-    );
+      final prepared = await AttachmentService.prepareGalleryPhotoForUpload(
+        fixture,
+        webpEncoder: (_, _) async => Uint8List.fromList([
+          ...'RIFF'.codeUnits,
+          1,
+          0,
+          0,
+          0,
+          ...'WEBP'.codeUnits,
+          0,
+        ]),
+      );
 
-    expect(prepared.fileName.endsWith('.webp'), isTrue);
-    expect(prepared.mimeType, 'image/webp');
-    expect(String.fromCharCodes(prepared.bytes.take(4).toList()), 'RIFF');
-    expect(
-        String.fromCharCodes(prepared.bytes.skip(8).take(4).toList()), 'WEBP');
-    expect(String.fromCharCodes(prepared.bytes).contains(marker), isFalse);
-  });
+      expect(prepared.fileName.endsWith('.webp'), isTrue);
+      expect(prepared.mimeType, 'image/webp');
+      expect(String.fromCharCodes(prepared.bytes.take(4).toList()), 'RIFF');
+      expect(
+        String.fromCharCodes(prepared.bytes.skip(8).take(4).toList()),
+        'WEBP',
+      );
+      expect(String.fromCharCodes(prepared.bytes).contains(marker), isFalse);
+    },
+  );
 
   test('file upload path preserves original name and mime type', () async {
     final dir = await Directory.systemTemp.createTemp('chat-file-test');
@@ -138,19 +166,46 @@ void main() {
     expect(prepared.mimeType, 'text/plain');
   });
 
+  test('voice note upload payload includes duration metadata', () {
+    const pending = PendingAttachment(
+      attachmentId: 'voice-attachment-1',
+      fileName: 'voice.m4a',
+      fileSize: 2048,
+      mimeType: 'audio/mp4',
+      messageType: MessageType.voice,
+      durationMs: 3600,
+      fileKey: 'key',
+      fileNonce: 'nonce',
+    );
+
+    expect(pending.toPayloadJson()['duration_ms'], 3600);
+  });
+
   testWidgets('message bubbles render a glass blur shell', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: MessageBubble(
-            message: _textMessage(),
-            isMe: true,
-          ),
+          body: MessageBubble(message: _textMessage(), isMe: true),
         ),
       ),
     );
 
     expect(find.byType(BackdropFilter), findsWidgets);
+  });
+
+  testWidgets('voice notes render an inline player before playback', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBubble(message: _voiceMessage(), isMe: true),
+        ),
+      ),
+    );
+
+    expect(find.byIcon(Icons.play_arrow), findsOneWidget);
+    expect(find.text('00:03'), findsOneWidget);
   });
 
   testWidgets('default outgoing bubble text is always white', (tester) async {
@@ -164,10 +219,7 @@ void main() {
           ),
         ),
         home: Scaffold(
-          body: MessageBubble(
-            message: _textMessage(),
-            isMe: true,
-          ),
+          body: MessageBubble(message: _textMessage(), isMe: true),
         ),
       ),
     );
@@ -176,15 +228,13 @@ void main() {
     expect(text.style?.color, Colors.white);
   });
 
-  testWidgets('message bubbles use a highly translucent glass tint',
-      (tester) async {
+  testWidgets('message bubbles use a highly translucent glass tint', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: MessageBubble(
-            message: _textMessage(),
-            isMe: true,
-          ),
+          body: MessageBubble(message: _textMessage(), isMe: true),
         ),
       ),
     );
@@ -205,8 +255,9 @@ void main() {
     );
   });
 
-  testWidgets('incoming sender bubble colors keep readable text',
-      (tester) async {
+  testWidgets('incoming sender bubble colors keep readable text', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(

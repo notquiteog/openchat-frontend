@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb;
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
@@ -15,10 +16,14 @@ import '../../services/background_ws_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/push_notification_service.dart';
 import '../../services/secure_storage_service.dart';
+import '../../utils/account_security_duration.dart';
+import '../../utils/device_label.dart';
 import '../bots/bot_management_screen.dart';
+import '../custom_emojis/custom_emoji_pack_screen.dart';
 import '../stickers/sticker_pack_screen.dart';
 import 'pgp_keys_screen.dart';
 import 'premium_screen.dart';
+import 'wallet_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -501,81 +506,228 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Future<void> _manageAccountSecurity() async {
+  Future<void> _manageTwoFactorPassword() async {
     final api = context.read<ApiService>();
     final messenger = ScaffoldMessenger.of(context);
     final twoFactorCtrl = TextEditingController();
-    final settings = await api.getSecuritySettings();
-    var selfDestructDays = settings['account_self_destruct_days'] as int? ?? 0;
-    final twoFactorEnabled = settings['two_factor_enabled'] as bool? ?? false;
+    final Map<String, dynamic> settings;
+    try {
+      settings = await api.getSecuritySettings();
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+      twoFactorCtrl.dispose();
+      return;
+    }
+    if (!mounted) {
+      twoFactorCtrl.dispose();
+      return;
+    }
 
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlg) => AlertDialog(
-          title: const Text('Account security'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: twoFactorCtrl,
-                obscureText: true,
-                decoration: InputDecoration(
-                  labelText: twoFactorEnabled
-                      ? 'New 2FA password'
-                      : 'Enable 2FA password',
-                ),
+    final twoFactorEnabled = settings['two_factor_enabled'] as bool? ?? false;
+    var submitting = false;
+
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDlg) => AlertDialog(
+            title: const Text('2FA password'),
+            content: TextField(
+              controller: twoFactorCtrl,
+              obscureText: true,
+              decoration: InputDecoration(
+                labelText: twoFactorEnabled
+                    ? 'New 2FA password'
+                    : 'Enable 2FA password',
               ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<int>(
-                initialValue: selfDestructDays,
-                decoration: const InputDecoration(
-                  labelText: 'Account self-destruct',
+            ),
+            actions: [
+              if (twoFactorEnabled)
+                TextButton(
+                  onPressed: submitting
+                      ? null
+                      : () async {
+                          setDlg(() => submitting = true);
+                          try {
+                            await api.updateSecuritySettings(
+                              disableTwoFactor: true,
+                            );
+                            if (ctx.mounted) Navigator.pop(ctx);
+                            messenger.showSnackBar(
+                              const SnackBar(content: Text('2FA disabled')),
+                            );
+                          } catch (e) {
+                            if (ctx.mounted) setDlg(() => submitting = false);
+                            messenger.showSnackBar(
+                              SnackBar(content: Text('Failed: $e')),
+                            );
+                          }
+                        },
+                  child: const Text('Disable 2FA'),
                 ),
-                items: const [
-                  DropdownMenuItem(value: 0, child: Text('Off')),
-                  DropdownMenuItem(value: 30, child: Text('After 30 days')),
-                  DropdownMenuItem(value: 180, child: Text('After 6 months')),
-                  DropdownMenuItem(value: 365, child: Text('After 1 year')),
-                ],
-                onChanged: (v) => setDlg(() => selfDestructDays = v ?? 0),
+              TextButton(
+                onPressed: submitting ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: submitting
+                    ? null
+                    : () async {
+                        final password = twoFactorCtrl.text.trim();
+                        if (password.isEmpty) {
+                          messenger.showSnackBar(
+                            const SnackBar(
+                              content: Text('Enter a 2FA password'),
+                            ),
+                          );
+                          return;
+                        }
+                        setDlg(() => submitting = true);
+                        try {
+                          await api.updateSecuritySettings(
+                            twoFactorPassword: password,
+                          );
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                twoFactorEnabled
+                                    ? '2FA password updated'
+                                    : '2FA enabled',
+                              ),
+                            ),
+                          );
+                        } catch (e) {
+                          if (ctx.mounted) setDlg(() => submitting = false);
+                          messenger.showSnackBar(
+                            SnackBar(content: Text('Failed: $e')),
+                          );
+                        }
+                      },
+                child: submitting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Save'),
               ),
             ],
           ),
-          actions: [
-            if (twoFactorEnabled)
-              TextButton(
-                onPressed: () async {
-                  await api.updateSecuritySettings(disableTwoFactor: true);
-                  if (ctx.mounted) Navigator.pop(ctx);
-                  messenger.showSnackBar(
-                    const SnackBar(content: Text('2FA disabled')),
-                  );
-                },
-                child: const Text('Disable 2FA'),
-              ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                final password = twoFactorCtrl.text.trim();
-                await api.updateSecuritySettings(
-                  twoFactorPassword: password.isEmpty ? null : password,
-                  accountSelfDestructDays: selfDestructDays,
-                );
-                if (ctx.mounted) Navigator.pop(ctx);
-                messenger.showSnackBar(
-                  const SnackBar(content: Text('Security settings updated')),
-                );
-              },
-              child: const Text('Save'),
-            ),
-          ],
         ),
-      ),
+      );
+    } finally {
+      twoFactorCtrl.dispose();
+    }
+  }
+
+  Future<void> _manageAccountInactivityDeletion() async {
+    final api = context.read<ApiService>();
+    final messenger = ScaffoldMessenger.of(context);
+    final Map<String, dynamic> settings;
+    try {
+      settings = await api.getSecuritySettings();
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+      return;
+    }
+    if (!mounted) return;
+
+    var selectedDays = normalizeInactiveDeletionDays(
+      settings['account_self_destruct_days'] as int?,
     );
+    var submitting = false;
+    final wheelController = FixedExtentScrollController(
+      initialItem: selectedDays,
+    );
+
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDlg) => AlertDialog(
+            title: const Text('Delete account when inactive for'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    inactiveDeletionSummaryLabel(selectedDays),
+                    style: Theme.of(ctx).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    height: 216,
+                    child: CupertinoPicker.builder(
+                      scrollController: wheelController,
+                      itemExtent: 44,
+                      useMagnifier: true,
+                      magnification: 1.06,
+                      backgroundColor: Colors.transparent,
+                      childCount: accountInactivityDeletionMaxDays + 1,
+                      onSelectedItemChanged: (index) {
+                        setDlg(() => selectedDays = index);
+                      },
+                      itemBuilder: (ctx, index) {
+                        return Center(
+                          child: Text(
+                            inactiveDeletionDurationLabel(index),
+                            style: Theme.of(ctx).textTheme.titleMedium,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: submitting ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: submitting
+                    ? null
+                    : () async {
+                        setDlg(() => submitting = true);
+                        try {
+                          await api.updateSecuritySettings(
+                            accountSelfDestructDays: selectedDays,
+                          );
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          messenger.showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Inactive account deletion updated',
+                              ),
+                            ),
+                          );
+                        } catch (e) {
+                          if (ctx.mounted) setDlg(() => submitting = false);
+                          messenger.showSnackBar(
+                            SnackBar(content: Text('Failed: $e')),
+                          );
+                        }
+                      },
+                child: submitting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Save'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } finally {
+      wheelController.dispose();
+    }
   }
 
   Future<void> _manageSessions() async {
@@ -599,9 +751,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         contentPadding: EdgeInsets.zero,
                         leading: const Icon(Icons.devices_outlined),
                         title: Text(
-                          session['device_name'] as String? ??
-                              session['user_agent'] as String? ??
-                              'OpenChat session',
+                          sessionDeviceDisplayLabel(session),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -654,7 +804,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDlg) => AlertDialog(
-          title: const Text('Business suite'),
+          title: const Text('Business profile'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -849,10 +999,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           ListTile(
             leading: const Icon(Icons.security_outlined),
-            title: const Text('Account security'),
-            subtitle: const Text('2FA password and self-destruct timer'),
+            title: const Text('2FA password'),
+            subtitle: const Text('Add, update, or disable 2FA'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: _manageAccountSecurity,
+            onTap: _manageTwoFactorPassword,
+          ),
+
+          ListTile(
+            leading: const Icon(Icons.delete_outline),
+            title: const Text('Delete account when inactive for'),
+            subtitle: const Text('Choose an exact inactivity period'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _manageAccountInactivityDeletion,
           ),
 
           ListTile(
@@ -865,7 +1023,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           ListTile(
             leading: const Icon(Icons.business_center_outlined),
-            title: const Text('Business suite'),
+            title: const Text('Business profile'),
             subtitle: const Text('Greeting, away message, and profile'),
             trailing: const Icon(Icons.chevron_right),
             onTap: _manageBusinessProfile,
@@ -959,6 +1117,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           const Divider(),
 
+          // ── Wallet ──────────────────────────────────────────────────────────
+          ListTile(
+            leading: const Icon(Icons.account_balance_wallet_outlined),
+            title: const Text('Wallet'),
+            subtitle: const Text('BTC/XMR balances, withdrawals, and history'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const WalletScreen()),
+            ),
+          ),
+
+          const Divider(),
+
           // ── Premium ─────────────────────────────────────────────────────────
           ListTile(
             leading: Icon(
@@ -971,7 +1143,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             subtitle: Text(
               user?.isPremium == true
                   ? 'Active${user?.premiumUntil != null ? ' until ${user!.premiumUntil!.toLocal().toString().split(' ').first}' : ''}'
-                  : '€10 / year or €2 / month — more stickers, more bots, custom channel wallpapers',
+                  : '€10 / year or €2 / month — more stickers, custom emoji, more bots, custom channel wallpapers',
             ),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.push(
@@ -1038,6 +1210,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
 
           ListTile(
+            leading: const Icon(Icons.add_reaction_outlined),
+            title: const Text('Custom Emoji Packs'),
+            subtitle: const Text('Create and manage your custom emoji packs'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const CustomEmojiPackScreen()),
+            ),
+          ),
+
+          ListTile(
             leading: const Icon(Icons.smart_toy_outlined),
             title: const Text('My Bots'),
             subtitle: const Text('Create and manage bots'),
@@ -1073,7 +1256,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   applicationIcon: Image.asset(
                     'assets/images/logo.png',
                     height: 48,
-                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
                   ),
                   applicationLegalese:
                       'Open source, end-to-end encrypted messenger.\n'

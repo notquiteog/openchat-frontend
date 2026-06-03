@@ -2,19 +2,19 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../config/api_config.dart';
-import '../screens/stickers/sticker_pack_screen.dart';
+import '../screens/custom_emojis/custom_emoji_pack_screen.dart';
 import '../services/api_service.dart';
 
-class StickerPicker extends StatefulWidget {
-  final void Function(String stickerID) onStickerSelected;
+class CustomEmojiPicker extends StatefulWidget {
+  final void Function(Map<String, dynamic> emoji) onEmojiSelected;
 
-  const StickerPicker({super.key, required this.onStickerSelected});
+  const CustomEmojiPicker({super.key, required this.onEmojiSelected});
 
   @override
-  State<StickerPicker> createState() => _StickerPickerState();
+  State<CustomEmojiPicker> createState() => _CustomEmojiPickerState();
 }
 
-class _StickerPickerState extends State<StickerPicker>
+class _CustomEmojiPickerState extends State<CustomEmojiPicker>
     with SingleTickerProviderStateMixin {
   TabController? _tabCtrl;
   List<Map<String, dynamic>> _packs = [];
@@ -29,24 +29,25 @@ class _StickerPickerState extends State<StickerPicker>
   Future<void> _loadPacks() async {
     try {
       final api = context.read<ApiService>();
-      final raw = await api.getStickerPacks();
-      // Fetch full pack data (includes stickers) for each pack
+      final raw = await api.getCustomEmojiPacks();
       final packs = <Map<String, dynamic>>[];
       for (final p in raw.cast<Map<String, dynamic>>()) {
         try {
-          final full = await api.getStickerPack(p['id'] as String);
+          final full = await api.getCustomEmojiPack(p['id'] as String);
           packs.add(full);
         } catch (_) {
           packs.add(p);
         }
       }
-      if (mounted) {
-        setState(() {
-          _packs = packs;
-          _tabCtrl = TabController(length: packs.length, vsync: this);
-          _loading = false;
-        });
-      }
+      if (!mounted) return;
+      setState(() {
+        _packs = packs;
+        _tabCtrl?.dispose();
+        _tabCtrl = packs.isEmpty
+            ? null
+            : TabController(length: packs.length, vsync: this);
+        _loading = false;
+      });
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
@@ -61,9 +62,9 @@ class _StickerPickerState extends State<StickerPicker>
   void _openPackManager() {
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const StickerPackScreen()),
+      MaterialPageRoute(builder: (_) => const CustomEmojiPackScreen()),
     ).then((_) {
-      // Refresh packs after returning from the manager
+      if (!mounted) return;
       setState(() => _loading = true);
       _loadPacks();
     });
@@ -87,12 +88,12 @@ class _StickerPickerState extends State<StickerPicker>
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const Text(
-                    'No sticker packs yet',
+                    'No custom emoji packs yet',
                     style: TextStyle(color: Colors.grey),
                   ),
                   const SizedBox(height: 8),
                   TextButton.icon(
-                    icon: const Icon(Icons.add),
+                    icon: const Icon(Icons.add_reaction_outlined),
                     label: const Text('Create a pack'),
                     onPressed: _openPackManager,
                   ),
@@ -101,7 +102,6 @@ class _StickerPickerState extends State<StickerPicker>
             )
           : Column(
               children: [
-                // Tab bar: one tab per pack + a "+" tab to manage packs
                 TabBar(
                   controller: _tabCtrl,
                   isScrollable: true,
@@ -116,7 +116,7 @@ class _StickerPickerState extends State<StickerPicker>
                                 width: 28,
                                 height: 28,
                                 errorWidget: (_, _, _) => Text(
-                                  p['name']?.toString().substring(0, 1) ?? 'S',
+                                  p['name']?.toString().substring(0, 1) ?? 'E',
                                 ),
                               )
                             : Text(
@@ -131,12 +131,12 @@ class _StickerPickerState extends State<StickerPicker>
                   child: TabBarView(
                     controller: _tabCtrl,
                     children: _packs.map((pack) {
-                      final stickers = (pack['stickers'] as List? ?? [])
+                      final emojis = (pack['custom_emojis'] as List? ?? [])
                           .cast<Map<String, dynamic>>();
-                      if (stickers.isEmpty) {
+                      if (emojis.isEmpty) {
                         return Center(
                           child: Text(
-                            'No stickers in this pack yet',
+                            'No custom emoji in this pack yet',
                             style: TextStyle(color: Colors.grey[500]),
                           ),
                         );
@@ -145,44 +145,45 @@ class _StickerPickerState extends State<StickerPicker>
                         padding: const EdgeInsets.all(8),
                         gridDelegate:
                             const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 5,
+                              crossAxisCount: 7,
                               crossAxisSpacing: 6,
                               mainAxisSpacing: 6,
                             ),
-                        itemCount: stickers.length,
+                        itemCount: emojis.length,
                         itemBuilder: (context, i) {
-                          final sticker = stickers[i];
-                          final fileUrl = sticker['file_url'] as String?;
-                          return GestureDetector(
-                            onTap: () => widget.onStickerSelected(
-                              sticker['id'] as String,
-                            ),
-                            child: Container(
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(8),
-                                color: Colors.grey.withValues(alpha: 0.08),
-                              ),
-                              child: fileUrl != null
-                                  ? ClipRRect(
-                                      borderRadius: BorderRadius.circular(8),
-                                      child: CachedNetworkImage(
-                                        imageUrl: ApiConfig.resolveMedia(
-                                          fileUrl,
-                                        ),
-                                        fit: BoxFit.cover,
-                                        placeholder: (_, _) => const Center(
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
+                          final emoji = emojis[i];
+                          final fileUrl = emoji['file_url'] as String?;
+                          return Tooltip(
+                            message: emoji['name'] as String? ?? 'Custom emoji',
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(8),
+                              onTap: () => widget.onEmojiSelected(emoji),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(8),
+                                  color: Colors.grey.withValues(alpha: 0.08),
+                                ),
+                                child: fileUrl != null
+                                    ? Padding(
+                                        padding: const EdgeInsets.all(5),
+                                        child: CachedNetworkImage(
+                                          imageUrl: ApiConfig.resolveMedia(
+                                            fileUrl,
+                                          ),
+                                          fit: BoxFit.contain,
+                                          errorWidget: (_, _, _) => Text(
+                                            emoji['emoji'] as String? ?? '🙂',
+                                            textAlign: TextAlign.center,
                                           ),
                                         ),
-                                        errorWidget: (_, _, _) => const Icon(
-                                          Icons.broken_image_outlined,
+                                      )
+                                    : Center(
+                                        child: Text(
+                                          emoji['emoji'] as String? ?? '🙂',
+                                          textAlign: TextAlign.center,
                                         ),
                                       ),
-                                    )
-                                  : const Center(
-                                      child: Icon(Icons.broken_image_outlined),
-                                    ),
+                              ),
                             ),
                           );
                         },
@@ -190,7 +191,6 @@ class _StickerPickerState extends State<StickerPicker>
                     }).toList(),
                   ),
                 ),
-                // Manage packs button
                 Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 8,
@@ -199,8 +199,8 @@ class _StickerPickerState extends State<StickerPicker>
                   child: SizedBox(
                     width: double.infinity,
                     child: TextButton.icon(
-                      icon: const Icon(Icons.manage_search, size: 18),
-                      label: const Text('Manage sticker packs'),
+                      icon: const Icon(Icons.add_reaction_outlined, size: 18),
+                      label: const Text('Manage custom emoji packs'),
                       onPressed: _openPackManager,
                     ),
                   ),

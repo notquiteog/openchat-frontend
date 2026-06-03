@@ -39,32 +39,32 @@ class ChatStyle {
     bool clearBackgroundColor = false,
     bool clearBackgroundImage = false,
     bool clearMyBubbleColor = false,
-  }) =>
-      ChatStyle(
-        backgroundColor: clearBackgroundColor
-            ? null
-            : (backgroundColor ?? this.backgroundColor),
-        backgroundImagePath: clearBackgroundImage
-            ? null
-            : (backgroundImagePath ?? this.backgroundImagePath),
-        myBubbleColor:
-            clearMyBubbleColor ? null : (myBubbleColor ?? this.myBubbleColor),
-        bubbleRadius: bubbleRadius ?? this.bubbleRadius,
-      );
+  }) => ChatStyle(
+    backgroundColor: clearBackgroundColor
+        ? null
+        : (backgroundColor ?? this.backgroundColor),
+    backgroundImagePath: clearBackgroundImage
+        ? null
+        : (backgroundImagePath ?? this.backgroundImagePath),
+    myBubbleColor: clearMyBubbleColor
+        ? null
+        : (myBubbleColor ?? this.myBubbleColor),
+    bubbleRadius: bubbleRadius ?? this.bubbleRadius,
+  );
 
   Map<String, dynamic> toJson() => {
-        if (backgroundColor != null) 'bg': backgroundColor,
-        if (backgroundImagePath != null) 'bg_img': backgroundImagePath,
-        if (myBubbleColor != null) 'bubble': myBubbleColor,
-        'radius': bubbleRadius,
-      };
+    if (backgroundColor != null) 'bg': backgroundColor,
+    if (backgroundImagePath != null) 'bg_img': backgroundImagePath,
+    if (myBubbleColor != null) 'bubble': myBubbleColor,
+    'radius': bubbleRadius,
+  };
 
   factory ChatStyle.fromJson(Map<String, dynamic> json) => ChatStyle(
-        backgroundColor: json['bg'] as int?,
-        backgroundImagePath: json['bg_img'] as String?,
-        myBubbleColor: json['bubble'] as int?,
-        bubbleRadius: (json['radius'] as num?)?.toDouble() ?? 18,
-      );
+    backgroundColor: json['bg'] as int?,
+    backgroundImagePath: json['bg_img'] as String?,
+    myBubbleColor: json['bubble'] as int?,
+    bubbleRadius: (json['radius'] as num?)?.toDouble() ?? 18,
+  );
 }
 
 typedef DmChatStyle = ChatStyle;
@@ -85,6 +85,8 @@ class SettingsProvider extends ChangeNotifier {
   static const int defaultSeed = 0xFF3D5AFE;
 
   SharedPreferences? _prefs;
+  Future<void>? _loadFuture;
+  bool _loaded = false;
 
   int _seedColor = defaultSeed;
   bool _channelsOwnTab = false;
@@ -97,6 +99,7 @@ class SettingsProvider extends ChangeNotifier {
   Color get seedColor => Color(_seedColor);
   bool get channelsOwnTab => _channelsOwnTab;
   bool get botsOwnTab => _botsOwnTab;
+  bool get isLoaded => _loaded;
 
   /// Firebase/APNs push notifications. Off by default (opt-in, privacy warning shown on enable).
   bool get pushNotificationsEnabled => _pushEnabled;
@@ -107,7 +110,12 @@ class SettingsProvider extends ChangeNotifier {
   /// Show sender name + message preview in notifications. Off = generic "New message" text.
   bool get notificationSensitiveContent => _notifSensitive;
 
-  Future<void> load() async {
+  Future<void> load() {
+    _loadFuture ??= _load();
+    return _loadFuture!;
+  }
+
+  Future<void> _load() async {
     _prefs = await SharedPreferences.getInstance();
     _seedColor = _prefs!.getInt(_kSeed) ?? defaultSeed;
     _channelsOwnTab = _prefs!.getBool(_kChannelsTab) ?? false;
@@ -120,6 +128,7 @@ class SettingsProvider extends ChangeNotifier {
       await _prefs!.setBool(_kWsBgEnabled, false);
     }
     _notifSensitive = _prefs!.getBool(_kNotifSensitive) ?? false;
+    _loaded = true;
     notifyListeners();
   }
 
@@ -190,7 +199,9 @@ class SettingsProvider extends ChangeNotifier {
       await _prefs?.remove('$_kDmStylePrefix$convID');
     } else {
       await _prefs?.setString(
-          '$_kDmStylePrefix$convID', jsonEncode(style.toJson()));
+        '$_kDmStylePrefix$convID',
+        jsonEncode(style.toJson()),
+      );
     }
     notifyListeners();
   }

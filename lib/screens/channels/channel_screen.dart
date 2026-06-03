@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -16,8 +17,12 @@ import '../../services/api_service.dart';
 import '../../services/attachment_service.dart';
 import '../../services/secure_storage_service.dart';
 import '../../crypto/pgp_service.dart';
+import '../../utils/custom_emoji_payload.dart';
+import '../../utils/disappearing_message_duration.dart';
 import '../../widgets/conversation_encryption_status.dart';
 import '../../widgets/color_choices.dart';
+import '../../widgets/custom_emoji_picker.dart';
+import '../../widgets/disappearing_messages_picker.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/message_bubble.dart';
 import '../../widgets/sticker_picker.dart';
@@ -301,8 +306,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   bool _loading = true;
   bool _archived = false;
   bool _showStickers = false;
+  bool _showCustomEmojis = false;
   bool _sendSilent = false;
   DateTime? _scheduledFor;
+  List<CustomEmojiEntity> _customEmojiEntities = [];
+  String _lastInputText = '';
+  bool _suppressInputEntityShift = false;
 
   // Mutable copy so edits to name/handle/avatar/privacy reflect immediately.
   late Conversation _channel;
@@ -312,11 +321,24 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   void initState() {
     super.initState();
     _channel = widget.channel;
+    _inputCtrl.addListener(_onInputTextChanged);
     _load();
+  }
+
+  void _onInputTextChanged() {
+    if (_suppressInputEntityShift) return;
+    final text = _inputCtrl.text;
+    _customEmojiEntities = shiftCustomEmojiEntitiesForTextEdit(
+      oldText: _lastInputText,
+      newText: text,
+      entities: _customEmojiEntities,
+    );
+    _lastInputText = text;
   }
 
   @override
   void dispose() {
+    _inputCtrl.removeListener(_onInputTextChanged);
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
@@ -967,36 +989,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   Future<void> _setDisappearing() async {
     final api = context.read<ApiService>();
     final messenger = ScaffoldMessenger.of(context);
-    const options = <(String, int)>[
-      ('Off', 0),
-      ('1 hour', 3600),
-      ('1 day', 86400),
-      ('1 week', 604800),
-    ];
     final current = channel.messageTtlSeconds;
-    final chosen = await showDialog<int>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('Disappearing messages'),
-        children: [
-          for (final (label, secs) in options)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(ctx, secs),
-              child: Row(
-                children: [
-                  Icon(
-                    secs == current
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_unchecked,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 12),
-                  Text(label),
-                ],
-              ),
-            ),
-        ],
-      ),
+    final chosen = await showDisappearingMessagesPickerDialog(
+      context,
+      initialSeconds: current,
     );
     if (chosen == null || chosen == current) return;
     try {
@@ -1009,7 +1005,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             content: Text(
               chosen == 0
                   ? 'Disappearing messages turned off'
-                  : 'Messages now disappear after ${options.firstWhere((o) => o.$2 == chosen).$1}',
+                  : 'Messages now disappear after ${disappearingMessageDurationLabel(chosen)}',
             ),
           ),
         );
@@ -1260,10 +1256,29 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     String messageType = 'text',
     String? attachmentId,
   }) async {
-    final text = plaintextOverride ?? _inputCtrl.text.trim();
-    if (text.isEmpty) return;
-    if (plaintextOverride == null) _inputCtrl.clear();
-    setState(() => _showStickers = false);
+    final rawText = _inputCtrl.text;
+    final draftEntities = [..._customEmojiEntities];
+    final draft = plaintextOverride == null && messageType == 'text'
+        ? buildCustomEmojiTextPayload(_inputCtrl.text, _customEmojiEntities)
+        : CustomEmojiTextPayload(
+            text: (plaintextOverride ?? '').trim(),
+            payload: (plaintextOverride ?? '').trim(),
+            entities: const [],
+          );
+    if (draft.text.isEmpty) return;
+    if (plaintextOverride == null) {
+      _setComposerValue(
+        const TextEditingValue(
+          text: '',
+          selection: TextSelection.collapsed(offset: 0),
+        ),
+      );
+      _customEmojiEntities = [];
+    }
+    setState(() {
+      _showStickers = false;
+      _showCustomEmojis = false;
+    });
 
     final api = context.read<ApiService>();
     final storage = context.read<SecureStorageService>();
@@ -1276,15 +1291,17 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       final fetchedKeys = await Future.wait(
         members.map((m) => api.getFreshUserPublicKey(m.userId)),
       );
-      final recipientKeys = [
-        for (final k in fetchedKeys)
-          if (k != null) k,
-      ];
+      final recipientKeys = [for (final k in fetchedKeys) ?k];
 
-      if (privateKey.isEmpty || recipientKeys.isEmpty) return;
+      if (privateKey.isEmpty || recipientKeys.isEmpty) {
+        if (plaintextOverride == null) {
+          _restoreComposer(rawText, draftEntities);
+        }
+        return;
+      }
 
       encrypted = await PgpService.encrypt(
-        plaintext: text,
+        plaintext: draft.payload,
         recipientPublicKeys: recipientKeys,
         signingPrivateKeyArmored: privateKey,
       );
@@ -1293,7 +1310,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         privateKeyArmored: privateKey,
       );
     } else {
-      encrypted = text;
+      encrypted = draft.payload;
       sig = '';
     }
 
@@ -1306,7 +1323,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       silent: _sendSilent,
       scheduledFor: _scheduledFor,
     );
-    msg.setDecryptedContent(text);
+    msg.setDecryptedContent(draft.payload);
     if (_scheduledFor == null) {
       setState(() => _posts.add(msg));
     } else if (mounted) {
@@ -1500,6 +1517,67 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     await _post(plaintextOverride: stickerID, messageType: 'sticker');
   }
 
+  void _insertCustomEmoji(Map<String, dynamic> emojiData) {
+    final id = emojiData['id'] as String? ?? '';
+    if (id.isEmpty) return;
+    final rawEmoji = (emojiData['emoji'] as String? ?? '🙂').trim();
+    final emoji = rawEmoji.isEmpty ? '🙂' : rawEmoji;
+    final oldText = _inputCtrl.text;
+    final selection = _inputCtrl.selection;
+    final start = selection.isValid
+        ? math
+              .min(selection.start, selection.end)
+              .clamp(0, oldText.length)
+              .toInt()
+        : oldText.length;
+    final end = selection.isValid
+        ? math
+              .max(selection.start, selection.end)
+              .clamp(0, oldText.length)
+              .toInt()
+        : oldText.length;
+    final newText = oldText.replaceRange(start, end, emoji);
+    final shifted = shiftCustomEmojiEntitiesForTextEdit(
+      oldText: oldText,
+      newText: newText,
+      entities: _customEmojiEntities,
+    );
+    final entity = CustomEmojiEntity(
+      offset: start,
+      length: emoji.length,
+      customEmojiId: id,
+      emoji: emoji,
+      fileUrl: emojiData['file_url'] as String?,
+      isAnimated: emojiData['is_animated'] as bool? ?? false,
+    );
+    setState(() {
+      _customEmojiEntities = [...shifted, entity];
+    });
+    _setComposerValue(
+      TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: start + emoji.length),
+      ),
+    );
+  }
+
+  void _setComposerValue(TextEditingValue value) {
+    _suppressInputEntityShift = true;
+    _inputCtrl.value = value;
+    _lastInputText = value.text;
+    _suppressInputEntityShift = false;
+  }
+
+  void _restoreComposer(String text, List<CustomEmojiEntity> entities) {
+    _setComposerValue(
+      TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: text.length),
+      ),
+    );
+    setState(() => _customEmojiEntities = entities);
+  }
+
   Future<void> _showAttachmentPicker() async {
     final choice = await showModalBottomSheet<String>(
       context: context,
@@ -1545,7 +1623,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           voiceNote = await showVoiceNoteRecorder(context);
           final note = voiceNote;
           if (note == null) return null;
-          return attachmentService.uploadVoiceNote(note.file);
+          return attachmentService.uploadVoiceNote(
+            note.file,
+            duration: note.duration,
+          );
         })(),
         _ => null,
       };
@@ -1726,6 +1807,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             ),
           ),
 
+          if (_showCustomEmojis)
+            CustomEmojiPicker(onEmojiSelected: _insertCustomEmoji),
           if (_showStickers) StickerPicker(onStickerSelected: _sendSticker),
           // Admins can always post. When admin-only posting is OFF, any
           // subscriber can post too. Archived channels are read-only.
@@ -1735,8 +1818,15 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             ChannelPostBar(
               controller: _inputCtrl,
               showStickers: _showStickers,
-              onToggleStickers: () =>
-                  setState(() => _showStickers = !_showStickers),
+              showCustomEmojis: _showCustomEmojis,
+              onToggleCustomEmojis: () => setState(() {
+                _showCustomEmojis = !_showCustomEmojis;
+                if (_showCustomEmojis) _showStickers = false;
+              }),
+              onToggleStickers: () => setState(() {
+                _showStickers = !_showStickers;
+                if (_showStickers) _showCustomEmojis = false;
+              }),
               onAttach: _showAttachmentPicker,
               onOptions: _showSendOptions,
               hasOptions: _sendSilent || _scheduledFor != null,
@@ -1776,6 +1866,8 @@ class _AnimatedChannelPost extends StatelessWidget {
 class ChannelPostBar extends StatelessWidget {
   final TextEditingController controller;
   final bool showStickers;
+  final bool showCustomEmojis;
+  final VoidCallback onToggleCustomEmojis;
   final VoidCallback onToggleStickers;
   final VoidCallback onAttach;
   final VoidCallback? onOptions;
@@ -1786,6 +1878,8 @@ class ChannelPostBar extends StatelessWidget {
     super.key,
     required this.controller,
     required this.showStickers,
+    required this.showCustomEmojis,
+    required this.onToggleCustomEmojis,
     required this.onToggleStickers,
     required this.onAttach,
     this.onOptions,
@@ -1808,7 +1902,14 @@ class ChannelPostBar extends StatelessWidget {
           children: [
             IconButton(
               icon: Icon(
-                showStickers ? Icons.keyboard : Icons.emoji_emotions_outlined,
+                showCustomEmojis ? Icons.keyboard : Icons.add_reaction_outlined,
+              ),
+              tooltip: showCustomEmojis ? 'Keyboard' : 'Custom emoji',
+              onPressed: onToggleCustomEmojis,
+            ),
+            IconButton(
+              icon: Icon(
+                showStickers ? Icons.keyboard : Icons.sticky_note_2_outlined,
               ),
               tooltip: showStickers ? 'Keyboard' : 'Stickers',
               onPressed: onToggleStickers,

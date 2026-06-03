@@ -20,16 +20,13 @@ class PushNotificationInitResult {
   final bool success;
   final PushNotificationInitFailure? failure;
 
-  const PushNotificationInitResult._({
-    required this.success,
-    this.failure,
-  });
+  const PushNotificationInitResult._({required this.success, this.failure});
 
   const PushNotificationInitResult.success()
-      : this._(success: true, failure: null);
+    : this._(success: true, failure: null);
 
   const PushNotificationInitResult.failed(PushNotificationInitFailure failure)
-      : this._(success: false, failure: failure);
+    : this._(success: false, failure: failure);
 }
 
 /// Firebase Cloud Messaging / APNs push notification service.
@@ -78,6 +75,7 @@ class PushNotificationService {
     if (!_supported) return;
     final ok = await _initFirebase();
     if (!ok) return;
+    await NotificationService.init();
     FirebaseMessaging.onBackgroundMessage(handler);
   }
 
@@ -121,6 +119,7 @@ class PushNotificationService {
     }
 
     final messaging = FirebaseMessaging.instance;
+    await messaging.setAutoInitEnabled(true);
 
     // Both iOS and Android 13+ (API 33+) require a runtime permission prompt.
     // firebase_messaging.requestPermission() handles both platforms: on iOS it
@@ -140,15 +139,7 @@ class PushNotificationService {
 
     // Obtain the FCM/APNs token. Fails when Firebase project ID is wrong or
     // the google-services / GoogleService-Info files are placeholders.
-    final String? token;
-    try {
-      token = await messaging.getToken();
-    } catch (e) {
-      debugPrint('PushNotificationService: getToken failed — $e');
-      return const PushNotificationInitResult.failed(
-        PushNotificationInitFailure.tokenUnavailable,
-      );
-    }
+    final token = await _getFcmToken(messaging);
     if (token == null) {
       return const PushNotificationInitResult.failed(
         PushNotificationInitFailure.tokenUnavailable,
@@ -160,7 +151,8 @@ class PushNotificationService {
       await _registerToken(token, api);
     } catch (e) {
       debugPrint(
-          'PushNotificationService: backend token registration failed — $e');
+        'PushNotificationService: backend token registration failed — $e',
+      );
       return const PushNotificationInitResult.failed(
         PushNotificationInitFailure.backendRegistrationFailed,
       );
@@ -303,7 +295,54 @@ class PushNotificationService {
   static Future<void> _registerToken(String token, ApiService api) async {
     await api.registerDeviceToken(
       token: token,
-      platform: Platform.isAndroid ? 'fcm' : 'apns',
+      platform: registrationPlatformForCurrentDevice(),
     );
+  }
+
+  @visibleForTesting
+  static String registrationPlatformForCurrentDevice({
+    bool? isAndroid,
+    bool? isIOS,
+  }) {
+    // FirebaseMessaging.getToken() returns an FCM registration token on both
+    // Android and Apple platforms. APNs tokens are only an intermediate input
+    // Firebase uses on iOS, so the backend should store this as an FCM token.
+    if (isAndroid ?? Platform.isAndroid) return 'fcm';
+    if (isIOS ?? Platform.isIOS) return 'fcm';
+    return 'fcm';
+  }
+
+  static Future<String?> _getFcmToken(FirebaseMessaging messaging) async {
+    if (Platform.isIOS) {
+      final apnsToken = await _waitForApnsToken(messaging);
+      if (apnsToken == null) {
+        debugPrint('PushNotificationService: APNs token unavailable');
+        return null;
+      }
+    }
+
+    for (var attempt = 0; attempt < 5; attempt++) {
+      try {
+        final token = await messaging.getToken();
+        if (token != null && token.isNotEmpty) return token;
+      } catch (e) {
+        debugPrint('PushNotificationService: getToken failed — $e');
+      }
+      await Future<void>.delayed(Duration(milliseconds: 250 * (attempt + 1)));
+    }
+    return null;
+  }
+
+  static Future<String?> _waitForApnsToken(FirebaseMessaging messaging) async {
+    for (var attempt = 0; attempt < 8; attempt++) {
+      try {
+        final token = await messaging.getAPNSToken();
+        if (token != null && token.isNotEmpty) return token;
+      } catch (e) {
+        debugPrint('PushNotificationService: getAPNSToken failed — $e');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
+    return null;
   }
 }

@@ -88,9 +88,21 @@ void main() {
   });
 
   group('Call overlay minimize and expand', () {
-    testWidgets('does not mount hidden RTC renderer for Linux voice calls', (
-      tester,
-    ) async {
+    test('does not disable RTC renderers for Linux sessions', () {
+      final session = CallSession(
+        callId: 'c-linux-policy',
+        remoteUserId: 'u-linux',
+        remoteUsername: 'linux',
+        isVideo: true,
+        isIncoming: false,
+        state: CallState.connected,
+      );
+
+      expect(shouldUseCallVideoRenderersForTesting(session), isTrue);
+      expect(shouldUseCallVideoRenderersForTesting(null), isFalse);
+    });
+
+    testWidgets('keeps Linux voice call controls tappable', (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.linux;
 
       final service = _FakeCallService();
@@ -113,9 +125,12 @@ void main() {
             child: const MaterialApp(home: Scaffold(body: CallOverlay())),
           ),
         );
+        await tester.pump();
 
         expect(find.byType(CallScreen), findsOneWidget);
-        expect(find.byType(RTCVideoView), findsNothing);
+        await tester.tap(find.byKey(const Key('minimize-call-button')));
+        await tester.pump();
+        expect(provider.isCallMinimized, isTrue);
       } finally {
         debugDefaultTargetPlatformOverride = null;
         provider.dispose();
@@ -123,9 +138,7 @@ void main() {
       }
     });
 
-    testWidgets('does not mount RTC renderers for Linux video calls', (
-      tester,
-    ) async {
+    testWidgets('keeps Linux video call controls tappable', (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.linux;
 
       final service = _FakeCallService();
@@ -148,14 +161,21 @@ void main() {
             child: const MaterialApp(home: Scaffold(body: CallOverlay())),
           ),
         );
+        await tester.pump();
 
         expect(find.byType(CallScreen), findsOneWidget);
-        expect(find.byType(RTCVideoView), findsNothing);
-        await tester.tap(find.byTooltip('Mute'));
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('call-control-mute')),
+            matching: find.byType(IconButton),
+          ),
+          findsNothing,
+        );
+        await tester.tap(find.byKey(const Key('call-control-mute')));
         await tester.pump();
         expect(provider.isMicMuted, isTrue);
         expect(service.micMuteValues, <bool>[true]);
-        await tester.tap(find.byTooltip('End'));
+        await tester.tap(find.byKey(const Key('call-control-end')));
         await tester.pump();
         expect(service.hangupCalls, 1);
       } finally {
@@ -197,6 +217,55 @@ void main() {
 
       provider.dispose();
       service.dispose();
+    });
+  });
+
+  group('Call media capture constraints', () {
+    test('audio calls do not request video capture', () {
+      final attempts = buildCallMediaCaptureAttemptsForTesting(
+        isVideo: false,
+        isMobile: false,
+        isWeb: false,
+        isLinuxDesktop: true,
+      );
+
+      expect(attempts, const [
+        {'audio': true, 'video': false},
+      ]);
+    });
+
+    test('linux video calls prefer Razer cameras and retry safe modes', () {
+      final attempts = buildCallMediaCaptureAttemptsForTesting(
+        isVideo: true,
+        isMobile: false,
+        isWeb: false,
+        isLinuxDesktop: true,
+        videoInputs: [
+          MediaDeviceInfo(
+            kind: 'videoinput',
+            label: 'Integrated Camera',
+            deviceId: 'integrated-camera',
+          ),
+          MediaDeviceInfo(
+            kind: 'videoinput',
+            label: 'Razer Kiyo',
+            deviceId: 'razer-kiyo',
+          ),
+        ],
+      );
+
+      final videos = attempts
+          .map((attempt) => attempt['video']! as Map<String, dynamic>)
+          .toList();
+      final firstOptional = videos.first['optional']! as List<Object?>;
+
+      expect(firstOptional.single, {'sourceId': 'razer-kiyo'});
+      expect(videos.take(3).map((video) => [video['width'], video['height']]), [
+        [1280, 720],
+        [640, 480],
+        [320, 240],
+      ]);
+      expect(videos.any((video) => !video.containsKey('optional')), isTrue);
     });
   });
 

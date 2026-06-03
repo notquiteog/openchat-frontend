@@ -18,6 +18,7 @@ class PendingAttachment {
   final int fileSize;
   final String mimeType;
   final MessageType messageType;
+  final int? durationMs;
   // AES-256-GCM key + nonce encoded as base64 — included in the PGP payload only
   final String fileKey;
   final String fileNonce;
@@ -28,6 +29,7 @@ class PendingAttachment {
     required this.fileSize,
     required this.mimeType,
     required this.messageType,
+    this.durationMs,
     required this.fileKey,
     required this.fileNonce,
   });
@@ -39,6 +41,7 @@ class PendingAttachment {
     'file_name': fileName,
     'file_size': fileSize,
     'mime_type': mimeType,
+    if (durationMs != null) 'duration_ms': durationMs,
     'file_key': fileKey,
     'file_nonce': fileNonce,
   };
@@ -142,7 +145,10 @@ class AttachmentService {
     );
   }
 
-  Future<PendingAttachment> uploadVoiceNote(File file) async {
+  Future<PendingAttachment> uploadVoiceNote(
+    File file, {
+    Duration? duration,
+  }) async {
     final prepared = await prepareFileForUpload(file);
     return _processPrepared(
       PreparedAttachmentInput(
@@ -154,6 +160,7 @@ class AttachmentService {
         messageType: MessageType.voice,
         originalFileSize: prepared.originalFileSize,
       ),
+      durationMs: duration?.inMilliseconds,
     );
   }
 
@@ -216,8 +223,9 @@ class AttachmentService {
   }
 
   Future<PendingAttachment> _processPrepared(
-    PreparedAttachmentInput prepared,
-  ) async {
+    PreparedAttachmentInput prepared, {
+    int? durationMs,
+  }) async {
     final bytes = prepared.bytes;
     final fileName = prepared.fileName;
     final mimeType = prepared.mimeType;
@@ -260,6 +268,7 @@ class AttachmentService {
           prepared.originalFileSize, // original unencrypted size for display
       mimeType: mimeType,
       messageType: msgType,
+      durationMs: durationMs,
       fileKey: keyB64,
       fileNonce: nonceB64,
     );

@@ -20,9 +20,13 @@ import '../../services/api_service.dart';
 import '../../services/call_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/attachment_service.dart';
+import '../../utils/custom_emoji_payload.dart';
+import '../../utils/disappearing_message_duration.dart';
 import '../../widgets/conversation_encryption_status.dart';
 import '../../widgets/conversation_info_panel.dart';
 import '../../widgets/color_choices.dart';
+import '../../widgets/custom_emoji_picker.dart';
+import '../../widgets/disappearing_messages_picker.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/message_bubble.dart';
 import '../../widgets/sticker_picker.dart';
@@ -58,7 +62,9 @@ class _ChatScreenState extends State<ChatScreen> {
   final _inputCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
   bool _showStickers = false;
+  bool _showCustomEmojis = false;
   bool _loadingMore = false;
+  bool _historyExhausted = false;
   bool _sendSilent = false;
   DateTime? _scheduledFor;
   int _lastMessageCount = 0;
@@ -68,6 +74,9 @@ class _ChatScreenState extends State<ChatScreen> {
   int _pendingNewMessageCount = 0;
   Message? _replyingTo;
   Timer? _typingTimer;
+  List<CustomEmojiEntity> _customEmojiEntities = [];
+  String _lastInputText = '';
+  bool _suppressInputEntityShift = false;
 
   // Read the live conversation from the provider (members get loaded
   // asynchronously after the screen opens) and fall back to the one passed in.
@@ -86,13 +95,25 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final chat = context.read<ChatProvider>();
       await chat.loadMessages(conv.id);
-      if (mounted) _jumpToBottom();
       unawaited(chat.loadConversationMembers(conv.id));
     });
     _scrollCtrl.addListener(_onScroll);
+    _inputCtrl.addListener(_onInputTextChanged);
+  }
+
+  void _onInputTextChanged() {
+    if (_suppressInputEntityShift) return;
+    final text = _inputCtrl.text;
+    _customEmojiEntities = shiftCustomEmojiEntitiesForTextEdit(
+      oldText: _lastInputText,
+      newText: text,
+      entities: _customEmojiEntities,
+    );
+    _lastInputText = text;
   }
 
   void _onScroll() {
+    if (!_scrollCtrl.hasClients) return;
     final nearBottom = _isNearBottom();
     if (nearBottom != _wasNearBottom || (nearBottom && _showNewMessagesPill)) {
       setState(() {
@@ -104,17 +125,14 @@ class _ChatScreenState extends State<ChatScreen> {
       });
     }
 
-    if (_loadingMore) return;
-    if (_scrollCtrl.position.pixels <= 100) {
-      final oldMax = _scrollCtrl.position.maxScrollExtent;
+    if (_loadingMore || _historyExhausted) return;
+    if (_isNearTop()) {
       setState(() => _loadingMore = true);
-      context.read<ChatProvider>().loadMoreMessages(conv.id).whenComplete(() {
+      context.read<ChatProvider>().loadMoreMessages(conv.id).then((added) {
         if (!mounted) return;
-        setState(() => _loadingMore = false);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!_scrollCtrl.hasClients) return;
-          final delta = _scrollCtrl.position.maxScrollExtent - oldMax;
-          _scrollCtrl.jumpTo(_scrollCtrl.position.pixels + delta);
+        setState(() {
+          _loadingMore = false;
+          if (added == 0) _historyExhausted = true;
         });
       });
     }
@@ -123,6 +141,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     NotificationService.setActiveConversation(null);
+    _inputCtrl.removeListener(_onInputTextChanged);
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
     _typingTimer?.cancel();
@@ -149,20 +168,32 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _sendMessage() async {
-    final text = _inputCtrl.text.trim();
-    if (text.isEmpty) return;
-    _inputCtrl.clear();
+    final draft = buildCustomEmojiTextPayload(
+      _inputCtrl.text,
+      _customEmojiEntities,
+    );
+    if (draft.text.isEmpty) return;
+    final rawText = _inputCtrl.text;
+    final draftEntities = [..._customEmojiEntities];
+    _setComposerValue(
+      const TextEditingValue(
+        text: '',
+        selection: TextSelection.collapsed(offset: 0),
+      ),
+    );
     final messenger = ScaffoldMessenger.of(context);
     final replyTo = _replyingTo?.id;
     final replyingTo = _replyingTo;
     setState(() {
       _showStickers = false;
+      _showCustomEmojis = false;
       _replyingTo = null;
+      _customEmojiEntities = [];
     });
     try {
       final sent = await context.read<ChatProvider>().sendMessage(
         convID: conv.id,
-        plaintext: text,
+        plaintext: draft.payload,
         replyTo: replyTo,
         silent: _sendSilent,
         scheduledFor: _scheduledFor,
@@ -178,14 +209,14 @@ class _ChatScreenState extends State<ChatScreen> {
         }
         setState(() => _scheduledFor = null);
       } else {
-        _restoreComposedMessage(text, replyingTo);
+        _restoreComposedMessage(rawText, replyingTo, draftEntities);
         messenger.showSnackBar(
           const SnackBar(content: Text('Message could not be sent')),
         );
       }
     } catch (e) {
       if (!mounted) return;
-      _restoreComposedMessage(text, replyingTo);
+      _restoreComposedMessage(rawText, replyingTo, draftEntities);
       messenger.showSnackBar(SnackBar(content: Text(e.toString())));
     }
   }
@@ -201,8 +232,14 @@ class _ChatScreenState extends State<ChatScreen> {
 
   bool _isNearBottom() {
     if (!_scrollCtrl.hasClients) return true;
+    return _scrollCtrl.position.pixels <= 96;
+  }
+
+  bool _isNearTop() {
+    if (!_scrollCtrl.hasClients) return false;
     final position = _scrollCtrl.position;
-    return position.maxScrollExtent - position.pixels <= 96;
+    if (position.maxScrollExtent <= 0) return false;
+    return position.maxScrollExtent - position.pixels <= 240;
   }
 
   void _handleMessageListChange(List<Message> messages, String currentUserID) {
@@ -221,20 +258,24 @@ class _ChatScreenState extends State<ChatScreen> {
       final shouldAutoScroll =
           _lastMessageCount == 0 || _wasNearBottom || incomingCount == 0;
 
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        if (shouldAutoScroll) {
-          _scrollToBottom();
-        } else {
-          setState(() {
-            _showNewMessagesPill = true;
-            _pendingNewMessageCount = math.max(
-              1,
-              _pendingNewMessageCount + incomingCount,
-            );
-          });
-        }
-      });
+      if (_lastMessageCount == 0) {
+        _wasNearBottom = true;
+      } else {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          if (shouldAutoScroll) {
+            _scrollToBottom();
+          } else {
+            setState(() {
+              _showNewMessagesPill = true;
+              _pendingNewMessageCount = math.max(
+                1,
+                _pendingNewMessageCount + incomingCount,
+              );
+            });
+          }
+        });
+      }
     } else if (messages.isEmpty && _showNewMessagesPill) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -348,6 +389,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final messenger = ScaffoldMessenger.of(context);
     setState(() {
       _showStickers = false;
+      _showCustomEmojis = false;
       _replyingTo = null;
     });
     try {
@@ -370,18 +412,81 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _restoreComposedMessage(String text, Message? replyingTo) {
+  void _insertCustomEmoji(Map<String, dynamic> emojiData) {
+    final id = emojiData['id'] as String? ?? '';
+    if (id.isEmpty) return;
+    final rawEmoji = (emojiData['emoji'] as String? ?? '🙂').trim();
+    final emoji = rawEmoji.isEmpty ? '🙂' : rawEmoji;
+    final oldText = _inputCtrl.text;
+    final selection = _inputCtrl.selection;
+    final start = selection.isValid
+        ? math
+              .min(selection.start, selection.end)
+              .clamp(0, oldText.length)
+              .toInt()
+        : oldText.length;
+    final end = selection.isValid
+        ? math
+              .max(selection.start, selection.end)
+              .clamp(0, oldText.length)
+              .toInt()
+        : oldText.length;
+    final newText = oldText.replaceRange(start, end, emoji);
+    final shifted = shiftCustomEmojiEntitiesForTextEdit(
+      oldText: oldText,
+      newText: newText,
+      entities: _customEmojiEntities,
+    );
+    final entity = CustomEmojiEntity(
+      offset: start,
+      length: emoji.length,
+      customEmojiId: id,
+      emoji: emoji,
+      fileUrl: emojiData['file_url'] as String?,
+      isAnimated: emojiData['is_animated'] as bool? ?? false,
+    );
+    setState(() {
+      _customEmojiEntities = [...shifted, entity];
+    });
+    _setComposerValue(
+      TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: start + emoji.length),
+      ),
+    );
+    _onTyping();
+  }
+
+  void _setComposerValue(TextEditingValue value) {
+    _suppressInputEntityShift = true;
+    _inputCtrl.value = value;
+    _lastInputText = value.text;
+    _suppressInputEntityShift = false;
+  }
+
+  void _restoreComposedMessage(
+    String text,
+    Message? replyingTo, [
+    List<CustomEmojiEntity> entities = const [],
+  ]) {
     if (_inputCtrl.text.isEmpty) {
-      _inputCtrl.text = text;
-      _inputCtrl.selection = TextSelection.collapsed(offset: text.length);
+      _setComposerValue(
+        TextEditingValue(
+          text: text,
+          selection: TextSelection.collapsed(offset: text.length),
+        ),
+      );
     }
-    setState(() => _replyingTo = replyingTo);
+    setState(() {
+      _replyingTo = replyingTo;
+      _customEmojiEntities = entities;
+    });
   }
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!_scrollCtrl.hasClients) return;
-      final target = _scrollCtrl.position.maxScrollExtent;
+      const target = 0.0;
       if ((target - _scrollCtrl.position.pixels).abs() > 1) {
         await _scrollCtrl.animateTo(
           target,
@@ -395,15 +500,6 @@ class _ChatScreenState extends State<ChatScreen> {
           _showNewMessagesPill = false;
           _pendingNewMessageCount = 0;
         });
-      }
-    });
-  }
-
-  void _jumpToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollCtrl.hasClients) {
-        _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
-        _wasNearBottom = true;
       }
     });
   }
@@ -454,6 +550,11 @@ class _ChatScreenState extends State<ChatScreen> {
               title: const Text('Voice note'),
               onTap: () => Navigator.pop(context, 'voice'),
             ),
+            ListTile(
+              leading: const Icon(Icons.payments_outlined),
+              title: const Text('Pay or request'),
+              onTap: () => Navigator.pop(context, 'payment'),
+            ),
           ],
         ),
       ),
@@ -462,6 +563,10 @@ class _ChatScreenState extends State<ChatScreen> {
     if (choice == null || !mounted) return;
     if (choice == 'poll') {
       await _showCreatePollDialog();
+      return;
+    }
+    if (choice == 'payment') {
+      await _showPaymentSheet();
       return;
     }
 
@@ -481,7 +586,10 @@ class _ChatScreenState extends State<ChatScreen> {
           voiceNote = await showVoiceNoteRecorder(context);
           final note = voiceNote;
           if (note == null) return null;
-          return attachmentService.uploadVoiceNote(note.file);
+          return attachmentService.uploadVoiceNote(
+            note.file,
+            duration: note.duration,
+          );
         })(),
         _ => null,
       };
@@ -521,6 +629,311 @@ class _ChatScreenState extends State<ChatScreen> {
         context,
       ).showSnackBar(SnackBar(content: Text(e.toString())));
     }
+  }
+
+  Future<void> _showPaymentSheet() async {
+    final currentUserID = context.read<AuthProvider>().currentUser?.id;
+    if (currentUserID == null) return;
+    final chat = context.read<ChatProvider>();
+    if (conv.members.isEmpty) {
+      await chat.loadConversationMembers(conv.id);
+    }
+    if (!mounted) return;
+
+    final members = conv.members
+        .where((m) => m.userId != currentUserID && m.user != null)
+        .toList();
+    if (members.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('No chat member available')));
+      return;
+    }
+
+    final api = context.read<ApiService>();
+    var providers = <String>['btc', 'xmr'];
+    var balances = <Map<String, dynamic>>[];
+    try {
+      final status = await api.getBillingStatus();
+      final enabled = ((status['providers'] as List?) ?? const [])
+          .whereType<String>()
+          .where((p) => p == 'btc' || p == 'xmr')
+          .toList();
+      if (enabled.isNotEmpty) providers = enabled;
+      balances = (await api.getPaymentBalances())
+          .whereType<Map<String, dynamic>>()
+          .toList();
+    } catch (_) {}
+
+    if (!mounted || !context.mounted) return;
+    final rootContext = context;
+    var payMode = true;
+    var paymentSource = 'wallet';
+    var provider = providers.first;
+    var selectedUserID = members.first.userId;
+    var submitting = false;
+    final amountCtrl = TextEditingController();
+    final noteCtrl = TextEditingController();
+
+    double balanceFor(String provider) {
+      for (final balance in balances) {
+        if (balance['provider'] == provider) {
+          final available = balance['available'];
+          if (available is num) return available.toDouble();
+          if (available is String) return double.tryParse(available) ?? 0;
+        }
+      }
+      return 0;
+    }
+
+    try {
+      await showModalBottomSheet<void>(
+        context: rootContext,
+        isScrollControlled: true,
+        builder: (sheetCtx) => StatefulBuilder(
+          builder: (sheetCtx, setSheet) {
+            Future<void> submit() async {
+              if (submitting) return;
+              final amount = double.tryParse(amountCtrl.text.trim()) ?? 0;
+              if (amount <= 0) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Enter an amount')),
+                );
+                return;
+              }
+              setSheet(() => submitting = true);
+              try {
+                if (payMode) {
+                  if (paymentSource == 'wallet') {
+                    if (amount > balanceFor(provider)) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Not enough app wallet balance'),
+                        ),
+                      );
+                      return;
+                    }
+                    await api.sendPaymentTransfer(
+                      toUserID: selectedUserID,
+                      provider: provider,
+                      amount: amount,
+                      conversationID: conv.id,
+                      note: noteCtrl.text,
+                    );
+                  } else {
+                    final result = await api.createExternalPaymentTransfer(
+                      toUserID: selectedUserID,
+                      provider: provider,
+                      amount: amount,
+                      conversationID: conv.id,
+                      note: noteCtrl.text,
+                    );
+                    if (!mounted || !sheetCtx.mounted) return;
+                    Navigator.pop(sheetCtx);
+                    final deposit = result['deposit'] as Map<String, dynamic>?;
+                    if (deposit != null) _showExternalPaymentAddress(deposit);
+                    return;
+                  }
+                } else {
+                  await api.createPaymentRequest(
+                    payerID: selectedUserID,
+                    conversationID: conv.id,
+                    provider: provider,
+                    amount: amount,
+                    title: 'Payment request',
+                    note: noteCtrl.text,
+                  );
+                }
+                if (!mounted || !sheetCtx.mounted) return;
+                Navigator.pop(sheetCtx);
+                _scrollToBottom();
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text(e.toString())));
+              } finally {
+                if (mounted) setSheet(() => submitting = false);
+              }
+            }
+
+            final bottomInset = MediaQuery.of(sheetCtx).viewInsets.bottom;
+            final amount = double.tryParse(amountCtrl.text.trim()) ?? 0;
+            final available = balanceFor(provider);
+            final canUseWallet =
+                !payMode || (amount > 0 && available >= amount);
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(16, 14, 16, 16 + bottomInset),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        SegmentedButton<bool>(
+                          segments: const [
+                            ButtonSegment(
+                              value: true,
+                              label: Text('Pay'),
+                              icon: Icon(Icons.arrow_upward),
+                            ),
+                            ButtonSegment(
+                              value: false,
+                              label: Text('Request'),
+                              icon: Icon(Icons.arrow_downward),
+                            ),
+                          ],
+                          selected: {payMode},
+                          onSelectionChanged: (next) =>
+                              setSheet(() => payMode = next.first),
+                        ),
+                        const Spacer(),
+                        Text(
+                          '${available.toStringAsFixed(provider == 'btc' ? 8 : 12)} ${provider.toUpperCase()}',
+                          style: Theme.of(context).textTheme.labelMedium,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedUserID,
+                      items: [
+                        for (final member in members)
+                          DropdownMenuItem(
+                            value: member.userId,
+                            child: Text('@${member.user!.username}'),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setSheet(() => selectedUserID = value);
+                        }
+                      },
+                      decoration: InputDecoration(
+                        labelText: payMode ? 'To' : 'From',
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    SegmentedButton<String>(
+                      segments: [
+                        for (final p in providers)
+                          ButtonSegment(value: p, label: Text(p.toUpperCase())),
+                      ],
+                      selected: {provider},
+                      onSelectionChanged: (next) =>
+                          setSheet(() => provider = next.first),
+                    ),
+                    const SizedBox(height: 12),
+                    if (payMode) ...[
+                      SegmentedButton<String>(
+                        segments: [
+                          ButtonSegment(
+                            value: 'wallet',
+                            label: const Text('App wallet'),
+                            icon: const Icon(Icons.account_balance_wallet),
+                            enabled: canUseWallet,
+                          ),
+                          const ButtonSegment(
+                            value: 'external',
+                            label: Text('External'),
+                            icon: Icon(Icons.qr_code_2),
+                          ),
+                        ],
+                        selected: {canUseWallet ? paymentSource : 'external'},
+                        onSelectionChanged: (next) =>
+                            setSheet(() => paymentSource = next.first),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    TextField(
+                      controller: amountCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      onChanged: (_) {
+                        final nextAmount =
+                            double.tryParse(amountCtrl.text.trim()) ?? 0;
+                        setSheet(() {
+                          if (payMode &&
+                              paymentSource == 'wallet' &&
+                              nextAmount > balanceFor(provider)) {
+                            paymentSource = 'external';
+                          }
+                        });
+                      },
+                      decoration: InputDecoration(
+                        labelText: 'Amount ${provider.toUpperCase()}',
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: noteCtrl,
+                      maxLength: 160,
+                      decoration: const InputDecoration(
+                        labelText: 'Note',
+                        border: OutlineInputBorder(),
+                        counterText: '',
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    FilledButton.icon(
+                      onPressed: submitting ? null : submit,
+                      icon: submitting
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Icon(
+                              payMode
+                                  ? Icons.send_outlined
+                                  : Icons.request_quote_outlined,
+                            ),
+                      label: Text(payMode ? 'Pay' : 'Request'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      );
+    } finally {
+      amountCtrl.dispose();
+      noteCtrl.dispose();
+    }
+  }
+
+  void _showExternalPaymentAddress(Map<String, dynamic> deposit) {
+    final address = deposit['crypto_address'] as String? ?? '';
+    final provider = deposit['provider'] as String? ?? '';
+    final amount = deposit['expected_amount'];
+    final amountText = amount == null
+        ? ''
+        : '\n\nSend at least ${_formatCrypto(_asDouble(amount), provider)}.';
+    showDialog<void>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: Text('Pay with ${provider.toUpperCase()}'),
+        content: SelectableText('$address$amountText'),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: address));
+              if (mounted && dialogCtx.mounted) Navigator.pop(dialogCtx);
+            },
+            child: const Text('Copy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _showCreatePollDialog() async {
@@ -711,119 +1124,164 @@ class _ChatScreenState extends State<ChatScreen> {
         : auth.currentUser?.bubbleColor != null
         ? Color(auth.currentUser!.bubbleColor!)
         : null;
+    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       appBar: _buildAppBar(context, typingUsers, currentUserID),
-      body: Column(
+      body: Stack(
         children: [
-          if (callTopInset > 0) SizedBox(height: callTopInset),
-          Expanded(
-            child: DecoratedBox(
-              decoration: _chatBackground(chatStyle),
-              child: GestureDetector(
-                onTap: () => setState(() => _showStickers = false),
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: messages.isEmpty
-                          ? const Center(child: Text('No messages yet'))
-                          : ListView.builder(
-                              controller: _scrollCtrl,
-                              physics: const BouncingScrollPhysics(
-                                parent: AlwaysScrollableScrollPhysics(),
-                              ),
-                              scrollCacheExtent: const ScrollCacheExtent.pixels(
-                                720,
-                              ),
-                              keyboardDismissBehavior:
-                                  ScrollViewKeyboardDismissBehavior.onDrag,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 8,
-                              ),
-                              itemCount: messages.length,
-                              itemBuilder: (context, i) {
-                                final msg = messages[i];
-                                final isMe = msg.senderId == currentUserID;
-                                final showAvatar =
-                                    !isMe &&
-                                    (i == messages.length - 1 ||
-                                        messages[i + 1].senderId !=
-                                            msg.senderId);
-                                return _AnimatedMessageEntry(
-                                  id: msg.id,
-                                  child: MessageBubble(
-                                    message: msg,
-                                    isMe: isMe,
-                                    showAvatar: showAvatar,
-                                    meBubbleColor: meBubbleColor,
-                                    bubbleRadius: chatStyle.bubbleRadius,
-                                    onTap: () =>
-                                        _showReactionMenu(context, msg),
-                                    onLongPress: () =>
-                                        _showMessageMenu(context, msg, isMe),
-                                    onAvatarTap: msg.sender != null
-                                        ? () => Navigator.push(
-                                            context,
-                                            MaterialPageRoute(
-                                              builder: (_) => UserProfileScreen(
-                                                user: msg.sender!,
-                                              ),
-                                            ),
-                                          )
-                                        : null,
+          Positioned.fill(
+            child: DecoratedBox(decoration: _chatBackground(chatStyle)),
+          ),
+          AnimatedPadding(
+            padding: EdgeInsets.only(bottom: keyboardInset),
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            child: Column(
+              children: [
+                if (callTopInset > 0) SizedBox(height: callTopInset),
+                Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => setState(() => _showStickers = false),
+                    child: Stack(
+                      children: [
+                        Positioned.fill(
+                          child: messages.isEmpty
+                              ? const Center(child: Text('No messages yet'))
+                              : ListView.builder(
+                                  controller: _scrollCtrl,
+                                  reverse: true,
+                                  physics: const BouncingScrollPhysics(
+                                    parent: AlwaysScrollableScrollPhysics(),
                                   ),
-                                );
-                              },
-                            ),
-                    ),
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 12,
-                      child: IgnorePointer(
-                        ignoring: !_showNewMessagesPill,
-                        child: AnimatedSlide(
-                          offset: _showNewMessagesPill
-                              ? Offset.zero
-                              : const Offset(0, 0.45),
-                          duration: const Duration(milliseconds: 180),
-                          curve: Curves.easeOutCubic,
-                          child: AnimatedOpacity(
-                            opacity: _showNewMessagesPill ? 1 : 0,
-                            duration: const Duration(milliseconds: 140),
-                            child: Center(
-                              child: FilledButton.tonalIcon(
-                                onPressed: _scrollToBottom,
-                                icon: const Icon(Icons.keyboard_arrow_down),
-                                label: Text(
-                                  _pendingNewMessageCount <= 1
-                                      ? 'View new messages'
-                                      : 'View $_pendingNewMessageCount new messages',
-                                ),
-                                style: FilledButton.styleFrom(
-                                  visualDensity: VisualDensity.compact,
+                                  scrollCacheExtent:
+                                      const ScrollCacheExtent.pixels(720),
+                                  keyboardDismissBehavior:
+                                      ScrollViewKeyboardDismissBehavior.onDrag,
                                   padding: const EdgeInsets.symmetric(
-                                    horizontal: 14,
+                                    horizontal: 8,
                                     vertical: 8,
                                   ),
-                                  shape: const StadiumBorder(),
-                                  elevation: 2,
+                                  itemCount:
+                                      messages.length + (_loadingMore ? 1 : 0),
+                                  itemBuilder: (context, i) {
+                                    if (i == messages.length) {
+                                      return const Padding(
+                                        padding: EdgeInsets.symmetric(
+                                          vertical: 12,
+                                        ),
+                                        child: Center(
+                                          child: SizedBox(
+                                            width: 20,
+                                            height: 20,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    }
+
+                                    final messageIndex =
+                                        messages.length - 1 - i;
+                                    final msg = messages[messageIndex];
+                                    final isMe = msg.senderId == currentUserID;
+                                    final showAvatar =
+                                        !isMe &&
+                                        (messageIndex == messages.length - 1 ||
+                                            messages[messageIndex + 1]
+                                                    .senderId !=
+                                                msg.senderId);
+                                    return _AnimatedMessageEntry(
+                                      id: msg.id,
+                                      child: MessageBubble(
+                                        message: msg,
+                                        isMe: isMe,
+                                        showAvatar: showAvatar,
+                                        meBubbleColor: meBubbleColor,
+                                        bubbleRadius: chatStyle.bubbleRadius,
+                                        onTapUp: (details) => _showReactionMenu(
+                                          context,
+                                          msg,
+                                          details.globalPosition,
+                                        ),
+                                        onLongPress: () => _showMessageMenu(
+                                          context,
+                                          msg,
+                                          isMe,
+                                        ),
+                                        onAvatarTap: msg.sender != null
+                                            ? () => Navigator.push(
+                                                context,
+                                                MaterialPageRoute(
+                                                  builder: (_) =>
+                                                      UserProfileScreen(
+                                                        user: msg.sender!,
+                                                      ),
+                                                ),
+                                              )
+                                            : null,
+                                      ),
+                                    );
+                                  },
+                                ),
+                        ),
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 12,
+                          child: IgnorePointer(
+                            ignoring: !_showNewMessagesPill,
+                            child: AnimatedSlide(
+                              offset: _showNewMessagesPill
+                                  ? Offset.zero
+                                  : const Offset(0, 0.45),
+                              duration: const Duration(milliseconds: 180),
+                              curve: Curves.easeOutCubic,
+                              child: AnimatedOpacity(
+                                opacity: _showNewMessagesPill ? 1 : 0,
+                                duration: const Duration(milliseconds: 140),
+                                child: Center(
+                                  child: FilledButton.tonalIcon(
+                                    onPressed: _scrollToBottom,
+                                    icon: const Icon(Icons.keyboard_arrow_down),
+                                    label: Text(
+                                      _pendingNewMessageCount <= 1
+                                          ? 'View new messages'
+                                          : 'View $_pendingNewMessageCount new messages',
+                                    ),
+                                    style: FilledButton.styleFrom(
+                                      visualDensity: VisualDensity.compact,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                        vertical: 8,
+                                      ),
+                                      shape: const StadiumBorder(),
+                                      elevation: 2,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ),
-                      ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
+                if (_showCustomEmojis)
+                  CustomEmojiPicker(onEmojiSelected: _insertCustomEmoji),
+                if (_showStickers)
+                  StickerPicker(onStickerSelected: _sendSticker),
+                if (typingUsers.isNotEmpty)
+                  _TypingIndicator(
+                    label: _typingLabel(typingUsers, currentUserID),
+                  ),
+                _buildInputBar(context),
+              ],
             ),
           ),
-          if (_showStickers) StickerPicker(onStickerSelected: _sendSticker),
-          if (typingUsers.isNotEmpty)
-            _TypingIndicator(label: _typingLabel(typingUsers, currentUserID)),
-          _buildInputBar(context),
         ],
       ),
     );
@@ -1243,12 +1701,27 @@ class _ChatScreenState extends State<ChatScreen> {
                 children: [
                   IconButton(
                     icon: Icon(
+                      _showCustomEmojis
+                          ? Icons.keyboard
+                          : Icons.add_reaction_outlined,
+                    ),
+                    tooltip: _showCustomEmojis ? 'Keyboard' : 'Custom emoji',
+                    onPressed: () => setState(() {
+                      _showCustomEmojis = !_showCustomEmojis;
+                      if (_showCustomEmojis) _showStickers = false;
+                    }),
+                  ),
+                  IconButton(
+                    icon: Icon(
                       _showStickers
                           ? Icons.keyboard
-                          : Icons.emoji_emotions_outlined,
+                          : Icons.sticky_note_2_outlined,
                     ),
-                    onPressed: () =>
-                        setState(() => _showStickers = !_showStickers),
+                    tooltip: _showStickers ? 'Keyboard' : 'Stickers',
+                    onPressed: () => setState(() {
+                      _showStickers = !_showStickers;
+                      if (_showStickers) _showCustomEmojis = false;
+                    }),
                   ),
                   Expanded(
                     child: TextField(
@@ -1360,33 +1833,46 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  void _showReactionMenu(BuildContext context, Message msg) {
+  void _showReactionMenu(BuildContext context, Message msg, Offset anchor) {
     if (msg.type == MessageType.system) return;
-    showModalBottomSheet<void>(
+    const emojis = ['👍', '❤️', '😂', '🔥', '🎉', '👀'];
+    showDialog<void>(
       context: context,
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
-          child: Wrap(
-            alignment: WrapAlignment.center,
-            spacing: 10,
-            children: [
-              for (final emoji in const ['👍', '❤️', '😂', '🔥', '🎉', '👀'])
-                InkWell(
-                  borderRadius: BorderRadius.circular(22),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _reactToMessage(msg, emoji);
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Text(emoji, style: const TextStyle(fontSize: 26)),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
+      barrierColor: Colors.transparent,
+      builder: (ctx) {
+        final size = MediaQuery.sizeOf(ctx);
+        final viewPadding = MediaQuery.viewPaddingOf(ctx);
+        final popupWidth = math.min(292.0, math.max(0.0, size.width - 16));
+        const popupHeight = 52.0;
+        final maxLeft = math.max(8.0, size.width - popupWidth - 8);
+        final maxTop = math.max(
+          viewPadding.top + 8,
+          size.height - viewPadding.bottom - popupHeight - 8,
+        );
+        final left = (anchor.dx - popupWidth / 2)
+            .clamp(8.0, maxLeft)
+            .toDouble();
+        final top = (anchor.dy - popupHeight - 10)
+            .clamp(viewPadding.top + 8, maxTop)
+            .toDouble();
+
+        return Stack(
+          children: [
+            Positioned(
+              left: left,
+              top: top,
+              width: popupWidth,
+              child: _ReactionPopup(
+                emojis: emojis,
+                onSelected: (emoji) {
+                  Navigator.pop(ctx);
+                  _reactToMessage(msg, emoji);
+                },
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -1460,36 +1946,10 @@ class _ChatScreenState extends State<ChatScreen> {
     final api = context.read<ApiService>();
     final chat = context.read<ChatProvider>();
     final messenger = ScaffoldMessenger.of(context);
-    const options = <(String, int)>[
-      ('Off', 0),
-      ('1 hour', 3600),
-      ('1 day', 86400),
-      ('1 week', 604800),
-    ];
     final current = conv.messageTtlSeconds;
-    final chosen = await showDialog<int>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('Disappearing messages'),
-        children: [
-          for (final (label, secs) in options)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(ctx, secs),
-              child: Row(
-                children: [
-                  Icon(
-                    secs == current
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_unchecked,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 12),
-                  Text(label),
-                ],
-              ),
-            ),
-        ],
-      ),
+    final chosen = await showDisappearingMessagesPickerDialog(
+      context,
+      initialSeconds: current,
     );
     if (chosen == null || chosen == current) return;
     try {
@@ -1500,7 +1960,7 @@ class _ChatScreenState extends State<ChatScreen> {
           content: Text(
             chosen == 0
                 ? 'Disappearing messages turned off'
-                : 'Messages now disappear after ${options.firstWhere((o) => o.$2 == chosen).$1}',
+                : 'Messages now disappear after ${disappearingMessageDurationLabel(chosen)}',
           ),
         ),
       );
@@ -2346,6 +2806,52 @@ class _AnimatedMessageEntry extends StatelessWidget {
       child: child,
     );
   }
+}
+
+class _ReactionPopup extends StatelessWidget {
+  final List<String> emojis;
+  final ValueChanged<String> onSelected;
+
+  const _ReactionPopup({required this.emojis, required this.onSelected});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surface,
+      elevation: 8,
+      shadowColor: Colors.black.withValues(alpha: 0.18),
+      borderRadius: BorderRadius.circular(26),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            for (final emoji in emojis)
+              InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () => onSelected(emoji),
+                child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: Text(emoji, style: const TextStyle(fontSize: 24)),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+double _asDouble(Object? value) {
+  if (value is num) return value.toDouble();
+  if (value is String) return double.tryParse(value) ?? 0;
+  return 0;
+}
+
+String _formatCrypto(double amount, String provider) {
+  final decimals = provider == 'btc' ? 8 : 12;
+  return '${amount.toStringAsFixed(decimals)} ${provider.toUpperCase()}';
 }
 
 class _TypingIndicator extends StatefulWidget {

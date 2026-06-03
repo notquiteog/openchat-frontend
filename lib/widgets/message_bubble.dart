@@ -1,14 +1,19 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import 'package:video_player/video_player.dart';
 import '../config/api_config.dart';
 import '../models/message.dart';
+import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
@@ -20,6 +25,7 @@ class MessageBubble extends StatelessWidget {
   final bool isMe;
   final bool showAvatar;
   final VoidCallback? onTap;
+  final GestureTapUpCallback? onTapUp;
   final VoidCallback? onLongPress;
   final VoidCallback? onAvatarTap;
   // The current user's own bubble can be previewed locally while the published
@@ -33,6 +39,7 @@ class MessageBubble extends StatelessWidget {
     required this.isMe,
     this.showAvatar = false,
     this.onTap,
+    this.onTapUp,
     this.onLongPress,
     this.onAvatarTap,
     this.meBubbleColor,
@@ -106,6 +113,7 @@ class MessageBubble extends StatelessWidget {
           Flexible(
             child: GestureDetector(
               onTap: onTap,
+              onTapUp: onTapUp,
               onLongPress: onLongPress,
               child: _buildBubble(context),
             ),
@@ -132,6 +140,22 @@ class MessageBubble extends StatelessWidget {
         textColor: textColor,
         radii: radii,
       );
+    }
+
+    if (message.type == MessageType.invoice ||
+        message.type == MessageType.paymentRequest ||
+        message.type == MessageType.paymentTransfer) {
+      final payment = _PaymentEnvelope.tryParse(message);
+      if (payment != null) {
+        return _PaymentBubble(
+          message: message,
+          isMe: isMe,
+          payment: payment,
+          bubbleColor: bubbleColor,
+          textColor: textColor,
+          radii: radii,
+        );
+      }
     }
 
     if (message.decryptionFailed) {
@@ -162,6 +186,13 @@ class MessageBubble extends StatelessWidget {
           radii: radii,
         ),
         MessageType.video => _VideoBubble(
+          message: message,
+          content: content,
+          bubbleColor: bubbleColor,
+          textColor: textColor,
+          radii: radii,
+        ),
+        MessageType.voice || MessageType.audio => _VoiceBubble(
           message: message,
           content: content,
           bubbleColor: bubbleColor,
@@ -370,10 +401,7 @@ class _TextBubble extends StatelessWidget {
             ),
           Text.rich(
             TextSpan(
-              children: _formatMessageText(
-                message.decryptedContent ?? '',
-                textColor,
-              ),
+              children: _formatMessageContent(message.content!, textColor),
             ),
             style: TextStyle(color: textColor, fontSize: 15, height: 1.25),
           ),
@@ -387,6 +415,53 @@ class _TextBubble extends StatelessWidget {
       ),
     );
   }
+}
+
+List<InlineSpan> _formatMessageContent(MessageContent content, Color color) {
+  if (content.entities.isEmpty) {
+    return _formatMessageText(content.text, color);
+  }
+  final spans = <InlineSpan>[];
+  final entities = normalizeRenderableEntities(content);
+  var cursor = 0;
+  for (final entity in entities) {
+    if (entity.offset > cursor) {
+      spans.addAll(
+        _formatMessageText(
+          content.text.substring(cursor, entity.offset),
+          color,
+        ),
+      );
+    }
+    spans.add(
+      WidgetSpan(
+        alignment: PlaceholderAlignment.middle,
+        child: _InlineCustomEmoji(entity: entity),
+      ),
+    );
+    cursor = entity.offset + entity.length;
+  }
+  if (cursor < content.text.length) {
+    spans.addAll(_formatMessageText(content.text.substring(cursor), color));
+  }
+  return spans;
+}
+
+List<CustomEmojiEntity> normalizeRenderableEntities(MessageContent content) {
+  final out = <CustomEmojiEntity>[];
+  final entities = [...content.entities]
+    ..sort((a, b) => a.offset.compareTo(b.offset));
+  for (final entity in entities) {
+    if (entity.offset < 0 || entity.length <= 0) continue;
+    final end = entity.offset + entity.length;
+    if (end > content.text.length) continue;
+    if (content.text.substring(entity.offset, end) != entity.emoji) continue;
+    if (out.any((e) => entity.offset < e.offset + e.length && end > e.offset)) {
+      continue;
+    }
+    out.add(entity);
+  }
+  return out;
 }
 
 List<InlineSpan> _formatMessageText(String text, Color color) {
@@ -404,8 +479,9 @@ List<InlineSpan> _formatMessageText(String text, Color color) {
       break;
     }
     final next = markers.entries.reduce((a, b) => a.value <= b.value ? a : b);
-    if (next.value > i)
+    if (next.value > i) {
       spans.add(TextSpan(text: text.substring(i, next.value)));
+    }
     final marker = next.key;
     final start = next.value + marker.length;
     final end = text.indexOf(marker, start);
@@ -451,6 +527,76 @@ List<InlineSpan> _formatMessageText(String text, Color color) {
     i = end + marker.length;
   }
   return spans;
+}
+
+class _InlineCustomEmoji extends StatefulWidget {
+  final CustomEmojiEntity entity;
+
+  const _InlineCustomEmoji({required this.entity});
+
+  @override
+  State<_InlineCustomEmoji> createState() => _InlineCustomEmojiState();
+}
+
+class _InlineCustomEmojiState extends State<_InlineCustomEmoji> {
+  String? _fileUrl;
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fileUrl = widget.entity.fileUrl;
+    if (_fileUrl == null || _fileUrl!.isEmpty) {
+      _load();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _InlineCustomEmoji oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.entity.customEmojiId != widget.entity.customEmojiId ||
+        oldWidget.entity.fileUrl != widget.entity.fileUrl) {
+      _fileUrl = widget.entity.fileUrl;
+      if (_fileUrl == null || _fileUrl!.isEmpty) {
+        _load();
+      }
+    }
+  }
+
+  Future<void> _load() async {
+    if (_loading || widget.entity.customEmojiId.isEmpty) return;
+    _loading = true;
+    try {
+      final data = await context.read<ApiService>().getCustomEmoji(
+        widget.entity.customEmojiId,
+      );
+      if (!mounted) return;
+      setState(() => _fileUrl = data['file_url'] as String?);
+    } catch (_) {
+      if (mounted) setState(() => _fileUrl = null);
+    } finally {
+      _loading = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fileUrl = _fileUrl;
+    if (fileUrl == null || fileUrl.isEmpty) {
+      return Text(widget.entity.emoji, style: const TextStyle(fontSize: 20));
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 1),
+      child: CachedNetworkImage(
+        imageUrl: ApiConfig.resolveMedia(fileUrl),
+        width: 22,
+        height: 22,
+        fit: BoxFit.contain,
+        errorWidget: (_, _, _) =>
+            Text(widget.entity.emoji, style: const TextStyle(fontSize: 20)),
+      ),
+    );
+  }
 }
 
 class _SpoilerText extends StatefulWidget {
@@ -518,6 +664,420 @@ class _ReactionChips extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+class _PaymentEnvelope {
+  final String kind;
+  final String id;
+  final String? payerId;
+  final String? fromUserId;
+  final String? toUserId;
+  final String title;
+  final String note;
+  final String provider;
+  final double amount;
+  final String status;
+
+  const _PaymentEnvelope({
+    required this.kind,
+    required this.id,
+    this.payerId,
+    this.fromUserId,
+    this.toUserId,
+    required this.title,
+    required this.note,
+    required this.provider,
+    required this.amount,
+    required this.status,
+  });
+
+  bool get isRequest => kind == 'payment_request';
+  bool get isTransfer => kind == 'payment_transfer';
+  String get providerLabel => provider.toUpperCase();
+  String get amountLabel =>
+      '${amount.toStringAsFixed(provider == 'btc' ? 8 : 12)} $providerLabel';
+
+  static _PaymentEnvelope? tryParse(Message message) {
+    try {
+      final raw = jsonDecode(message.encryptedPayload);
+      if (raw is! Map<String, dynamic>) return null;
+      final request = _asMap(raw['request']);
+      final transfer = _asMap(raw['transfer']);
+      final invoice = _asMap(raw['invoice']);
+      if (transfer != null) {
+        return _PaymentEnvelope(
+          kind: 'payment_transfer',
+          id: transfer['id'] as String? ?? '',
+          fromUserId: transfer['from_user_id'] as String?,
+          toUserId: transfer['to_user_id'] as String?,
+          title: 'Payment sent',
+          note: transfer['note'] as String? ?? '',
+          provider: transfer['provider'] as String? ?? '',
+          amount: _readDouble(transfer['amount']),
+          status: 'confirmed',
+        );
+      }
+      if (request != null) {
+        return _PaymentEnvelope(
+          kind: 'payment_request',
+          id: request['id'] as String? ?? '',
+          payerId: request['payer_id'] as String?,
+          title: request['title'] as String? ?? 'Payment request',
+          note: request['note'] as String? ?? '',
+          provider: request['provider'] as String? ?? '',
+          amount: _readDouble(request['amount']),
+          status: request['status'] as String? ?? 'nothing_sent',
+        );
+      }
+      if (invoice != null) {
+        return _PaymentEnvelope(
+          kind: 'invoice',
+          id: invoice['id'] as String? ?? '',
+          title: invoice['title'] as String? ?? 'Invoice',
+          note: invoice['description'] as String? ?? '',
+          provider: invoice['provider'] as String? ?? '',
+          amount: _readDouble(invoice['crypto_amount']),
+          status: invoice['status'] as String? ?? 'nothing_sent',
+        );
+      }
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
+
+  static Map<String, dynamic>? _asMap(Object? value) {
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) {
+      return value.map((key, value) => MapEntry(key.toString(), value));
+    }
+    return null;
+  }
+
+  static double _readDouble(Object? value) {
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value) ?? 0;
+    return 0;
+  }
+}
+
+String _formatPaymentAmount(double amount, String provider) {
+  final decimals = provider == 'btc' ? 8 : 12;
+  return '${amount.toStringAsFixed(decimals)} ${provider.toUpperCase()}';
+}
+
+class _PaymentBubble extends StatefulWidget {
+  final Message message;
+  final bool isMe;
+  final _PaymentEnvelope payment;
+  final Color bubbleColor;
+  final Color textColor;
+  final BorderRadius radii;
+
+  const _PaymentBubble({
+    required this.message,
+    required this.isMe,
+    required this.payment,
+    required this.bubbleColor,
+    required this.textColor,
+    required this.radii,
+  });
+
+  @override
+  State<_PaymentBubble> createState() => _PaymentBubbleState();
+}
+
+class _PaymentBubbleState extends State<_PaymentBubble> {
+  bool _paying = false;
+  bool _loadingBalance = false;
+  String? _balanceProvider;
+  double? _availableBalance;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _ensureBalanceLoaded();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PaymentBubble oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.payment.id != widget.payment.id ||
+        oldWidget.payment.provider != widget.payment.provider) {
+      _balanceProvider = null;
+      _availableBalance = null;
+      _ensureBalanceLoaded();
+    }
+  }
+
+  void _ensureBalanceLoaded() {
+    final currentUserID = context.read<AuthProvider>().currentUser?.id;
+    final payment = widget.payment;
+    final shouldLoad =
+        payment.isRequest &&
+        !widget.isMe &&
+        payment.status == 'nothing_sent' &&
+        payment.id.isNotEmpty &&
+        (payment.payerId == null || payment.payerId == currentUserID);
+    if (!shouldLoad ||
+        _loadingBalance ||
+        _balanceProvider == payment.provider) {
+      return;
+    }
+    unawaited(_loadBalance(payment.provider));
+  }
+
+  Future<void> _loadBalance(String provider) async {
+    setState(() {
+      _loadingBalance = true;
+      _balanceProvider = provider;
+    });
+    try {
+      final balances = await context.read<ApiService>().getPaymentBalances();
+      double available = 0;
+      for (final item in balances.whereType<Map<String, dynamic>>()) {
+        if (item['provider'] == provider) {
+          available = _PaymentEnvelope._readDouble(item['available']);
+          break;
+        }
+      }
+      if (!mounted) return;
+      setState(() => _availableBalance = available);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _availableBalance = 0);
+    } finally {
+      if (mounted) setState(() => _loadingBalance = false);
+    }
+  }
+
+  Future<void> _pay() async {
+    if (_paying) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('Pay request'),
+        content: Text('Send ${widget.payment.amountLabel}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogCtx, true),
+            child: const Text('Pay'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _paying = true);
+    try {
+      await context.read<ApiService>().payPaymentRequest(widget.payment.id);
+      if (!mounted) return;
+      await context.read<ChatProvider>().loadMessages(
+        widget.message.conversationId,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => _paying = false);
+    }
+  }
+
+  Future<void> _payExternal() async {
+    if (_paying) return;
+    setState(() => _paying = true);
+    try {
+      final result = await context
+          .read<ApiService>()
+          .payPaymentRequestExternally(requestID: widget.payment.id);
+      if (!mounted) return;
+      final deposit = result['deposit'] as Map<String, dynamic>?;
+      if (deposit != null) _showExternalPaymentAddress(deposit);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => _paying = false);
+    }
+  }
+
+  void _showExternalPaymentAddress(Map<String, dynamic> deposit) {
+    final address = deposit['crypto_address'] as String? ?? '';
+    final provider = deposit['provider'] as String? ?? '';
+    final amount = deposit['expected_amount'];
+    final amountText = amount == null
+        ? ''
+        : '\n\nSend at least ${_formatPaymentAmount(_PaymentEnvelope._readDouble(amount), provider)}.';
+    showDialog<void>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: Text('Pay with ${provider.toUpperCase()}'),
+        content: SelectableText('$address$amountText'),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: address));
+              if (mounted && dialogCtx.mounted) Navigator.pop(dialogCtx);
+            },
+            child: const Text('Copy'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final currentUserID = context.watch<AuthProvider>().currentUser?.id;
+    final payment = widget.payment;
+    final canPay =
+        payment.isRequest &&
+        !widget.isMe &&
+        payment.status == 'nothing_sent' &&
+        payment.id.isNotEmpty &&
+        (payment.payerId == null || payment.payerId == currentUserID);
+    final canPayWithWallet =
+        canPay &&
+        _availableBalance != null &&
+        _availableBalance! >= payment.amount;
+    final icon = payment.isTransfer
+        ? Icons.check_circle_outline
+        : Icons.payments_outlined;
+    final statusText = payment.isTransfer
+        ? 'Confirmed'
+        : payment.status == 'nothing_sent'
+        ? 'Requested'
+        : payment.status.replaceAll('_', ' ');
+
+    return _BubbleShell(
+      color: widget.bubbleColor,
+      radii: widget.radii,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!widget.isMe && widget.message.sender != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                '@${widget.message.sender!.username}',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: cs.primary,
+                ),
+              ),
+            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: widget.textColor.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: widget.textColor, size: 22),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      payment.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: widget.textColor,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      statusText,
+                      style: TextStyle(
+                        color: widget.textColor.withValues(alpha: 0.68),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                payment.amountLabel,
+                style: TextStyle(
+                  color: widget.textColor,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          if (payment.note.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              payment.note,
+              style: TextStyle(
+                color: widget.textColor.withValues(alpha: 0.78),
+                fontSize: 13,
+              ),
+            ),
+          ],
+          if (canPay) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (canPayWithWallet)
+                  FilledButton.icon(
+                    onPressed: _paying ? null : _pay,
+                    icon: _paying
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.account_balance_wallet, size: 16),
+                    label: const Text('App wallet'),
+                  ),
+                OutlinedButton.icon(
+                  onPressed: _paying ? null : _payExternal,
+                  icon: const Icon(Icons.qr_code_2, size: 16),
+                  label: const Text('External'),
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 6),
+          Align(
+            alignment: Alignment.centerRight,
+            child: _Timestamp(
+              message: widget.message,
+              textColor: widget.textColor,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1083,6 +1643,392 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
   }
 }
 
+// ── Voice / audio bubble ─────────────────────────────────────────────────────
+
+class _VoiceBubble extends StatefulWidget {
+  final Message message;
+  final MessageContent content;
+  final Color bubbleColor;
+  final Color textColor;
+  final BorderRadius radii;
+
+  const _VoiceBubble({
+    required this.message,
+    required this.content,
+    required this.bubbleColor,
+    required this.textColor,
+    required this.radii,
+  });
+
+  @override
+  State<_VoiceBubble> createState() => _VoiceBubbleState();
+}
+
+class _VoiceBubbleState extends State<_VoiceBubble> {
+  _LoadState _state = _LoadState.idle;
+  AudioPlayer? _player;
+  final List<StreamSubscription<dynamic>> _subscriptions = [];
+  late final List<double> _levels;
+  Duration _position = Duration.zero;
+  Duration? _duration;
+  bool _playing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _duration = _durationFromMetadata(widget.content.durationMs);
+    _levels = _voiceLevels(widget.message.id);
+  }
+
+  @override
+  void dispose() {
+    for (final sub in _subscriptions) {
+      unawaited(sub.cancel());
+    }
+    unawaited(_player?.dispose());
+    super.dispose();
+  }
+
+  Future<void> _togglePlayback() async {
+    if (_state == _LoadState.loading) return;
+    if (_state != _LoadState.done) {
+      await _load();
+      if (!mounted || _state != _LoadState.done) return;
+    }
+
+    final player = _player;
+    if (player == null) return;
+    final duration = _duration;
+    if (duration != null &&
+        duration > Duration.zero &&
+        _position >= duration - const Duration(milliseconds: 250)) {
+      await player.seek(Duration.zero);
+    }
+    if (player.playing) {
+      await player.pause();
+    } else {
+      unawaited(player.play());
+    }
+  }
+
+  Future<void> _seekToFraction(double fraction) async {
+    if (_state != _LoadState.done) {
+      await _load();
+      if (!mounted || _state != _LoadState.done) return;
+    }
+    final duration = _duration;
+    final player = _player;
+    if (duration == null || duration <= Duration.zero || player == null) {
+      return;
+    }
+    await player.seek(
+      Duration(
+        milliseconds: (duration.inMilliseconds * fraction.clamp(0, 1)).round(),
+      ),
+    );
+  }
+
+  Future<void> _load() async {
+    final attachmentId = widget.content.attachmentId;
+    if (attachmentId == null) {
+      setState(() => _state = _LoadState.error);
+      return;
+    }
+
+    setState(() => _state = _LoadState.loading);
+    try {
+      final svc = AttachmentService(context.read<ApiService>());
+      final bytes =
+          widget.content.fileKey != null && widget.content.fileNonce != null
+          ? await svc.downloadAndDecrypt(
+              attachmentId: attachmentId,
+              fileKeyB64: widget.content.fileKey!,
+              fileNonceB64: widget.content.fileNonce!,
+            )
+          : !widget.message.isEncrypted
+          ? await svc.downloadRaw(attachmentId: attachmentId)
+          : throw StateError('missing attachment key');
+
+      final file = await _writeTempAudio(bytes);
+      final player = _ensurePlayer();
+      final loadedDuration = await player.setFilePath(file.path);
+      if (!mounted) return;
+      setState(() {
+        _duration = loadedDuration ?? _duration;
+        _state = _LoadState.done;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _state = _LoadState.error);
+    }
+  }
+
+  AudioPlayer _ensurePlayer() {
+    final existing = _player;
+    if (existing != null) return existing;
+
+    final player = AudioPlayer();
+    _player = player;
+    _subscriptions
+      ..add(
+        player.positionStream.listen((position) {
+          if (mounted) setState(() => _position = position);
+        }),
+      )
+      ..add(
+        player.durationStream.listen((duration) {
+          if (mounted && duration != null) setState(() => _duration = duration);
+        }),
+      )
+      ..add(
+        player.playerStateStream.listen((state) {
+          if (!mounted) return;
+          if (state.processingState == ProcessingState.completed) {
+            setState(() {
+              _playing = false;
+              _position = _duration ?? _position;
+            });
+            unawaited(player.seek(Duration.zero));
+            return;
+          }
+          setState(() => _playing = state.playing);
+        }),
+      );
+    return player;
+  }
+
+  Future<File> _writeTempAudio(Uint8List bytes) async {
+    final dir = await getTemporaryDirectory();
+    final safeId = (widget.content.attachmentId ?? widget.message.id)
+        .replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+    final ext = _audioExtension(widget.content);
+    final file = File(p.join(dir.path, 'openchat_voice_$safeId.$ext'));
+    if (!await file.exists() || await file.length() != bytes.length) {
+      await file.writeAsBytes(bytes, flush: true);
+    }
+    return file;
+  }
+
+  double get _progress {
+    final duration = _duration;
+    if (duration == null || duration.inMilliseconds <= 0) return 0;
+    return (_position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0);
+  }
+
+  String get _timeLabel {
+    if (_position > Duration.zero && _state == _LoadState.done) {
+      return _formatVoiceDuration(_position);
+    }
+    final duration = _duration;
+    return duration == null ? '--:--' : _formatVoiceDuration(duration);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final error = _state == _LoadState.error;
+    final loading = _state == _LoadState.loading;
+    return _BubbleShell(
+      color: widget.bubbleColor,
+      radii: widget.radii,
+      child: SizedBox(
+        width: math.min(MediaQuery.of(context).size.width * 0.64, 340),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            _VoicePlayButton(
+              color: widget.textColor,
+              loading: loading,
+              playing: _playing,
+              error: error,
+              onTap: _togglePlayback,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _VoiceScrubber(
+                    levels: _levels,
+                    progress: _progress,
+                    activeColor: widget.textColor,
+                    inactiveColor: widget.textColor.withValues(alpha: 0.24),
+                    onSeek: _seekToFraction,
+                  ),
+                  const SizedBox(height: 5),
+                  Row(
+                    children: [
+                      Text(
+                        error ? 'Tap to retry' : _timeLabel,
+                        style: TextStyle(
+                          color: widget.textColor.withValues(alpha: 0.76),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const Spacer(),
+                      _Timestamp(
+                        message: widget.message,
+                        textColor: widget.textColor,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _VoicePlayButton extends StatelessWidget {
+  final Color color;
+  final bool loading;
+  final bool playing;
+  final bool error;
+  final VoidCallback onTap;
+
+  const _VoicePlayButton({
+    required this.color,
+    required this.loading,
+    required this.playing,
+    required this.error,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: color.withValues(alpha: 0.18),
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: loading ? null : onTap,
+        child: SizedBox(
+          width: 44,
+          height: 44,
+          child: Center(
+            child: loading
+                ? SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: color,
+                    ),
+                  )
+                : Icon(
+                    error
+                        ? Icons.refresh
+                        : playing
+                        ? Icons.pause
+                        : Icons.play_arrow,
+                    color: color,
+                    size: 27,
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _VoiceScrubber extends StatelessWidget {
+  final List<double> levels;
+  final double progress;
+  final Color activeColor;
+  final Color inactiveColor;
+  final ValueChanged<double> onSeek;
+
+  const _VoiceScrubber({
+    required this.levels,
+    required this.progress,
+    required this.activeColor,
+    required this.inactiveColor,
+    required this.onSeek,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        void seek(Offset localPosition) {
+          final width = math.max(1.0, constraints.maxWidth);
+          onSeek((localPosition.dx / width).clamp(0.0, 1.0));
+        }
+
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (details) => seek(details.localPosition),
+          onHorizontalDragUpdate: (details) => seek(details.localPosition),
+          child: SizedBox(
+            height: 32,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                for (final (index, level) in levels.indexed) ...[
+                  Expanded(
+                    child: Center(
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 90),
+                        height: 5 + (24 * level),
+                        decoration: BoxDecoration(
+                          color: (index + 1) / levels.length <= progress
+                              ? activeColor
+                              : inactiveColor,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (index != levels.length - 1) const SizedBox(width: 3),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+Duration? _durationFromMetadata(int? durationMs) {
+  if (durationMs == null || durationMs <= 0) return null;
+  return Duration(milliseconds: durationMs);
+}
+
+String _formatVoiceDuration(Duration duration) {
+  final total = duration.inSeconds;
+  final minutes = (total ~/ 60).toString().padLeft(2, '0');
+  final seconds = (total % 60).toString().padLeft(2, '0');
+  return '$minutes:$seconds';
+}
+
+String _audioExtension(MessageContent content) {
+  final nameExt = content.fileName == null
+      ? ''
+      : p.extension(content.fileName!).replaceFirst('.', '').toLowerCase();
+  if (nameExt.isNotEmpty && nameExt.length <= 5) return nameExt;
+
+  final mime = content.mimeType ?? '';
+  if (mime.contains('mpeg')) return 'mp3';
+  if (mime.contains('ogg') || mime.contains('opus')) return 'ogg';
+  if (mime.contains('wav')) return 'wav';
+  if (mime.contains('webm')) return 'webm';
+  return 'm4a';
+}
+
+List<double> _voiceLevels(String seed) {
+  var hash = seed.codeUnits.fold<int>(0x4d3c2b1a, (value, code) {
+    return (value * 31 + code) & 0x7fffffff;
+  });
+  return List<double>.generate(28, (_) {
+    hash = (hash * 1103515245 + 12345) & 0x7fffffff;
+    return 0.18 + ((hash >> 8) & 0xff) / 255 * 0.82;
+  });
+}
+
 // ── File bubble ───────────────────────────────────────────────────────────────
 
 class _FileBubble extends StatefulWidget {
@@ -1457,7 +2403,7 @@ class _StickerPackSheetState extends State<_StickerPackSheet> {
                       width: 40,
                       height: 40,
                       fit: BoxFit.cover,
-                      errorWidget: (_, __, ___) => const SizedBox.shrink(),
+                      errorWidget: (_, _, _) => const SizedBox.shrink(),
                     ),
                   ),
                   const SizedBox(width: 10),

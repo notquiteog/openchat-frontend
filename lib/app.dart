@@ -53,9 +53,76 @@ class OpenChatApp extends StatelessWidget {
       themeMode: ThemeMode.system,
       home: const _AppRoot(),
       // Float the call UI above every route so incoming/active calls surface on
-      // any screen, not just the chats list.
-      builder: (context, child) =>
-          Stack(children: [if (child != null) child, const CallOverlay()]),
+      // any screen, not just the chats list. The live connection banner stays
+      // above it so a broken websocket is always visible.
+      builder: (context, child) => Stack(
+        children: [?child, const CallOverlay(), const _LiveConnectionBanner()],
+      ),
+    );
+  }
+}
+
+class _LiveConnectionBanner extends StatelessWidget {
+  const _LiveConnectionBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final authenticated = context.select<AuthProvider, bool>(
+      (auth) => auth.state == AuthState.authenticated,
+    );
+    final monitoring = context.select<WebSocketService, bool>(
+      (ws) => ws.isMonitoring,
+    );
+    final show = authenticated && !monitoring;
+    final scheme = Theme.of(context).colorScheme;
+
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: IgnorePointer(
+        child: SafeArea(
+          bottom: false,
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 160),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            child: show
+                ? Material(
+                    key: const Key('websocket-connecting-banner'),
+                    color: scheme.primary,
+                    elevation: 2,
+                    child: SizedBox(
+                      height: 24,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SizedBox(
+                            width: 10,
+                            height: 10,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.6,
+                              color: scheme.onPrimary,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Connecting...',
+                            style: TextStyle(
+                              color: scheme.onPrimary,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : const SizedBox.shrink(key: Key('websocket-connected')),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -128,6 +195,10 @@ class _AppRootState extends State<_AppRoot> {
   void _onForeground() {
     NotificationService.setAppFocused(true);
     context.read<CallProvider>().refreshActiveCallNotification();
+    if (context.read<AuthProvider>().state == AuthState.authenticated) {
+      unawaited(context.read<ChatProvider>().connectWebSocket());
+      unawaited(context.read<ChatProvider>().refreshConversationsSilently());
+    }
     final storage = context.read<SecureStorageService>();
     storage.getAppLockEnabled().then((enabled) {
       if (!mounted) return;
@@ -233,12 +304,7 @@ class _AppRootState extends State<_AppRoot> {
       // Re-register the FCM/APNs push token on every login so the backend
       // always has a current token. Silently skipped when Firebase credentials
       // are placeholders or push notifications have not been enabled.
-      final settings = context.read<SettingsProvider>();
-      if (settings.pushNotificationsEnabled) {
-        PushNotificationService.initFromSettings(
-          api: context.read<ApiService>(),
-        );
-      }
+      unawaited(_initPushFromSettingsIfEnabled());
     } else if (auth.state == AuthState.unauthenticated &&
         _lastAuthState == AuthState.authenticated) {
       context.read<ChatProvider>().clearState();
@@ -248,6 +314,14 @@ class _AppRootState extends State<_AppRoot> {
       OpenChatApp.navigatorKey.currentState?.popUntil((route) => route.isFirst);
     }
     _lastAuthState = auth.state;
+  }
+
+  Future<void> _initPushFromSettingsIfEnabled() async {
+    final settings = context.read<SettingsProvider>();
+    final api = context.read<ApiService>();
+    await settings.load();
+    if (!mounted || !settings.pushNotificationsEnabled) return;
+    await PushNotificationService.initFromSettings(api: api);
   }
 
   Future<void> _fetchIceServers() async {

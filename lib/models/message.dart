@@ -17,16 +17,79 @@ enum MessageType {
   venue,
   contact,
   dice,
+  checklist,
+  invoice,
+  paymentRequest,
+  paymentTransfer,
   system,
+}
+
+class CustomEmojiEntity {
+  final String type;
+  final int offset;
+  final int length;
+  final String customEmojiId;
+  final String emoji;
+  final String? fileUrl;
+  final bool isAnimated;
+
+  const CustomEmojiEntity({
+    this.type = 'custom_emoji',
+    required this.offset,
+    required this.length,
+    required this.customEmojiId,
+    required this.emoji,
+    this.fileUrl,
+    this.isAnimated = false,
+  });
+
+  factory CustomEmojiEntity.fromJson(Map<String, dynamic> json) {
+    final id =
+        json['custom_emoji_id'] as String? ??
+        json['customEmojiId'] as String? ??
+        '';
+    final emoji = json['emoji'] as String? ?? '';
+    return CustomEmojiEntity(
+      type: json['type'] as String? ?? 'custom_emoji',
+      offset: MessageContent._parseInt(json['offset']) ?? 0,
+      length: MessageContent._parseInt(json['length']) ?? emoji.length,
+      customEmojiId: id,
+      emoji: emoji,
+      fileUrl: json['file_url'] as String?,
+      isAnimated: json['is_animated'] as bool? ?? false,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'type': type,
+    'offset': offset,
+    'length': length,
+    'custom_emoji_id': customEmojiId,
+    'emoji': emoji,
+    if (fileUrl != null) 'file_url': fileUrl,
+    if (isAnimated) 'is_animated': true,
+  };
+
+  CustomEmojiEntity copyWith({int? offset, int? length}) => CustomEmojiEntity(
+    type: type,
+    offset: offset ?? this.offset,
+    length: length ?? this.length,
+    customEmojiId: customEmojiId,
+    emoji: emoji,
+    fileUrl: fileUrl,
+    isAnimated: isAnimated,
+  );
 }
 
 /// Parsed content for media messages. Text messages just use [text] directly.
 class MessageContent {
   final String text;
+  final List<CustomEmojiEntity> entities;
   final String? attachmentId;
   final String? fileName;
   final int? fileSize;
   final String? mimeType;
+  final int? durationMs;
   // AES-256-GCM key/nonce — included only inside the PGP-encrypted payload,
   // never stored on the server or exposed in plaintext.
   final String? fileKey;
@@ -34,33 +97,43 @@ class MessageContent {
 
   const MessageContent({
     required this.text,
+    this.entities = const [],
     this.attachmentId,
     this.fileName,
     this.fileSize,
     this.mimeType,
+    this.durationMs,
     this.fileKey,
     this.fileNonce,
   });
 
   bool get hasAttachment => attachmentId != null;
 
-  factory MessageContent.text(String content) => MessageContent(text: content);
+  factory MessageContent.text(
+    String content, {
+    List<CustomEmojiEntity> entities = const [],
+  }) => MessageContent(text: content, entities: entities);
 
   factory MessageContent.fromJson(Map<String, dynamic> json) => MessageContent(
     text: json['text'] as String? ?? '',
+    entities: _parseEntities(json['entities'] ?? json['caption_entities']),
     attachmentId: json['attachment_id'] as String?,
     fileName: json['file_name'] as String?,
     fileSize: json['file_size'] as int?,
     mimeType: json['mime_type'] as String?,
+    durationMs: _parseInt(json['duration_ms']),
     fileKey: json['file_key'] as String?,
     fileNonce: json['file_nonce'] as String?,
   );
 
   /// Parses a decrypted payload string — falls back to plain text if not JSON.
   static MessageContent parse(String raw, MessageType type) {
-    if (type == MessageType.text ||
-        type == MessageType.sticker ||
-        type == MessageType.system) {
+    if (type == MessageType.text) {
+      final parsed = _tryParseTextPayload(raw);
+      if (parsed != null) return parsed;
+      return MessageContent.text(raw);
+    }
+    if (type == MessageType.sticker || type == MessageType.system) {
       return MessageContent.text(raw);
     }
     try {
@@ -73,13 +146,42 @@ class MessageContent {
 
   Map<String, dynamic> toJson() => {
     'text': text,
+    if (entities.isNotEmpty)
+      'entities': entities.map((entity) => entity.toJson()).toList(),
     if (attachmentId != null) 'attachment_id': attachmentId,
     if (fileName != null) 'file_name': fileName,
     if (fileSize != null) 'file_size': fileSize,
     if (mimeType != null) 'mime_type': mimeType,
+    if (durationMs != null) 'duration_ms': durationMs,
     if (fileKey != null) 'file_key': fileKey,
     if (fileNonce != null) 'file_nonce': fileNonce,
   };
+
+  static int? _parseInt(Object? raw) {
+    if (raw is int) return raw;
+    if (raw is num) return raw.round();
+    return null;
+  }
+
+  static MessageContent? _tryParseTextPayload(String raw) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return null;
+      if (!decoded.containsKey('entities')) return null;
+      return MessageContent.fromJson(decoded);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static List<CustomEmojiEntity> _parseEntities(Object? raw) {
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((e) => CustomEmojiEntity.fromJson(Map<String, dynamic>.from(e)))
+        .where((e) => e.type == 'custom_emoji' && e.customEmojiId.isNotEmpty)
+        .toList();
+  }
 }
 
 /// Outcome of a call, surfaced in a DM as a deletable `system` message.
@@ -148,6 +250,7 @@ class Message {
   final String? attachmentId;
   final String? replyTo;
   final String? topicId;
+  final String? mediaGroupId;
   final bool silent;
   final List<MessageReactionSummary> reactions;
   final Poll? poll;
@@ -174,6 +277,7 @@ class Message {
     this.attachmentId,
     this.replyTo,
     this.topicId,
+    this.mediaGroupId,
     this.silent = false,
     this.reactions = const [],
     this.poll,
@@ -197,6 +301,7 @@ class Message {
     attachmentId: json['attachment_id'] as String?,
     replyTo: json['reply_to'] as String?,
     topicId: json['topic_id'] as String?,
+    mediaGroupId: json['media_group_id'] as String?,
     silent: json['silent'] as bool? ?? false,
     reactions: (json['reactions'] as List? ?? [])
         .map((e) => MessageReactionSummary.fromJson(e as Map<String, dynamic>))
@@ -244,6 +349,18 @@ class Message {
     if (type == MessageType.poll && poll != null) {
       return 'Poll: ${poll!.question}';
     }
+    if (type == MessageType.checklist) {
+      return 'Checklist';
+    }
+    if (type == MessageType.invoice ||
+        type == MessageType.paymentRequest ||
+        type == MessageType.paymentTransfer) {
+      return switch (type) {
+        MessageType.invoice => 'Invoice',
+        MessageType.paymentRequest => 'Payment request',
+        _ => 'Payment sent',
+      };
+    }
     final ev = callEvent;
     if (ev != null) return ev.label;
     return isDecrypted ? (decryptedContent ?? '') : '🔒 Encrypted';
@@ -264,6 +381,10 @@ class Message {
     'venue' => MessageType.venue,
     'contact' => MessageType.contact,
     'dice' => MessageType.dice,
+    'checklist' => MessageType.checklist,
+    'invoice' => MessageType.invoice,
+    'payment_request' => MessageType.paymentRequest,
+    'payment_transfer' => MessageType.paymentTransfer,
     'system' => MessageType.system,
     _ => MessageType.text,
   };
@@ -286,6 +407,7 @@ class Message {
       attachmentId: attachmentId,
       replyTo: replyTo,
       topicId: topicId,
+      mediaGroupId: mediaGroupId,
       silent: silent,
       reactions: reactions ?? this.reactions,
       poll: poll ?? this.poll,

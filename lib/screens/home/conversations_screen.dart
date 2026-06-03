@@ -11,6 +11,7 @@ import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../config/api_config.dart';
 import '../../widgets/glass.dart';
+import '../../widgets/stories_strip.dart';
 import '../channels/channel_screen.dart';
 import '../chat/chat_screen.dart';
 import '../profile/user_profile_screen.dart';
@@ -23,6 +24,8 @@ class ConversationsScreen extends StatefulWidget {
 }
 
 class _ConversationsScreenState extends State<ConversationsScreen> {
+  int _storiesRefreshKey = 0;
+
   @override
   void initState() {
     super.initState();
@@ -58,7 +61,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
             Image.asset(
               'assets/images/logo.png',
               height: 28,
-              errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+              errorBuilder: (_, _, _) => const SizedBox.shrink(),
             ),
             const SizedBox(width: 8),
             const Text('OpenChat'),
@@ -80,10 +83,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       ),
       body: chat.isLoading
           ? const Center(child: CircularProgressIndicator())
-          : conversations.isEmpty
-          ? _buildEmpty(context)
           : RefreshIndicator(
-              onRefresh: chat.loadConversations,
+              onRefresh: () async {
+                await chat.loadConversations();
+                if (mounted) setState(() => _storiesRefreshKey += 1);
+              },
               // The list scrolls behind the translucent app bar
               // (extendBodyBehindAppBar), so drop the spinner below it
               // instead of letting it appear hidden under the bar.
@@ -91,7 +95,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                   MediaQuery.paddingOf(context).top +
                   kToolbarHeight +
                   callTopInset,
-              child: ListView.separated(
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
                 padding: EdgeInsets.only(
                   top:
                       MediaQuery.paddingOf(context).top +
@@ -99,17 +104,28 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                       callTopInset,
                   bottom: MediaQuery.paddingOf(context).bottom + 8,
                 ),
-                itemCount: conversations.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (context, index) {
-                  final conv = conversations[index];
-                  return _ConversationTile(
-                    conversation: conv,
-                    currentUserID: currentUserID,
-                    onTap: () => _openConversation(context, conv),
-                    onLongPress: () => _confirmDelete(context, conv),
-                  );
-                },
+                children: [
+                  StoriesStrip(key: ValueKey(_storiesRefreshKey)),
+                  const Divider(height: 1),
+                  if (conversations.isEmpty)
+                    SizedBox(height: 360, child: _buildEmpty(context))
+                  else
+                    for (
+                      var index = 0;
+                      index < conversations.length;
+                      index++
+                    ) ...[
+                      if (index > 0) const Divider(height: 1),
+                      _ConversationTile(
+                        conversation: conversations[index],
+                        currentUserID: currentUserID,
+                        onTap: () =>
+                            _openConversation(context, conversations[index]),
+                        onLongPress: () =>
+                            _confirmDelete(context, conversations[index]),
+                      ),
+                    ],
+                ],
               ),
             ),
       // Lift above the translucent glass nav bar. extendBody propagates the bar
@@ -381,6 +397,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       final conv = await context.read<ApiService>().getSavedMessages();
       if (!context.mounted) return;
       await context.read<ChatProvider>().loadConversations();
+      if (!context.mounted) return;
       Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => ChatScreen(conversation: conv)),
