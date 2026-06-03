@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:timeago/timeago.dart' as timeago;
 import 'package:video_player/video_player.dart';
 import '../config/api_config.dart';
 import '../models/message.dart';
+import '../providers/chat_provider.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
 import 'glass.dart';
@@ -121,6 +123,16 @@ class MessageBubble extends StatelessWidget {
     final bubbleColor = _bubbleColor(context);
     final textColor = _textColorFor(context);
     final radii = _radii();
+
+    if (message.type == MessageType.poll && message.poll != null) {
+      return _PollBubble(
+        message: message,
+        isMe: isMe,
+        bubbleColor: bubbleColor,
+        textColor: textColor,
+        radii: radii,
+      );
+    }
 
     if (message.decryptionFailed) {
       return _BubbleShell(
@@ -506,6 +518,210 @@ class _ReactionChips extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+class _PollBubble extends StatefulWidget {
+  final Message message;
+  final bool isMe;
+  final Color bubbleColor;
+  final Color textColor;
+  final BorderRadius radii;
+
+  const _PollBubble({
+    required this.message,
+    required this.isMe,
+    required this.bubbleColor,
+    required this.textColor,
+    required this.radii,
+  });
+
+  @override
+  State<_PollBubble> createState() => _PollBubbleState();
+}
+
+class _PollBubbleState extends State<_PollBubble> {
+  bool _voting = false;
+
+  Future<void> _vote(PollOption option) async {
+    final poll = widget.message.poll;
+    if (poll == null || poll.isClosed || _voting) return;
+    final selected = poll.voterOptionIds.toSet();
+    final next = poll.allowsMultipleAnswers
+        ? (selected.contains(option.id)
+              ? (selected..remove(option.id)).toList()
+              : (selected..add(option.id)).toList())
+        : [option.id];
+    if (next.isEmpty) return;
+    setState(() => _voting = true);
+    try {
+      await context.read<ChatProvider>().votePoll(
+        convID: widget.message.conversationId,
+        pollID: poll.id,
+        optionIDs: next,
+      );
+    } finally {
+      if (mounted) setState(() => _voting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final poll = widget.message.poll!;
+    final cs = Theme.of(context).colorScheme;
+    final total = math.max(1, poll.totalVoterCount);
+
+    return _BubbleShell(
+      color: widget.bubbleColor,
+      radii: widget.radii,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!widget.isMe && widget.message.sender != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                '@${widget.message.sender!.username}',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: cs.primary,
+                ),
+              ),
+            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.poll_outlined, size: 18, color: widget.textColor),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  poll.question,
+                  style: TextStyle(
+                    color: widget.textColor,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (poll.description != null && poll.description!.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              poll.description!,
+              style: TextStyle(
+                color: widget.textColor.withValues(alpha: 0.78),
+                fontSize: 13,
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
+          for (final option in poll.options) ...[
+            _PollOptionRow(
+              option: option,
+              percent: option.voterCount / total,
+              selected: poll.isSelected(option.id),
+              enabled: !poll.isClosed && !_voting,
+              textColor: widget.textColor,
+              onTap: () => _vote(option),
+            ),
+            const SizedBox(height: 6),
+          ],
+          Row(
+            children: [
+              Text(
+                poll.isClosed ? 'Closed' : '${poll.totalVoterCount} votes',
+                style: TextStyle(
+                  color: widget.textColor.withValues(alpha: 0.68),
+                  fontSize: 12,
+                ),
+              ),
+              const Spacer(),
+              _Timestamp(message: widget.message, textColor: widget.textColor),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PollOptionRow extends StatelessWidget {
+  final PollOption option;
+  final double percent;
+  final bool selected;
+  final bool enabled;
+  final Color textColor;
+  final VoidCallback onTap;
+
+  const _PollOptionRow({
+    required this.option,
+    required this.percent,
+    required this.selected,
+    required this.enabled,
+    required this.textColor,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fill = textColor.withValues(alpha: selected ? 0.24 : 0.14);
+    final border = textColor.withValues(alpha: selected ? 0.42 : 0.16);
+    return InkWell(
+      onTap: enabled ? onTap : null,
+      borderRadius: BorderRadius.circular(8),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: FractionallySizedBox(
+                alignment: Alignment.centerLeft,
+                widthFactor: percent.clamp(0, 1),
+                child: DecoratedBox(decoration: BoxDecoration(color: fill)),
+              ),
+            ),
+            Container(
+              constraints: const BoxConstraints(minHeight: 40),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: border),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    selected
+                        ? Icons.check_circle
+                        : Icons.radio_button_unchecked,
+                    size: 18,
+                    color: textColor.withValues(alpha: selected ? 0.95 : 0.7),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      option.text,
+                      style: TextStyle(color: textColor, fontSize: 14),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${(percent * 100).round()}%',
+                    style: TextStyle(
+                      color: textColor.withValues(alpha: 0.72),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -444,6 +444,11 @@ class _ChatScreenState extends State<ChatScreen> {
               onTap: () => Navigator.pop(context, 'file'),
             ),
             ListTile(
+              leading: const Icon(Icons.poll_outlined),
+              title: const Text('Poll'),
+              onTap: () => Navigator.pop(context, 'poll'),
+            ),
+            ListTile(
               leading: const Icon(Icons.mic_none_outlined),
               title: const Text('Voice note'),
               onTap: () => Navigator.pop(context, 'voice'),
@@ -454,6 +459,10 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     if (choice == null || !mounted) return;
+    if (choice == 'poll') {
+      await _showCreatePollDialog();
+      return;
+    }
 
     final attachmentService = AttachmentService(
       context.read(), // ApiService
@@ -497,6 +506,128 @@ class _ChatScreenState extends State<ChatScreen> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
+  Future<void> _showCreatePollDialog() async {
+    final questionCtrl = TextEditingController();
+    final optionCtrls = [TextEditingController(), TextEditingController()];
+    var anonymous = true;
+    var multiple = false;
+
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogCtx) => StatefulBuilder(
+          builder: (dialogCtx, setDialog) {
+            Future<void> submit() async {
+              final question = questionCtrl.text.trim();
+              final options = optionCtrls
+                  .map((c) => c.text.trim())
+                  .where((text) => text.isNotEmpty)
+                  .toList();
+              if (question.isEmpty || options.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Question and option required')),
+                );
+                return;
+              }
+              Navigator.pop(dialogCtx);
+              try {
+                final sent = await context.read<ChatProvider>().sendPoll(
+                  convID: conv.id,
+                  question: question,
+                  options: options,
+                  isAnonymous: anonymous,
+                  allowsMultipleAnswers: multiple,
+                  silent: _sendSilent,
+                );
+                if (sent && mounted) _scrollToBottom();
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text(e.toString())));
+              }
+            }
+
+            return AlertDialog(
+              title: const Text('New poll'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: questionCtrl,
+                      decoration: const InputDecoration(labelText: 'Question'),
+                      textInputAction: TextInputAction.next,
+                    ),
+                    const SizedBox(height: 12),
+                    for (var i = 0; i < optionCtrls.length; i++)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: TextField(
+                          controller: optionCtrls[i],
+                          decoration: InputDecoration(
+                            labelText: 'Option ${i + 1}',
+                          ),
+                          textInputAction: TextInputAction.next,
+                        ),
+                      ),
+                    Row(
+                      children: [
+                        TextButton.icon(
+                          icon: const Icon(Icons.add),
+                          label: const Text('Option'),
+                          onPressed: optionCtrls.length >= 10
+                              ? null
+                              : () => setDialog(
+                                  () =>
+                                      optionCtrls.add(TextEditingController()),
+                                ),
+                        ),
+                        const Spacer(),
+                        if (optionCtrls.length > 1)
+                          IconButton(
+                            tooltip: 'Remove option',
+                            icon: const Icon(Icons.remove_circle_outline),
+                            onPressed: () => setDialog(
+                              () => optionCtrls.removeLast().dispose(),
+                            ),
+                          ),
+                      ],
+                    ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Anonymous'),
+                      value: anonymous,
+                      onChanged: (v) => setDialog(() => anonymous = v),
+                    ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Multiple answers'),
+                      value: multiple,
+                      onChanged: (v) => setDialog(() => multiple = v),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogCtx),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(onPressed: submit, child: const Text('Send')),
+              ],
+            );
+          },
+        ),
+      );
+    } finally {
+      questionCtrl.dispose();
+      for (final ctrl in optionCtrls) {
+        ctrl.dispose();
+      }
     }
   }
 

@@ -464,6 +464,33 @@ class ApiService {
     return Message.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
+  Future<Message> createPoll({
+    required String convID,
+    required String question,
+    required List<String> options,
+    bool isAnonymous = true,
+    bool allowsMultipleAnswers = false,
+    bool allowsRevoting = true,
+    bool silent = false,
+  }) async {
+    final resp = await _post('/api/v1/conversations/$convID/polls', {
+      'question': question,
+      'options': options,
+      'is_anonymous': isAnonymous,
+      'allows_multiple_answers': allowsMultipleAnswers,
+      'allows_revoting': allowsRevoting,
+      if (silent) 'silent': true,
+    });
+    return Message.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<Poll> votePoll(String pollID, List<String> optionIDs) async {
+    final resp = await _post('/api/v1/polls/$pollID/votes', {
+      'option_ids': optionIDs,
+    });
+    return Poll.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
   Future<void> reactToMessage(String msgID, String emoji) async {
     await _post('/api/v1/messages/$msgID/reactions', {'emoji': emoji});
   }

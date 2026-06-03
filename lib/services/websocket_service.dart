@@ -15,6 +15,7 @@ enum WsEventType {
   messageDeleted,
   messageEdited,
   messageReaction,
+  pollUpdated,
   conversationDeleted,
   conversationUpdated,
   // WebRTC call signaling
@@ -194,6 +195,7 @@ class WebSocketService {
     'message_deleted' => WsEventType.messageDeleted,
     'message_edited' => WsEventType.messageEdited,
     'message_reaction' => WsEventType.messageReaction,
+    'poll_updated' => WsEventType.pollUpdated,
     'conversation_deleted' => WsEventType.conversationDeleted,
     'conversation_updated' => WsEventType.conversationUpdated,
     'call_offer' => WsEventType.callOffer,

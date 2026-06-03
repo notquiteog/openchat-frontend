@@ -1,7 +1,24 @@
 import 'dart:convert';
 import 'user.dart';
 
-enum MessageType { text, sticker, file, image, video, voice, system }
+enum MessageType {
+  text,
+  sticker,
+  file,
+  image,
+  video,
+  voice,
+  audio,
+  animation,
+  videoNote,
+  livePhoto,
+  poll,
+  location,
+  venue,
+  contact,
+  dice,
+  system,
+}
 
 /// Parsed content for media messages. Text messages just use [text] directly.
 class MessageContent {
@@ -133,6 +150,7 @@ class Message {
   final String? topicId;
   final bool silent;
   final List<MessageReactionSummary> reactions;
+  final Poll? poll;
   final DateTime createdAt;
   final DateTime? editedAt;
   // Not final: realtime new_message events arrive without sender details, so
@@ -158,6 +176,7 @@ class Message {
     this.topicId,
     this.silent = false,
     this.reactions = const [],
+    this.poll,
     required this.createdAt,
     this.editedAt,
     this.sender,
@@ -182,6 +201,9 @@ class Message {
     reactions: (json['reactions'] as List? ?? [])
         .map((e) => MessageReactionSummary.fromJson(e as Map<String, dynamic>))
         .toList(),
+    poll: json['poll'] != null
+        ? Poll.fromJson(json['poll'] as Map<String, dynamic>)
+        : null,
     createdAt: DateTime.parse(json['created_at'] as String),
     editedAt: json['edited_at'] != null
         ? DateTime.parse(json['edited_at'] as String)
@@ -219,6 +241,9 @@ class Message {
   /// One-line text for conversation list previews. Call events render as their
   /// label (e.g. "Missed voice call") rather than the raw JSON payload.
   String get listPreview {
+    if (type == MessageType.poll && poll != null) {
+      return 'Poll: ${poll!.question}';
+    }
     final ev = callEvent;
     if (ev != null) return ev.label;
     return isDecrypted ? (decryptedContent ?? '') : '🔒 Encrypted';
@@ -230,9 +255,123 @@ class Message {
     'image' => MessageType.image,
     'video' => MessageType.video,
     'voice' => MessageType.voice,
+    'audio' => MessageType.audio,
+    'animation' => MessageType.animation,
+    'video_note' => MessageType.videoNote,
+    'live_photo' => MessageType.livePhoto,
+    'poll' => MessageType.poll,
+    'location' => MessageType.location,
+    'venue' => MessageType.venue,
+    'contact' => MessageType.contact,
+    'dice' => MessageType.dice,
     'system' => MessageType.system,
     _ => MessageType.text,
   };
+
+  Message copyWith({
+    List<MessageReactionSummary>? reactions,
+    Poll? poll,
+    User? sender,
+  }) {
+    final msg = Message(
+      id: id,
+      conversationId: conversationId,
+      senderId: senderId,
+      type: type,
+      encryptedPayload: encryptedPayload,
+      signature: signature,
+      isEncrypted: isEncrypted,
+      autoDeleteSeconds: autoDeleteSeconds,
+      autoDeleteExpiresAt: autoDeleteExpiresAt,
+      attachmentId: attachmentId,
+      replyTo: replyTo,
+      topicId: topicId,
+      silent: silent,
+      reactions: reactions ?? this.reactions,
+      poll: poll ?? this.poll,
+      createdAt: createdAt,
+      editedAt: editedAt,
+      sender: sender ?? this.sender,
+    );
+    if (_content != null) msg._content = _content;
+    msg._decryptionFailed = _decryptionFailed;
+    return msg;
+  }
+}
+
+class Poll {
+  final String id;
+  final String? messageId;
+  final String question;
+  final String? description;
+  final String type;
+  final bool isAnonymous;
+  final bool allowsMultipleAnswers;
+  final bool allowsRevoting;
+  final bool isClosed;
+  final int totalVoterCount;
+  final List<PollOption> options;
+  final List<String> voterOptionIds;
+
+  const Poll({
+    required this.id,
+    this.messageId,
+    required this.question,
+    this.description,
+    required this.type,
+    required this.isAnonymous,
+    required this.allowsMultipleAnswers,
+    required this.allowsRevoting,
+    required this.isClosed,
+    required this.totalVoterCount,
+    required this.options,
+    this.voterOptionIds = const [],
+  });
+
+  factory Poll.fromJson(Map<String, dynamic> json) => Poll(
+    id: json['id'] as String,
+    messageId: json['message_id'] as String?,
+    question: json['question'] as String? ?? '',
+    description: json['description'] as String?,
+    type: json['type'] as String? ?? 'regular',
+    isAnonymous: json['is_anonymous'] as bool? ?? true,
+    allowsMultipleAnswers: json['allows_multiple_answers'] as bool? ?? false,
+    allowsRevoting: json['allows_revoting'] as bool? ?? false,
+    isClosed: (json['is_closed'] as bool?) ?? json['closed_at'] != null,
+    totalVoterCount: json['total_voter_count'] as int? ?? 0,
+    options: (json['options'] as List? ?? [])
+        .map((e) => PollOption.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    voterOptionIds: (json['voter_option_ids'] as List? ?? [])
+        .map((e) => e.toString())
+        .toList(),
+  );
+
+  bool isSelected(String optionId) => voterOptionIds.contains(optionId);
+}
+
+class PollOption {
+  final String id;
+  final int index;
+  final String text;
+  final int voterCount;
+  final String? persistentId;
+
+  const PollOption({
+    required this.id,
+    required this.index,
+    required this.text,
+    required this.voterCount,
+    this.persistentId,
+  });
+
+  factory PollOption.fromJson(Map<String, dynamic> json) => PollOption(
+    id: json['id'] as String? ?? json['persistent_id'] as String? ?? '',
+    index: json['option_index'] as int? ?? 0,
+    text: json['text'] as String? ?? '',
+    voterCount: json['voter_count'] as int? ?? 0,
+    persistentId: json['persistent_id'] as String?,
+  );
 }
 
 class MessageReactionSummary {
@@ -267,6 +406,7 @@ class PendingMessage extends Message {
     super.topicId,
     super.silent,
     super.reactions,
+    super.poll,
     required super.createdAt,
     required String plaintext,
     this.isSending = true,

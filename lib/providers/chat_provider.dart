@@ -250,6 +250,55 @@ class ChatProvider extends ChangeNotifier {
     );
   }
 
+  Future<bool> sendPoll({
+    required String convID,
+    required String question,
+    required List<String> options,
+    bool isAnonymous = true,
+    bool allowsMultipleAnswers = false,
+    bool silent = false,
+  }) async {
+    final userID = await _storage.getUserID() ?? '';
+    if (userID.isEmpty) {
+      throw const ChatSendException(
+        'Your session is incomplete. Sign in again.',
+      );
+    }
+    final msg = await _api.createPoll(
+      convID: convID,
+      question: question,
+      options: options,
+      isAnonymous: isAnonymous,
+      allowsMultipleAnswers: allowsMultipleAnswers,
+      silent: silent,
+    );
+    _hydrateMessageSender(msg);
+    final list = _messages[convID] ?? [];
+    _messages[convID] = [...list.where((m) => m.id != msg.id), msg];
+    final existingConv = _conversations[convID];
+    if (existingConv != null) {
+      _conversations[convID] = existingConv.copyWith(lastMessage: msg);
+    }
+    notifyListeners();
+    return true;
+  }
+
+  Future<void> votePoll({
+    required String convID,
+    required String pollID,
+    required List<String> optionIDs,
+  }) async {
+    final updatedPoll = await _api.votePoll(pollID, optionIDs);
+    final list = _messages[convID];
+    if (list == null) return;
+    final idx = list.indexWhere((m) => m.poll?.id == pollID);
+    if (idx == -1) return;
+    final updated = List<Message>.from(list);
+    updated[idx] = updated[idx].copyWith(poll: updatedPoll);
+    _messages[convID] = updated;
+    notifyListeners();
+  }
+
   /// Records a call outcome as a `system` message in the DM. The payload is
   /// E2E-encrypted like any other message and rendered as a centered chip
   /// (red for missed). Posted only by the caller's client to avoid duplicates.
@@ -687,6 +736,10 @@ class ChatProvider extends ChangeNotifier {
         final convID = event.data['conversation_id'] as String?;
         if (convID != null) unawaited(loadMessages(convID));
 
+      case WsEventType.pollUpdated:
+        final convID = event.data['conversation_id'] as String?;
+        if (convID != null) unawaited(loadMessages(convID));
+
       case WsEventType.conversationUpdated:
         // Name / description / avatar (and for channels, handle) changed. Pull
         // the fresh conversation + members so it updates without a manual refresh.
@@ -836,6 +889,10 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<void> _tryDecrypt(Message msg, String privateKey) async {
+    if (msg.type == MessageType.poll) {
+      msg.setDecryptedContent(msg.encryptedPayload);
+      return;
+    }
     if (!msg.isEncrypted) {
       msg.setDecryptedContent(msg.encryptedPayload);
       return;
