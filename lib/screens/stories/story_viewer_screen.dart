@@ -9,6 +9,7 @@ import '../../models/story.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/attachment_service.dart';
+import '../../widgets/glass.dart';
 
 enum _StoryLoadState { idle, loading, done, error }
 
@@ -314,20 +315,32 @@ class _StoryHeader extends StatelessWidget {
               ),
             ),
             if (story.viewCount > 0)
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(
-                    Icons.visibility_outlined,
-                    color: Colors.white70,
-                    size: 16,
+              LiquidGlass.capsule(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
                   ),
-                  const SizedBox(width: 4),
-                  Text(
-                    '${story.viewCount}',
-                    style: const TextStyle(color: Colors.white70),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.visibility_outlined,
+                        color: Colors.white,
+                        size: 13,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${story.viewCount}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
           ],
         ),
@@ -349,42 +362,37 @@ class _StoryFooter extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (story.caption.isNotEmpty)
-          DecoratedBox(
-            decoration: BoxDecoration(
-              color: Colors.black54,
-              borderRadius: BorderRadius.circular(8),
-            ),
+          LiquidGlass.capsule(
             child: Padding(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               child: Text(
                 story.caption,
-                style: const TextStyle(color: Colors.white, fontSize: 15),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ),
           ),
         const SizedBox(height: 10),
-        DecoratedBox(
-          decoration: BoxDecoration(
-            color: Colors.black54,
-            borderRadius: BorderRadius.circular(28),
-          ),
+        LiquidGlass.capsule(
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: ['❤️', '🔥', '😂', '👍', '😮', '😢'].map((emoji) {
                 final selected = story.viewerReaction == emoji;
-                return InkWell(
-                  borderRadius: BorderRadius.circular(22),
+                return GestureDetector(
                   onTap: () => onReact(emoji),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 120),
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: selected ? Colors.white24 : Colors.transparent,
+                      color: selected ? Colors.white30 : Colors.transparent,
                       shape: BoxShape.circle,
                     ),
-                    child: Text(emoji, style: const TextStyle(fontSize: 24)),
+                    child: Text(emoji, style: const TextStyle(fontSize: 26)),
                   ),
                 );
               }).toList(),

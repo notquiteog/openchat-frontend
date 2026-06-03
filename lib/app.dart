@@ -84,38 +84,52 @@ class _LiveConnectionBanner extends StatelessWidget {
         child: SafeArea(
           bottom: false,
           child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 160),
+            duration: const Duration(milliseconds: 280),
             switchInCurve: Curves.easeOutCubic,
             switchOutCurve: Curves.easeInCubic,
+            transitionBuilder: (child, animation) => SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0, -1),
+                end: Offset.zero,
+              ).animate(animation),
+              child: FadeTransition(opacity: animation, child: child),
+            ),
             child: show
-                ? Material(
+                ? Padding(
                     key: const Key('websocket-connecting-banner'),
-                    color: scheme.primary,
-                    elevation: 2,
-                    child: SizedBox(
-                      height: 24,
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          SizedBox(
-                            width: 10,
-                            height: 10,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 1.6,
-                              color: scheme.onPrimary,
-                            ),
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Center(
+                      child: LiquidGlass.capsule(
+                        tint: scheme.primary,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
                           ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Connecting...',
-                            style: TextStyle(
-                              color: scheme.onPrimary,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0,
-                            ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: 12,
+                                height: 12,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 1.8,
+                                  color: scheme.primary,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Connecting…',
+                                style: TextStyle(
+                                  color: scheme.primary,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.2,
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   )
@@ -350,8 +364,21 @@ class _AppRootState extends State<_AppRoot> {
     }
 
     return switch (auth.state) {
-      AuthState.unknown => const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
+      AuthState.unknown => Scaffold(
+        body: LiquidMeshBackground(
+          child: Center(
+            child: LiquidGlass(
+              blur: 32,
+              borderRadius: const BorderRadius.all(Radius.circular(32)),
+              padding: const EdgeInsets.all(36),
+              child: const SizedBox(
+                width: 36,
+                height: 36,
+                child: CircularProgressIndicator(strokeWidth: 2.5),
+              ),
+            ),
+          ),
+        ),
       ),
       AuthState.unauthenticated => const LoginScreen(),
       AuthState.authenticated => const _HomeShell(),
@@ -454,38 +481,83 @@ class _AppLockScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.lock_outline,
-              size: 72,
-              color: theme.colorScheme.primary,
-            ),
-            const SizedBox(height: 24),
-            Text(
-              'OpenChat is locked',
-              style: theme.textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.w600,
+      body: LiquidMeshBackground(
+        child: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: LiquidGlass(
+                blur: 36,
+                borderRadius: const BorderRadius.all(Radius.circular(40)),
+                padding: const EdgeInsets.fromLTRB(32, 40, 32, 40),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Lock icon with glow
+                    Container(
+                      width: 80,
+                      height: 80,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: RadialGradient(
+                          colors: [scheme.primary, scheme.tertiary],
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: scheme.primary.withValues(alpha: 0.45),
+                            blurRadius: 28,
+                            spreadRadius: -4,
+                            offset: const Offset(0, 10),
+                          ),
+                        ],
+                      ),
+                      child: const Icon(
+                        Icons.lock_outline_rounded,
+                        color: Colors.white,
+                        size: 38,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      'OpenChat is Locked',
+                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Authenticate to continue',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: scheme.onSurface.withValues(alpha: 0.55),
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                    const SizedBox(height: 32),
+                    SizedBox(
+                      height: 52,
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: onUnlock,
+                        icon: const Icon(Icons.fingerprint_rounded),
+                        label: const Text('Unlock'),
+                        style: FilledButton.styleFrom(
+                          shape: const StadiumBorder(),
+                          textStyle: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              'Authenticate to continue',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 32),
-            FilledButton.icon(
-              onPressed: onUnlock,
-              icon: const Icon(Icons.fingerprint),
-              label: const Text('Unlock'),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -502,47 +574,76 @@ class _ExpiredKeyBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Material(
-      color: theme.colorScheme.errorContainer,
-      child: InkWell(
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const PgpKeysScreen()),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          child: Row(
-            children: [
-              Icon(Icons.lock_clock, color: theme.colorScheme.onErrorContainer),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Your PGP key has expired',
-                      style: TextStyle(
-                        color: theme.colorScheme.onErrorContainer,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    Text(
-                      'You can’t send or receive messages until you rotate to a new key. Tap to fix.',
-                      style: TextStyle(
-                        color: theme.colorScheme.onErrorContainer,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Icon(
-                Icons.chevron_right,
-                color: theme.colorScheme.onErrorContainer,
-              ),
-            ],
+    final scheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const PgpKeysScreen()),
+      ),
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: scheme.error.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: scheme.error.withValues(alpha: 0.32),
+            width: 0.8,
           ),
+          boxShadow: [
+            BoxShadow(
+              color: scheme.error.withValues(alpha: 0.12),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: scheme.error.withValues(alpha: 0.20),
+              ),
+              child: Icon(
+                Icons.lock_clock_outlined,
+                color: scheme.error,
+                size: 18,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'PGP key expired',
+                    style: TextStyle(
+                      color: scheme.error,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                    ),
+                  ),
+                  Text(
+                    'You can\'t send or receive messages. Tap to rotate.',
+                    style: TextStyle(
+                      color: scheme.error.withValues(alpha: 0.75),
+                      fontSize: 12,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(
+              Icons.arrow_forward_ios_rounded,
+              color: scheme.error.withValues(alpha: 0.70),
+              size: 14,
+            ),
+          ],
         ),
       ),
     );

@@ -10,7 +10,6 @@ import '../../config/api_config.dart';
 import '../../models/conversation.dart';
 import '../../models/message.dart';
 import '../../providers/auth_provider.dart';
-import '../../providers/call_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
@@ -178,10 +177,6 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     final chat = context.watch<ChatProvider>();
     final subscribed = chat.conversations.where((c) => c.isChannel).toList();
     final searching = _searchCtrl.text.isNotEmpty;
-    final callTopInset = context.select<CallProvider, double>(
-      (cp) => cp.minimizedContentTopInset,
-    );
-
     return Scaffold(
       appBar: GlassAppBar(
         title: const Text('Channels'),
@@ -191,7 +186,6 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
       ),
       body: Column(
         children: [
-          if (callTopInset > 0) SizedBox(height: callTopInset),
           Padding(
             padding: const EdgeInsets.all(12),
             child: TextField(
@@ -235,52 +229,134 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     required String emptyText,
     bool subscribedView = false,
   }) {
+    final scheme = Theme.of(context).colorScheme;
     if (channels.isEmpty) {
       return Center(
-        child: Text(
-          emptyText,
-          textAlign: TextAlign.center,
-          style: const TextStyle(color: Colors.grey),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32),
+          child: LiquidGlass.capsule(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              child: Text(
+                emptyText,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: scheme.onSurface.withValues(alpha: 0.55),
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          ),
         ),
       );
     }
     return ListView.builder(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.paddingOf(context).bottom + 8,
+      padding: EdgeInsets.fromLTRB(
+        12,
+        8,
+        12,
+        MediaQuery.paddingOf(context).bottom + 8,
       ),
       itemCount: channels.length,
       itemBuilder: (context, i) {
         final ch = channels[i];
-        return ListTile(
-          leading: CircleAvatar(
-            backgroundImage: ch.avatarUrl != null
-                ? CachedNetworkImageProvider(
-                    ApiConfig.resolveMedia(ch.avatarUrl!),
-                  )
-                : null,
-            child: ch.avatarUrl == null
-                ? Text(ch.name?.substring(0, 1).toUpperCase() ?? 'C')
-                : null,
-          ),
-          title: Row(
-            children: [
-              Flexible(child: Text(ch.name ?? 'Unnamed')),
-              if (ch.handle != null)
-                Padding(
-                  padding: const EdgeInsets.only(left: 6),
-                  child: Text(
-                    '@${ch.handle}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: GlassCard(
+            padding: EdgeInsets.zero,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(22),
+                onTap: () => _openChannel(ch),
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Row(
+                    children: [
+                      Container(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: scheme.primary.withValues(alpha: 0.20),
+                              blurRadius: 8,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: CircleAvatar(
+                          radius: 24,
+                          backgroundImage: ch.avatarUrl != null
+                              ? CachedNetworkImageProvider(
+                                  ApiConfig.resolveMedia(ch.avatarUrl!),
+                                )
+                              : null,
+                          child: ch.avatarUrl == null
+                              ? Text(
+                                  ch.name?.substring(0, 1).toUpperCase() ??
+                                      'C',
+                                )
+                              : null,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    ch.name ?? 'Unnamed',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 15,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                if (ch.handle != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 6),
+                                    child: Text(
+                                      '@${ch.handle}',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: scheme.primary,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            if (ch.description != null)
+                              Text(
+                                ch.description!,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: scheme.onSurface.withValues(
+                                    alpha: 0.55,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      Icon(
+                        Icons.arrow_forward_ios_rounded,
+                        size: 14,
+                        color: scheme.onSurface.withValues(alpha: 0.35),
+                      ),
+                    ],
                   ),
                 ),
-            ],
+              ),
+            ),
           ),
-          subtitle: ch.description != null ? Text(ch.description!) : null,
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => _openChannel(ch),
         );
       },
     );
@@ -1672,9 +1748,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         : auth.currentUser?.bubbleColor != null
         ? Color(auth.currentUser!.bubbleColor!)
         : null;
-    final callTopInset = context.select<CallProvider, double>(
-      (cp) => cp.minimizedContentTopInset,
-    );
     final actionPlacement = ChannelActionPolicy.actionsFor(
       channel: channel,
       isAdmin: _isAdmin,
@@ -1750,21 +1823,48 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       ),
       body: Column(
         children: [
-          if (callTopInset > 0) SizedBox(height: callTopInset),
           if (_archived || channel.isArchived)
-            Container(
-              width: double.infinity,
-              color: Colors.grey[700],
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: const Row(
-                children: [
-                  Icon(Icons.archive, color: Colors.white70, size: 16),
-                  SizedBox(width: 8),
-                  Text(
-                    'This channel has been archived and is read-only.',
-                    style: TextStyle(color: Colors.white70, fontSize: 13),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.onSurface.withValues(
+                    alpha: 0.08,
                   ),
-                ],
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.onSurface.withValues(
+                      alpha: 0.16,
+                    ),
+                    width: 0.7,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.archive_outlined,
+                      size: 15,
+                      color: Theme.of(context).colorScheme.onSurface.withValues(
+                        alpha: 0.55,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'This channel has been archived and is read-only.',
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurface
+                              .withValues(alpha: 0.60),
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           Expanded(
@@ -1773,7 +1873,27 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
                   : _posts.isEmpty
-                  ? const Center(child: Text('No posts yet'))
+                  ? Center(
+                      child: LiquidGlass.capsule(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 12,
+                          ),
+                          child: Text(
+                            'No posts yet',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withValues(alpha: 0.55),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ),
+                    )
                   : ListView.builder(
                       controller: _scrollCtrl,
                       padding: const EdgeInsets.symmetric(

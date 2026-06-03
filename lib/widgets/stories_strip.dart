@@ -55,16 +55,16 @@ class _StoriesStripState extends State<StoriesStrip> {
   Widget build(BuildContext context) {
     final currentUserId = context.watch<AuthProvider>().currentUser?.id ?? '';
     return SizedBox(
-      height: 104,
+      height: 108,
       child: FutureBuilder<List<Story>>(
         future: _future,
         builder: (context, snap) {
           final stories = snap.data ?? const <Story>[];
           return ListView.separated(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
             itemCount: stories.length + 1,
-            separatorBuilder: (_, _) => const SizedBox(width: 10),
+            separatorBuilder: (_, _) => const SizedBox(width: 12),
             itemBuilder: (context, index) {
               if (index == 0) {
                 return _StoryAddTile(onTap: _createStory);
@@ -91,40 +91,72 @@ class _StoryAddTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return SizedBox(
       width: 72,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
+      child: GestureDetector(
         onTap: onTap,
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Stack(
               clipBehavior: Clip.none,
               children: [
-                CircleAvatar(
-                  radius: 28,
-                  backgroundColor: Theme.of(
-                    context,
-                  ).colorScheme.surfaceContainerHighest,
-                  child: const Icon(Icons.person_outline),
+                // Avatar circle with glass border
+                Container(
+                  width: 60,
+                  height: 60,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.20),
+                      width: 0.7,
+                    ),
+                  ),
+                  child: Icon(
+                    Icons.person_outline_rounded,
+                    color: scheme.onSurfaceVariant,
+                    size: 26,
+                  ),
                 ),
                 Positioned(
                   right: -2,
                   bottom: -2,
-                  child: CircleAvatar(
-                    radius: 11,
-                    backgroundColor: Theme.of(context).colorScheme.primary,
-                    child: const Icon(Icons.add, color: Colors.white, size: 16),
+                  child: Container(
+                    width: 22,
+                    height: 22,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: scheme.primary,
+                      border: Border.all(
+                        color: Theme.of(context).scaffoldBackgroundColor,
+                        width: 2,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: scheme.primary.withValues(alpha: 0.38),
+                          blurRadius: 8,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(Icons.add, color: Colors.white, size: 14),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 6),
-            const Text(
+            Text(
               'Your story',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 12),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 11,
+                color: scheme.onSurface.withValues(alpha: 0.65),
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ],
         ),
@@ -146,44 +178,95 @@ class _StoryTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final avatar = story.displayAvatar(currentUserId);
     final title = story.displayTitle(currentUserId);
     final unread = !story.viewerHasViewed && story.userId != currentUserId;
-    final ringColor = unread
-        ? Theme.of(context).colorScheme.primary
-        : Theme.of(context).dividerColor;
+
     return SizedBox(
       width: 72,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
+      child: GestureDetector(
         onTap: onTap,
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              padding: const EdgeInsets.all(2),
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: ringColor, width: unread ? 3 : 1),
-              ),
-              child: CircleAvatar(
-                radius: 26,
-                backgroundImage: avatar != null
-                    ? CachedNetworkImageProvider(ApiConfig.resolveMedia(avatar))
-                    : null,
-                backgroundColor: Theme.of(
-                  context,
-                ).colorScheme.surfaceContainerHighest,
-                child: avatar == null
-                    ? Text(title.isNotEmpty ? title[0].toUpperCase() : '?')
-                    : null,
-              ),
+            Stack(
+              alignment: Alignment.center,
+              children: [
+                // Gradient ring for unread; glass hairline for viewed
+                if (unread)
+                  Container(
+                    width: 64,
+                    height: 64,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: SweepGradient(
+                        colors: [
+                          scheme.primary,
+                          scheme.tertiary,
+                          const Color(0xFF00D4FF),
+                          scheme.primary,
+                        ],
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: scheme.primary.withValues(alpha: 0.35),
+                          blurRadius: 12,
+                          spreadRadius: -2,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  Container(
+                    width: 64,
+                    height: 64,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Colors.white.withValues(
+                          alpha: isDark ? 0.14 : 0.30,
+                        ),
+                        width: 1,
+                      ),
+                    ),
+                  ),
+                // Avatar inside a white-bordered circle
+                ClipOval(
+                  child: Container(
+                    width: 56,
+                    height: 56,
+                    color: scheme.surfaceContainerHighest,
+                    child: avatar != null
+                        ? CachedNetworkImage(
+                            imageUrl: ApiConfig.resolveMedia(avatar),
+                            fit: BoxFit.cover,
+                          )
+                        : Center(
+                            child: Text(
+                              title.isNotEmpty ? title[0].toUpperCase() : '?',
+                              style: const TextStyle(fontSize: 20),
+                            ),
+                          ),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 6),
             Text(
               title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: unread ? FontWeight.w600 : FontWeight.w500,
+                color: unread
+                    ? scheme.onSurface.withValues(alpha: 0.90)
+                    : scheme.onSurface.withValues(alpha: 0.55),
+              ),
             ),
           ],
         ),

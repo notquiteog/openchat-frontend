@@ -5,7 +5,6 @@ import '../../config/api_config.dart';
 import '../../models/conversation.dart';
 import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
-import '../../providers/call_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../services/api_service.dart';
 import '../../widgets/glass.dart';
@@ -64,16 +63,11 @@ class _BotChatsScreenState extends State<BotChatsScreen> {
     final botChats = chat.conversations
         .where((c) => c.isBotDM(currentUserID))
         .toList();
-    final callTopInset = context.select<CallProvider, double>(
-      (cp) => cp.minimizedContentTopInset,
-    );
-
     return Scaffold(
       extendBodyBehindAppBar: false,
       appBar: const GlassAppBar(title: Text('Bots')),
       body: Column(
         children: [
-          if (callTopInset > 0) SizedBox(height: callTopInset),
           Padding(
             padding: const EdgeInsets.all(12),
             child: TextField(

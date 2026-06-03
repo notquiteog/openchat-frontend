@@ -5,7 +5,6 @@ import 'package:timeago/timeago.dart' as timeago;
 import '../../models/conversation.dart';
 import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
-import '../../providers/call_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
@@ -40,12 +39,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final chat = context.watch<ChatProvider>();
     final settings = context.watch<SettingsProvider>();
     final currentUserID = auth.currentUser?.id ?? '';
-    final callTopInset = context.select<CallProvider, double>(
-      (cp) => cp.minimizedContentTopInset,
-    );
-
-    // Channels and bot DMs are hidden here only when the user has given them
-    // their own dedicated tab; otherwise everything lives in one Chats list.
     final conversations = chat.conversations.where((c) {
       if (c.isChannel) return !settings.channelsOwnTab;
       if (c.isBotDM(currentUserID)) return !settings.botsOwnTab;
@@ -60,7 +53,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           children: [
             Image.asset(
               'assets/images/logo.png',
-              height: 28,
+              height: 26,
               errorBuilder: (_, _, _) => const SizedBox.shrink(),
             ),
             const SizedBox(width: 8),
@@ -69,7 +62,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.search),
+            icon: const Icon(Icons.search_rounded),
             onPressed: () => _showSearch(context),
           ),
           IconButton(
@@ -88,36 +81,21 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 await chat.loadConversations();
                 if (mounted) setState(() => _storiesRefreshKey += 1);
               },
-              // The list scrolls behind the translucent app bar
-              // (extendBodyBehindAppBar), so drop the spinner below it
-              // instead of letting it appear hidden under the bar.
               displacement:
-                  MediaQuery.paddingOf(context).top +
-                  kToolbarHeight +
-                  callTopInset,
+                  MediaQuery.paddingOf(context).top + kToolbarHeight,
               child: ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 padding: EdgeInsets.only(
-                  top:
-                      MediaQuery.paddingOf(context).top +
-                      kToolbarHeight +
-                      callTopInset,
+                  top: MediaQuery.paddingOf(context).top + kToolbarHeight,
                   bottom: MediaQuery.paddingOf(context).bottom + 8,
                 ),
                 children: [
                   StoriesStrip(key: ValueKey(_storiesRefreshKey)),
-                  const SizedBox(height: 6),
-                  // No hard dividers between rows — the canvas reads as one
-                  // continuous content surface under the floating chrome, with
-                  // the tile's own ink/rounding marking selection on tap.
+                  const SizedBox(height: 4),
                   if (conversations.isEmpty)
                     SizedBox(height: 360, child: _buildEmpty(context))
                   else
-                    for (
-                      var index = 0;
-                      index < conversations.length;
-                      index++
-                    )
+                    for (var index = 0; index < conversations.length; index++)
                       _ConversationTile(
                         conversation: conversations[index],
                         currentUserID: currentUserID,
@@ -129,14 +107,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 ],
               ),
             ),
-      // Lift above the translucent glass nav bar. extendBody propagates the bar
-      // height through MediaQuery.padding, but the FAB slot positions off
-      // viewPadding (unaffected), so pad it up by the same inset.
       floatingActionButton: Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.paddingOf(context).bottom),
-        child: FloatingActionButton(
+        child: _GlassFab(
           onPressed: () => _showNewConversation(context),
-          child: const Icon(Icons.edit_outlined),
+          icon: Icons.edit_outlined,
         ),
       ),
     );
@@ -148,7 +123,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final currentUserId = context.read<AuthProvider>().currentUser?.id;
     final isOwner = conv.createdBy == currentUserId;
     final label = conv.isChannel ? 'channel' : 'group';
-
     final leaveOnly = !conv.isDM && !isOwner;
 
     final String title;
@@ -172,7 +146,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     }
 
     if (leaveOnly) {
-      final action = await showDialog<String>(
+      final chosenAction = await showDialog<String>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: Text('Leave $label?'),
@@ -194,11 +168,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           ],
         ),
       );
-      if (action == null) return;
+      if (chosenAction == null) return;
       try {
         await chat.leaveConversation(
           conv.id,
-          deleteOwnMessages: action == 'leave_delete',
+          deleteOwnMessages: chosenAction == 'leave_delete',
         );
       } catch (_) {
         messenger.showSnackBar(
@@ -252,22 +226,54 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   Widget _buildEmpty(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.chat_bubble_outline, size: 80, color: Colors.grey),
-          const SizedBox(height: 16),
-          const Text(
-            'No conversations yet',
-            style: TextStyle(fontSize: 18, color: Colors.grey),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: GlassCard(
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 36),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 72,
+                height: 72,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: scheme.primary.withValues(alpha: 0.10),
+                ),
+                child: Icon(
+                  Icons.chat_bubble_outline_rounded,
+                  size: 34,
+                  color: scheme.primary.withValues(alpha: 0.65),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'No conversations yet',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Start a conversation to get going',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: scheme.onSurface.withValues(alpha: 0.50),
+                    ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: () => _showSearch(context),
+                icon: const Icon(Icons.search_rounded, size: 18),
+                label: const Text('Find someone'),
+                style: FilledButton.styleFrom(shape: const StadiumBorder()),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
-          TextButton(
-            onPressed: () => _showSearch(context),
-            child: const Text('Start a conversation'),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -304,58 +310,69 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   Future<void> _showNewConversation(BuildContext context) async {
     showModalBottomSheet(
       context: context,
+      backgroundColor: Colors.transparent,
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.person_outline),
-              title: const Text('New Direct Message'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _showSearch(context);
-              },
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          child: LiquidGlass(
+            blur: 32,
+            borderRadius: const BorderRadius.all(Radius.circular(28)),
+            padding: EdgeInsets.zero,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 8),
+                _SheetTile(
+                  icon: Icons.person_outline_rounded,
+                  label: 'New Direct Message',
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _showSearch(context);
+                  },
+                ),
+                _SheetTile(
+                  icon: Icons.bookmark_border_rounded,
+                  label: 'Saved Messages',
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    await _openSavedMessages(context);
+                  },
+                ),
+                _SheetTile(
+                  icon: Icons.group_outlined,
+                  label: 'New Group',
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _showCreateGroup(context);
+                  },
+                ),
+                _SheetTile(
+                  icon: Icons.campaign_outlined,
+                  label: 'New Channel',
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    final channel = await showCreateChannelDialog(context);
+                    if (channel != null && context.mounted) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => ChannelFeedScreen(channel: channel),
+                        ),
+                      );
+                    }
+                  },
+                ),
+                const SizedBox(height: 8),
+              ],
             ),
-            ListTile(
-              leading: const Icon(Icons.bookmark_border_outlined),
-              title: const Text('Saved Messages'),
-              onTap: () async {
-                Navigator.pop(ctx);
-                await _openSavedMessages(context);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.group_outlined),
-              title: const Text('New Group'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _showCreateGroup(context);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.campaign_outlined),
-              title: const Text('New Channel'),
-              onTap: () async {
-                Navigator.pop(ctx);
-                final channel = await showCreateChannelDialog(context);
-                if (channel != null && context.mounted) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ChannelFeedScreen(channel: channel),
-                    ),
-                  );
-                }
-              },
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
 
   Future<void> _showCreateGroup(BuildContext context) async {
-    // Simplified — a full implementation would have a member picker
     final nameCtrl = TextEditingController();
     final result = await showDialog<String>(
       context: context,
@@ -409,6 +426,43 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 }
 
+// ── Glass FAB ──────────────────────────────────────────────────────────────────
+
+class _GlassFab extends StatelessWidget {
+  final VoidCallback onPressed;
+  final IconData icon;
+
+  const _GlassFab({required this.onPressed, required this.icon});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      onTap: onPressed,
+      child: LiquidGlass(
+        blur: 28,
+        borderRadius: const BorderRadius.all(Radius.circular(24)),
+        tint: scheme.primary,
+        boxShadow: [
+          BoxShadow(
+            color: scheme.primary.withValues(alpha: 0.40),
+            blurRadius: 22,
+            spreadRadius: -4,
+            offset: const Offset(0, 10),
+          ),
+        ],
+        child: SizedBox(
+          width: 56,
+          height: 56,
+          child: Icon(icon, color: Colors.white, size: 24),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Conversation Tile ─────────────────────────────────────────────────────────
+
 class _ConversationTile extends StatelessWidget {
   final Conversation conversation;
   final String currentUserID;
@@ -424,82 +478,211 @@ class _ConversationTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final name = conversation.displayName(currentUserID);
     final avatar = conversation.displayAvatar(currentUserID);
     final last = conversation.lastMessage;
     final isBot = conversation.isBotDM(currentUserID);
+    final hasUnread = conversation.unreadCount > 0;
 
-    return ListTile(
-      onTap: onTap,
-      onLongPress: onLongPress,
-      leading: CircleAvatar(
-        backgroundImage: avatar != null
-            ? CachedNetworkImageProvider(ApiConfig.resolveMedia(avatar))
-            : null,
-        child: avatar == null
-            ? Text(name.isNotEmpty ? name[0].toUpperCase() : '?')
-            : null,
-      ),
-      title: Row(
-        children: [
-          if (conversation.isChannel)
-            const Padding(
-              padding: EdgeInsets.only(right: 4),
-              child: Icon(Icons.campaign, size: 16, color: Colors.grey),
-            ),
-          if (isBot)
-            const Padding(
-              padding: EdgeInsets.only(right: 4),
-              child: Icon(Icons.smart_toy, size: 14, color: Colors.grey),
-            ),
-          Flexible(
-            child: Text(
-              name,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-              overflow: TextOverflow.ellipsis,
-            ),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        onLongPress: onLongPress,
+        borderRadius: BorderRadius.circular(18),
+        splashColor: scheme.primary.withValues(alpha: 0.08),
+        highlightColor: scheme.primary.withValues(alpha: 0.04),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            children: [
+              // Avatar with optional unread ring
+              _ConvAvatar(
+                avatarUrl: avatar,
+                name: name,
+                isGroup: conversation.isGroup,
+                isChannel: conversation.isChannel,
+                hasUnread: hasUnread,
+              ),
+              const SizedBox(width: 14),
+              // Content
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        if (conversation.isChannel)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Icon(
+                              Icons.campaign_rounded,
+                              size: 14,
+                              color: scheme.onSurface.withValues(alpha: 0.44),
+                            ),
+                          ),
+                        if (isBot)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Icon(
+                              Icons.smart_toy_outlined,
+                              size: 13,
+                              color: scheme.onSurface.withValues(alpha: 0.44),
+                            ),
+                          ),
+                        Flexible(
+                          child: Text(
+                            name,
+                            style: TextStyle(
+                              fontWeight: hasUnread
+                                  ? FontWeight.w700
+                                  : FontWeight.w600,
+                              fontSize: 15,
+                              letterSpacing: -0.2,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (last != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        last.listPreview,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: hasUnread
+                              ? scheme.onSurface.withValues(alpha: 0.75)
+                              : scheme.onSurface.withValues(alpha: 0.45),
+                          fontSize: 13,
+                          fontWeight:
+                              hasUnread ? FontWeight.w500 : FontWeight.w400,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              // Trailing: time + unread badge
+              const SizedBox(width: 10),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (last != null)
+                    Text(
+                      timeago.format(last.createdAt, locale: 'en_short'),
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: hasUnread
+                            ? scheme.primary
+                            : scheme.onSurface.withValues(alpha: 0.38),
+                        fontWeight: hasUnread ? FontWeight.w600 : FontWeight.w400,
+                      ),
+                    ),
+                  if (hasUnread) ...[
+                    const SizedBox(height: 5),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 7,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: scheme.primary,
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: scheme.primary.withValues(alpha: 0.40),
+                            blurRadius: 8,
+                            offset: const Offset(0, 3),
+                          ),
+                        ],
+                      ),
+                      child: Text(
+                        conversation.unreadCount > 99
+                            ? '99+'
+                            : '${conversation.unreadCount}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.1,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ],
           ),
-        ],
-      ),
-      subtitle: last != null
-          ? Text(
-              last.listPreview,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: Colors.grey[600]),
-            )
-          : null,
-      trailing: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          if (last != null)
-            Text(
-              timeago.format(last.createdAt, locale: 'en_short'),
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-          if (conversation.unreadCount > 0)
-            Container(
-              margin: const EdgeInsets.only(top: 4),
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primary,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                '${conversation.unreadCount}',
-                style: const TextStyle(color: Colors.white, fontSize: 12),
-              ),
-            ),
-        ],
+        ),
       ),
     );
   }
 }
 
-/// Searches users, bots (both via /users/search) and public channels and shows
-/// them in one list. Anything with an "@" — usernames and channel handles —
-/// surfaces here, not just plain users.
+class _ConvAvatar extends StatelessWidget {
+  final String? avatarUrl;
+  final String name;
+  final bool isGroup;
+  final bool isChannel;
+  final bool hasUnread;
+
+  const _ConvAvatar({
+    this.avatarUrl,
+    required this.name,
+    required this.isGroup,
+    required this.isChannel,
+    required this.hasUnread,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    Widget avatar = CircleAvatar(
+      radius: 26,
+      backgroundColor: scheme.surfaceContainerHighest,
+      backgroundImage: avatarUrl != null
+          ? CachedNetworkImageProvider(ApiConfig.resolveMedia(avatarUrl!))
+          : null,
+      child: avatarUrl == null
+          ? (isGroup || isChannel
+              ? Icon(
+                  isChannel ? Icons.campaign_rounded : Icons.group_rounded,
+                  size: 22,
+                  color: scheme.onSurfaceVariant,
+                )
+              : Text(
+                  name.isNotEmpty ? name[0].toUpperCase() : '?',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 17,
+                  ),
+                ))
+          : null,
+    );
+
+    if (hasUnread) {
+      return Container(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: scheme.primary, width: 2),
+        ),
+        child: avatar,
+      );
+    }
+
+    return avatar;
+  }
+}
+
+// ── Search delegate ────────────────────────────────────────────────────────────
+
 class _ChatSearchDelegate extends SearchDelegate<String?> {
   final ApiService api;
   final Future<void> Function(String userID) onUserSelected;
@@ -533,7 +716,6 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
     if (q.length < 2) {
       return const Center(child: Text('Search users, bots and channels'));
     }
-    // A leading "@" is just how people type handles — strip it before querying.
     final term = q.startsWith('@') ? q.substring(1) : q;
     return FutureBuilder<_SearchResults>(
       future: _search(term),
@@ -566,11 +748,7 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
                     if (u.isBot)
                       const Padding(
                         padding: EdgeInsets.only(left: 6),
-                        child: Icon(
-                          Icons.smart_toy,
-                          size: 14,
-                          color: Colors.grey,
-                        ),
+                        child: Icon(Icons.smart_toy, size: 14, color: Colors.grey),
                       ),
                   ],
                 ),
@@ -636,4 +814,49 @@ class _SearchResults {
   final List<User> users;
   final List<Conversation> channels;
   _SearchResults({required this.users, required this.channels});
+}
+
+class _SheetTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _SheetTile({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ClipRRect(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: scheme.primary.withValues(alpha: 0.12),
+                  ),
+                  child: Icon(icon, size: 18, color: scheme.primary),
+                ),
+                const SizedBox(width: 14),
+                Text(label,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 15)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
+import '../../widgets/glass.dart';
 import '../../widgets/secure_storage_warning.dart';
 import '../settings/pgp_keys_screen.dart';
 import 'register_screen.dart';
@@ -38,200 +39,288 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
+    final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          return SizedBox(
-            key: const Key('auth-landing-hero'),
-            width: constraints.maxWidth,
-            height: constraints.maxHeight,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: const Color(0xFFF6FBF8),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    const Color(0xFFF6FBF8),
-                    Theme.of(
-                      context,
-                    ).colorScheme.primary.withValues(alpha: 0.08),
-                  ],
-                ),
-              ),
-              child: SafeArea(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: constraints.maxHeight - 40,
-                    ),
-                    child: Form(
-                      key: _formKey,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: Wrap(
-                              spacing: 8,
-                              children: [
-                                TextButton(
-                                  onPressed: null,
-                                  child: const Text('Sign in'),
-                                ),
-                                FilledButton(
-                                  onPressed: () => Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => const RegisterScreen(),
-                                    ),
-                                  ),
-                                  child: const Text('Sign up'),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 56),
-                          Text(
-                            'OpenChat',
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context).textTheme.displayMedium
-                                ?.copyWith(fontWeight: FontWeight.w800),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Secure. Open. Encrypted.',
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context).textTheme.titleMedium
-                                ?.copyWith(
-                                  color: Colors.grey[700],
-                                  letterSpacing: 1.4,
-                                ),
-                          ),
-                          const SizedBox(height: 48),
-                          TextFormField(
-                            controller: _usernameCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'Username',
-                              prefixIcon: Icon(Icons.alternate_email),
-                              border: OutlineInputBorder(),
-                            ),
-                            autocorrect: false,
-                            textInputAction: TextInputAction.next,
-                            validator: (v) =>
-                                v?.isEmpty == true ? 'Required' : null,
-                          ),
-                          const SizedBox(height: 16),
-                          TextFormField(
-                            controller: _passwordCtrl,
-                            decoration: InputDecoration(
-                              labelText: 'Password',
-                              prefixIcon: const Icon(Icons.lock),
-                              border: const OutlineInputBorder(),
-                              suffixIcon: IconButton(
-                                icon: Icon(
-                                  _obscurePassword
-                                      ? Icons.visibility
-                                      : Icons.visibility_off,
-                                ),
-                                onPressed: () => setState(
-                                  () => _obscurePassword = !_obscurePassword,
+      resizeToAvoidBottomInset: true,
+      body: LiquidMeshBackground(
+        child: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+              child: LiquidGlass(
+                key: const Key('auth-landing-hero'),
+                blur: 36,
+                borderRadius: const BorderRadius.all(Radius.circular(36)),
+                padding: const EdgeInsets.fromLTRB(28, 32, 28, 32),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Sign in / Sign up toggle row
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            TextButton(
+                              onPressed: null,
+                              child: Text(
+                                'Sign in',
+                                style: TextStyle(
+                                  color: scheme.primary,
+                                  fontWeight: FontWeight.w700,
                                 ),
                               ),
                             ),
-                            obscureText: _obscurePassword,
-                            textInputAction: TextInputAction.done,
-                            onFieldSubmitted: (_) => _login(),
-                            validator: (v) =>
-                                v?.isEmpty == true ? 'Required' : null,
-                          ),
-                          if (auth.twoFactorRequired ||
-                              _twoFactorCtrl.text.isNotEmpty) ...[
-                            const SizedBox(height: 16),
-                            TextFormField(
-                              controller: _twoFactorCtrl,
-                              decoration: const InputDecoration(
-                                labelText: '2FA password',
-                                prefixIcon: Icon(Icons.security_outlined),
-                                border: OutlineInputBorder(),
+                            const SizedBox(width: 4),
+                            FilledButton(
+                              onPressed: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const RegisterScreen(),
+                                ),
                               ),
-                              obscureText: true,
-                              textInputAction: TextInputAction.done,
-                              onChanged: (_) => setState(() {}),
-                              onFieldSubmitted: (_) => _login(),
+                              child: const Text('Sign up'),
                             ),
                           ],
-                          const SizedBox(height: 28),
-                          if (auth.storageWarning != null)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 16),
-                              child: SecureStorageWarning(
-                                message: auth.storageWarning!,
+                        ),
+                        const SizedBox(height: 32),
+                        // Logo + wordmark
+                        Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 72,
+                                height: 72,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  gradient: RadialGradient(
+                                    colors: [
+                                      scheme.primary,
+                                      scheme.tertiary,
+                                    ],
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: scheme.primary.withValues(alpha: 0.42),
+                                      blurRadius: 24,
+                                      spreadRadius: -4,
+                                      offset: const Offset(0, 10),
+                                    ),
+                                  ],
+                                ),
+                                child: const Icon(
+                                  Icons.lock_outline_rounded,
+                                  color: Colors.white,
+                                  size: 34,
+                                ),
                               ),
-                            ),
-                          if (auth.error != null &&
-                              auth.error != auth.storageWarning)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 16),
-                              child: Text(
-                                auth.error!,
-                                style: const TextStyle(color: Colors.red),
+                              const SizedBox(height: 16),
+                              Text(
+                                'OpenChat',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .headlineMedium
+                                    ?.copyWith(fontWeight: FontWeight.w800),
                                 textAlign: TextAlign.center,
                               ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Secure · Open · Encrypted',
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.copyWith(
+                                      color: scheme.onSurface
+                                          .withValues(alpha: 0.55),
+                                      letterSpacing: 0.8,
+                                    ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 36),
+                        // Username
+                        TextFormField(
+                          controller: _usernameCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Username',
+                            prefixIcon: Icon(Icons.alternate_email_rounded),
+                          ),
+                          autocorrect: false,
+                          textInputAction: TextInputAction.next,
+                          validator: (v) =>
+                              v?.isEmpty == true ? 'Required' : null,
+                        ),
+                        const SizedBox(height: 14),
+                        // Password
+                        TextFormField(
+                          controller: _passwordCtrl,
+                          decoration: InputDecoration(
+                            labelText: 'Password',
+                            prefixIcon: const Icon(Icons.lock_outline_rounded),
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                _obscurePassword
+                                    ? Icons.visibility_outlined
+                                    : Icons.visibility_off_outlined,
+                              ),
+                              onPressed: () => setState(
+                                () => _obscurePassword = !_obscurePassword,
+                              ),
                             ),
-                          FilledButton(
+                          ),
+                          obscureText: _obscurePassword,
+                          textInputAction: TextInputAction.done,
+                          onFieldSubmitted: (_) => _login(),
+                          validator: (v) =>
+                              v?.isEmpty == true ? 'Required' : null,
+                        ),
+                        // 2FA (conditional)
+                        if (auth.twoFactorRequired ||
+                            _twoFactorCtrl.text.isNotEmpty) ...[
+                          const SizedBox(height: 14),
+                          TextFormField(
+                            controller: _twoFactorCtrl,
+                            decoration: const InputDecoration(
+                              labelText: '2FA password',
+                              prefixIcon:
+                                  Icon(Icons.security_outlined),
+                            ),
+                            obscureText: true,
+                            textInputAction: TextInputAction.done,
+                            onChanged: (_) => setState(() {}),
+                            onFieldSubmitted: (_) => _login(),
+                          ),
+                        ],
+                        const SizedBox(height: 24),
+                        // Warnings
+                        if (auth.storageWarning != null)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 14),
+                            child: SecureStorageWarning(
+                              message: auth.storageWarning!,
+                            ),
+                          ),
+                        if (auth.error != null &&
+                            auth.error != auth.storageWarning)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 14),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: scheme.error.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: scheme.error.withValues(alpha: 0.28),
+                                  width: 0.7,
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.error_outline_rounded,
+                                    color: scheme.error,
+                                    size: 18,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      auth.error!,
+                                      style: TextStyle(
+                                        color: scheme.error,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        // Sign in button
+                        SizedBox(
+                          height: 52,
+                          child: FilledButton(
                             onPressed: auth.isLoading ? null : _login,
+                            style: FilledButton.styleFrom(
+                              shape: const StadiumBorder(),
+                              textStyle: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
                             child: auth.isLoading
-                                ? const SizedBox(
+                                ? SizedBox(
                                     height: 20,
                                     width: 20,
                                     child: CircularProgressIndicator(
                                       strokeWidth: 2,
-                                      color: Colors.white,
+                                      color: scheme.onPrimary,
                                     ),
                                   )
                                 : const Text('Sign in'),
                           ),
-                          const SizedBox(height: 12),
-                          FilledButton.tonal(
+                        ),
+                        const SizedBox(height: 10),
+                        // Create account button
+                        SizedBox(
+                          height: 52,
+                          child: FilledButton.tonal(
                             onPressed: () => Navigator.push(
                               context,
                               MaterialPageRoute(
                                 builder: (_) => const RegisterScreen(),
                               ),
                             ),
+                            style: FilledButton.styleFrom(
+                              shape: const StadiumBorder(),
+                            ),
                             child: const Text('Create your account'),
                           ),
-                          const SizedBox(height: 24),
-                          const Divider(),
-                          TextButton.icon(
-                            icon: const Icon(Icons.vpn_key_outlined),
-                            label: const Text('Import existing PGP key'),
-                            onPressed: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const PgpKeysScreen(),
-                              ),
+                        ),
+                        const SizedBox(height: 20),
+                        Divider(
+                          color: Colors.white.withValues(alpha: 0.12),
+                          height: 1,
+                        ),
+                        const SizedBox(height: 12),
+                        TextButton.icon(
+                          icon: const Icon(Icons.vpn_key_outlined, size: 17),
+                          label: const Text('Import existing PGP key'),
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const PgpKeysScreen(),
                             ),
                           ),
-                          Text(
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
                             'Sign-in requires your private key to be on this device.',
                             textAlign: TextAlign.center,
-                            style: Theme.of(
-                              context,
-                            ).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: scheme.onSurface.withValues(alpha: 0.40),
+                                ),
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
               ),
             ),
-          );
-        },
+          ),
+        ),
       ),
     );
   }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -11,14 +12,14 @@ import '../../widgets/glass.dart';
 
 const _callEndColor = Color(0xFFFF453A);
 const _callAnswerColor = Color(0xFF30D158);
-const _callDismissColor = Color(0xFFE5E5EA);
+const _callDismissColor = Color(0xFF8E8E93);
 
 @visibleForTesting
 bool shouldUseCallVideoRenderersForTesting(CallSession? session) {
   return session != null;
 }
 
-/// Full-screen audio/video call UI.
+/// Full-screen audio/video call UI in iOS 26 Liquid Glass style.
 class CallScreen extends StatefulWidget {
   const CallScreen({super.key});
 
@@ -103,24 +104,17 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   void _toggleMic() {
-    final callProvider = context.read<CallProvider>();
-    callProvider.setMicMuted(!callProvider.isMicMuted);
+    final cp = context.read<CallProvider>();
+    cp.setMicMuted(!cp.isMicMuted);
   }
 
   void _toggleCamera() {
-    final callProvider = context.read<CallProvider>();
-    callProvider.setCameraEnabled(!callProvider.isCameraEnabled);
+    final cp = context.read<CallProvider>();
+    cp.setCameraEnabled(!cp.isCameraEnabled);
   }
 
-  void _hangup() {
-    // The root CallOverlay shows/hides this screen off the session state, so we
-    // just end the call — no Navigator.pop (this isn't a pushed route anymore).
-    context.read<CallProvider>().hangup();
-  }
-
-  void _minimize() {
-    context.read<CallProvider>().setCallMinimized(true);
-  }
+  void _hangup() => context.read<CallProvider>().hangup();
+  void _minimize() => context.read<CallProvider>().setCallMinimized(true);
 
   Future<void> _pickAudioOutput() async {
     final cp = context.read<CallProvider>();
@@ -135,29 +129,39 @@ class _CallScreenState extends State<CallScreen> {
     }
     final selected = await showModalBottomSheet<String>(
       context: context,
-      builder: (context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 12),
-              const Text(
-                'Audio output',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 8),
-              for (final output in outputs)
-                ListTile(
-                  title: Text(output.label),
-                  trailing: cp.selectedAudioOutputId == output.deviceId
-                      ? const Icon(Icons.check)
-                      : null,
-                  onTap: () => Navigator.of(context).pop(output.deviceId),
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          child: LiquidGlass(
+            blur: 32,
+            borderRadius: const BorderRadius.all(Radius.circular(28)),
+            padding: const EdgeInsets.fromLTRB(0, 20, 0, 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Audio Output',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                  ),
                 ),
-            ],
+                const SizedBox(height: 12),
+                for (final output in outputs)
+                  _AudioOutputTile(
+                    label: output.label,
+                    selected: cp.selectedAudioOutputId == output.deviceId,
+                    onTap: () => Navigator.of(ctx).pop(output.deviceId),
+                  ),
+                const SizedBox(height: 4),
+              ],
+            ),
           ),
-        );
-      },
+        ),
+      ),
     );
     if (selected != null) {
       await cp.selectAudioOutput(selected);
@@ -166,50 +170,47 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final callProvider = context.watch<CallProvider>();
-    final session = callProvider.session;
-    if (session == null) {
-      return const SizedBox.shrink();
-    }
+    final cp = context.watch<CallProvider>();
+    final session = cp.session;
+    if (session == null) return const SizedBox.shrink();
 
     final isVideo = session.isVideo;
     final useVideoRenderers = _shouldUseVideoRenderers(session);
 
-    // Keep renderers in sync whenever streams change (guard: must be initialized first)
     if (_renderersReady && useVideoRenderers) {
-      if (callProvider.localStream != null) {
-        _localRenderer.srcObject = callProvider.localStream;
-      }
-      if (callProvider.remoteStream != null) {
-        _remoteRenderer.srcObject = callProvider.remoteStream;
-      }
+      if (cp.localStream != null) _localRenderer.srcObject = cp.localStream;
+      if (cp.remoteStream != null) _remoteRenderer.srcObject = cp.remoteStream;
     }
 
-    final statusText = callProvider.callStatusText;
-    final micMuted = callProvider.isMicMuted;
-    final cameraOff = !callProvider.isCameraEnabled;
+    final statusText = cp.callStatusText;
+    final micMuted = cp.isMicMuted;
+    final cameraOff = !cp.isCameraEnabled;
+    final avatarUrl = session.remoteAvatarUrl;
+    final username = session.remoteUsername ?? 'Unknown';
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // Audio-only calls still attach the remote stream to a renderer so
-          // platforms that route audio through RTCVideoRenderer will play it.
-          if (!isVideo && useVideoRenderers && _renderersReady)
-            Positioned(
-              left: 0,
-              top: 0,
-              width: 1,
-              height: 1,
-              child: IgnorePointer(
-                child: Opacity(
-                  opacity: 0,
-                  child: RTCVideoView(_remoteRenderer),
-                ),
+          // ── Background ─────────────────────────────────────────────────────
+          if (!isVideo || !_renderersReady || !useVideoRenderers)
+            Positioned.fill(
+              child: _CallBackground(
+                avatarUrl: avatarUrl,
+                username: username,
               ),
             ),
 
-          // Remote video (full screen) or avatar for audio call
+          // Hidden audio renderer
+          if (!isVideo && useVideoRenderers && _renderersReady)
+            Positioned(
+              left: 0, top: 0, width: 1, height: 1,
+              child: IgnorePointer(
+                child: Opacity(opacity: 0, child: RTCVideoView(_remoteRenderer)),
+              ),
+            ),
+
+          // Remote video
           if (isVideo && useVideoRenderers && _renderersReady)
             Positioned.fill(
               child: IgnorePointer(
@@ -218,39 +219,17 @@ class _CallScreenState extends State<CallScreen> {
                   objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                 ),
               ),
-            )
-          else
-            Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircleAvatar(
-                    radius: 60,
-                    backgroundColor: Colors.grey[800],
-                    child: Text(
-                      session.remoteUsername?.substring(0, 1).toUpperCase() ??
-                          '?',
-                      style: const TextStyle(fontSize: 48, color: Colors.white),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    session.remoteUsername ?? 'Unknown',
-                    style: const TextStyle(color: Colors.white, fontSize: 24),
-                  ),
-                ],
-              ),
             ),
 
-          // Local video (picture-in-picture)
+          // Local PiP
           if (isVideo && useVideoRenderers && _renderersReady)
             Positioned(
-              top: 60,
+              top: 72,
               right: 16,
-              width: 100,
-              height: 140,
+              width: 104,
+              height: 148,
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(16),
                 child: IgnorePointer(
                   child: RTCVideoView(
                     _localRenderer,
@@ -261,94 +240,116 @@ class _CallScreenState extends State<CallScreen> {
               ),
             ),
 
-          // Status banner
+          // ── Top bar ────────────────────────────────────────────────────────
           Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
+            top: 0, left: 0, right: 0,
             child: SafeArea(
-              child: SizedBox(
-                height: 56,
-                child: Stack(
-                  alignment: Alignment.center,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
                   children: [
-                    Text(
-                      statusText,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 16,
+                    _CallIconButton(
+                      key: const Key('minimize-call-button'),
+                      tooltip: 'Minimize call',
+                      icon: Icons.keyboard_arrow_down_rounded,
+                      onTap: _minimize,
+                    ),
+                    const Spacer(),
+                    // Status chip
+                    LiquidGlass.capsule(
+                      blur: 20,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 7,
+                      ),
+                      child: Text(
+                        statusText,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
-                    Positioned(
-                      left: 8,
-                      child: _CallIconButton(
-                        buttonKey: const Key('minimize-call-button'),
-                        tooltip: 'Minimize call',
-                        icon: Icons.expand_more,
-                        iconColor: Colors.white70,
-                        onTap: _minimize,
-                      ),
-                    ),
+                    const Spacer(),
+                    const SizedBox(width: 44), // balance the minimize button
                   ],
                 ),
               ),
             ),
           ),
 
-          // Controls bar
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: SafeArea(
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 24),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.bottomCenter,
-                    end: Alignment.topCenter,
-                    colors: [Colors.black87, Colors.transparent],
+          // ── Audio-only: name + status centered ─────────────────────────────
+          if (!isVideo || !_renderersReady || !useVideoRenderers)
+            Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 60),
+                  // Avatar with glass ring
+                  _GlowAvatar(avatarUrl: avatarUrl, username: username),
+                  const SizedBox(height: 22),
+                  Text(
+                    username,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 28,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.4,
+                    ),
                   ),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    // Mic toggle
-                    _ControlButton(
-                      buttonKey: const Key('call-control-mute'),
-                      icon: micMuted ? Icons.mic_off : Icons.mic,
-                      label: micMuted ? 'Unmute' : 'Mute',
-                      active: micMuted,
-                      onTap: _toggleMic,
-                    ),
+                ],
+              ),
+            ),
 
-                    _ControlButton(
-                      buttonKey: const Key('call-control-audio-output'),
-                      icon: Icons.volume_up,
-                      label: 'Audio',
-                      onTap: _pickAudioOutput,
-                    ),
-
-                    // Camera toggle (video calls only)
-                    if (isVideo)
+          // ── Controls bar ───────────────────────────────────────────────────
+          Positioned(
+            bottom: 0, left: 0, right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                child: LiquidGlass(
+                  blur: 30,
+                  borderRadius: const BorderRadius.all(Radius.circular(36)),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 20,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
                       _ControlButton(
-                        buttonKey: const Key('call-control-camera'),
-                        icon: cameraOff ? Icons.videocam_off : Icons.videocam,
-                        label: cameraOff ? 'Camera on' : 'Camera off',
-                        active: cameraOff,
-                        onTap: _toggleCamera,
+                        key: const Key('call-control-mute'),
+                        icon: micMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
+                        label: micMuted ? 'Unmute' : 'Mute',
+                        active: micMuted,
+                        onTap: _toggleMic,
                       ),
-
-                    // Hang up
-                    _ControlButton(
-                      buttonKey: const Key('call-control-end'),
-                      icon: Icons.call_end,
-                      label: 'End',
-                      onTap: _hangup,
-                      color: _callEndColor,
-                    ),
-                  ],
+                      _ControlButton(
+                        key: const Key('call-control-audio-output'),
+                        icon: Icons.volume_up_rounded,
+                        label: 'Audio',
+                        onTap: _pickAudioOutput,
+                      ),
+                      if (isVideo)
+                        _ControlButton(
+                          key: const Key('call-control-camera'),
+                          icon: cameraOff
+                              ? Icons.videocam_off_rounded
+                              : Icons.videocam_rounded,
+                          label: cameraOff ? 'Camera on' : 'Camera off',
+                          active: cameraOff,
+                          onTap: _toggleCamera,
+                        ),
+                      _ControlButton(
+                        key: const Key('call-control-end'),
+                        icon: Icons.call_end_rounded,
+                        label: 'End',
+                        onTap: _hangup,
+                        color: _callEndColor,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -359,95 +360,147 @@ class _CallScreenState extends State<CallScreen> {
   }
 }
 
-class _CallIconButton extends StatelessWidget {
-  final Key? buttonKey;
-  final String tooltip;
-  final IconData icon;
-  final Color iconColor;
-  final VoidCallback onTap;
+// ── Background ────────────────────────────────────────────────────────────────
 
-  const _CallIconButton({
-    this.buttonKey,
-    required this.tooltip,
-    required this.icon,
-    required this.iconColor,
-    required this.onTap,
-  });
+class _CallBackground extends StatelessWidget {
+  final String? avatarUrl;
+  final String username;
+
+  const _CallBackground({this.avatarUrl, required this.username});
 
   @override
   Widget build(BuildContext context) {
-    return _GlassCircleButton(
-      buttonKey: buttonKey,
-      tooltip: tooltip,
-      icon: icon,
-      iconColor: iconColor,
-      onTap: onTap,
-      size: 44,
-      iconSize: 24,
-      blur: 24,
-      tint: Colors.white,
-      boxShadow: const [
-        BoxShadow(
-          color: Color(0x33000000),
-          blurRadius: 14,
-          offset: Offset(0, 6),
+    return Stack(
+      children: [
+        // Deep gradient base
+        const Positioned.fill(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment(0, -0.3),
+                radius: 1.4,
+                colors: [Color(0xFF1A2340), Color(0xFF070D1A), Color(0xFF000000)],
+              ),
+            ),
+          ),
+        ),
+        // Avatar blurred behind everything (gives a "bokeh" call background)
+        if (avatarUrl != null)
+          Positioned.fill(
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 60, sigmaY: 60),
+              child: Opacity(
+                opacity: 0.22,
+                child: CachedNetworkImage(
+                  imageUrl: ApiConfig.resolveMedia(avatarUrl!),
+                  fit: BoxFit.cover,
+                ),
+              ),
+            ),
+          ),
+        // Radial glow accent
+        Positioned(
+          top: -100,
+          left: -100,
+          right: -100,
+          height: 500,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment.topCenter,
+                radius: 1.0,
+                colors: [
+                  const Color(0xFF3D5AFE).withValues(alpha: 0.18),
+                  Colors.transparent,
+                ],
+              ),
+            ),
+          ),
         ),
       ],
     );
   }
 }
 
-class _GlassCircleButton extends StatelessWidget {
+// ── Glow avatar ───────────────────────────────────────────────────────────────
+
+class _GlowAvatar extends StatelessWidget {
+  final String? avatarUrl;
+  final String username;
+
+  const _GlowAvatar({this.avatarUrl, required this.username});
+
+  @override
+  Widget build(BuildContext context) {
+    final initial =
+        username.isNotEmpty ? username.substring(0, 1).toUpperCase() : '?';
+    return Container(
+      width: 120,
+      height: 120,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF3D5AFE).withValues(alpha: 0.40),
+            blurRadius: 48,
+            spreadRadius: -4,
+          ),
+        ],
+      ),
+      child: ClipOval(
+        child: avatarUrl != null
+            ? CachedNetworkImage(
+                imageUrl: ApiConfig.resolveMedia(avatarUrl!),
+                fit: BoxFit.cover,
+              )
+            : Container(
+                color: const Color(0xFF1A2340),
+                child: Center(
+                  child: Text(
+                    initial,
+                    style: const TextStyle(
+                      fontSize: 48,
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+      ),
+    );
+  }
+}
+
+// ── Icon button ───────────────────────────────────────────────────────────────
+
+class _CallIconButton extends StatelessWidget {
   final Key? buttonKey;
   final String tooltip;
   final IconData icon;
-  final Color iconColor;
   final VoidCallback onTap;
-  final double size;
-  final double iconSize;
-  final double blur;
-  final Color tint;
-  final List<BoxShadow>? boxShadow;
 
-  const _GlassCircleButton({
+  const _CallIconButton({
+    super.key,
+    this.buttonKey,
     required this.tooltip,
     required this.icon,
-    required this.iconColor,
     required this.onTap,
-    required this.size,
-    required this.iconSize,
-    required this.tint,
-    this.buttonKey,
-    this.blur = 26,
-    this.boxShadow,
   });
 
   @override
   Widget build(BuildContext context) {
     return Tooltip(
       message: tooltip,
-      child: Semantics(
-        button: true,
-        label: tooltip,
-        child: GestureDetector(
-          key: buttonKey,
-          behavior: HitTestBehavior.opaque,
-          onTap: onTap,
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: SizedBox(
-              width: size,
-              height: size,
-              child: LiquidGlass(
-                blur: blur,
-                borderRadius: BorderRadius.circular(size / 2),
-                tint: tint,
-                boxShadow: boxShadow,
-                child: Center(
-                  child: Icon(icon, color: iconColor, size: iconSize),
-                ),
-              ),
-            ),
+      child: GestureDetector(
+        key: buttonKey,
+        onTap: onTap,
+        child: LiquidGlass(
+          blur: 22,
+          borderRadius: BorderRadius.circular(22),
+          child: SizedBox(
+            width: 44,
+            height: 44,
+            child: Icon(icon, color: Colors.white70, size: 22),
           ),
         ),
       ),
@@ -455,67 +508,77 @@ class _GlassCircleButton extends StatelessWidget {
   }
 }
 
+// ── Control button ────────────────────────────────────────────────────────────
+
 class _ControlButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
-
-  /// When set, renders a solid semantic circle (e.g. red for End) instead of
-  /// glass so vivid, irreversible actions stay unmistakable.
   final Color? color;
-
-  /// Toggled-on state (muted, camera off). The glass inverts to a bright solid
-  /// fill with a dark glyph so the active state reads at a glance.
   final bool active;
-  final Key? buttonKey;
 
   const _ControlButton({
+    super.key,
     required this.icon,
     required this.label,
     required this.onTap,
     this.color,
     this.active = false,
-    this.buttonKey,
   });
 
   @override
   Widget build(BuildContext context) {
-    const double size = 60;
-    final tint = active ? Colors.white : color ?? Colors.white;
-    final iconColor = active ? Colors.black87 : Colors.white;
-    final shadowColor =
-        color?.withValues(alpha: 0.42) ?? const Color(0x38000000);
+    final tint = active ? Colors.white : (color ?? Colors.white);
+    final iconColor = active
+        ? Colors.black87
+        : color != null
+            ? Colors.white
+            : Colors.white;
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _GlassCircleButton(
-          buttonKey: buttonKey,
-          tooltip: label,
-          icon: icon,
-          iconColor: iconColor,
-          onTap: onTap,
-          size: size,
-          iconSize: 26,
-          tint: tint,
-          boxShadow: [
-            BoxShadow(
-              color: shadowColor,
-              blurRadius: color == null ? 18 : 22,
-              spreadRadius: color == null ? 0 : -2,
-              offset: const Offset(0, 8),
+    return Tooltip(
+      message: label,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            LiquidGlass(
+              blur: 26,
+              borderRadius: BorderRadius.circular(30),
+              tint: tint,
+              boxShadow: [
+                BoxShadow(
+                  color: (color ?? Colors.white).withValues(
+                    alpha: color != null ? 0.42 : 0.10,
+                  ),
+                  blurRadius: color != null ? 22 : 12,
+                  spreadRadius: -4,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+              child: SizedBox(
+                width: 60,
+                height: 60,
+                child: Icon(icon, color: iconColor, size: 26),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ],
         ),
-        const SizedBox(height: 8),
-        Text(
-          label,
-          style: const TextStyle(color: Colors.white70, fontSize: 12),
-        ),
-      ],
+      ),
     );
   }
 }
+
+// ── Call overlay ──────────────────────────────────────────────────────────────
 
 /// Mounted once at the app root (via MaterialApp.builder) so calls surface over
 /// any screen. Shows the glassy incoming-call modal while a call is ringing and
@@ -541,6 +604,8 @@ class CallOverlay extends StatelessWidget {
   }
 }
 
+// ── Minimized overlay ─────────────────────────────────────────────────────────
+
 class _MinimizedCallOverlay extends StatelessWidget {
   const _MinimizedCallOverlay();
 
@@ -551,28 +616,30 @@ class _MinimizedCallOverlay extends StatelessWidget {
     if (session == null) return const SizedBox.shrink();
     final name = session.remoteUsername ?? 'Unknown';
     final scheme = Theme.of(context).colorScheme;
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.only(
-          left: 12,
-          top: kToolbarHeight,
-          right: 12,
-        ),
-        child: Align(
-          alignment: Alignment.topCenter,
+
+    // The bar anchors inside the AppBar zone — top of SafeArea, not below the
+    // toolbar. Body content (messages, lists) starts below the AppBar and is
+    // therefore never covered by the bar regardless of which screen is open.
+    return Align(
+      alignment: Alignment.topCenter,
+      child: SafeArea(
+        bottom: false,
+        left: false,
+        right: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
           child: GestureDetector(
             key: const Key('minimized-call-overlay'),
-            behavior: HitTestBehavior.opaque,
             onTap: () => cp.setCallMinimized(false),
             child: LiquidGlass.capsule(
-              blur: 28,
+              blur: 30,
               tint: scheme.surface,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.18),
-                  blurRadius: 22,
+                  color: Colors.black.withValues(alpha: 0.28),
+                  blurRadius: 24,
                   spreadRadius: -4,
-                  offset: const Offset(0, 10),
+                  offset: const Offset(0, 8),
                 ),
               ],
               child: SizedBox(
@@ -580,49 +647,87 @@ class _MinimizedCallOverlay extends StatelessWidget {
                 width: double.infinity,
                 child: Row(
                   children: [
-                    const SizedBox(width: 8),
-                    _GlassCircleButton(
-                      buttonKey: const Key('expand-call-button'),
-                      tooltip: 'Expand call',
-                      icon: Icons.open_in_full,
-                      iconColor: scheme.onSurface,
-                      onTap: () => cp.setCallMinimized(false),
-                      size: 40,
-                      iconSize: 20,
-                      blur: 22,
-                      tint: Colors.white,
-                      boxShadow: const [],
+                    const SizedBox(width: 12),
+                    // Green pulse dot — shows call is live
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: _callAnswerColor,
+                        shape: BoxShape.circle,
+                      ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
-                      child: Text(
-                        '$name · ${cp.callStatusText}',
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: scheme.onSurface,
-                          fontWeight: FontWeight.w600,
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            name,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: scheme.onSurface,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                            ),
+                          ),
+                          Text(
+                            cp.callStatusText,
+                            style: TextStyle(
+                              color: scheme.onSurface.withValues(alpha: 0.55),
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Expand button
+                    GestureDetector(
+                      key: const Key('expand-call-button'),
+                      onTap: () => cp.setCallMinimized(false),
+                      child: LiquidGlass(
+                        blur: 20,
+                        borderRadius: BorderRadius.circular(18),
+                        child: const SizedBox(
+                          width: 32,
+                          height: 32,
+                          child: Icon(
+                            Icons.open_in_full_rounded,
+                            color: Colors.white70,
+                            size: 15,
+                          ),
                         ),
                       ),
                     ),
-                    _GlassCircleButton(
-                      tooltip: 'End call',
-                      icon: Icons.call_end,
-                      iconColor: Colors.white,
+                    const SizedBox(width: 6),
+                    // End call button
+                    GestureDetector(
                       onTap: cp.hangup,
-                      size: 40,
-                      iconSize: 21,
-                      blur: 22,
-                      tint: _callEndColor,
-                      boxShadow: [
-                        BoxShadow(
-                          color: _callEndColor.withValues(alpha: 0.34),
-                          blurRadius: 16,
-                          spreadRadius: -3,
-                          offset: const Offset(0, 7),
+                      child: LiquidGlass(
+                        blur: 20,
+                        borderRadius: BorderRadius.circular(18),
+                        tint: _callEndColor,
+                        boxShadow: [
+                          BoxShadow(
+                            color: _callEndColor.withValues(alpha: 0.40),
+                            blurRadius: 12,
+                            spreadRadius: -3,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                        child: const SizedBox(
+                          width: 32,
+                          height: 32,
+                          child: Icon(
+                            Icons.call_end_rounded,
+                            color: Colors.white,
+                            size: 16,
+                          ),
                         ),
-                      ],
+                      ),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 10),
                   ],
                 ),
               ),
@@ -633,6 +738,8 @@ class _MinimizedCallOverlay extends StatelessWidget {
     );
   }
 }
+
+// ── Incoming call modal ───────────────────────────────────────────────────────
 
 /// Full-screen, frosted-glass incoming-call prompt with the caller's avatar
 /// centered and Answer / Decline / Dismiss actions.
@@ -648,9 +755,7 @@ class IncomingCallModal extends StatelessWidget {
     final name = incoming.remoteUsername != null
         ? '@${incoming.remoteUsername}'
         : 'Unknown caller';
-    final kind = incoming.isVideo
-        ? 'Incoming video call'
-        : 'Incoming voice call';
+    final kind = incoming.isVideo ? 'Incoming video call' : 'Incoming voice call';
     final avatarUrl = incoming.remoteAvatarUrl;
     final initial = (incoming.remoteUsername?.isNotEmpty ?? false)
         ? incoming.remoteUsername!.substring(0, 1).toUpperCase()
@@ -658,67 +763,140 @@ class IncomingCallModal extends StatelessWidget {
 
     return Material(
       type: MaterialType.transparency,
-      child: GlassSurface(
-        blur: 30,
-        child: SafeArea(
+      child: Stack(
+        children: [
+          // Blurred + tinted background
+          Positioned.fill(
+            child: _CallBackground(
+              avatarUrl: avatarUrl,
+              username: incoming.remoteUsername ?? '',
+            ),
+          ),
+          // Glass overlay
+          Positioned.fill(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+              child: Container(color: Colors.black.withValues(alpha: 0.20)),
+            ),
+          ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 40),
+              child: Column(
+                children: [
+                  const Spacer(),
+                  _GlowAvatar(
+                    avatarUrl: avatarUrl,
+                    username: incoming.remoteUsername ?? '',
+                  ),
+                  const SizedBox(height: 22),
+                  Text(
+                    name,
+                    style: const TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                      letterSpacing: -0.3,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  LiquidGlass.capsule(
+                    blur: 20,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          incoming.isVideo ? Icons.videocam_rounded : Icons.call_rounded,
+                          color: Colors.white70,
+                          size: 14,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          kind,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Spacer(),
+                  // Action buttons
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _CallAction(
+                        icon: Icons.call_end_rounded,
+                        label: 'Decline',
+                        color: _callEndColor,
+                        onTap: cp.rejectIncomingCall,
+                      ),
+                      _CallAction(
+                        icon: Icons.close_rounded,
+                        label: 'Dismiss',
+                        color: _callDismissColor,
+                        onTap: cp.dismissIncomingCall,
+                      ),
+                      _CallAction(
+                        icon: incoming.isVideo
+                            ? Icons.videocam_rounded
+                            : Icons.call_rounded,
+                        label: 'Answer',
+                        color: _callAnswerColor,
+                        onTap: cp.acceptIncomingCall,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AudioOutputTile extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _AudioOutputTile({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 40),
-            child: Column(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            child: Row(
               children: [
-                const Spacer(),
-                CircleAvatar(
-                  radius: 64,
-                  backgroundImage: avatarUrl != null
-                      ? CachedNetworkImageProvider(
-                          ApiConfig.resolveMedia(avatarUrl),
-                        )
-                      : null,
-                  child: avatarUrl == null
-                      ? Text(initial, style: const TextStyle(fontSize: 48))
-                      : null,
-                ),
-                const SizedBox(height: 20),
-                Text(
-                  name,
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w600,
+                Expanded(
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w500,
+                      fontSize: 15,
+                    ),
                   ),
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  kind,
-                  style: TextStyle(
-                    fontSize: 15,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const Spacer(),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    _CallAction(
-                      icon: Icons.call_end,
-                      label: 'Decline',
-                      color: _callEndColor,
-                      onTap: cp.rejectIncomingCall,
-                    ),
-                    _CallAction(
-                      icon: Icons.close,
-                      label: 'Dismiss',
-                      color: _callDismissColor,
-                      iconColor: Colors.black87,
-                      onTap: cp.dismissIncomingCall,
-                    ),
-                    _CallAction(
-                      icon: incoming.isVideo ? Icons.videocam : Icons.call,
-                      label: 'Answer',
-                      color: _callAnswerColor,
-                      onTap: cp.acceptIncomingCall,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
+                if (selected)
+                  const Icon(Icons.check_rounded, color: _callAnswerColor, size: 20),
               ],
             ),
           ),
@@ -745,30 +923,40 @@ class _CallAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _GlassCircleButton(
-          tooltip: label,
-          icon: icon,
-          iconColor: iconColor,
-          onTap: onTap,
-          size: 66,
-          iconSize: 30,
-          blur: 28,
-          tint: color,
-          boxShadow: [
-            BoxShadow(
-              color: color.withValues(alpha: 0.36),
-              blurRadius: 22,
-              spreadRadius: -3,
-              offset: const Offset(0, 10),
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          LiquidGlass(
+            blur: 28,
+            borderRadius: BorderRadius.circular(38),
+            tint: color,
+            boxShadow: [
+              BoxShadow(
+                color: color.withValues(alpha: 0.44),
+                blurRadius: 26,
+                spreadRadius: -4,
+                offset: const Offset(0, 12),
+              ),
+            ],
+            child: SizedBox(
+              width: 72,
+              height: 72,
+              child: Icon(icon, color: iconColor, size: 30),
             ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Text(label, style: const TextStyle(fontSize: 13)),
-      ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

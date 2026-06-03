@@ -3,6 +3,9 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
     <!-- Android 13+ runtime notification permission -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- Background WebSocket notifications run as a foreground service. -->
@@ -54,7 +57,7 @@
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:exported="false"
-            android:foregroundServiceType="remoteMessaging"
+            android:foregroundServiceType="location|remoteMessaging"
             android:stopWithTask="false"
             tools:replace="android:exported" />
         <service

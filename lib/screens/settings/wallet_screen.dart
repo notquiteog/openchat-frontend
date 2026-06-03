@@ -291,72 +291,197 @@ class _WalletScreenState extends State<WalletScreen> {
           : RefreshIndicator(
               onRefresh: _load,
               child: ListView(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
                 children: [
-                  for (final provider in _providers)
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              provider.toUpperCase(),
-                              style: theme.textTheme.labelLarge,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              _formatCrypto(_balanceFor(provider), provider),
-                              style: theme.textTheme.headlineSmall,
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                OutlinedButton.icon(
-                                  onPressed: () => _createDeposit(provider),
-                                  icon: const Icon(Icons.arrow_downward),
-                                  label: const Text('Deposit'),
+                  for (final provider in _providers) ...[
+                    GlassCard(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                width: 36,
+                                height: 36,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: theme.colorScheme.primary
+                                      .withValues(alpha: 0.12),
                                 ),
-                                const SizedBox(width: 8),
-                                FilledButton.icon(
-                                  onPressed: _balanceFor(provider) > 0
-                                      ? () => _withdraw(provider)
-                                      : null,
-                                  icon: const Icon(Icons.arrow_upward),
-                                  label: const Text('Withdraw'),
+                                child: Icon(
+                                  provider == 'btc'
+                                      ? Icons.currency_bitcoin
+                                      : Icons.lock_outline,
+                                  size: 18,
+                                  color: theme.colorScheme.primary,
                                 ),
-                              ],
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                provider.toUpperCase(),
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 1.0,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            _formatCrypto(_balanceFor(provider), provider),
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w800,
+                              color: theme.colorScheme.primary,
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          Row(
+                            children: [
+                              OutlinedButton.icon(
+                                onPressed: () => _createDeposit(provider),
+                                icon: const Icon(Icons.arrow_downward, size: 16),
+                                label: const Text('Deposit'),
+                                style: OutlinedButton.styleFrom(
+                                  shape: const StadiumBorder(),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              FilledButton.icon(
+                                onPressed: _balanceFor(provider) > 0
+                                    ? () => _withdraw(provider)
+                                    : null,
+                                icon: const Icon(Icons.arrow_upward, size: 16),
+                                label: const Text('Withdraw'),
+                                style: FilledButton.styleFrom(
+                                  shape: const StadiumBorder(),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4, bottom: 10),
+                    child: Text(
+                      'TRANSACTION HISTORY',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: theme.colorScheme.primary,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ),
+                  if (_historyItems(currentUserID).isEmpty)
+                    GlassCard(
+                      padding: const EdgeInsets.all(18),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.receipt_long_outlined,
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.40,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            'No transactions yet',
+                            style: TextStyle(
+                              color: theme.colorScheme.onSurface.withValues(
+                                alpha: 0.55,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    GlassCard(
+                      padding: EdgeInsets.zero,
+                      child: Column(
+                        children: [
+                          for (var i = 0; i < _historyItems(currentUserID).length; i++) ...[
+                            if (i > 0)
+                              Divider(
+                                height: 1,
+                                thickness: 0.5,
+                                indent: 60,
+                                color: theme.colorScheme.onSurface.withValues(
+                                  alpha: 0.10,
+                                ),
+                              ),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 12,
+                              ),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 36,
+                                    height: 36,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: theme.colorScheme.primary
+                                          .withValues(alpha: 0.10),
+                                    ),
+                                    child: Icon(
+                                      _historyItems(currentUserID)[i].icon,
+                                      size: 18,
+                                      color: theme.colorScheme.primary,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          _historyItems(currentUserID)[i].title,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                        Text(
+                                          _historyItems(currentUserID)[i]
+                                                  .subtitle
+                                                  .isEmpty
+                                              ? _historyItems(currentUserID)[i]
+                                                  .dateLabel
+                                              : '${_historyItems(currentUserID)[i].subtitle} — ${_historyItems(currentUserID)[i].dateLabel}',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color:
+                                                theme.colorScheme.onSurface
+                                                    .withValues(alpha: 0.55),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  if (_historyItems(currentUserID)[i].amount != null)
+                                    Text(
+                                      _historyItems(currentUserID)[i].amount!,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                ],
+                              ),
                             ),
                           ],
-                        ),
-                      ),
-                    ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Transaction history',
-                    style: theme.textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  for (final item in _historyItems(currentUserID))
-                    Card(
-                      child: ListTile(
-                        leading: Icon(item.icon),
-                        title: Text(item.title),
-                        subtitle: Text(
-                          item.subtitle.isEmpty
-                              ? item.dateLabel
-                              : '${item.subtitle} - ${item.dateLabel}',
-                        ),
-                        trailing: item.amount == null
-                            ? null
-                            : Text(item.amount!),
-                      ),
-                    ),
-                  if (_historyItems(currentUserID).isEmpty)
-                    const Card(
-                      child: ListTile(
-                        leading: Icon(Icons.receipt_long_outlined),
-                        title: Text('No transactions yet'),
+                        ],
                       ),
                     ),
                 ],

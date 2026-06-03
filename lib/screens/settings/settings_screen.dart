@@ -919,408 +919,503 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final user = auth.currentUser;
     final keys = context.watch<KeyProvider>();
     final settings = context.watch<SettingsProvider>();
+    final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
       appBar: const GlassAppBar(title: Text('Settings')),
       body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         children: [
-          // ── Profile header ──────────────────────────────────────────────────
-          if (user != null)
-            ListTile(
-              leading: CircleAvatar(
-                backgroundImage: user.avatarUrl != null
-                    ? CachedNetworkImageProvider(
-                        ApiConfig.resolveMedia(user.avatarUrl!),
-                      )
-                    : null,
-                child: user.avatarUrl == null
-                    ? Text(user.username[0].toUpperCase())
-                    : null,
-              ),
-              title: Row(
-                children: [
-                  Text(
-                    '@${user.username}',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  if (user.isSystemAdmin)
-                    const Padding(
-                      padding: EdgeInsets.only(left: 6),
-                      child: Icon(Icons.verified, size: 16, color: Colors.blue),
+          // ── Profile header ───────────────────────────────────────────────
+          if (user != null) ...[
+            GestureDetector(
+              onTap: _editProfile,
+              child: GlassCard(
+                padding: const EdgeInsets.all(20),
+                child: Row(
+                  children: [
+                    Stack(
+                      children: [
+                        Container(
+                          width: 68,
+                          height: 68,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: scheme.primary.withValues(alpha: 0.30),
+                                blurRadius: 16,
+                                offset: const Offset(0, 6),
+                              ),
+                            ],
+                          ),
+                          child: CircleAvatar(
+                            radius: 34,
+                            backgroundImage: user.avatarUrl != null
+                                ? CachedNetworkImageProvider(
+                                    ApiConfig.resolveMedia(user.avatarUrl!),
+                                  )
+                                : null,
+                            child: user.avatarUrl == null
+                                ? Text(
+                                    user.username[0].toUpperCase(),
+                                    style: const TextStyle(
+                                      fontSize: 26,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  )
+                                : null,
+                          ),
+                        ),
+                        Positioned(
+                          right: 0,
+                          bottom: 0,
+                          child: Container(
+                            width: 22,
+                            height: 22,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: scheme.primary,
+                              border: Border.all(
+                                color: Theme.of(context).scaffoldBackgroundColor,
+                                width: 2,
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.edit,
+                              color: Colors.white,
+                              size: 12,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  if (user.isPremium)
-                    const Padding(
-                      padding: EdgeInsets.only(left: 6),
-                      child: Icon(
-                        Icons.workspace_premium,
-                        size: 16,
-                        color: Colors.amber,
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                '@${user.username}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 17,
+                                ),
+                              ),
+                              if (user.isSystemAdmin)
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 6),
+                                  child: Icon(
+                                    Icons.verified,
+                                    size: 16,
+                                    color: Colors.blue,
+                                  ),
+                                ),
+                              if (user.isPremium)
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 4),
+                                  child: Icon(
+                                    Icons.workspace_premium,
+                                    size: 16,
+                                    color: Colors.amber,
+                                  ),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            user.bio?.isNotEmpty == true
+                                ? user.bio!
+                                : 'Tap to add a bio',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: scheme.onSurface.withValues(alpha: 0.55),
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
                       ),
                     ),
-                ],
-              ),
-              subtitle: Text(user.bio ?? 'No bio set'),
-              trailing: const Icon(Icons.edit_outlined),
-              onTap: _editProfile,
-            ),
-
-          const Divider(),
-
-          // ── Security section ────────────────────────────────────────────────
-          const _SectionHeader('Security & Keys'),
-
-          ListTile(
-            leading: Icon(
-              keys.hasKey ? Icons.verified_user : Icons.warning_amber,
-              color: keys.hasKey ? Colors.green : Colors.orange,
-            ),
-            title: const Text('PGP Keys'),
-            subtitle: keys.hasKey
-                ? Text(
-                    'Fingerprint: …${keys.fingerprint?.substring((keys.fingerprint?.length ?? 8) - 8)}',
-                  )
-                : const Text(
-                    'No key on device',
-                    style: TextStyle(color: Colors.orange),
-                  ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const PgpKeysScreen()),
-            ),
-          ),
-
-          ListTile(
-            leading: const Icon(Icons.password_outlined),
-            title: const Text('Change Password'),
-            subtitle: const Text('Update your account login password'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: _changePassword,
-          ),
-
-          ListTile(
-            leading: const Icon(Icons.security_outlined),
-            title: const Text('2FA password'),
-            subtitle: const Text('Add, update, or disable 2FA'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: _manageTwoFactorPassword,
-          ),
-
-          ListTile(
-            leading: const Icon(Icons.delete_outline),
-            title: const Text('Delete account when inactive for'),
-            subtitle: const Text('Choose an exact inactivity period'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: _manageAccountInactivityDeletion,
-          ),
-
-          ListTile(
-            leading: const Icon(Icons.devices_outlined),
-            title: const Text('Active sessions'),
-            subtitle: const Text('Review and revoke signed-in devices'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: _manageSessions,
-          ),
-
-          ListTile(
-            leading: const Icon(Icons.business_center_outlined),
-            title: const Text('Business profile'),
-            subtitle: const Text('Greeting, away message, and profile'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: _manageBusinessProfile,
-          ),
-
-          if (_biometricAvailable) ...[
-            SwitchListTile(
-              secondary: const Icon(Icons.fingerprint),
-              title: const Text('Biometric Key Unlock'),
-              subtitle: const Text(
-                'Require fingerprint / face before exporting your private key',
-              ),
-              value: _biometricEnabled,
-              onChanged: _setBiometric,
-            ),
-            SwitchListTile(
-              secondary: const Icon(Icons.lock_outline),
-              title: const Text('App Lock'),
-              subtitle: const Text(
-                'Require biometrics to open OpenChat after it leaves the background',
-              ),
-              value: _appLockEnabled,
-              onChanged: _setAppLock,
-            ),
-          ],
-
-          SwitchListTile(
-            secondary: const Icon(Icons.group_add_outlined),
-            title: const Text('Allow others to add me to groups'),
-            subtitle: const Text('Other users can add you to group chats'),
-            value: user?.allowGroupAdd ?? true,
-            onChanged: (value) async {
-              final api = context.read<ApiService>();
-              final auth = context.read<AuthProvider>();
-              final messenger = ScaffoldMessenger.of(context);
-              try {
-                await api.updatePreferences(allowGroupAdd: value);
-                if (mounted) auth.refreshCurrentUser();
-              } catch (e) {
-                if (mounted) {
-                  messenger.showSnackBar(
-                    SnackBar(content: Text('Failed to update: $e')),
-                  );
-                }
-              }
-            },
-          ),
-
-          const Divider(),
-
-          // ── Notifications ────────────────────────────────────────────────────
-          const _SectionHeader('Notifications'),
-
-          // Push notifications are only available on Android and iOS.
-          // Linux is not supported by firebase_messaging; desktop users rely
-          // on the Background WebSocket option below instead.
-          if (!kIsWeb &&
-              (defaultTargetPlatform == TargetPlatform.android ||
-                  defaultTargetPlatform == TargetPlatform.iOS))
-            SwitchListTile(
-              secondary: const Icon(Icons.notifications_outlined),
-              title: const Text('Push Notifications'),
-              subtitle: const Text(
-                'Receive notifications via Firebase when the app is closed',
-              ),
-              value: settings.pushNotificationsEnabled,
-              onChanged: (v) => _setPushEnabled(v, settings),
-            ),
-
-          SwitchListTile(
-            secondary: const Icon(Icons.wifi_tethering),
-            title: const Text('Background WebSocket'),
-            subtitle: const Text(
-              'Keep a live connection open for real-time notifications '
-              '(uses more battery)',
-            ),
-            value: settings.wsBackgroundEnabled,
-            onChanged: (v) => _setWsBackground(v, settings),
-          ),
-
-          SwitchListTile(
-            secondary: const Icon(Icons.visibility_outlined),
-            title: const Text('Show Sensitive Content'),
-            subtitle: const Text(
-              'Display sender name and message preview in notifications. '
-              'Off shows only "New message"',
-            ),
-            value: settings.notificationSensitiveContent,
-            onChanged: settings.setNotificationSensitiveContent,
-          ),
-
-          const Divider(),
-
-          // ── Wallet ──────────────────────────────────────────────────────────
-          ListTile(
-            leading: const Icon(Icons.account_balance_wallet_outlined),
-            title: const Text('Wallet'),
-            subtitle: const Text('BTC/XMR balances, withdrawals, and history'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const WalletScreen()),
-            ),
-          ),
-
-          const Divider(),
-
-          // ── Premium ─────────────────────────────────────────────────────────
-          ListTile(
-            leading: Icon(
-              user?.isPremium == true
-                  ? Icons.workspace_premium
-                  : Icons.workspace_premium_outlined,
-              color: user?.isPremium == true ? Colors.amber : null,
-            ),
-            title: const Text('OpenChat Premium'),
-            subtitle: Text(
-              user?.isPremium == true
-                  ? 'Active${user?.premiumUntil != null ? ' until ${user!.premiumUntil!.toLocal().toString().split(' ').first}' : ''}'
-                  : '€10 / year or €2 / month — more stickers, custom emoji, more bots, custom channel wallpapers',
-            ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const PremiumScreen()),
-            ),
-          ),
-
-          const Divider(),
-
-          // ── Appearance ──────────────────────────────────────────────────────
-          const _SectionHeader('Appearance'),
-
-          ListTile(
-            leading: const Icon(Icons.palette_outlined),
-            title: const Text('Accent color'),
-            subtitle: const Text('Theme color used across the app'),
-            trailing: Container(
-              width: 28,
-              height: 28,
-              decoration: BoxDecoration(
-                color: settings.seedColor,
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.grey.withValues(alpha: 0.5)),
-              ),
-            ),
-            onTap: () => _pickAccentColor(context, settings),
-          ),
-
-          SwitchListTile(
-            secondary: const Icon(Icons.campaign_outlined),
-            title: const Text('Channels in their own tab'),
-            subtitle: const Text(
-              'Off: channels appear in your Chats list (default)',
-            ),
-            value: settings.channelsOwnTab,
-            onChanged: settings.setChannelsOwnTab,
-          ),
-
-          SwitchListTile(
-            secondary: const Icon(Icons.smart_toy_outlined),
-            title: const Text('Bots in their own tab'),
-            subtitle: const Text(
-              'Off: bot chats appear in your Chats list (default)',
-            ),
-            value: settings.botsOwnTab,
-            onChanged: settings.setBotsOwnTab,
-          ),
-
-          const Divider(),
-
-          // ── Content & Bots ──────────────────────────────────────────────────
-          const _SectionHeader('Content & Bots'),
-
-          ListTile(
-            leading: const Icon(Icons.emoji_emotions_outlined),
-            title: const Text('Sticker Packs'),
-            subtitle: const Text('Create and manage your sticker packs'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const StickerPackScreen()),
-            ),
-          ),
-
-          ListTile(
-            leading: const Icon(Icons.add_reaction_outlined),
-            title: const Text('Custom Emoji Packs'),
-            subtitle: const Text('Create and manage your custom emoji packs'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const CustomEmojiPackScreen()),
-            ),
-          ),
-
-          ListTile(
-            leading: const Icon(Icons.smart_toy_outlined),
-            title: const Text('My Bots'),
-            subtitle: const Text('Create and manage bots'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const BotManagementScreen()),
-            ),
-          ),
-
-          const Divider(),
-
-          // ── About ───────────────────────────────────────────────────────────
-          const _SectionHeader('About'),
-          FutureBuilder<PackageInfo>(
-            future: _packageInfoFuture,
-            builder: (context, snapshot) {
-              final version = snapshot.data == null
-                  ? ''
-                  : 'v${snapshot.data!.version}+${snapshot.data!.buildNumber}';
-              return ListTile(
-                leading: const Icon(Icons.info_outline),
-                title: const Text('OpenChat'),
-                subtitle: Text(
-                  version.isEmpty
-                      ? 'Open Source • E2E Encrypted'
-                      : '$version • Open Source • E2E Encrypted',
-                ),
-                onTap: () => showAboutDialog(
-                  context: context,
-                  applicationName: 'OpenChat',
-                  applicationVersion: version,
-                  applicationIcon: Image.asset(
-                    'assets/images/logo.png',
-                    height: 48,
-                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
-                  ),
-                  applicationLegalese:
-                      'Open source, end-to-end encrypted messenger.\n'
-                      'Uses OpenPGP (RFC 4880) for encryption.',
-                ),
-              );
-            },
-          ),
-
-          const Divider(),
-
-          ListTile(
-            leading: const Icon(Icons.logout, color: Colors.red),
-            title: const Text('Sign Out', style: TextStyle(color: Colors.red)),
-            onTap: () async {
-              final confirmed = await showDialog<bool>(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: const Text('Sign Out'),
-                  content: const Text(
-                    'Your PGP keys will remain on this device.',
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(ctx, false),
-                      child: const Text('Cancel'),
-                    ),
-                    FilledButton(
-                      onPressed: () => Navigator.pop(ctx, true),
-                      child: const Text('Sign Out'),
+                    Icon(
+                      Icons.arrow_forward_ios_rounded,
+                      size: 14,
+                      color: scheme.onSurface.withValues(alpha: 0.40),
                     ),
                   ],
                 ),
-              );
-              if (confirmed == true && context.mounted) {
-                await context.read<AuthProvider>().logout();
-              }
-            },
-          ),
-
-          // Desktop secure stores (Windows Credential Manager, macOS Keychain,
-          // Linux libsecret) persist across app reinstalls. Provide an explicit
-          // wipe for users who need a clean slate after an upgrade.
-          if (!kIsWeb &&
-              (defaultTargetPlatform == TargetPlatform.windows ||
-                  defaultTargetPlatform == TargetPlatform.linux ||
-                  defaultTargetPlatform == TargetPlatform.macOS)) ...[
-            const Divider(),
-            ListTile(
-              leading: const Icon(
-                Icons.delete_forever_outlined,
-                color: Colors.red,
               ),
-              title: const Text(
-                'Clear All Local Data',
-                style: TextStyle(color: Colors.red),
-              ),
-              subtitle: const Text(
-                'Remove stored keys, tokens, and preferences from this device',
-              ),
-              onTap: _clearAllData,
             ),
+            const SizedBox(height: 24),
           ],
+
+          // ── Security & Keys ──────────────────────────────────────────────
+          const _SectionHeader('Security & Keys'),
+          GlassCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                _GlassTile(
+                  icon: keys.hasKey ? Icons.verified_user : Icons.warning_amber,
+                  iconColor: keys.hasKey ? Colors.green : Colors.orange,
+                  title: 'PGP Keys',
+                  subtitle: keys.hasKey
+                      ? 'Fingerprint: …${keys.fingerprint?.substring((keys.fingerprint?.length ?? 8) - 8)}'
+                      : 'No key on device',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const PgpKeysScreen()),
+                  ),
+                ),
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.password_outlined,
+                  title: 'Change Password',
+                  subtitle: 'Update your account login password',
+                  onTap: _changePassword,
+                ),
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.security_outlined,
+                  title: '2FA Password',
+                  subtitle: 'Add, update, or disable 2FA',
+                  onTap: _manageTwoFactorPassword,
+                ),
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.timer_outlined,
+                  title: 'Delete account when inactive for',
+                  subtitle: 'Choose an exact inactivity period',
+                  onTap: _manageAccountInactivityDeletion,
+                ),
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.devices_outlined,
+                  title: 'Active sessions',
+                  subtitle: 'Review and revoke signed-in devices',
+                  onTap: _manageSessions,
+                ),
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.business_center_outlined,
+                  title: 'Business profile',
+                  subtitle: 'Greeting, away message, and profile',
+                  onTap: _manageBusinessProfile,
+                  isLast: !_biometricAvailable,
+                ),
+                if (_biometricAvailable) ...[
+                  _GlassDivider(),
+                  _GlassSwitchTile(
+                    icon: Icons.fingerprint,
+                    title: 'Biometric Key Unlock',
+                    subtitle: 'Require fingerprint / face before exporting your key',
+                    value: _biometricEnabled,
+                    onChanged: _setBiometric,
+                  ),
+                  _GlassDivider(),
+                  _GlassSwitchTile(
+                    icon: Icons.lock_outline,
+                    title: 'App Lock',
+                    subtitle: 'Require biometrics when returning to OpenChat',
+                    value: _appLockEnabled,
+                    onChanged: _setAppLock,
+                    isLast: true,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          GlassCard(
+            padding: EdgeInsets.zero,
+            child: _GlassSwitchTile(
+              icon: Icons.group_add_outlined,
+              title: 'Allow others to add me to groups',
+              subtitle: 'Other users can add you to group chats',
+              value: user?.allowGroupAdd ?? true,
+              onChanged: (value) async {
+                final api = context.read<ApiService>();
+                final messenger = ScaffoldMessenger.of(context);
+                try {
+                  await api.updatePreferences(allowGroupAdd: value);
+                  if (mounted) context.read<AuthProvider>().refreshCurrentUser();
+                } catch (e) {
+                  if (mounted) {
+                    messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+                  }
+                }
+              },
+              isLast: true,
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // ── Notifications ────────────────────────────────────────────────
+          const _SectionHeader('Notifications'),
+          GlassCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                if (!kIsWeb &&
+                    (defaultTargetPlatform == TargetPlatform.android ||
+                        defaultTargetPlatform == TargetPlatform.iOS)) ...[
+                  _GlassSwitchTile(
+                    icon: Icons.notifications_outlined,
+                    title: 'Push Notifications',
+                    subtitle: 'Via Firebase when the app is closed',
+                    value: settings.pushNotificationsEnabled,
+                    onChanged: (v) => _setPushEnabled(v, settings),
+                  ),
+                  _GlassDivider(),
+                ],
+                _GlassSwitchTile(
+                  icon: Icons.wifi_tethering,
+                  title: 'Background WebSocket',
+                  subtitle: 'Live connection for real-time notifications',
+                  value: settings.wsBackgroundEnabled,
+                  onChanged: (v) => _setWsBackground(v, settings),
+                ),
+                _GlassDivider(),
+                _GlassSwitchTile(
+                  icon: Icons.visibility_outlined,
+                  title: 'Show Sensitive Content',
+                  subtitle: 'Show sender and preview in notifications',
+                  value: settings.notificationSensitiveContent,
+                  onChanged: settings.setNotificationSensitiveContent,
+                  isLast: true,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // ── Wallet & Premium ─────────────────────────────────────────────
+          const _SectionHeader('Wallet & Premium'),
+          GlassCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                _GlassTile(
+                  icon: Icons.account_balance_wallet_outlined,
+                  title: 'Wallet',
+                  subtitle: 'BTC/XMR balances, withdrawals, and history',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const WalletScreen()),
+                  ),
+                ),
+                _GlassDivider(),
+                _GlassTile(
+                  icon: user?.isPremium == true
+                      ? Icons.workspace_premium
+                      : Icons.workspace_premium_outlined,
+                  iconColor: user?.isPremium == true ? Colors.amber : null,
+                  title: 'OpenChat Premium',
+                  subtitle: user?.isPremium == true
+                      ? 'Active${user?.premiumUntil != null ? ' until ${user!.premiumUntil!.toLocal().toString().split(' ').first}' : ''}'
+                      : '€10 / year — more stickers, emoji, bots, wallpapers',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const PremiumScreen()),
+                  ),
+                  isLast: true,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // ── Appearance ───────────────────────────────────────────────────
+          const _SectionHeader('Appearance'),
+          GlassCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                _GlassTile(
+                  icon: Icons.palette_outlined,
+                  title: 'Accent color',
+                  subtitle: 'Theme color used across the app',
+                  trailing: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: settings.seedColor,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: settings.seedColor.withValues(alpha: 0.45),
+                          blurRadius: 8,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
+                    ),
+                  ),
+                  onTap: () => _pickAccentColor(context, settings),
+                ),
+                _GlassDivider(),
+                _GlassSwitchTile(
+                  icon: Icons.campaign_outlined,
+                  title: 'Channels in their own tab',
+                  subtitle: 'Off: channels appear in your Chats list',
+                  value: settings.channelsOwnTab,
+                  onChanged: settings.setChannelsOwnTab,
+                ),
+                _GlassDivider(),
+                _GlassSwitchTile(
+                  icon: Icons.smart_toy_outlined,
+                  title: 'Bots in their own tab',
+                  subtitle: 'Off: bot chats appear in your Chats list',
+                  value: settings.botsOwnTab,
+                  onChanged: settings.setBotsOwnTab,
+                  isLast: true,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // ── Content & Bots ───────────────────────────────────────────────
+          const _SectionHeader('Content & Bots'),
+          GlassCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                _GlassTile(
+                  icon: Icons.emoji_emotions_outlined,
+                  title: 'Sticker Packs',
+                  subtitle: 'Create and manage your sticker packs',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const StickerPackScreen()),
+                  ),
+                ),
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.add_reaction_outlined,
+                  title: 'Custom Emoji Packs',
+                  subtitle: 'Create and manage your custom emoji packs',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const CustomEmojiPackScreen(),
+                    ),
+                  ),
+                ),
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.smart_toy_outlined,
+                  title: 'My Bots',
+                  subtitle: 'Create and manage bots',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const BotManagementScreen(),
+                    ),
+                  ),
+                  isLast: true,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // ── About ────────────────────────────────────────────────────────
+          const _SectionHeader('About'),
+          GlassCard(
+            padding: EdgeInsets.zero,
+            child: FutureBuilder<PackageInfo>(
+              future: _packageInfoFuture,
+              builder: (context, snapshot) {
+                final version = snapshot.data == null
+                    ? ''
+                    : 'v${snapshot.data!.version}+${snapshot.data!.buildNumber}';
+                return _GlassTile(
+                  icon: Icons.info_outline,
+                  title: 'OpenChat',
+                  subtitle: version.isEmpty
+                      ? 'Open Source • E2E Encrypted'
+                      : '$version • Open Source • E2E Encrypted',
+                  onTap: () => showAboutDialog(
+                    context: context,
+                    applicationName: 'OpenChat',
+                    applicationVersion: version,
+                    applicationIcon: Image.asset(
+                      'assets/images/logo.png',
+                      height: 48,
+                      errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                    ),
+                    applicationLegalese:
+                        'Open source, end-to-end encrypted messenger.\n'
+                        'Uses OpenPGP (RFC 4880) for encryption.',
+                  ),
+                  isLast: true,
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // ── Sign out ─────────────────────────────────────────────────────
+          GlassCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                _GlassTile(
+                  icon: Icons.logout_rounded,
+                  iconColor: scheme.error,
+                  title: 'Sign Out',
+                  titleColor: scheme.error,
+                  onTap: () async {
+                    final confirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Sign Out'),
+                        content: const Text(
+                          'Your PGP keys will remain on this device.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx, false),
+                            child: const Text('Cancel'),
+                          ),
+                          FilledButton(
+                            onPressed: () => Navigator.pop(ctx, true),
+                            child: const Text('Sign Out'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirmed == true && context.mounted) {
+                      await context.read<AuthProvider>().logout();
+                    }
+                  },
+                  isLast: !kIsWeb &&
+                      (defaultTargetPlatform == TargetPlatform.windows ||
+                          defaultTargetPlatform == TargetPlatform.linux ||
+                          defaultTargetPlatform == TargetPlatform.macOS)
+                      ? false
+                      : true,
+                ),
+                if (!kIsWeb &&
+                    (defaultTargetPlatform == TargetPlatform.windows ||
+                        defaultTargetPlatform == TargetPlatform.linux ||
+                        defaultTargetPlatform == TargetPlatform.macOS)) ...[
+                  _GlassDivider(),
+                  _GlassTile(
+                    icon: Icons.delete_forever_outlined,
+                    iconColor: scheme.error,
+                    title: 'Clear All Local Data',
+                    titleColor: scheme.error,
+                    subtitle: 'Remove stored keys, tokens, and preferences',
+                    onTap: _clearAllData,
+                    isLast: true,
+                  ),
+                ],
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -1333,15 +1428,205 @@ class _SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+    padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
     child: Text(
-      title,
+      title.toUpperCase(),
       style: TextStyle(
-        fontSize: 12,
-        fontWeight: FontWeight.w600,
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
         color: Theme.of(context).colorScheme.primary,
-        letterSpacing: 0.8,
+        letterSpacing: 1.2,
       ),
     ),
   );
+}
+
+/// A row inside a glass card that acts like a ListTile.
+class _GlassTile extends StatelessWidget {
+  final IconData icon;
+  final Color? iconColor;
+  final String title;
+  final Color? titleColor;
+  final String? subtitle;
+  final Widget? trailing;
+  final VoidCallback? onTap;
+  final bool isLast;
+
+  const _GlassTile({
+    required this.icon,
+    this.iconColor,
+    required this.title,
+    this.titleColor,
+    this.subtitle,
+    this.trailing,
+    this.onTap,
+    this.isLast = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ClipRRect(
+      borderRadius: BorderRadius.vertical(
+        bottom: isLast ? const Radius.circular(22) : Radius.zero,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: (iconColor ?? scheme.primary).withValues(alpha: 0.12),
+                  ),
+                  child: Icon(
+                    icon,
+                    size: 18,
+                    color: iconColor ?? scheme.primary,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                          color: titleColor,
+                        ),
+                      ),
+                      if (subtitle != null)
+                        Text(
+                          subtitle!,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: scheme.onSurface.withValues(alpha: 0.55),
+                            height: 1.3,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                trailing ??
+                    Icon(
+                      Icons.arrow_forward_ios_rounded,
+                      size: 14,
+                      color: scheme.onSurface.withValues(alpha: 0.35),
+                    ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A switch row inside a glass card.
+class _GlassSwitchTile extends StatelessWidget {
+  final IconData icon;
+  final Color? iconColor;
+  final String title;
+  final String? subtitle;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+  final bool isLast;
+
+  const _GlassSwitchTile({
+    required this.icon,
+    this.iconColor,
+    required this.title,
+    this.subtitle,
+    required this.value,
+    required this.onChanged,
+    this.isLast = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ClipRRect(
+      borderRadius: BorderRadius.vertical(
+        bottom: isLast ? const Radius.circular(22) : Radius.zero,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => onChanged(!value),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: (iconColor ?? scheme.primary).withValues(alpha: 0.12),
+                  ),
+                  child: Icon(
+                    icon,
+                    size: 18,
+                    color: iconColor ?? scheme.primary,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                        ),
+                      ),
+                      if (subtitle != null)
+                        Text(
+                          subtitle!,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: scheme.onSurface.withValues(alpha: 0.55),
+                            height: 1.3,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                Switch(value: value, onChanged: onChanged),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A 1dp hairline separator inside glass cards.
+class _GlassDivider extends StatelessWidget {
+  const _GlassDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Divider(
+      height: 1,
+      thickness: 0.5,
+      indent: 66,
+      endIndent: 0,
+      color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.10),
+    );
+  }
 }

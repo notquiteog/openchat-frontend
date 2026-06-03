@@ -133,26 +133,38 @@ class _CustomEmojiPackScreenState extends State<CustomEmojiPackScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.add_reaction_outlined,
                     size: 72,
-                    color: Colors.grey,
+                    color: Theme.of(context)
+                        .colorScheme
+                        .onSurface
+                        .withValues(alpha: 0.35),
                   ),
                   const SizedBox(height: 16),
-                  const Text(
+                  Text(
                     'No custom emoji packs yet',
-                    style: TextStyle(fontSize: 16, color: Colors.grey),
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurface
+                          .withValues(alpha: 0.55),
+                    ),
                   ),
                   const SizedBox(height: 12),
                   FilledButton.icon(
                     icon: const Icon(Icons.add),
                     label: const Text('Create a pack'),
+                    style: FilledButton.styleFrom(
+                        shape: const StadiumBorder()),
                     onPressed: _createPack,
                   ),
                 ],
               ),
             )
           : ListView.builder(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
               itemCount: _packs.length,
               itemBuilder: (context, i) {
                 final pack = _packs[i];
@@ -165,32 +177,78 @@ class _CustomEmojiPackScreenState extends State<CustomEmojiPackScreen> {
                 final isOwner =
                     currentUserId != null &&
                     pack['creator_id'] == currentUserId;
-                return ListTile(
-                  leading: SizedBox(
-                    width: 48,
-                    height: 48,
-                    child: coverUrl != null
-                        ? CachedNetworkImage(
-                            imageUrl: ApiConfig.resolveMedia(coverUrl),
-                            fit: BoxFit.contain,
-                            errorWidget: (_, _, _) =>
-                                const Icon(Icons.add_reaction_outlined),
-                          )
-                        : const Icon(Icons.add_reaction_outlined, size: 36),
-                  ),
-                  title: Text(pack['name'] as String? ?? 'Pack'),
-                  subtitle: Text(
-                    isOwner
-                        ? '$count custom emoji'
-                        : '$count custom emoji · Added',
-                  ),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => _PackDetailScreen(pack: pack),
+                final scheme = Theme.of(context).colorScheme;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: GlassCard(
+                    padding: EdgeInsets.zero,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(22),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => _PackDetailScreen(pack: pack),
+                            ),
+                          ).then((_) => _loadPacks()),
+                          child: Padding(
+                            padding: const EdgeInsets.all(14),
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: 48,
+                                  height: 48,
+                                  child: coverUrl != null
+                                      ? CachedNetworkImage(
+                                          imageUrl:
+                                              ApiConfig.resolveMedia(coverUrl),
+                                          fit: BoxFit.contain,
+                                          errorWidget: (_, _, _) => Icon(
+                                            Icons.add_reaction_outlined,
+                                            color: scheme.primary,
+                                          ),
+                                        )
+                                      : Icon(Icons.add_reaction_outlined,
+                                          size: 36, color: scheme.primary),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        pack['name'] as String? ?? 'Pack',
+                                        style: const TextStyle(
+                                            fontWeight: FontWeight.w600),
+                                      ),
+                                      Text(
+                                        isOwner
+                                            ? '$count custom emoji'
+                                            : '$count custom emoji · Added',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: scheme.onSurface
+                                              .withValues(alpha: 0.55),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Icon(Icons.chevron_right,
+                                    size: 18,
+                                    color: scheme.onSurface
+                                        .withValues(alpha: 0.35)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
-                  ).then((_) => _loadPacks()),
+                  ),
                 );
               },
             ),

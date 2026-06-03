@@ -165,6 +165,17 @@ class MessageBubble extends StatelessWidget {
       );
     }
 
+    if (message.type == MessageType.location && message.location != null) {
+      return _LocationBubble(
+        message: message,
+        isMe: isMe,
+        location: message.location!,
+        bubbleColor: bubbleColor,
+        textColor: textColor,
+        radii: radii,
+      );
+    }
+
     if (!message.isDecrypted) {
       return _BubbleShell(
         color: bubbleColor,
@@ -403,6 +414,178 @@ class _TextBubble extends StatelessWidget {
           ],
           const SizedBox(height: 2),
           _Timestamp(message: message, textColor: textColor),
+        ],
+      ),
+    );
+  }
+}
+
+class _LocationBubble extends StatelessWidget {
+  final Message message;
+  final bool isMe;
+  final MessageLocation location;
+  final Color bubbleColor;
+  final Color textColor;
+  final BorderRadius radii;
+
+  const _LocationBubble({
+    required this.message,
+    required this.isMe,
+    required this.location,
+    required this.bubbleColor,
+    required this.textColor,
+    required this.radii,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final previewText = location.previewLabel.replaceFirst('📍 ', '');
+    final status = location.isLive
+        ? location.isActive
+              ? 'Live${location.remainingLabel}'
+              : 'Live location (ended)'
+        : previewText;
+    final accuracyText = location.accuracy != null
+        ? 'Accuracy ±${location.accuracy!.toStringAsFixed(0)}m'
+        : null;
+
+    return _BubbleShell(
+      color: bubbleColor,
+      radii: radii,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!isMe && message.sender != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                '@${message.sender!.username}',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+            ),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Stack(
+              children: [
+                AspectRatio(
+                  aspectRatio: 16 / 10,
+                  child: CachedNetworkImage(
+                    imageUrl: location.thumbnailUrl,
+                    fit: BoxFit.cover,
+                    width: double.infinity,
+                    placeholder: (context, url) =>
+                        const Center(child: CircularProgressIndicator()),
+                    errorWidget: (_, __, ___) => Container(
+                      color: Colors.black26,
+                      alignment: Alignment.center,
+                      child: const Icon(Icons.map_outlined, size: 32),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          Colors.black.withValues(alpha: 0.3),
+                          Colors.transparent,
+                        ],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ),
+                    ),
+                  ),
+                ),
+                const Center(
+                  child: Icon(
+                    Icons.location_on,
+                    size: 36,
+                    color: Colors.redAccent,
+                    shadows: [Shadow(blurRadius: 10, color: Colors.black54)],
+                  ),
+                ),
+                if (location.isLive)
+                  Positioned(
+                    top: 8,
+                    left: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(999),
+                        color: Colors.redAccent.withValues(alpha: 0.9),
+                      ),
+                      child: const Text(
+                        'Live',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    status,
+                    style: TextStyle(color: textColor, fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    previewText,
+                    style: TextStyle(
+                      color: textColor.withValues(alpha: 0.8),
+                      fontSize: 12,
+                    ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (accuracyText != null)
+                  Text(
+                    accuracyText,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: textColor.withValues(alpha: 0.7),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 6),
+          if (message.reactions.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: _ReactionChips(
+                reactions: message.reactions,
+                textColor: textColor,
+              ),
+            ),
+          ],
+          const SizedBox(height: 2),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(2, 0, 2, 2),
+            child: _Timestamp(message: message, textColor: textColor),
+          ),
         ],
       ),
     );

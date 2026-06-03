@@ -65,6 +65,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
+      backgroundColor: Colors.transparent,
       builder: (_) => _ProviderPickerSheet(
         plan: plan,
         providers: ((_status?['providers'] as List?) ?? []).cast<String>(),
@@ -211,17 +212,35 @@ class _PremiumScreenState extends State<PremiumScreen> {
                   const _PremiumFeatures(),
                   if (((_status?['providers'] as List?) ?? []).isEmpty) ...[
                     const SizedBox(height: 24),
-                    Card(
-                      color: theme.colorScheme.errorContainer,
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Text(
-                          'This server has not configured any payment providers. '
-                          'Ask the operator to enable Stripe, Bitcoin, or Monero.',
-                          style: TextStyle(
-                            color: theme.colorScheme.onErrorContainer,
+                    GlassCard(
+                      tint: theme.colorScheme.error.withValues(alpha: 0.10),
+                      padding: const EdgeInsets.all(16),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: theme.colorScheme.error
+                                  .withValues(alpha: 0.14),
+                            ),
+                            child: Icon(Icons.warning_amber_rounded,
+                                size: 16, color: theme.colorScheme.error),
                           ),
-                        ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'This server has not configured any payment providers. '
+                              'Ask the operator to enable Stripe, Bitcoin, or Monero.',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: theme.colorScheme.error,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
@@ -409,42 +428,72 @@ class _PremiumStatusCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final scheme = Theme.of(context).colorScheme;
     final isPremium = user?.isPremium == true;
     final until = user?.premiumUntil as DateTime?;
-    return Card(
-      color: isPremium ? theme.colorScheme.primaryContainer : null,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            Icon(
+    return GlassCard(
+      tint: isPremium ? scheme.primary.withValues(alpha: 0.08) : null,
+      padding: const EdgeInsets.all(18),
+      child: Row(
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: isPremium
+                  ? Colors.amber.withValues(alpha: 0.18)
+                  : scheme.onSurface.withValues(alpha: 0.08),
+              boxShadow: isPremium
+                  ? [
+                      BoxShadow(
+                        color: Colors.amber.withValues(alpha: 0.35),
+                        blurRadius: 14,
+                        offset: const Offset(0, 4),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Icon(
               isPremium
                   ? Icons.workspace_premium
                   : Icons.workspace_premium_outlined,
-              size: 32,
-              color: isPremium ? theme.colorScheme.primary : Colors.grey,
+              size: 26,
+              color: isPremium ? Colors.amber : scheme.onSurface.withValues(alpha: 0.45),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isPremium ? 'Premium active' : 'Free tier',
-                    style: theme.textTheme.titleMedium,
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isPremium ? 'Premium active' : 'Free tier',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
                   ),
-                  if (isPremium && until != null)
-                    Text(
-                      'Renews / expires ${until.toLocal().toString().split('.').first}',
+                ),
+                if (isPremium && until != null)
+                  Text(
+                    'Expires ${until.toLocal().toString().split('.').first}',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: scheme.onSurface.withValues(alpha: 0.55),
                     ),
-                  if (!isPremium)
-                    const Text('Upgrade to remove limits and unlock extras.'),
-                ],
-              ),
+                  ),
+                if (!isPremium)
+                  Text(
+                    'Upgrade to remove limits and unlock extras.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: scheme.onSurface.withValues(alpha: 0.55),
+                    ),
+                  ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -494,70 +543,101 @@ class _WalletBalanceSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (providers.isEmpty) return const SizedBox.shrink();
-    final theme = Theme.of(context);
+    final scheme = Theme.of(context).colorScheme;
     final recentDeposits = deposits.take(2).toList();
     final recentWithdrawals = withdrawals.take(2).toList();
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
+    return GlassCard(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: scheme.primary.withValues(alpha: 0.12),
+                ),
+                child: Icon(
+                  Icons.account_balance_wallet_outlined,
+                  size: 18,
+                  color: scheme.primary,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                'Balances',
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '${(feeRate * 100).toStringAsFixed(0)}% fee',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: scheme.onSurface.withValues(alpha: 0.45),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          for (final provider in providers) ...[
             Row(
               children: [
-                const Icon(Icons.account_balance_wallet_outlined),
-                const SizedBox(width: 8),
-                Text('Balances', style: theme.textTheme.titleMedium),
-                const Spacer(),
-                Text(
-                  '${(feeRate * 100).toStringAsFixed(0)}% withdrawal fee',
-                  style: theme.textTheme.labelSmall,
+                Expanded(
+                  child: Text(
+                    _formatCrypto(_balanceFor(balances, provider), provider),
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => onDeposit(provider),
+                  child: const Text('Deposit'),
+                ),
+                TextButton(
+                  onPressed: () =>
+                      onWithdraw(provider, _balanceFor(balances, provider)),
+                  child: const Text('Withdraw'),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            for (final provider in providers) ...[
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      _formatCrypto(_balanceFor(balances, provider), provider),
-                      style: theme.textTheme.titleSmall,
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () => onDeposit(provider),
-                    child: const Text('Deposit'),
-                  ),
-                  TextButton(
-                    onPressed: () =>
-                        onWithdraw(provider, _balanceFor(balances, provider)),
-                    child: const Text('Withdraw'),
-                  ),
-                ],
+            if (provider != providers.last)
+              Divider(
+                height: 16,
+                thickness: 0.5,
+                color: scheme.onSurface.withValues(alpha: 0.10),
               ),
-              if (provider != providers.last) const Divider(),
-            ],
-            if (recentDeposits.isNotEmpty || recentWithdrawals.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              const Divider(),
-              for (final dep in recentDeposits)
-                _LedgerMiniRow(
-                  icon: Icons.arrow_downward,
-                  label: 'Deposit',
-                  provider: dep['provider'] as String? ?? '',
-                  status: dep['status'] as String? ?? '',
-                ),
-              for (final withdrawal in recentWithdrawals)
-                _LedgerMiniRow(
-                  icon: Icons.arrow_upward,
-                  label: 'Withdrawal',
-                  provider: withdrawal['provider'] as String? ?? '',
-                  status: withdrawal['status'] as String? ?? '',
-                ),
-            ],
           ],
-        ),
+          if (recentDeposits.isNotEmpty || recentWithdrawals.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Divider(
+              height: 12,
+              thickness: 0.5,
+              color: scheme.onSurface.withValues(alpha: 0.10),
+            ),
+            for (final dep in recentDeposits)
+              _LedgerMiniRow(
+                icon: Icons.arrow_downward,
+                label: 'Deposit',
+                provider: dep['provider'] as String? ?? '',
+                status: dep['status'] as String? ?? '',
+              ),
+            for (final withdrawal in recentWithdrawals)
+              _LedgerMiniRow(
+                icon: Icons.arrow_upward,
+                label: 'Withdrawal',
+                provider: withdrawal['provider'] as String? ?? '',
+                status: withdrawal['status'] as String? ?? '',
+              ),
+          ],
+        ],
       ),
     );
   }
@@ -608,46 +688,58 @@ class _PlanCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Card(
-      elevation: highlighted ? 4 : 1,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: highlighted
-            ? BorderSide(color: theme.colorScheme.primary, width: 2)
-            : BorderSide.none,
-      ),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title, style: theme.textTheme.titleMedium),
-                    Text(
-                      priceLabel,
-                      style: theme.textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: theme.colorScheme.primary,
-                      ),
-                    ),
-                    if (savings != null)
+    final scheme = Theme.of(context).colorScheme;
+    return GlassCard(
+      tint: highlighted ? scheme.primary.withValues(alpha: 0.10) : null,
+      padding: EdgeInsets.zero,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(22),
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Text(
-                        savings!,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.secondary,
+                        title,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
-                  ],
+                      const SizedBox(height: 4),
+                      Text(
+                        priceLabel,
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          color: scheme.primary,
+                        ),
+                      ),
+                      if (savings != null)
+                        Text(
+                          savings!,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: scheme.secondary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
-              ),
-              const Icon(Icons.chevron_right),
-            ],
+                Icon(
+                  Icons.arrow_forward_ios_rounded,
+                  size: 14,
+                  color: scheme.onSurface.withValues(alpha: 0.40),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -672,20 +764,63 @@ class _PremiumFeatures extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Card(
+    final scheme = Theme.of(context).colorScheme;
+    return GlassCard(
+      padding: const EdgeInsets.symmetric(vertical: 8),
       child: Column(
         children: [
-          for (final (title, sub) in _items)
-            ListTile(
-              leading: Icon(
-                Icons.check_circle,
-                color: theme.colorScheme.primary,
+          for (var i = 0; i < _items.length; i++) ...[
+            if (i > 0)
+              Divider(
+                height: 1,
+                thickness: 0.5,
+                indent: 60,
+                color: scheme.onSurface.withValues(alpha: 0.10),
               ),
-              title: Text(title),
-              subtitle: Text(sub),
-              dense: true,
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Row(
+                children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: scheme.primary.withValues(alpha: 0.12),
+                    ),
+                    child: Icon(
+                      Icons.check_rounded,
+                      size: 16,
+                      color: scheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _items[i].$1,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          _items[i].$2,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: scheme.onSurface.withValues(alpha: 0.55),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
+          ],
         ],
       ),
     );
@@ -738,50 +873,177 @@ class _ProviderPickerSheet extends StatelessWidget {
     final walletProviders = providers
         .where((provider) => provider == 'btc' || provider == 'xmr')
         .toList(growable: false);
+    final scheme = Theme.of(context).colorScheme;
     return SafeArea(
+      top: false,
       child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Pay for ${plan == 'year' ? 'yearly' : 'monthly'} premium',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            if (walletProviders.isNotEmpty) ...[
-              Text('App wallet', style: Theme.of(context).textTheme.labelLarge),
-              for (final p in walletProviders)
-                ListTile(
-                  leading: Icon(_icon(p)),
-                  title: Text('${p.toUpperCase()} balance'),
-                  subtitle: Text(_formatCrypto(_balanceFor(balances, p), p)),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => onPicked(p, 'wallet'),
-                ),
-              const Divider(),
-            ],
-            Text(
-              'External wallet or card',
-              style: Theme.of(context).textTheme.labelLarge,
-            ),
-            for (final p in providers)
-              ListTile(
-                leading: Icon(_icon(p)),
-                title: Text(_label(p)),
-                subtitle: pendingProviders.contains(p)
-                    ? const Text('A pending payment already exists')
-                    : null,
-                trailing: pendingProviders.contains(p)
-                    ? const Icon(Icons.hourglass_top)
-                    : const Icon(Icons.chevron_right),
-                enabled: !pendingProviders.contains(p),
-                onTap: pendingProviders.contains(p)
-                    ? null
-                    : () => onPicked(p, 'external'),
+        padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+        child: LiquidGlass(
+          blur: 32,
+          borderRadius: const BorderRadius.all(Radius.circular(28)),
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Pay for ${plan == 'year' ? 'yearly' : 'monthly'} premium',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
               ),
-          ],
+              const SizedBox(height: 16),
+              if (walletProviders.isNotEmpty) ...[
+                Text('App wallet',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: scheme.primary,
+                      letterSpacing: 1.1,
+                    )),
+                const SizedBox(height: 8),
+                GlassCard(
+                  padding: EdgeInsets.zero,
+                  child: Column(
+                    children: [
+                      for (final (i, p) in walletProviders.indexed) ...[
+                        if (i > 0)
+                          Divider(
+                            height: 1,
+                            thickness: 0.5,
+                            indent: 66,
+                            color: scheme.onSurface.withValues(alpha: 0.10),
+                          ),
+                        _ProviderTile(
+                          icon: _icon(p),
+                          title: '${p.toUpperCase()} balance',
+                          subtitle:
+                              _formatCrypto(_balanceFor(balances, p), p),
+                          onTap: () => onPicked(p, 'wallet'),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+              Text('External wallet or card',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: scheme.primary,
+                    letterSpacing: 1.1,
+                  )),
+              const SizedBox(height: 8),
+              GlassCard(
+                padding: EdgeInsets.zero,
+                child: Column(
+                  children: [
+                    for (final (i, p) in providers.indexed) ...[
+                      if (i > 0)
+                        Divider(
+                          height: 1,
+                          thickness: 0.5,
+                          indent: 66,
+                          color: scheme.onSurface.withValues(alpha: 0.10),
+                        ),
+                      _ProviderTile(
+                        icon: _icon(p),
+                        title: _label(p),
+                        subtitle: pendingProviders.contains(p)
+                            ? 'A pending payment already exists'
+                            : null,
+                        trailing: pendingProviders.contains(p)
+                            ? Icon(Icons.hourglass_top,
+                                size: 18,
+                                color:
+                                    scheme.onSurface.withValues(alpha: 0.45))
+                            : null,
+                        enabled: !pendingProviders.contains(p),
+                        onTap: pendingProviders.contains(p)
+                            ? null
+                            : () => onPicked(p, 'external'),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ProviderTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final Widget? trailing;
+  final bool enabled;
+  final VoidCallback? onTap;
+
+  const _ProviderTile({
+    required this.icon,
+    required this.title,
+    this.subtitle,
+    this.trailing,
+    this.enabled = true,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = enabled ? scheme.primary : scheme.onSurface.withValues(alpha: 0.35);
+    return ClipRRect(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: enabled ? onTap : null,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: color.withValues(alpha: 0.12),
+                  ),
+                  child: Icon(icon, size: 18, color: color),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(title,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: enabled ? null : scheme.onSurface.withValues(alpha: 0.45),
+                          )),
+                      if (subtitle != null)
+                        Text(subtitle!,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: scheme.onSurface.withValues(alpha: 0.55),
+                            )),
+                    ],
+                  ),
+                ),
+                trailing ??
+                    Icon(Icons.chevron_right,
+                        size: 18,
+                        color: scheme.onSurface.withValues(alpha: 0.35)),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -879,15 +1141,62 @@ class _InvoiceTile extends StatelessWidget {
             .first ??
         '';
 
-    return Card(
-      child: ListTile(
-        leading: Icon(_providerIcon(provider)),
-        title: Text(
-          '$providerLabel • ${plan == 'year' ? 'Yearly' : 'Monthly'}',
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GlassCard(
+        padding: EdgeInsets.zero,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(22),
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: scheme.primary.withValues(alpha: 0.12),
+                    ),
+                    child: Icon(
+                      _providerIcon(provider),
+                      size: 20,
+                      color: scheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '$providerLabel • ${plan == 'year' ? 'Yearly' : 'Monthly'}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                        ),
+                        Text(
+                          '$statusText${date.isEmpty ? '' : ' • $date'}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: scheme.onSurface.withValues(alpha: 0.55),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (trailing != null) trailing!,
+                ],
+              ),
+            ),
+          ),
         ),
-        subtitle: Text('$statusText${date.isEmpty ? '' : ' • $date'}'),
-        trailing: trailing,
-        onTap: onTap,
       ),
     );
   }

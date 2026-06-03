@@ -134,27 +134,46 @@ class _BotManagementScreenState extends State<BotManagementScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.smart_toy_outlined,
-                          size: 72, color: Colors.grey),
+                      Icon(Icons.smart_toy_outlined,
+                          size: 72,
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurface
+                              .withValues(alpha: 0.35)),
                       const SizedBox(height: 16),
-                      const Text('No bots yet',
-                          style: TextStyle(fontSize: 16, color: Colors.grey)),
+                      Text('No bots yet',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withValues(alpha: 0.55),
+                          )),
                       const SizedBox(height: 8),
-                      const Text(
+                      Text(
                         'Create a bot to automate messages\nusing the OpenChat Bot API',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.grey, fontSize: 13),
+                        style: TextStyle(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurface
+                              .withValues(alpha: 0.45),
+                          fontSize: 13,
+                        ),
                       ),
                       const SizedBox(height: 16),
                       FilledButton.icon(
                         icon: const Icon(Icons.add),
                         label: const Text('Create a bot'),
+                        style: FilledButton.styleFrom(
+                            shape: const StadiumBorder()),
                         onPressed: _createBot,
                       ),
                     ],
                   ),
                 )
               : ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
                   itemCount: _bots.length,
                   itemBuilder: (context, i) {
                     final bot = _bots[i];
@@ -162,26 +181,74 @@ class _BotManagementScreenState extends State<BotManagementScreen> {
                     final avatarUrl = bot['avatar_url'] as String?;
                     final description =
                         (bot['bio'] ?? bot['description']) as String?;
-                    return ListTile(
-                      leading: CircleAvatar(
-                        backgroundImage: avatarUrl != null
-                            ? CachedNetworkImageProvider(
-                                ApiConfig.resolveMedia(avatarUrl))
-                            : null,
-                        child: avatarUrl == null
-                            ? Text(username.isNotEmpty
-                                ? username[0].toUpperCase()
-                                : 'B')
-                            : null,
+                    final scheme = Theme.of(context).colorScheme;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: GlassCard(
+                        padding: EdgeInsets.zero,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(22),
+                          child: Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: () => _openBot(bot),
+                              child: Padding(
+                                padding: const EdgeInsets.all(14),
+                                child: Row(
+                                  children: [
+                                    CircleAvatar(
+                                      radius: 22,
+                                      backgroundImage: avatarUrl != null
+                                          ? CachedNetworkImageProvider(
+                                              ApiConfig.resolveMedia(avatarUrl))
+                                          : null,
+                                      child: avatarUrl == null
+                                          ? Text(
+                                              username.isNotEmpty
+                                                  ? username[0].toUpperCase()
+                                                  : 'B',
+                                              style: const TextStyle(
+                                                  fontWeight: FontWeight.w600),
+                                            )
+                                          : null,
+                                    ),
+                                    const SizedBox(width: 14),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text('@$username',
+                                              style: const TextStyle(
+                                                  fontWeight: FontWeight.w600)),
+                                          Text(
+                                            description != null &&
+                                                    description.isNotEmpty
+                                                ? description
+                                                : 'No description',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color: scheme.onSurface
+                                                  .withValues(alpha: 0.55),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    Icon(Icons.chevron_right,
+                                        size: 18,
+                                        color: scheme.onSurface
+                                            .withValues(alpha: 0.35)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
-                      title: Text('@$username'),
-                      subtitle: description != null && description.isNotEmpty
-                          ? Text(description,
-                              maxLines: 1, overflow: TextOverflow.ellipsis)
-                          : const Text('No description',
-                              style: TextStyle(color: Colors.grey)),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () => _openBot(bot),
                     );
                   },
                 ),
@@ -590,8 +657,8 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
         ],
       ),
       body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
         children: [
-          // Avatar + name header
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 24),
             child: Column(
@@ -615,12 +682,15 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
                               )
                             : null,
                       ),
-                      const Positioned(
+                      Positioned(
                         bottom: 0,
                         right: 0,
                         child: CircleAvatar(
                           radius: 14,
-                          child: Icon(Icons.camera_alt, size: 16),
+                          backgroundColor:
+                              Theme.of(context).colorScheme.primary,
+                          child: const Icon(Icons.camera_alt,
+                              size: 16, color: Colors.white),
                         ),
                       ),
                     ],
@@ -636,75 +706,164 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
                     child: Text(
                       _description!,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.grey),
+                      style: TextStyle(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurface
+                            .withValues(alpha: 0.55),
+                      ),
                     ),
                   ),
               ],
             ),
           ),
 
-          const Divider(),
-
-          // API Token section
-          ListTile(
-            leading: const Icon(Icons.vpn_key_outlined),
-            title: const Text('API Token'),
-            subtitle: _token.isNotEmpty
-                ? Text(
-                    '${_token.substring(0, _token.length.clamp(0, 20))}…',
-                    style:
-                        const TextStyle(fontFamily: 'monospace', fontSize: 12),
-                  )
-                : const Text(
-                    'Shown only once. Regenerate to issue a new token.',
-                    style: TextStyle(color: Colors.grey)),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
+          GlassCard(
+            padding: EdgeInsets.zero,
+            child: Column(
               children: [
-                if (_token.isNotEmpty)
-                  IconButton(
-                    icon: const Icon(Icons.copy, size: 20),
-                    tooltip: 'Copy token',
-                    onPressed: _copyToken,
+                _BotDetailTile(
+                  icon: Icons.vpn_key_outlined,
+                  title: 'API Token',
+                  subtitle: _token.isNotEmpty
+                      ? '${_token.substring(0, _token.length.clamp(0, 20))}…'
+                      : 'Shown only once. Regenerate to issue a new token.',
+                  subtitleMono: _token.isNotEmpty,
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_token.isNotEmpty)
+                        IconButton(
+                          icon: const Icon(Icons.copy, size: 20),
+                          tooltip: 'Copy token',
+                          onPressed: _copyToken,
+                        ),
+                      IconButton(
+                        icon: const Icon(Icons.refresh, size: 20),
+                        tooltip: 'Regenerate token',
+                        onPressed: _regenerateToken,
+                      ),
+                    ],
                   ),
-                IconButton(
-                  icon: const Icon(Icons.refresh, size: 20),
-                  tooltip: 'Regenerate token',
-                  onPressed: _regenerateToken,
+                  onTap: _token.isNotEmpty ? _copyToken : _regenerateToken,
+                ),
+                Divider(
+                  height: 1,
+                  thickness: 0.5,
+                  indent: 66,
+                  color: Theme.of(context)
+                      .colorScheme
+                      .onSurface
+                      .withValues(alpha: 0.10),
+                ),
+                _BotDetailTile(
+                  icon: Icons.webhook_outlined,
+                  title: 'Webhook URL',
+                  subtitle: (_bot['webhook_url'] as String?)?.isNotEmpty == true
+                      ? _bot['webhook_url'] as String
+                      : 'Not configured',
+                  trailingIcon: Icons.edit_outlined,
+                  onTap: _editBot,
                 ),
               ],
             ),
-            onTap: _token.isNotEmpty ? _copyToken : _regenerateToken,
           ),
-
-          // Webhook URL
-          ListTile(
-            leading: const Icon(Icons.webhook_outlined),
-            title: const Text('Webhook URL'),
-            subtitle: Text(
-              (_bot['webhook_url'] as String?)?.isNotEmpty == true
-                  ? _bot['webhook_url'] as String
-                  : 'Not configured',
-              style: TextStyle(
-                color: (_bot['webhook_url'] as String?)?.isNotEmpty == true
-                    ? null
-                    : Colors.grey,
-              ),
+          const SizedBox(height: 8),
+          GlassCard(
+            tint:
+                Theme.of(context).colorScheme.error.withValues(alpha: 0.06),
+            padding: EdgeInsets.zero,
+            child: _BotDetailTile(
+              icon: Icons.delete_outline,
+              title: 'Delete Bot',
+              isDestructive: true,
+              onTap: _deleteBot,
             ),
-            trailing: const Icon(Icons.edit_outlined, size: 20),
-            onTap: _editBot,
-          ),
-
-          const Divider(),
-
-          // Delete
-          ListTile(
-            leading: const Icon(Icons.delete_outline, color: Colors.red),
-            title:
-                const Text('Delete Bot', style: TextStyle(color: Colors.red)),
-            onTap: _deleteBot,
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _BotDetailTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final bool subtitleMono;
+  final Widget? trailing;
+  final IconData? trailingIcon;
+  final VoidCallback? onTap;
+  final bool isDestructive;
+
+  const _BotDetailTile({
+    required this.icon,
+    required this.title,
+    this.subtitle,
+    this.subtitleMono = false,
+    this.trailing,
+    this.trailingIcon,
+    this.onTap,
+    this.isDestructive = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = isDestructive ? scheme.error : scheme.primary;
+    return ClipRRect(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: color.withValues(alpha: 0.12),
+                  ),
+                  child: Icon(icon, size: 18, color: color),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: isDestructive ? color : null,
+                        ),
+                      ),
+                      if (subtitle != null)
+                        Text(
+                          subtitle!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontFamily: subtitleMono ? 'monospace' : null,
+                            color: scheme.onSurface.withValues(alpha: 0.55),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                if (trailing case final w?) w,
+                if (trailingIcon != null)
+                  Icon(trailingIcon, size: 18,
+                      color: scheme.onSurface.withValues(alpha: 0.35)),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

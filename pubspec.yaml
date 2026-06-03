@@ -58,6 +58,9 @@ dependencies:
   # Call ringtone / connecting tones
   just_audio: ^0.10.5
 
+  # Location-based features (live sharing)
+  geolocator: ^14.0.2
+
   # QR code generation (fingerprint verification)
   qr_flutter: ^4.1.0
 

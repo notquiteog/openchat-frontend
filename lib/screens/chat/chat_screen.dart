@@ -515,47 +515,69 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final choice = await showModalBottomSheet<String>(
       context: context,
+      backgroundColor: Colors.transparent,
       builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_library),
-              title: const Text('Photo from gallery'),
-              onTap: () => Navigator.pop(context, 'gallery_image'),
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          child: LiquidGlass(
+            blur: 32,
+            borderRadius: const BorderRadius.all(Radius.circular(28)),
+            padding: EdgeInsets.zero,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 8),
+                _AttachTile(
+                  icon: Icons.photo_library_outlined,
+                  label: 'Photo from gallery',
+                  onTap: () => Navigator.pop(context, 'gallery_image'),
+                ),
+                _AttachTile(
+                  icon: Icons.share_location_outlined,
+                  label: 'Share location',
+                  onTap: () => Navigator.pop(context, 'location_once'),
+                ),
+                _AttachTile(
+                  icon: Icons.location_on_outlined,
+                  label: 'Share live location',
+                  onTap: () => Navigator.pop(context, 'location_live'),
+                ),
+                if (cameraSupported)
+                  _AttachTile(
+                    icon: Icons.camera_alt_outlined,
+                    label: 'Take photo',
+                    onTap: () => Navigator.pop(context, 'camera_image'),
+                  ),
+                _AttachTile(
+                  icon: Icons.videocam_outlined,
+                  label: 'Video from gallery',
+                  onTap: () => Navigator.pop(context, 'gallery_video'),
+                ),
+                _AttachTile(
+                  icon: Icons.attach_file_rounded,
+                  label: 'File',
+                  onTap: () => Navigator.pop(context, 'file'),
+                ),
+                _AttachTile(
+                  icon: Icons.poll_outlined,
+                  label: 'Poll',
+                  onTap: () => Navigator.pop(context, 'poll'),
+                ),
+                _AttachTile(
+                  icon: Icons.mic_none_outlined,
+                  label: 'Voice note',
+                  onTap: () => Navigator.pop(context, 'voice'),
+                ),
+                _AttachTile(
+                  icon: Icons.payments_outlined,
+                  label: 'Pay or request',
+                  onTap: () => Navigator.pop(context, 'payment'),
+                ),
+                const SizedBox(height: 8),
+              ],
             ),
-            if (cameraSupported)
-              ListTile(
-                leading: const Icon(Icons.camera_alt),
-                title: const Text('Take photo'),
-                onTap: () => Navigator.pop(context, 'camera_image'),
-              ),
-            ListTile(
-              leading: const Icon(Icons.videocam),
-              title: const Text('Video from gallery'),
-              onTap: () => Navigator.pop(context, 'gallery_video'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.attach_file),
-              title: const Text('File'),
-              onTap: () => Navigator.pop(context, 'file'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.poll_outlined),
-              title: const Text('Poll'),
-              onTap: () => Navigator.pop(context, 'poll'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.mic_none_outlined),
-              title: const Text('Voice note'),
-              onTap: () => Navigator.pop(context, 'voice'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.payments_outlined),
-              title: const Text('Pay or request'),
-              onTap: () => Navigator.pop(context, 'payment'),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -567,6 +589,14 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     if (choice == 'payment') {
       await _showPaymentSheet();
+      return;
+    }
+    if (choice == 'location_once') {
+      await _shareOneTimeLocation();
+      return;
+    }
+    if (choice == 'location_live') {
+      await _shareLiveLocation();
       return;
     }
 
@@ -907,6 +937,174 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _shareOneTimeLocation() async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final sent = await context.read<ChatProvider>().sendOneTimeLocation(
+        convID: conv.id,
+      );
+      if (!mounted) return;
+      if (sent) {
+        _scrollToBottom();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
+  Future<void> _shareLiveLocation() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final duration = await _selectLiveLocationDuration();
+    if (duration == null || !mounted) return;
+    try {
+      final msgID = await context.read<ChatProvider>().sendLiveLocation(
+        convID: conv.id,
+        duration: duration,
+      );
+      if (!mounted) return;
+      if (msgID != null) {
+        _scrollToBottom();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
+  Future<Duration?> _selectLiveLocationDuration() async {
+    const options = <(String, Duration)>[
+      ('15 minutes', Duration(minutes: 15)),
+      ('30 minutes', Duration(minutes: 30)),
+      ('1 hour', Duration(hours: 1)),
+      ('2 hours', Duration(hours: 2)),
+      ('8 hours', Duration(hours: 8)),
+      ('1 day', Duration(days: 1)),
+    ];
+    return showDialog<Duration>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Live location duration'),
+        children: [
+          for (final option in options)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, option.$2),
+              child: Text(option.$1),
+            ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openLocationMessage(Message msg) {
+    final location = msg.location;
+    if (location == null) return;
+    final coords = '${location.latitude.toStringAsFixed(6)}, ${location.longitude.toStringAsFixed(6)}';
+    final status = location.isLive
+        ? location.isActive
+              ? 'Live location${location.remainingLabel}'
+              : 'Live location ended'
+        : location.previewLabel;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            foregroundColor: Colors.white,
+            title: Text(status),
+          ),
+          body: SafeArea(
+            child: Column(
+              children: [
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: InteractiveViewer(
+                        minScale: 1,
+                        maxScale: 5,
+                        child: CachedNetworkImage(
+                          imageUrl: location.mapUrl,
+                          fit: BoxFit.contain,
+                          placeholder: (_, __) =>
+                              const Center(child: CircularProgressIndicator()),
+                          errorWidget: (_, __, ___) => const Center(
+                            child: Icon(
+                              Icons.map_outlined,
+                              color: Colors.white54,
+                              size: 48,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: Container(
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: Colors.black87,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (location.previewLabel.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 4),
+                                child: Text(
+                                  location.previewLabel,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                          ),
+                        Text(
+                          coords,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        FilledButton.tonal(
+                          onPressed: () {
+                            Clipboard.setData(
+                              ClipboardData(
+                                text: '${location.latitude}, ${location.longitude}',
+                              ),
+                            );
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Coordinates copied')),
+                            );
+                          },
+                          child: const Text('Copy coordinates'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   void _showExternalPaymentAddress(Map<String, dynamic> deposit) {
     final address = deposit['crypto_address'] as String? ?? '';
     final provider = deposit['provider'] as String? ?? '';
@@ -1111,9 +1309,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final messages = chat.messagesFor(conv.id);
     final currentUserID = auth.currentUser?.id ?? '';
     final typingUsers = chat.typingUsersFor(conv.id);
-    final callTopInset = context.select<CallProvider, double>(
-      (cp) => cp.minimizedContentTopInset,
-    );
     _handleMessageListChange(messages, currentUserID);
 
     // Per-chat look. The current user's bubble color is also stored on their
@@ -1139,7 +1334,6 @@ class _ChatScreenState extends State<ChatScreen> {
             curve: Curves.easeOutCubic,
             child: Column(
               children: [
-                if (callTopInset > 0) SizedBox(height: callTopInset),
                 Expanded(
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
@@ -1148,7 +1342,27 @@ class _ChatScreenState extends State<ChatScreen> {
                       children: [
                         Positioned.fill(
                           child: messages.isEmpty
-                              ? const Center(child: Text('No messages yet'))
+                              ? Center(
+                                  child: LiquidGlass.capsule(
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 20,
+                                        vertical: 12,
+                                      ),
+                                      child: Text(
+                                        'No messages yet',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .onSurface
+                                              .withValues(alpha: 0.55),
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                )
                               : ListView.builder(
                                   controller: _scrollCtrl,
                                   reverse: true,
@@ -1187,6 +1401,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                         messages.length - 1 - i;
                                     final msg = messages[messageIndex];
                                     final isMe = msg.senderId == currentUserID;
+                                    final isLocationMessage =
+                                        msg.type == MessageType.location &&
+                                        msg.location != null;
                                     final showAvatar =
                                         !isMe &&
                                         (messageIndex == messages.length - 1 ||
@@ -1201,11 +1418,17 @@ class _ChatScreenState extends State<ChatScreen> {
                                         showAvatar: showAvatar,
                                         meBubbleColor: meBubbleColor,
                                         bubbleRadius: chatStyle.bubbleRadius,
-                                        onTapUp: (details) => _showReactionMenu(
-                                          context,
-                                          msg,
-                                          details.globalPosition,
-                                        ),
+                                        onTap: isLocationMessage
+                                            ? () => _openLocationMessage(msg)
+                                            : null,
+                                        onTapUp: isLocationMessage
+                                            ? null
+                                            : (details) =>
+                                                _showReactionMenu(
+                                                  context,
+                                                  msg,
+                                                  details.globalPosition,
+                                                ),
                                         onLongPress: () => _showMessageMenu(
                                           context,
                                           msg,
@@ -1243,22 +1466,34 @@ class _ChatScreenState extends State<ChatScreen> {
                                 opacity: _showNewMessagesPill ? 1 : 0,
                                 duration: const Duration(milliseconds: 140),
                                 child: Center(
-                                  child: FilledButton.tonalIcon(
-                                    onPressed: _scrollToBottom,
-                                    icon: const Icon(Icons.keyboard_arrow_down),
-                                    label: Text(
-                                      _pendingNewMessageCount <= 1
-                                          ? 'View new messages'
-                                          : 'View $_pendingNewMessageCount new messages',
-                                    ),
-                                    style: FilledButton.styleFrom(
-                                      visualDensity: VisualDensity.compact,
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 14,
-                                        vertical: 8,
+                                  child: GestureDetector(
+                                    onTap: _scrollToBottom,
+                                    child: LiquidGlass.capsule(
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 10,
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const Icon(
+                                              Icons.keyboard_arrow_down_rounded,
+                                              size: 18,
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Text(
+                                              _pendingNewMessageCount <= 1
+                                                  ? 'New messages'
+                                                  : '$_pendingNewMessageCount new messages',
+                                              style: const TextStyle(
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                       ),
-                                      shape: const StadiumBorder(),
-                                      elevation: 2,
                                     ),
                                   ),
                                 ),
@@ -1936,6 +2171,22 @@ class _ChatScreenState extends State<ChatScreen> {
               onTap: () {
                 Navigator.pop(context);
                 context.read<ChatProvider>().deleteMessage(conv.id, msg.id);
+              },
+            ),
+          if (msg.type == MessageType.location &&
+              isMe &&
+              context.read<ChatProvider>().isLiveLocationActive(msg.id) &&
+              msg.location != null &&
+              msg.location!.isLive)
+            ListTile(
+              leading: const Icon(Icons.location_off, color: Colors.orange),
+              title: const Text(
+                'Stop location sharing',
+                style: TextStyle(color: Colors.orange),
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                context.read<ChatProvider>().stopLiveLocation(msg.id);
               },
             ),
         ],
@@ -2829,24 +3080,18 @@ class _ReactionPopup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Material(
-      color: scheme.surface,
-      elevation: 8,
-      shadowColor: Colors.black.withValues(alpha: 0.18),
-      borderRadius: BorderRadius.circular(26),
+    return LiquidGlass.capsule(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
             for (final emoji in emojis)
-              InkWell(
-                borderRadius: BorderRadius.circular(20),
+              GestureDetector(
                 onTap: () => onSelected(emoji),
                 child: Padding(
-                  padding: const EdgeInsets.all(6),
-                  child: Text(emoji, style: const TextStyle(fontSize: 24)),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                  child: Text(emoji, style: const TextStyle(fontSize: 26)),
                 ),
               ),
           ],
@@ -2896,17 +3141,30 @@ class _TypingIndicatorState extends State<_TypingIndicator>
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 2, 16, 2),
+      padding: const EdgeInsets.fromLTRB(12, 2, 12, 2),
       child: Row(
         children: [
-          _BouncingDots(controller: _ctrl),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              widget.label,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+          LiquidGlass.capsule(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _BouncingDots(controller: _ctrl),
+                  const SizedBox(width: 8),
+                  Text(
+                    widget.label,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: scheme.onSurface.withValues(alpha: 0.60),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -2942,6 +3200,51 @@ class _BouncingDots extends AnimatedWidget {
           ),
         );
       }),
+    );
+  }
+}
+
+class _AttachTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _AttachTile({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ClipRRect(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: scheme.primary.withValues(alpha: 0.12),
+                  ),
+                  child: Icon(icon, size: 18, color: scheme.primary),
+                ),
+                const SizedBox(width: 14),
+                Text(label,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 15)),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

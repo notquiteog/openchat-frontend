@@ -104,8 +104,9 @@ class CallProvider extends ChangeNotifier {
   bool get isCameraEnabled => _cameraEnabled;
   List<CallAudioOutput> get audioOutputs => _audioOutputs;
   String? get selectedAudioOutputId => _selectedAudioOutputId;
-  double get minimizedContentTopInset =>
-      isInCall && _isCallMinimized ? minimizedCallBarHeight : 0;
+  // The minimized bar now occupies the AppBar zone (not the body), so body
+  // content never needs to offset for it.
+  double get minimizedContentTopInset => 0;
 
   StreamSubscription? _sessionSub;
   StreamSubscription? _incomingSub;

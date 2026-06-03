@@ -24,6 +24,148 @@ enum MessageType {
   system,
 }
 
+enum LocationMessageKind { oneTime, live }
+
+class MessageLocation {
+  final LocationMessageKind kind;
+  final double latitude;
+  final double longitude;
+  final double? accuracy;
+  final String shareId;
+  final DateTime? endsAt;
+  final bool ended;
+
+  const MessageLocation({
+    required this.kind,
+    required this.latitude,
+    required this.longitude,
+    required this.shareId,
+    this.accuracy,
+    this.endsAt,
+    this.ended = false,
+  });
+
+  bool get isLive => kind == LocationMessageKind.live;
+  bool get isActive =>
+      isLive && !ended && endsAt != null && endsAt!.isAfter(DateTime.now());
+
+  Duration? get _remaining {
+    if (endsAt == null) return null;
+    final diff = endsAt!.difference(DateTime.now());
+    if (diff <= Duration.zero) return null;
+    return diff;
+  }
+
+  String get remainingLabel {
+    final remaining = _remaining;
+    if (remaining == null) return '';
+    if (remaining.inDays >= 1) {
+      return '· ${remaining.inDays}d remaining';
+    }
+    if (remaining.inHours >= 1) {
+      return '· ${remaining.inHours}h remaining';
+    }
+    if (remaining.inMinutes >= 1) {
+      return '· ${remaining.inMinutes}m remaining';
+    }
+    return '· ${remaining.inSeconds}s remaining';
+  }
+
+  String get previewLabel {
+    if (kind == LocationMessageKind.oneTime) return '📍 Location shared';
+    if (ended) return '📍 Live location ended';
+    if (isActive) return '📍 Live location $remainingLabel';
+    return '📍 Live location';
+  }
+
+  String get copyLabel =>
+      '${latitude.toStringAsFixed(5)}, ${longitude.toStringAsFixed(5)}';
+
+  String get mapUrl {
+    final lat = latitude.toStringAsFixed(6);
+    final lng = longitude.toStringAsFixed(6);
+    return 'https://staticmap.openstreetmap.de/staticmap.php?center=$lat,$lng&zoom=15&size=640x360&markers=$lat,$lng,pin';
+  }
+
+  String get thumbnailUrl {
+    final lat = latitude.toStringAsFixed(6);
+    final lng = longitude.toStringAsFixed(6);
+    return 'https://staticmap.openstreetmap.de/staticmap.php?center=$lat,$lng&zoom=14&size=560x260&markers=$lat,$lng,pin';
+  }
+
+  Map<String, dynamic> toJson() => {
+    'kind': kind == LocationMessageKind.live ? 'live' : 'one_time',
+    'latitude': latitude,
+    'longitude': longitude,
+    if (accuracy != null) 'accuracy': accuracy,
+    'share_id': shareId,
+    if (endsAt != null) 'ends_at': endsAt!.toUtc().toIso8601String(),
+    'ended': ended,
+  };
+
+  MessageLocation copyWith({
+    LocationMessageKind? kind,
+    double? latitude,
+    double? longitude,
+    double? accuracy,
+    String? shareId,
+    DateTime? endsAt,
+    bool? ended,
+  }) => MessageLocation(
+    kind: kind ?? this.kind,
+    latitude: latitude ?? this.latitude,
+    longitude: longitude ?? this.longitude,
+    shareId: shareId ?? this.shareId,
+    accuracy: accuracy ?? this.accuracy,
+    endsAt: endsAt ?? this.endsAt,
+    ended: ended ?? this.ended,
+  );
+
+  static MessageLocation? tryParse(String raw) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return null;
+      return _fromMap(decoded);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static MessageLocation? _fromMap(Map<String, dynamic> raw) {
+    final lat = _parseDouble(raw['latitude']) ?? _parseDouble(raw['lat']);
+    final lng = _parseDouble(raw['longitude']) ?? _parseDouble(raw['lng']);
+    if (lat == null || lng == null) return null;
+
+    final kindRaw = (raw['kind'] as String? ?? raw['type'] as String? ?? '')
+        .toLowerCase();
+    final kind = switch (kindRaw) {
+      'live' => LocationMessageKind.live,
+      'one_time' || 'onetime' => LocationMessageKind.oneTime,
+      _ => LocationMessageKind.oneTime,
+    };
+    final endsAt = raw['ends_at'] != null
+        ? DateTime.tryParse(raw['ends_at'] as String)
+        : raw['endsAt'] != null
+        ? DateTime.tryParse(raw['endsAt'] as String)
+        : null;
+    return MessageLocation(
+      kind: kind,
+      latitude: lat,
+      longitude: lng,
+      shareId: raw['share_id'] as String? ?? raw['shareId'] as String? ?? '',
+      accuracy: _parseDouble(raw['accuracy']),
+      endsAt: endsAt,
+      ended: raw['ended'] == true,
+    );
+  }
+
+  static double? _parseDouble(Object? value) {
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value);
+    return null;
+  }
+}
+
 class CustomEmojiEntity {
   final String type;
   final int offset;
@@ -262,6 +404,7 @@ class Message {
 
   // Decrypted on client — never stored or sent to server
   MessageContent? _content;
+  MessageLocation? _location;
   bool _decryptionFailed = false;
 
   Message({
@@ -319,7 +462,17 @@ class Message {
   );
 
   void setDecryptedContent(String raw) {
-    _content = MessageContent.parse(raw, type);
+    if (type == MessageType.location) {
+      final location = MessageLocation.tryParse(raw);
+      _location = location;
+      if (location == null) {
+        _content = MessageContent.parse(raw, type);
+      } else {
+        _content = MessageContent.text(location.copyLabel);
+      }
+    } else {
+      _content = MessageContent.parse(raw, type);
+    }
     _decryptionFailed = false;
   }
 
@@ -336,6 +489,9 @@ class Message {
 
   /// Convenience: plain display text (for text/sticker) or caption.
   String? get decryptedContent => _content?.text;
+  MessageLocation? get location => _location;
+  bool get isActiveLiveLocation =>
+      _location?.isLive == true && _location?.isActive == true;
 
   /// Parsed call event if this is a `system` call-outcome message, else null.
   CallEventInfo? get callEvent {
@@ -346,6 +502,9 @@ class Message {
   /// One-line text for conversation list previews. Call events render as their
   /// label (e.g. "Missed voice call") rather than the raw JSON payload.
   String get listPreview {
+    if (type == MessageType.location && location != null) {
+      return location!.previewLabel;
+    }
     if (type == MessageType.poll && poll != null) {
       return 'Poll: ${poll!.question}';
     }
@@ -416,6 +575,7 @@ class Message {
       sender: sender ?? this.sender,
     );
     if (_content != null) msg._content = _content;
+    if (_location != null) msg._location = _location;
     msg._decryptionFailed = _decryptionFailed;
     return msg;
   }

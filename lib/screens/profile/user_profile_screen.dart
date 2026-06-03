@@ -485,39 +485,25 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 switch (v) {
                   case 'ban':
                     _ban();
-                    break;
                   case 'unban':
                     _unban();
-                    break;
                   case 'flag':
                     _flagScammer();
-                    break;
                   case 'unflag':
                     _unflagScammer();
-                    break;
                   case 'premium_month':
                     _grantPremiumMonth();
-                    break;
                 }
               },
               itemBuilder: (_) => [
                 if (!_user.isBanned)
                   const PopupMenuItem(value: 'ban', child: Text('Ban user'))
                 else
-                  const PopupMenuItem(
-                    value: 'unban',
-                    child: Text('Unban user'),
-                  ),
+                  const PopupMenuItem(value: 'unban', child: Text('Unban user')),
                 if (!_user.isFlaggedScammer)
-                  const PopupMenuItem(
-                    value: 'flag',
-                    child: Text('Flag as scammer'),
-                  )
+                  const PopupMenuItem(value: 'flag', child: Text('Flag as scammer'))
                 else
-                  const PopupMenuItem(
-                    value: 'unflag',
-                    child: Text('Remove scammer flag'),
-                  ),
+                  const PopupMenuItem(value: 'unflag', child: Text('Remove scammer flag')),
                 const PopupMenuItem(
                   value: 'premium_month',
                   child: Text('Give Premium for 1 month'),
@@ -529,78 +515,120 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
-              padding: const EdgeInsets.all(0),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
               children: [
-                // ── Scammer warning ──────────────────────────────────────────
+                // ── Warning banners ──────────────────────────────────────────
                 if (_user.isFlaggedScammer)
-                  Container(
-                    color: Colors.red[700],
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 10,
-                    ),
-                    child: const Row(
-                      children: [
-                        Icon(Icons.warning_amber, color: Colors.white),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'This user has been flagged as a scammer. Exercise caution.',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: cs.error.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: cs.error.withValues(alpha: 0.32),
+                          width: 0.8,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.warning_amber_rounded, color: cs.error),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'This user has been flagged as a scammer. Exercise caution.',
+                              style: TextStyle(
+                                color: cs.error,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
 
-                // ── Banned banner ─────────────────────────────────────────────
                 if (_user.isBanned)
-                  Container(
-                    color: Colors.grey[800],
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 10,
-                    ),
-                    child: const Row(
-                      children: [
-                        Icon(Icons.block, color: Colors.white70),
-                        SizedBox(width: 8),
-                        Text(
-                          'This account has been banned.',
-                          style: TextStyle(color: Colors.white70),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: cs.onSurface.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: cs.onSurface.withValues(alpha: 0.18),
+                          width: 0.8,
                         ),
-                      ],
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.block,
+                            color: cs.onSurface.withValues(alpha: 0.55),
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            'This account has been banned.',
+                            style: TextStyle(
+                              color: cs.onSurface.withValues(alpha: 0.65),
+                              fontWeight: FontWeight.w500,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
 
-                // ── Avatar + name ─────────────────────────────────────────────
-                Container(
-                  color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
-                  padding: const EdgeInsets.symmetric(vertical: 32),
+                // ── Avatar + name hero ────────────────────────────────────────
+                GlassCard(
+                  padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
                   child: Column(
                     children: [
-                      CircleAvatar(
-                        radius: 50,
-                        backgroundImage: _user.avatarUrl != null
-                            ? CachedNetworkImageProvider(
-                                ApiConfig.resolveMedia(_user.avatarUrl!),
-                              )
-                            : null,
-                        backgroundColor: cs.primaryContainer,
-                        child: _user.avatarUrl == null
-                            ? Text(
-                                _user.username[0].toUpperCase(),
-                                style: TextStyle(
-                                  fontSize: 36,
-                                  color: cs.onPrimaryContainer,
-                                ),
-                              )
-                            : null,
+                      // Avatar with glow
+                      Container(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: cs.primary.withValues(alpha: 0.30),
+                              blurRadius: 24,
+                              spreadRadius: -4,
+                              offset: const Offset(0, 8),
+                            ),
+                          ],
+                        ),
+                        child: CircleAvatar(
+                          radius: 52,
+                          backgroundImage: _user.avatarUrl != null
+                              ? CachedNetworkImageProvider(
+                                  ApiConfig.resolveMedia(_user.avatarUrl!),
+                                )
+                              : null,
+                          backgroundColor: cs.primaryContainer,
+                          child: _user.avatarUrl == null
+                              ? Text(
+                                  _user.username[0].toUpperCase(),
+                                  style: TextStyle(
+                                    fontSize: 38,
+                                    fontWeight: FontWeight.w700,
+                                    color: cs.onPrimaryContainer,
+                                  ),
+                                )
+                              : null,
+                        ),
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 14),
+                      // Username + badges
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
@@ -608,7 +636,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                             '@${_user.username}',
                             style: const TextStyle(
                               fontSize: 22,
-                              fontWeight: FontWeight.bold,
+                              fontWeight: FontWeight.w800,
                             ),
                           ),
                           if (_user.isSystemAdmin)
@@ -623,150 +651,370 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                                 ),
                               ),
                             ),
+                          if (_user.isPremium)
+                            const Padding(
+                              padding: EdgeInsets.only(left: 4),
+                              child: Icon(
+                                Icons.workspace_premium,
+                                size: 18,
+                                color: Colors.amber,
+                              ),
+                            ),
                           if (_user.isBot)
                             Padding(
                               padding: const EdgeInsets.only(left: 6),
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
+                                  horizontal: 7,
                                   vertical: 2,
                                 ),
                                 decoration: BoxDecoration(
                                   color: cs.secondaryContainer,
-                                  borderRadius: BorderRadius.circular(4),
+                                  borderRadius: BorderRadius.circular(6),
                                 ),
                                 child: Text(
                                   'BOT',
                                   style: TextStyle(
                                     fontSize: 10,
-                                    fontWeight: FontWeight.bold,
+                                    fontWeight: FontWeight.w800,
                                     color: cs.onSecondaryContainer,
+                                    letterSpacing: 0.8,
                                   ),
                                 ),
                               ),
                             ),
                         ],
                       ),
-                      if (_user.bio != null && _user.bio!.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
-                          child: Text(
-                            _user.bio!,
-                            style: TextStyle(
-                              color: cs.onSurface.withValues(alpha: 0.7),
-                              fontSize: 14,
-                            ),
-                            textAlign: TextAlign.center,
+                      // Online status pill
+                      const SizedBox(height: 8),
+                      LiquidGlass.capsule(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 5,
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 7,
+                                height: 7,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: _user.isOnline
+                                      ? const Color(0xFF34C759)
+                                      : cs.onSurface.withValues(alpha: 0.35),
+                                  boxShadow: _user.isOnline
+                                      ? [
+                                          BoxShadow(
+                                            color: const Color(
+                                              0xFF34C759,
+                                            ).withValues(alpha: 0.60),
+                                            blurRadius: 6,
+                                          ),
+                                        ]
+                                      : null,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                _user.isOnline ? 'Online' : 'Offline',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: cs.onSurface.withValues(alpha: 0.75),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
+                      ),
+                      // Bio
+                      if (_user.bio != null && _user.bio!.isNotEmpty) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          _user.bio!,
+                          style: TextStyle(
+                            color: cs.onSurface.withValues(alpha: 0.65),
+                            fontSize: 14,
+                            height: 1.4,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                      // Pay button
                       if (!_isOwnProfile) ...[
-                        const SizedBox(height: 16),
-                        FilledButton.icon(
-                          onPressed: _showPaymentSheet,
-                          icon: const Icon(Icons.payments_outlined),
-                          label: const Text('Pay or request'),
+                        const SizedBox(height: 18),
+                        SizedBox(
+                          height: 44,
+                          child: FilledButton.icon(
+                            onPressed: _showPaymentSheet,
+                            icon: const Icon(Icons.payments_outlined, size: 18),
+                            label: const Text('Pay or request'),
+                            style: FilledButton.styleFrom(
+                              shape: const StadiumBorder(),
+                            ),
+                          ),
                         ),
                       ],
                     ],
                   ),
                 ),
+                const SizedBox(height: 16),
 
-                const Divider(height: 1),
-
-                // ── Online status ─────────────────────────────────────────────
-                ListTile(
-                  leading: Icon(
-                    Icons.circle,
-                    size: 12,
-                    color: _user.isOnline ? Colors.green : Colors.grey,
+                // ── Details card ──────────────────────────────────────────────
+                GlassCard(
+                  padding: EdgeInsets.zero,
+                  child: Column(
+                    children: [
+                      if (_user.isPremium) ...[
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 14,
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 36,
+                                height: 36,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: Colors.amber.withValues(alpha: 0.16),
+                                ),
+                                child: const Icon(
+                                  Icons.workspace_premium,
+                                  color: Colors.amber,
+                                  size: 18,
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text(
+                                      'Premium active',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 15,
+                                      ),
+                                    ),
+                                    if (_user.premiumUntil != null)
+                                      Text(
+                                        'Until ${_user.premiumUntil!.toLocal().toString().split('.').first}',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: cs.onSurface.withValues(
+                                            alpha: 0.55,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Divider(
+                          height: 1,
+                          thickness: 0.5,
+                          indent: 66,
+                          color: cs.onSurface.withValues(alpha: 0.10),
+                        ),
+                      ],
+                      // PGP Fingerprint
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 14,
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: cs.primary.withValues(alpha: 0.12),
+                              ),
+                              child: Icon(
+                                Icons.key_outlined,
+                                size: 18,
+                                color: cs.primary,
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Text(
+                                    'PGP Fingerprint',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 15,
+                                    ),
+                                  ),
+                                  Text(
+                                    _user.shortFingerprint,
+                                    style: TextStyle(
+                                      fontFamily: 'monospace',
+                                      fontSize: 12,
+                                      color: cs.onSurface.withValues(alpha: 0.55),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (_user.keyFingerprint.isNotEmpty)
+                              IconButton(
+                                icon: const Icon(Icons.qr_code_rounded),
+                                tooltip: 'Verify fingerprint',
+                                onPressed: _showFingerprintQR,
+                                color: cs.primary,
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                  title: Text(_user.isOnline ? 'Online' : 'Last seen recently'),
-                  dense: true,
                 ),
 
-                if (_user.isPremium)
-                  ListTile(
-                    leading: const Icon(Icons.workspace_premium),
-                    title: const Text('Premium active'),
-                    subtitle: _user.premiumUntil == null
-                        ? null
-                        : Text(
-                            'Until ${_user.premiumUntil!.toLocal().toString().split('.').first}',
-                          ),
-                    dense: true,
-                  ),
-
+                // ── Shared conversations ──────────────────────────────────────
                 if (!_isOwnProfile) ...[
-                  const Divider(height: 1),
+                  const SizedBox(height: 24),
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+                    padding: const EdgeInsets.only(left: 4, bottom: 10),
                     child: Text(
-                      'Shared chats and channels',
-                      style: Theme.of(context).textTheme.titleSmall,
+                      'SHARED CHATS & CHANNELS',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: cs.primary,
+                        letterSpacing: 1.2,
+                      ),
                     ),
                   ),
-                  FutureBuilder<List<Conversation>>(
-                    future: _sharedConversationsFuture,
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const ListTile(
-                          leading: SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                          title: Text('Loading shared chats...'),
-                          dense: true,
-                        );
-                      }
-                      final sharedConversations =
-                          snapshot.data ?? const <Conversation>[];
-                      if (sharedConversations.isEmpty) {
-                        return const ListTile(
-                          leading: Icon(Icons.forum_outlined),
-                          title: Text('No shared groups or channels'),
-                          dense: true,
-                        );
-                      }
-                      return Column(
-                        children: [
-                          for (final conv in sharedConversations.take(8))
-                            ListTile(
-                              leading: Icon(
-                                conv.isChannel
-                                    ? Icons.campaign_outlined
-                                    : Icons.group_outlined,
+                  GlassCard(
+                    padding: EdgeInsets.zero,
+                    child: FutureBuilder<List<Conversation>>(
+                      future: _sharedConversationsFuture,
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return const Padding(
+                            padding: EdgeInsets.all(20),
+                            child: Center(
+                              child: SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               ),
-                              title: Text(conv.displayName('')),
-                              subtitle: Text(
-                                conv.isChannel ? 'Channel' : 'Group',
-                              ),
-                              dense: true,
                             ),
-                        ],
-                      );
-                    },
+                          );
+                        }
+                        final convs =
+                            snapshot.data ?? const <Conversation>[];
+                        if (convs.isEmpty) {
+                          return Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.forum_outlined,
+                                  color: cs.onSurface.withValues(alpha: 0.40),
+                                ),
+                                const SizedBox(width: 12),
+                                Text(
+                                  'No shared groups or channels',
+                                  style: TextStyle(
+                                    color: cs.onSurface.withValues(alpha: 0.55),
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+                        return Column(
+                          children: [
+                            for (var i = 0;
+                                i < convs.take(8).length;
+                                i++) ...[
+                              if (i > 0)
+                                Divider(
+                                  height: 1,
+                                  thickness: 0.5,
+                                  indent: 66,
+                                  color: cs.onSurface.withValues(alpha: 0.10),
+                                ),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 12,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      width: 36,
+                                      height: 36,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: cs.primary.withValues(
+                                          alpha: 0.12,
+                                        ),
+                                      ),
+                                      child: Icon(
+                                        convs[i].isChannel
+                                            ? Icons.campaign_outlined
+                                            : Icons.group_outlined,
+                                        size: 18,
+                                        color: cs.primary,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 14),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            convs[i].displayName(''),
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                              fontSize: 14,
+                                            ),
+                                          ),
+                                          Text(
+                                            convs[i].isChannel
+                                                ? 'Channel'
+                                                : 'Group',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: cs.onSurface.withValues(
+                                                alpha: 0.50,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ],
+                        );
+                      },
+                    ),
                   ),
                 ],
-
-                // ── PGP fingerprint ───────────────────────────────────────────
-                ListTile(
-                  leading: const Icon(Icons.key_outlined),
-                  title: const Text('PGP Fingerprint'),
-                  subtitle: Text(
-                    _user.shortFingerprint,
-                    style: const TextStyle(fontFamily: 'monospace'),
-                  ),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.qr_code),
-                    tooltip: 'Verify fingerprint',
-                    onPressed: _user.keyFingerprint.isNotEmpty
-                        ? _showFingerprintQR
-                        : null,
-                  ),
-                ),
-
-                const Divider(height: 1),
               ],
             ),
     );

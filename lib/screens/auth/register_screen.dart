@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../crypto/pgp_service.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/key_provider.dart';
+import '../../widgets/glass.dart';
 import '../../widgets/secure_storage_warning.dart';
 
 class RegisterScreen extends StatefulWidget {
@@ -46,254 +47,336 @@ class _RegisterScreenState extends State<RegisterScreen> {
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
+    final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          return SizedBox(
-            key: const Key('auth-landing-hero'),
-            width: constraints.maxWidth,
-            height: constraints.maxHeight,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: const Color(0xFFF6FBF8),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    const Color(0xFFF6FBF8),
-                    Theme.of(context)
-                        .colorScheme
-                        .primary
-                        .withValues(alpha: 0.08),
-                  ],
-                ),
-              ),
-              child: SafeArea(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
-                  child: ConstrainedBox(
-                    constraints:
-                        BoxConstraints(minHeight: constraints.maxHeight - 40),
-                    child: Form(
-                      key: _formKey,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: Wrap(
-                              spacing: 8,
-                              children: [
-                                TextButton(
-                                  onPressed: () => Navigator.maybePop(context),
-                                  child: const Text('Sign in'),
-                                ),
-                                const FilledButton(
-                                  onPressed: null,
-                                  child: Text('Sign up'),
-                                ),
-                              ],
+      resizeToAvoidBottomInset: true,
+      body: LiquidMeshBackground(
+        child: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+              child: LiquidGlass(
+                key: const Key('auth-landing-hero'),
+                blur: 36,
+                borderRadius: const BorderRadius.all(Radius.circular(36)),
+                padding: const EdgeInsets.fromLTRB(28, 32, 28, 32),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Tab row
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            TextButton(
+                              onPressed: () => Navigator.maybePop(context),
+                              child: const Text('Sign in'),
                             ),
-                          ),
-                          const SizedBox(height: 48),
-                          Text(
-                            'OpenChat',
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context)
-                                .textTheme
-                                .displayMedium
-                                ?.copyWith(fontWeight: FontWeight.w800),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Secure. Open. Encrypted.',
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleMedium
-                                ?.copyWith(
-                                  color: Colors.grey[700],
-                                  letterSpacing: 1.4,
-                                ),
-                          ),
-                          const SizedBox(height: 36),
-                          Text(
-                            'Create your account',
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleLarge
-                                ?.copyWith(fontWeight: FontWeight.w700),
-                          ),
-                          const SizedBox(height: 20),
-                          TextFormField(
-                            controller: _usernameCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'Username',
-                              prefixIcon: Icon(Icons.alternate_email),
-                              helperText:
-                                  '3-32 lowercase letters, numbers, underscores',
-                              border: OutlineInputBorder(),
-                            ),
-                            autocorrect: false,
-                            textInputAction: TextInputAction.next,
-                            validator: (v) {
-                              if (v == null || v.isEmpty) return 'Required';
-                              if (!RegExp(r'^[a-z0-9_]{3,32}$')
-                                  .hasMatch(v.toLowerCase())) {
-                                return '3-32 lowercase alphanumeric characters or underscores';
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 16),
-                          TextFormField(
-                            controller: _passwordCtrl,
-                            decoration: InputDecoration(
-                              labelText: 'Password',
-                              prefixIcon: const Icon(Icons.lock),
-                              border: const OutlineInputBorder(),
-                              suffixIcon: IconButton(
-                                icon: Icon(_obscurePassword
-                                    ? Icons.visibility
-                                    : Icons.visibility_off),
-                                onPressed: () => setState(
-                                    () => _obscurePassword = !_obscurePassword),
-                              ),
-                            ),
-                            obscureText: _obscurePassword,
-                            textInputAction: TextInputAction.next,
-                            validator: (v) {
-                              if (v == null || v.length < 8) {
-                                return 'Minimum 8 characters';
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 16),
-                          TextFormField(
-                            controller: _confirmCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'Confirm Password',
-                              prefixIcon: Icon(Icons.lock_outline),
-                              border: OutlineInputBorder(),
-                            ),
-                            obscureText: _obscurePassword,
-                            validator: (v) {
-                              if (v != _passwordCtrl.text) {
-                                return 'Passwords do not match';
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 24),
-                          InkWell(
-                            onTap: () =>
-                                setState(() => _showAdvanced = !_showAdvanced),
-                            child: Row(
-                              children: [
-                                const Text('Advanced options'),
-                                Icon(_showAdvanced
-                                    ? Icons.expand_less
-                                    : Icons.expand_more),
-                              ],
-                            ),
-                          ),
-                          if (_showAdvanced) ...[
-                            const SizedBox(height: 12),
-                            const Text('PGP Key Algorithm',
-                                style: TextStyle(fontWeight: FontWeight.w500)),
-                            const SizedBox(height: 8),
-                            RadioGroup<KeyType>(
-                              groupValue: _keyType,
-                              onChanged: (v) => setState(() => _keyType = v!),
-                              child: Column(
-                                children: [
-                                  for (final keyType
-                                      in KeyType.accountCreationOptions)
-                                    Material(
-                                      color: Colors.transparent,
-                                      child: RadioListTile<KeyType>(
-                                        value: keyType,
-                                        title: Text(keyType.title),
-                                        subtitle: Text(keyType.subtitle),
-                                      ),
-                                    ),
-                                ],
-                              ),
+                            const SizedBox(width: 4),
+                            const FilledButton(
+                              onPressed: null,
+                              child: Text('Sign up'),
                             ),
                           ],
-                          const SizedBox(height: 28),
-                          if (auth.storageWarning != null)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 16),
-                              child: SecureStorageWarning(
-                                message: auth.storageWarning!,
+                        ),
+                        const SizedBox(height: 28),
+                        // Logo
+                        Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 64,
+                                height: 64,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  gradient: RadialGradient(
+                                    colors: [
+                                      scheme.tertiary,
+                                      scheme.primary,
+                                    ],
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: scheme.primary.withValues(alpha: 0.40),
+                                      blurRadius: 22,
+                                      spreadRadius: -4,
+                                      offset: const Offset(0, 10),
+                                    ),
+                                  ],
+                                ),
+                                child: const Icon(
+                                  Icons.person_add_outlined,
+                                  color: Colors.white,
+                                  size: 30,
+                                ),
                               ),
-                            ),
-                          if (auth.error != null &&
-                              auth.error != auth.storageWarning)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 16),
-                              child: Text(
-                                auth.error!,
-                                style: const TextStyle(color: Colors.red),
+                              const SizedBox(height: 14),
+                              Text(
+                                'Create account',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .headlineSmall
+                                    ?.copyWith(fontWeight: FontWeight.w800),
                                 textAlign: TextAlign.center,
                               ),
-                            ),
-                          FilledButton(
-                            onPressed: auth.isLoading ? null : _register,
-                            child: auth.isLoading
-                                ? const SizedBox(
-                                    height: 20,
-                                    width: 20,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2),
-                                  )
-                                : const Text('Create account'),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Your keys stay on your device',
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.copyWith(
+                                      color: scheme.onSurface.withValues(alpha: 0.50),
+                                    ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 16),
-                          TextButton(
-                            onPressed: () => Navigator.maybePop(context),
-                            child:
-                                const Text('Already have an account? Sign in'),
+                        ),
+                        const SizedBox(height: 32),
+                        // Username
+                        TextFormField(
+                          controller: _usernameCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Username',
+                            prefixIcon: Icon(Icons.alternate_email_rounded),
+                            helperText:
+                                '3-32 lowercase letters, numbers, underscores',
                           ),
-                          const SizedBox(height: 24),
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.blue.withValues(alpha: 0.08),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                  color: Colors.blue.withValues(alpha: 0.3)),
+                          autocorrect: false,
+                          textInputAction: TextInputAction.next,
+                          validator: (v) {
+                            if (v == null || v.isEmpty) return 'Required';
+                            if (!RegExp(r'^[a-z0-9_]{3,32}$')
+                                .hasMatch(v.toLowerCase())) {
+                              return '3-32 lowercase alphanumeric or underscores';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 14),
+                        // Password
+                        TextFormField(
+                          controller: _passwordCtrl,
+                          decoration: InputDecoration(
+                            labelText: 'Password',
+                            prefixIcon: const Icon(Icons.lock_outline_rounded),
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                _obscurePassword
+                                    ? Icons.visibility_outlined
+                                    : Icons.visibility_off_outlined,
+                              ),
+                              onPressed: () => setState(
+                                () => _obscurePassword = !_obscurePassword,
+                              ),
                             ),
-                            child: const Row(
+                          ),
+                          obscureText: _obscurePassword,
+                          textInputAction: TextInputAction.next,
+                          validator: (v) {
+                            if (v == null || v.length < 8) {
+                              return 'Minimum 8 characters';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 14),
+                        // Confirm password
+                        TextFormField(
+                          controller: _confirmCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Confirm password',
+                            prefixIcon: Icon(Icons.lock_outline_rounded),
+                          ),
+                          obscureText: _obscurePassword,
+                          validator: (v) {
+                            if (v != _passwordCtrl.text) {
+                              return 'Passwords do not match';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 18),
+                        // Advanced toggle
+                        InkWell(
+                          onTap: () =>
+                              setState(() => _showAdvanced = !_showAdvanced),
+                          borderRadius: BorderRadius.circular(10),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 4,
+                              vertical: 6,
+                            ),
+                            child: Row(
                               children: [
-                                Icon(Icons.shield,
-                                    color: Colors.blue, size: 18),
-                                SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    'Your PGP keys are generated on this device. '
-                                    'The private key never leaves your device. '
-                                    'Only the public key is shared with the server.',
-                                    style: TextStyle(
-                                        fontSize: 12, color: Colors.blue),
+                                Text(
+                                  'Advanced options',
+                                  style: TextStyle(
+                                    color: scheme.primary,
+                                    fontWeight: FontWeight.w600,
                                   ),
                                 ),
+                                const SizedBox(width: 4),
+                                Icon(
+                                  _showAdvanced
+                                      ? Icons.expand_less_rounded
+                                      : Icons.expand_more_rounded,
+                                  color: scheme.primary,
+                                  size: 18,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        if (_showAdvanced) ...[
+                          const SizedBox(height: 12),
+                          Text(
+                            'PGP Key Algorithm',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: scheme.onSurface.withValues(alpha: 0.7),
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          RadioGroup<KeyType>(
+                            groupValue: _keyType,
+                            onChanged: (v) => setState(() => _keyType = v!),
+                            child: Column(
+                              children: [
+                                for (final keyType in KeyType.accountCreationOptions)
+                                  RadioListTile<KeyType>(
+                                    value: keyType,
+                                    title: Text(keyType.title),
+                                    subtitle: Text(keyType.subtitle),
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
                               ],
                             ),
                           ),
                         ],
-                      ),
+                        const SizedBox(height: 22),
+                        // Errors
+                        if (auth.storageWarning != null)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 14),
+                            child: SecureStorageWarning(
+                              message: auth.storageWarning!,
+                            ),
+                          ),
+                        if (auth.error != null && auth.error != auth.storageWarning)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 14),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: scheme.error.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: scheme.error.withValues(alpha: 0.28),
+                                  width: 0.7,
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.error_outline_rounded,
+                                    color: scheme.error,
+                                    size: 18,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      auth.error!,
+                                      style: TextStyle(
+                                        color: scheme.error,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        // Create button
+                        SizedBox(
+                          height: 52,
+                          child: FilledButton(
+                            onPressed: auth.isLoading ? null : _register,
+                            style: FilledButton.styleFrom(
+                              shape: const StadiumBorder(),
+                              textStyle: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            child: auth.isLoading
+                                ? SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: scheme.onPrimary,
+                                    ),
+                                  )
+                                : const Text('Create account'),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        // Privacy notice
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 12,
+                          ),
+                          decoration: BoxDecoration(
+                            color: scheme.primary.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: scheme.primary.withValues(alpha: 0.18),
+                              width: 0.7,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.shield_outlined,
+                                color: scheme.primary,
+                                size: 18,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  'PGP keys are generated on this device. '
+                                  'Your private key never leaves your device.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: scheme.primary,
+                                    height: 1.4,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
               ),
             ),
-          );
-        },
+          ),
+        ),
       ),
     );
   }

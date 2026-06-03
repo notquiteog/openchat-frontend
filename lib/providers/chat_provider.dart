@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:geolocator/geolocator.dart';
 import '../crypto/pgp_service.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
@@ -20,6 +21,28 @@ class ChatSendException implements Exception {
   String toString() => message;
 }
 
+class _ActiveLiveLocationShare {
+  _ActiveLiveLocationShare({
+    required this.conversationId,
+    required this.shareId,
+    required this.expiresAt,
+    required this.latitude,
+    required this.longitude,
+    this.accuracy,
+    required this.timer,
+  });
+
+  final String conversationId;
+  final String shareId;
+  DateTime expiresAt;
+  double latitude;
+  double longitude;
+  double? accuracy;
+  Timer timer;
+
+  bool get isActive => DateTime.now().isBefore(expiresAt);
+}
+
 class ChatProvider extends ChangeNotifier {
   final ApiService _api;
   final SecureStorageService _storage;
@@ -29,6 +52,7 @@ class ChatProvider extends ChangeNotifier {
   final Map<String, List<Message>> _messages = {};
   final Map<String, Conversation> _conversations = {};
   final Map<String, Set<String>> _typingUsers = {};
+  final Map<String, _ActiveLiveLocationShare> _liveLocationShares = {};
   String? _selfId;
 
   List<Conversation> get conversations =>
@@ -48,6 +72,7 @@ class ChatProvider extends ChangeNotifier {
 
   StreamSubscription<WsEvent>? _wsSub;
   Timer? _pollTimer;
+  static const Duration _liveLocationInterval = Duration(seconds: 30);
   Future<void>? _conversationRefreshInFlight;
   bool _wasWsMonitoring = false;
 
@@ -71,8 +96,23 @@ class ChatProvider extends ChangeNotifier {
     _conversations.clear();
     _typingUsers.clear();
     _wasWsMonitoring = false;
+    unawaited(_stopAllLiveLocationShares());
     _ws.disconnect();
     notifyListeners();
+  }
+
+  Future<void> _stopAllLiveLocationShares() async {
+    if (_liveLocationShares.isEmpty) return;
+    final active = _liveLocationShares.entries.toList();
+    _liveLocationShares.clear();
+    for (final entry in active) {
+      final share = entry.value;
+      share.timer.cancel();
+      await NotificationService.cancelLiveLocationNotification(
+        messageId: entry.key,
+        conversationId: share.conversationId,
+      );
+    }
   }
 
   void _onWsConnectionChanged() {
@@ -201,9 +241,11 @@ class ChatProvider extends ChangeNotifier {
         if (cached != null && cached.isDecrypted) {
           _hydrateMessageSender(cached, fresh: msg);
           result.add(cached);
+          await _syncLiveLocationShareFromMessage(cached);
         } else {
           _hydrateMessageSender(msg);
           await _tryDecrypt(msg, privateKey);
+          await _syncLiveLocationShareFromMessage(msg);
           result.add(msg);
         }
       }
@@ -229,6 +271,9 @@ class ChatProvider extends ChangeNotifier {
       }
       final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
       await Future.wait(older.map((msg) => _tryDecrypt(msg, privateKey)));
+      for (final msg in older) {
+        await _syncLiveLocationShareFromMessage(msg);
+      }
       _messages[convID] = [...older.reversed, ...existing];
       notifyListeners();
       return older.length;
@@ -269,6 +314,108 @@ class ChatProvider extends ChangeNotifier {
       plaintextPayload: payloadJson,
       messageType: attachment.messageType.name,
       attachmentId: attachment.attachmentId,
+    );
+  }
+
+  Future<bool> sendOneTimeLocation({required String convID}) async {
+    await _ensureLocationPermission(background: false);
+    final pos = await _getCurrentPosition();
+    final payload = MessageLocation(
+      kind: LocationMessageKind.oneTime,
+      latitude: pos.latitude,
+      longitude: pos.longitude,
+      accuracy: pos.accuracy,
+      shareId: _newLiveLocationShareId(),
+    );
+    await _sendEncryptedPayload(
+      convID: convID,
+      plaintextPayload: jsonEncode(payload.toJson()),
+      messageType: 'location',
+    );
+    return true;
+  }
+
+  Future<String?> sendLiveLocation({
+    required String convID,
+    required Duration duration,
+  }) async {
+    await _ensureLocationPermission(background: true);
+    if (duration <= Duration.zero) {
+      throw const ChatSendException('Live location duration must be greater than 0');
+    }
+    final now = DateTime.now();
+    final expiresAt = now.add(duration);
+    final pos = await _getCurrentPosition();
+    final shareId = _newLiveLocationShareId();
+    final payload = MessageLocation(
+      kind: LocationMessageKind.live,
+      latitude: pos.latitude,
+      longitude: pos.longitude,
+      accuracy: pos.accuracy,
+      shareId: shareId,
+      endsAt: expiresAt,
+    );
+    final msg = await _sendEncryptedPayloadWithResult(
+      convID: convID,
+      plaintextPayload: jsonEncode(payload.toJson()),
+      messageType: 'location',
+    );
+    if (msg == null) return null;
+    await _beginLiveLocationShare(
+      messageID: msg.id,
+      conversationId: convID,
+      shareId: shareId,
+      latitude: pos.latitude,
+      longitude: pos.longitude,
+      accuracy: pos.accuracy,
+      expiresAt: expiresAt,
+    );
+    return msg.id;
+  }
+
+  Future<void> stopLiveLocation(String messageID) async {
+    await _stopLiveLocationShare(messageID, shouldNotify: true);
+  }
+
+  bool isLiveLocationActive(String messageID) =>
+      _liveLocationShares.containsKey(messageID);
+
+  Future<void> _syncLiveLocationShareFromMessage(Message msg) async {
+    final location = msg.location;
+    final selfId = _selfId ?? await _storage.getUserID() ?? '';
+    if (selfId.isEmpty || location == null || msg.senderId != selfId) {
+      await _stopLiveLocationShare(msg.id, shouldNotify: false);
+      return;
+    }
+    if (!location.isLive || location.ended || !location.isActive) {
+      await _stopLiveLocationShare(msg.id, shouldNotify: false);
+      return;
+    }
+
+    final existing = _liveLocationShares[msg.id];
+    if (existing == null) {
+      await _beginLiveLocationShare(
+        messageID: msg.id,
+        conversationId: msg.conversationId,
+        shareId: location.shareId,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        accuracy: location.accuracy,
+        expiresAt: location.endsAt!,
+      );
+      return;
+    }
+
+    existing.latitude = location.latitude;
+    existing.longitude = location.longitude;
+    existing.accuracy = location.accuracy;
+    existing.expiresAt = location.endsAt!;
+    await NotificationService.showLiveLocationNotification(
+      messageId: msg.id,
+      conversationId: msg.conversationId,
+      title: 'Live location',
+      endsAt: location.endsAt!,
+      live: true,
     );
   }
 
@@ -408,11 +555,12 @@ class ChatProvider extends ChangeNotifier {
     }
     msg.sender ??= old.sender;
     list[idx] = msg;
+    await _syncLiveLocationShareFromMessage(msg);
     _messages[msg.conversationId] = List.from(list);
     notifyListeners();
   }
 
-  Future<bool> _sendEncryptedPayload({
+  Future<Message?> _sendEncryptedPayloadWithResult({
     required String convID,
     required String plaintextPayload,
     required String messageType,
@@ -496,7 +644,7 @@ class ChatProvider extends ChangeNotifier {
         silent: silent,
         scheduledFor: scheduledFor,
       );
-      return true;
+      return null;
     }
 
     final pending = PendingMessage(
@@ -557,7 +705,7 @@ class ChatProvider extends ChangeNotifier {
       }
 
       notifyListeners();
-      return true;
+      return confirmed;
     } catch (_) {
       final list = _messages[convID] ?? [];
       final idx = list.indexWhere((m) => m.id == pending.id);
@@ -566,8 +714,192 @@ class ChatProvider extends ChangeNotifier {
         _messages[convID] = List.from(list);
         notifyListeners();
       }
+      rethrow;
+    }
+  }
+
+  Future<bool> _sendEncryptedPayload({
+    required String convID,
+    required String plaintextPayload,
+    required String messageType,
+    String? replyTo,
+    String? attachmentId,
+    String? topicId,
+    bool silent = false,
+    DateTime? scheduledFor,
+  }) async {
+    try {
+      await _sendEncryptedPayloadWithResult(
+        convID: convID,
+        plaintextPayload: plaintextPayload,
+        messageType: messageType,
+        replyTo: replyTo,
+        attachmentId: attachmentId,
+        topicId: topicId,
+        silent: silent,
+        scheduledFor: scheduledFor,
+      );
+      return true;
+    } catch (_) {
       return false;
     }
+  }
+
+  String _newLiveLocationShareId() =>
+      'live_${DateTime.now().millisecondsSinceEpoch}';
+
+  Future<bool> _ensureLocationPermission({required bool background}) async {
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      throw const ChatSendException('Location service is disabled.');
+    }
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      throw const ChatSendException(
+        'Location permission is required to share location.',
+      );
+    }
+    if (!background) return true;
+
+    if (permission != LocationPermission.always) {
+      final next = await Geolocator.requestPermission();
+      permission = next;
+      if (permission != LocationPermission.always) {
+        throw const ChatSendException(
+          'Enable Always location access for background live sharing.',
+      );
+      }
+    }
+    return true;
+  }
+
+  Future<Position> _getCurrentPosition() async {
+    return Geolocator.getCurrentPosition(
+      desiredAccuracy: LocationAccuracy.best,
+    );
+  }
+
+  MessageLocation _liveLocationPayload({
+    required LocationMessageKind kind,
+    required double latitude,
+    required double longitude,
+    required String shareId,
+    DateTime? endsAt,
+    double? accuracy,
+    bool ended = false,
+  }) => MessageLocation(
+    kind: kind,
+    latitude: latitude,
+    longitude: longitude,
+    shareId: shareId,
+    endsAt: endsAt,
+    accuracy: accuracy,
+    ended: ended,
+  );
+
+  Future<void> _beginLiveLocationShare({
+    required String messageID,
+    required String conversationId,
+    required String shareId,
+    required double latitude,
+    required double longitude,
+    required double? accuracy,
+    required DateTime expiresAt,
+  }) async {
+    _liveLocationShares.remove(messageID)?.timer.cancel();
+    final share = _ActiveLiveLocationShare(
+      conversationId: conversationId,
+      shareId: shareId,
+      expiresAt: expiresAt,
+      latitude: latitude,
+      longitude: longitude,
+      accuracy: accuracy,
+      timer: Timer.periodic(_liveLocationInterval, (_) {
+        unawaited(_updateLiveLocationShare(messageID));
+      }),
+    );
+    _liveLocationShares[messageID] = share;
+
+    final conv = _conversations[conversationId];
+    final convTitle = conv?.displayName(_selfId ?? '') ?? 'Live location';
+    await NotificationService.showLiveLocationNotification(
+      messageId: messageID,
+      conversationId: conversationId,
+      title: convTitle,
+      endsAt: expiresAt,
+      live: true,
+    );
+  }
+
+  Future<void> _updateLiveLocationShare(String messageID) async {
+    final share = _liveLocationShares[messageID];
+    if (share == null) return;
+    if (!share.isActive) {
+      await _stopLiveLocationShare(messageID, shouldNotify: true);
+      return;
+    }
+    try {
+      final pos = await _getCurrentPosition();
+      share.latitude = pos.latitude;
+      share.longitude = pos.longitude;
+      share.accuracy = pos.accuracy;
+      final payload = _liveLocationPayload(
+        kind: LocationMessageKind.live,
+        latitude: pos.latitude,
+        longitude: pos.longitude,
+        shareId: share.shareId,
+        endsAt: share.expiresAt,
+        accuracy: pos.accuracy,
+      );
+      await editMessage(
+        convID: share.conversationId,
+        msgID: messageID,
+        newPlaintext: jsonEncode(payload.toJson()),
+      );
+      await NotificationService.showLiveLocationNotification(
+        messageId: messageID,
+        conversationId: share.conversationId,
+        title: 'Live location',
+        endsAt: share.expiresAt,
+        live: true,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _stopLiveLocationShare(
+    String messageID, {
+    bool shouldNotify = false,
+  }) async {
+    final share = _liveLocationShares.remove(messageID);
+    if (share == null) return;
+    share.timer.cancel();
+
+    await NotificationService.cancelLiveLocationNotification(
+      messageId: messageID,
+      conversationId: share.conversationId,
+    );
+    if (!shouldNotify) return;
+
+    try {
+      final payload = _liveLocationPayload(
+        kind: LocationMessageKind.live,
+        latitude: share.latitude,
+        longitude: share.longitude,
+        shareId: share.shareId,
+        endsAt: share.expiresAt,
+        accuracy: share.accuracy,
+        ended: true,
+      );
+      await editMessage(
+        convID: share.conversationId,
+        msgID: messageID,
+        newPlaintext: jsonEncode(payload.toJson()),
+      );
+    } catch (_) {}
   }
 
   /// Builds the recipient keyring from the server's latest membership and
@@ -735,6 +1067,7 @@ class ChatProvider extends ChangeNotifier {
         final convID = event.data['conversation_id'] as String?;
         final msgID = event.data['message_id'] as String?;
         if (convID != null && msgID != null) {
+          unawaited(_stopLiveLocationShare(msgID, shouldNotify: false));
           final list = _messages[convID];
           if (list != null) {
             _messages[convID] = list.where((m) => m.id != msgID).toList();
@@ -812,6 +1145,7 @@ class ChatProvider extends ChangeNotifier {
 
     final cached = _cachedDecryptedMessage(msg);
     final displayMsg = (!msg.isDecrypted && cached != null) ? cached : msg;
+    await _syncLiveLocationShareFromMessage(displayMsg);
     if (displayMsg != msg) {
       _hydrateMessageSender(displayMsg, fresh: msg);
     }
@@ -937,6 +1271,7 @@ class ChatProvider extends ChangeNotifier {
 
   Future<void> deleteMessage(String convID, String msgID) async {
     try {
+      await _stopLiveLocationShare(msgID, shouldNotify: false);
       await _api.deleteMessage(convID, msgID);
       final list = _messages[convID] ?? [];
       _messages[convID] = list.where((m) => m.id != msgID).toList();
@@ -959,6 +1294,7 @@ class ChatProvider extends ChangeNotifier {
   void dispose() {
     _wsSub?.cancel();
     _pollTimer?.cancel();
+    unawaited(_stopAllLiveLocationShares());
     _ws.removeListener(_onWsConnectionChanged);
     _ws.disconnect();
     super.dispose();

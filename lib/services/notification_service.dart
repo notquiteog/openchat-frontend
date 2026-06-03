@@ -56,6 +56,12 @@ class NotificationService {
       importance: Importance.max,
     ),
     AndroidNotificationChannel(
+      'live_location',
+      'Live location sharing',
+      description: 'Ongoing live location sharing updates',
+      importance: Importance.low,
+    ),
+    AndroidNotificationChannel(
       'openchat_background',
       'OpenChat background service',
       description: 'Keeps OpenChat connected for background notifications',
@@ -555,6 +561,93 @@ class NotificationService {
       title: 'Missed call',
       body: body,
       notificationDetails: details,
+    );
+  }
+
+  static int _liveLocationNotificationId({
+    required String conversationId,
+    required String messageId,
+  }) => Object.hash(conversationId, messageId);
+
+  static String _liveLocationRemainingLabel(DateTime? endsAt) {
+    if (endsAt == null) return 'Live location shared';
+    final remaining = endsAt.difference(DateTime.now());
+    if (remaining.inSeconds <= 0) return 'Live location ended';
+    if (remaining.inHours >= 1) {
+      final hours = remaining.inHours;
+      final mins = remaining.inMinutes % 60;
+      if (mins == 0) return 'Ends in ${hours}h';
+      return 'Ends in ${hours}h ${mins}m';
+    }
+    if (remaining.inMinutes >= 1) return 'Ends in ${remaining.inMinutes}m';
+    return 'Ends in ${remaining.inSeconds}s';
+  }
+
+  static Future<void> showLiveLocationNotification({
+    required String messageId,
+    required String conversationId,
+    required String title,
+    DateTime? endsAt,
+    required bool live,
+  }) async {
+    if (!_supported) return;
+    if (await _shouldSuppressFocusedNotification()) {
+      await cancelLiveLocationNotification(
+        messageId: messageId,
+        conversationId: conversationId,
+      );
+      return;
+    }
+    await init();
+    if (!_available) return;
+    final details = NotificationDetails(
+      android: const AndroidNotificationDetails(
+        'live_location',
+        'Live location sharing',
+        channelDescription: 'Ongoing live location sharing updates',
+        importance: Importance.low,
+        priority: Priority.low,
+        ongoing: true,
+        autoCancel: false,
+        onlyAlertOnce: true,
+      ),
+      iOS: DarwinNotificationDetails(
+        presentBanner: live,
+        presentList: live,
+        presentSound: false,
+      ),
+      macOS: DarwinNotificationDetails(
+        presentBanner: live,
+        presentList: live,
+        presentSound: false,
+      ),
+      linux: const LinuxNotificationDetails(),
+      windows: const WindowsNotificationDetails(),
+    );
+
+    await _plugin.show(
+      id: _liveLocationNotificationId(
+        conversationId: conversationId,
+        messageId: messageId,
+      ).abs(),
+      title: title,
+      body: _liveLocationRemainingLabel(endsAt),
+      notificationDetails: details,
+    );
+  }
+
+  static Future<void> cancelLiveLocationNotification({
+    required String messageId,
+    required String conversationId,
+  }) async {
+    if (!_supported) return;
+    await init();
+    if (!_available) return;
+    await _plugin.cancel(
+      id: _liveLocationNotificationId(
+        conversationId: conversationId,
+        messageId: messageId,
+      ).abs(),
     );
   }
 }
