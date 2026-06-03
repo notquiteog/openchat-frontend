@@ -25,7 +25,12 @@ class _SpecularBorderPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final hw = strokeWidth / 2;
     final rrect = RRect.fromRectAndCorners(
-      Rect.fromLTWH(hw, hw, size.width - strokeWidth, size.height - strokeWidth),
+      Rect.fromLTWH(
+        hw,
+        hw,
+        size.width - strokeWidth,
+        size.height - strokeWidth,
+      ),
       topLeft: borderRadius.topLeft,
       topRight: borderRadius.topRight,
       bottomLeft: borderRadius.bottomLeft,
@@ -106,7 +111,8 @@ class LiquidGlass extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final base = tint ?? scheme.surface;
 
-    final shadow = boxShadow ??
+    final shadow =
+        boxShadow ??
         [
           BoxShadow(
             color: Colors.black.withValues(alpha: isDark ? 0.52 : 0.13),
@@ -125,7 +131,10 @@ class LiquidGlass extends StatelessWidget {
     // Reduced transparency fallback: flat, opaque, legible.
     if (glassReduceTransparency(context)) {
       return DecoratedBox(
-        decoration: BoxDecoration(borderRadius: borderRadius, boxShadow: shadow),
+        decoration: BoxDecoration(
+          borderRadius: borderRadius,
+          boxShadow: shadow,
+        ),
         child: ClipRRect(
           borderRadius: borderRadius,
           child: Container(
@@ -146,7 +155,10 @@ class LiquidGlass extends StatelessWidget {
 
     return RepaintBoundary(
       child: DecoratedBox(
-        decoration: BoxDecoration(borderRadius: borderRadius, boxShadow: shadow),
+        decoration: BoxDecoration(
+          borderRadius: borderRadius,
+          boxShadow: shadow,
+        ),
         child: ClipRRect(
           borderRadius: borderRadius,
           child: BackdropFilter(
@@ -174,12 +186,12 @@ class LiquidGlass extends StatelessWidget {
                 ),
                 // Inner top-highlight: a very narrow white glow at the top
                 // edge inside the glass — the "dew-drop" effect.
-                IgnorePointer(
-                  child: Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    height: borderRadius.topLeft.x.clamp(0.0, 16.0),
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: borderRadius.topLeft.x.clamp(0.0, 16.0),
+                  child: IgnorePointer(
                     child: DecoratedBox(
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.vertical(
@@ -189,7 +201,9 @@ class LiquidGlass extends StatelessWidget {
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
                           colors: [
-                            Colors.white.withValues(alpha: isDark ? 0.18 : 0.36),
+                            Colors.white.withValues(
+                              alpha: isDark ? 0.18 : 0.36,
+                            ),
                             Colors.transparent,
                           ],
                         ),
@@ -198,14 +212,15 @@ class LiquidGlass extends StatelessWidget {
                   ),
                 ),
                 // Prismatic specular rim — gradient stroke drawn on top.
-                IgnorePointer(
-                  child: CustomPaint(
-                    painter: _SpecularBorderPainter(
-                      borderRadius: borderRadius,
-                      strokeWidth: stroke,
-                      isDark: isDark,
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      painter: _SpecularBorderPainter(
+                        borderRadius: borderRadius,
+                        strokeWidth: stroke,
+                        isDark: isDark,
+                      ),
                     ),
-                    child: const SizedBox.expand(),
                   ),
                 ),
               ],
@@ -266,7 +281,8 @@ class GlassSurface extends StatelessWidget {
       );
     }
 
-    final effectiveBorder = border ??
+    final effectiveBorder =
+        border ??
         Border.all(
           color: Colors.white.withValues(alpha: isDark ? 0.14 : 0.38),
           width: 0.5,
@@ -411,11 +427,7 @@ class LiquidMeshBackground extends StatelessWidget {
   final Widget child;
   final List<Color>? colors;
 
-  const LiquidMeshBackground({
-    super.key,
-    required this.child,
-    this.colors,
-  });
+  const LiquidMeshBackground({super.key, required this.child, this.colors});
 
   @override
   Widget build(BuildContext context) {
@@ -477,7 +489,9 @@ class LiquidMeshBackground extends StatelessWidget {
               shape: BoxShape.circle,
               gradient: RadialGradient(
                 colors: [
-                  const Color(0xFF00B4D8).withValues(alpha: isDark ? 0.22 : 0.10),
+                  const Color(
+                    0xFF00B4D8,
+                  ).withValues(alpha: isDark ? 0.22 : 0.10),
                   Colors.transparent,
                 ],
               ),
@@ -494,7 +508,9 @@ class LiquidMeshBackground extends StatelessWidget {
               shape: BoxShape.circle,
               gradient: RadialGradient(
                 colors: [
-                  const Color(0xFF7B2FFF).withValues(alpha: isDark ? 0.16 : 0.08),
+                  const Color(
+                    0xFF7B2FFF,
+                  ).withValues(alpha: isDark ? 0.16 : 0.08),
                   Colors.transparent,
                 ],
               ),

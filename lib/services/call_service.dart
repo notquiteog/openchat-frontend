@@ -1,11 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart'
-    show
-        debugPrint,
-        defaultTargetPlatform,
-        kIsWeb,
-        TargetPlatform,
-        visibleForTesting;
+    show defaultTargetPlatform, kIsWeb, TargetPlatform, visibleForTesting;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:uuid/uuid.dart';
 import '../config/api_config.dart' show IceServer;
@@ -79,7 +74,7 @@ List<Map<String, dynamic>> buildCallMediaCaptureAttemptsForTesting({
   required bool isVideo,
   required bool isMobile,
   required bool isWeb,
-  required bool isLinuxDesktop,
+  required bool isDesktop,
   List<MediaDeviceInfo> videoInputs = const [],
 }) {
   if (!isVideo) {
@@ -88,7 +83,7 @@ List<Map<String, dynamic>> buildCallMediaCaptureAttemptsForTesting({
     ];
   }
 
-  final profiles = isLinuxDesktop
+  final profiles = isDesktop
       ? const [
           _VideoProfile(width: 1280, height: 720, frameRate: 30),
           _VideoProfile(width: 640, height: 480, frameRate: 30),
@@ -497,23 +492,46 @@ class CallService {
       if (!kIsWeb &&
           (defaultTargetPlatform == TargetPlatform.android ||
               defaultTargetPlatform == TargetPlatform.iOS)) {
-        if (deviceId == 'speaker') {
-          await Helper.setSpeakerphoneOn(true);
-          return;
-        }
-        if (deviceId == 'earpiece') {
-          await Helper.setSpeakerphoneOn(false);
-          return;
-        }
-        if (deviceId == 'bluetooth') {
-          await Helper.setSpeakerphoneOnButPreferBluetooth();
-          return;
-        }
+        await _selectMobileAudioOutput(deviceId);
+        return;
       }
       await Helper.selectAudioOutput(deviceId);
     } catch (_) {
       // Some platforms do not expose output routing in flutter_webrtc.
     }
+  }
+
+  Future<void> _selectMobileAudioOutput(String deviceId) async {
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      switch (deviceId) {
+        case 'speaker':
+        case 'earpiece':
+        case 'bluetooth':
+        case 'wired-headset':
+          await Helper.selectAudioOutput(deviceId);
+          return;
+      }
+      await Helper.selectAudioOutput(deviceId);
+      return;
+    }
+
+    try {
+      await Helper.ensureAudioSession();
+    } catch (_) {}
+
+    switch (deviceId) {
+      case 'speaker':
+        await Helper.selectAudioOutput('Speaker');
+        return;
+      case 'bluetooth':
+        await Helper.setSpeakerphoneOnButPreferBluetooth();
+        return;
+      case 'earpiece':
+      case 'wired-headset':
+        await Helper.selectAudioOutput(deviceId);
+        return;
+    }
+    await Helper.selectAudioOutput(deviceId);
   }
 
   String _labelForAudioOutput(String raw) {
@@ -832,9 +850,6 @@ class CallService {
       }
 
       await _releaseMediaStream(stream);
-      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.linux) {
-        debugPrint('OpenChat call media retry: $lastError');
-      }
     }
 
     if (isVideo) {
@@ -847,8 +862,12 @@ class CallService {
     required bool isVideo,
     required bool isMobile,
   }) async {
-    final isLinuxDesktop =
-        !kIsWeb && defaultTargetPlatform == TargetPlatform.linux;
+    final isDesktop =
+        !kIsWeb &&
+        !isMobile &&
+        (defaultTargetPlatform == TargetPlatform.linux ||
+            defaultTargetPlatform == TargetPlatform.macOS ||
+            defaultTargetPlatform == TargetPlatform.windows);
     final videoInputs = isVideo && !isMobile
         ? await _safeVideoInputs()
         : const <MediaDeviceInfo>[];
@@ -856,7 +875,7 @@ class CallService {
       isVideo: isVideo,
       isMobile: isMobile,
       isWeb: kIsWeb,
-      isLinuxDesktop: isLinuxDesktop,
+      isDesktop: isDesktop,
       videoInputs: videoInputs,
     );
   }

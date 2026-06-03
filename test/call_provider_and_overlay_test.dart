@@ -88,30 +88,39 @@ void main() {
   });
 
   group('Call overlay minimize and expand', () {
-    test('does not disable RTC renderers for Linux sessions', () {
-      final session = CallSession(
-        callId: 'c-linux-policy',
-        remoteUserId: 'u-linux',
-        remoteUsername: 'linux',
+    test('uses RTC renderers only for video sessions', () {
+      final videoSession = CallSession(
+        callId: 'c-video-policy',
+        remoteUserId: 'u-desktop',
+        remoteUsername: 'desktop',
         isVideo: true,
         isIncoming: false,
         state: CallState.connected,
       );
+      final voiceSession = CallSession(
+        callId: 'c-voice-policy',
+        remoteUserId: 'u-desktop',
+        remoteUsername: 'desktop',
+        isVideo: false,
+        isIncoming: false,
+        state: CallState.connected,
+      );
 
-      expect(shouldUseCallVideoRenderersForTesting(session), isTrue);
+      expect(shouldUseCallVideoRenderersForTesting(videoSession), isTrue);
+      expect(shouldUseCallVideoRenderersForTesting(voiceSession), isFalse);
       expect(shouldUseCallVideoRenderersForTesting(null), isFalse);
     });
 
-    testWidgets('keeps Linux voice call controls tappable', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    testWidgets('keeps desktop voice call controls tappable', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
 
       final service = _FakeCallService();
       final provider = CallProvider(service, audio: _FakeCallAudio());
       try {
         final session = CallSession(
-          callId: 'c-linux-audio',
-          remoteUserId: 'u-linux',
-          remoteUsername: 'linux',
+          callId: 'c-desktop-audio',
+          remoteUserId: 'u-desktop',
+          remoteUsername: 'desktop',
           isVideo: false,
           isIncoming: false,
           state: CallState.connected,
@@ -138,16 +147,16 @@ void main() {
       }
     });
 
-    testWidgets('keeps Linux video call controls tappable', (tester) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    testWidgets('keeps desktop video call controls tappable', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
 
       final service = _FakeCallService();
       final provider = CallProvider(service, audio: _FakeCallAudio());
       try {
         final session = CallSession(
-          callId: 'c-linux-video',
-          remoteUserId: 'u-linux',
-          remoteUsername: 'linux',
+          callId: 'c-desktop-video',
+          remoteUserId: 'u-desktop',
+          remoteUsername: 'desktop',
           isVideo: true,
           isIncoming: false,
           state: CallState.connected,
@@ -226,7 +235,7 @@ void main() {
         isVideo: false,
         isMobile: false,
         isWeb: false,
-        isLinuxDesktop: true,
+        isDesktop: true,
       );
 
       expect(attempts, const [
@@ -234,12 +243,12 @@ void main() {
       ]);
     });
 
-    test('linux video calls prefer Razer cameras and retry safe modes', () {
+    test('desktop video calls prefer Razer cameras and retry safe modes', () {
       final attempts = buildCallMediaCaptureAttemptsForTesting(
         isVideo: true,
         isMobile: false,
         isWeb: false,
-        isLinuxDesktop: true,
+        isDesktop: true,
         videoInputs: [
           MediaDeviceInfo(
             kind: 'videoinput',

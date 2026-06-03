@@ -16,7 +16,7 @@ const _callDismissColor = Color(0xFF8E8E93);
 
 @visibleForTesting
 bool shouldUseCallVideoRenderersForTesting(CallSession? session) {
-  return session != null;
+  return session?.isVideo == true;
 }
 
 /// Full-screen audio/video call UI in iOS 26 Liquid Glass style.
@@ -195,18 +195,21 @@ class _CallScreenState extends State<CallScreen> {
           // ── Background ─────────────────────────────────────────────────────
           if (!isVideo || !_renderersReady || !useVideoRenderers)
             Positioned.fill(
-              child: _CallBackground(
-                avatarUrl: avatarUrl,
-                username: username,
-              ),
+              child: _CallBackground(avatarUrl: avatarUrl, username: username),
             ),
 
           // Hidden audio renderer
           if (!isVideo && useVideoRenderers && _renderersReady)
             Positioned(
-              left: 0, top: 0, width: 1, height: 1,
+              left: 0,
+              top: 0,
+              width: 1,
+              height: 1,
               child: IgnorePointer(
-                child: Opacity(opacity: 0, child: RTCVideoView(_remoteRenderer)),
+                child: Opacity(
+                  opacity: 0,
+                  child: RTCVideoView(_remoteRenderer),
+                ),
               ),
             ),
 
@@ -242,10 +245,15 @@ class _CallScreenState extends State<CallScreen> {
 
           // ── Top bar ────────────────────────────────────────────────────────
           Positioned(
-            top: 0, left: 0, right: 0,
+            top: 0,
+            left: 0,
+            right: 0,
             child: SafeArea(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 8,
+                ),
                 child: Row(
                   children: [
                     _CallIconButton(
@@ -304,7 +312,9 @@ class _CallScreenState extends State<CallScreen> {
 
           // ── Controls bar ───────────────────────────────────────────────────
           Positioned(
-            bottom: 0, left: 0, right: 0,
+            bottom: 0,
+            left: 0,
+            right: 0,
             child: SafeArea(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
@@ -320,7 +330,9 @@ class _CallScreenState extends State<CallScreen> {
                     children: [
                       _ControlButton(
                         key: const Key('call-control-mute'),
-                        icon: micMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
+                        icon: micMuted
+                            ? Icons.mic_off_rounded
+                            : Icons.mic_rounded,
                         label: micMuted ? 'Unmute' : 'Mute',
                         active: micMuted,
                         onTap: _toggleMic,
@@ -379,7 +391,11 @@ class _CallBackground extends StatelessWidget {
               gradient: RadialGradient(
                 center: Alignment(0, -0.3),
                 radius: 1.4,
-                colors: [Color(0xFF1A2340), Color(0xFF070D1A), Color(0xFF000000)],
+                colors: [
+                  Color(0xFF1A2340),
+                  Color(0xFF070D1A),
+                  Color(0xFF000000),
+                ],
               ),
             ),
           ),
@@ -432,8 +448,9 @@ class _GlowAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final initial =
-        username.isNotEmpty ? username.substring(0, 1).toUpperCase() : '?';
+    final initial = username.isNotEmpty
+        ? username.substring(0, 1).toUpperCase()
+        : '?';
     return Container(
       width: 120,
       height: 120,
@@ -474,14 +491,12 @@ class _GlowAvatar extends StatelessWidget {
 // ── Icon button ───────────────────────────────────────────────────────────────
 
 class _CallIconButton extends StatelessWidget {
-  final Key? buttonKey;
   final String tooltip;
   final IconData icon;
   final VoidCallback onTap;
 
   const _CallIconButton({
     super.key,
-    this.buttonKey,
     required this.tooltip,
     required this.icon,
     required this.onTap,
@@ -492,7 +507,6 @@ class _CallIconButton extends StatelessWidget {
     return Tooltip(
       message: tooltip,
       child: GestureDetector(
-        key: buttonKey,
         onTap: onTap,
         child: LiquidGlass(
           blur: 22,
@@ -532,8 +546,8 @@ class _ControlButton extends StatelessWidget {
     final iconColor = active
         ? Colors.black87
         : color != null
-            ? Colors.white
-            : Colors.white;
+        ? Colors.white
+        : Colors.white;
 
     return Tooltip(
       message: label,
@@ -755,11 +769,10 @@ class IncomingCallModal extends StatelessWidget {
     final name = incoming.remoteUsername != null
         ? '@${incoming.remoteUsername}'
         : 'Unknown caller';
-    final kind = incoming.isVideo ? 'Incoming video call' : 'Incoming voice call';
+    final kind = incoming.isVideo
+        ? 'Incoming video call'
+        : 'Incoming voice call';
     final avatarUrl = incoming.remoteAvatarUrl;
-    final initial = (incoming.remoteUsername?.isNotEmpty ?? false)
-        ? incoming.remoteUsername!.substring(0, 1).toUpperCase()
-        : '?';
 
     return Material(
       type: MaterialType.transparency,
@@ -803,13 +816,17 @@ class IncomingCallModal extends StatelessWidget {
                   const SizedBox(height: 8),
                   LiquidGlass.capsule(
                     blur: 20,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 6,
+                    ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(
-                          incoming.isVideo ? Icons.videocam_rounded : Icons.call_rounded,
+                          incoming.isVideo
+                              ? Icons.videocam_rounded
+                              : Icons.call_rounded,
                           color: Colors.white70,
                           size: 14,
                         ),
@@ -896,7 +913,11 @@ class _AudioOutputTile extends StatelessWidget {
                   ),
                 ),
                 if (selected)
-                  const Icon(Icons.check_rounded, color: _callAnswerColor, size: 20),
+                  const Icon(
+                    Icons.check_rounded,
+                    color: _callAnswerColor,
+                    size: 20,
+                  ),
               ],
             ),
           ),
@@ -910,7 +931,6 @@ class _CallAction extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color color;
-  final Color iconColor;
   final VoidCallback onTap;
 
   const _CallAction({
@@ -918,7 +938,6 @@ class _CallAction extends StatelessWidget {
     required this.label,
     required this.color,
     required this.onTap,
-    this.iconColor = Colors.white,
   });
 
   @override
@@ -943,7 +962,7 @@ class _CallAction extends StatelessWidget {
             child: SizedBox(
               width: 72,
               height: 72,
-              child: Icon(icon, color: iconColor, size: 30),
+              child: Icon(icon, color: Colors.white, size: 30),
             ),
           ),
           const SizedBox(height: 10),
