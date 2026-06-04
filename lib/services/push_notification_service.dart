@@ -269,13 +269,18 @@ class PushNotificationService {
     if (_firebaseInitialized) return true;
     try {
       if (Firebase.apps.isEmpty) {
-        await Firebase.initializeApp(
-          options: DefaultFirebaseOptions.currentPlatform,
-        );
+        if (DefaultFirebaseOptions.currentPlatformConfigured) {
+          await Firebase.initializeApp(
+            options: DefaultFirebaseOptions.currentPlatform,
+          );
+        } else {
+          await Firebase.initializeApp();
+        }
       }
-      // Detect placeholder credentials: the template project-id is a dead
-      // give-away that the operator hasn't run flutterfire configure yet.
-      final opts = DefaultFirebaseOptions.currentPlatform;
+      // Detect placeholder credentials after init. Native google-services /
+      // GoogleService-Info files are accepted, while the generated Dart
+      // placeholder is still rejected when no injected config exists.
+      final opts = Firebase.app().options;
       if (opts.projectId == 'your-firebase-project-id' ||
           opts.apiKey.startsWith('REPLACE_WITH')) {
         debugPrint(

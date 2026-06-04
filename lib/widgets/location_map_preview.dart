@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import '../config/api_config.dart';
 import '../models/message.dart';
 
 class LocationMapPreview extends StatelessWidget {
@@ -23,6 +24,7 @@ class LocationMapPreview extends StatelessWidget {
         ? 0.0
         : (compact ? 22.0 : 44.0) +
               math.min(compact ? 58.0 : 150.0, math.sqrt(accuracy) * 3.4);
+    final mapUrls = _staticMapUrls();
 
     return Stack(
       fit: StackFit.expand,
@@ -35,6 +37,7 @@ class LocationMapPreview extends StatelessWidget {
             compact: compact,
           ),
         ),
+        if (mapUrls.isNotEmpty) _FallbackMapImage(urls: mapUrls),
         if (accuracy != null)
           Center(
             child: Container(
@@ -117,6 +120,71 @@ class LocationMapPreview extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+
+  List<String> _staticMapUrls() {
+    final lat = location.latitude.toStringAsFixed(6);
+    final lng = location.longitude.toStringAsFixed(6);
+    final size = compact ? '560x350' : '960x640';
+    final urls = <String>[];
+    if (ApiConfig.hasMapbox) {
+      final token = Uri.encodeQueryComponent(
+        ApiConfig.mapboxAccessToken.trim(),
+      );
+      final style = ApiConfig.mapboxStyle.trim().isEmpty
+          ? 'mapbox/streets-v12'
+          : ApiConfig.mapboxStyle.trim();
+      urls.add(
+        'https://api.mapbox.com/styles/v1/$style/static/pin-s+e53935($lng,$lat)/$lng,$lat,15,0/$size@2x?access_token=$token',
+      );
+    }
+    urls.add(
+      'https://staticmap.openstreetmap.de/staticmap.php?center=$lat,$lng&zoom=15&size=$size&markers=$lat,$lng,red-pushpin',
+    );
+    return urls;
+  }
+}
+
+class _FallbackMapImage extends StatefulWidget {
+  final List<String> urls;
+
+  const _FallbackMapImage({required this.urls});
+
+  @override
+  State<_FallbackMapImage> createState() => _FallbackMapImageState();
+}
+
+class _FallbackMapImageState extends State<_FallbackMapImage> {
+  var _index = 0;
+
+  @override
+  void didUpdateWidget(covariant _FallbackMapImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.urls.join('|') != widget.urls.join('|')) {
+      _index = 0;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_index >= widget.urls.length) {
+      return const SizedBox.shrink();
+    }
+    return Image.network(
+      widget.urls[_index],
+      fit: BoxFit.cover,
+      width: double.infinity,
+      height: double.infinity,
+      gaplessPlayback: true,
+      errorBuilder: (_, __, ___) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            setState(() => _index += 1);
+          }
+        });
+        return const SizedBox.shrink();
+      },
     );
   }
 }

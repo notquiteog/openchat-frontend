@@ -30,6 +30,8 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback? onLongPress;
   final VoidCallback? onAvatarTap;
   final ValueChanged<String>? onReactionTap;
+  final bool isLiveLocationSharing;
+  final VoidCallback? onCancelLiveLocation;
   // The current user's own bubble can be previewed locally while the published
   // sender bubble color remains authoritative for incoming messages.
   final Color? meBubbleColor;
@@ -45,6 +47,8 @@ class MessageBubble extends StatelessWidget {
     this.onLongPress,
     this.onAvatarTap,
     this.onReactionTap,
+    this.isLiveLocationSharing = false,
+    this.onCancelLiveLocation,
     this.meBubbleColor,
     this.bubbleRadius = 18,
   });
@@ -179,6 +183,8 @@ class MessageBubble extends StatelessWidget {
         textColor: textColor,
         radii: radii,
         onReactionTap: onReactionTap,
+        isSharing: isLiveLocationSharing,
+        onCancelSharing: onCancelLiveLocation,
       );
     }
 
@@ -441,6 +447,8 @@ class _LocationBubble extends StatelessWidget {
   final Color textColor;
   final BorderRadius radii;
   final ValueChanged<String>? onReactionTap;
+  final bool isSharing;
+  final VoidCallback? onCancelSharing;
 
   const _LocationBubble({
     required this.message,
@@ -450,6 +458,8 @@ class _LocationBubble extends StatelessWidget {
     required this.textColor,
     required this.radii,
     this.onReactionTap,
+    this.isSharing = false,
+    this.onCancelSharing,
   });
 
   @override
@@ -525,6 +535,21 @@ class _LocationBubble extends StatelessWidget {
                       color: textColor.withValues(alpha: 0.7),
                     ),
                   ),
+                if (isSharing && location.isLive && location.isActive) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FilledButton.tonalIcon(
+                      style: FilledButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      onPressed: onCancelSharing,
+                      icon: const Icon(Icons.location_off_outlined, size: 16),
+                      label: const Text('Stop sharing'),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

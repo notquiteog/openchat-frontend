@@ -30,6 +30,14 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
     await NotificationService.showIncomingCall(
       body: 'Incoming $kind call from @$caller',
     );
+  } else if (message.notification == null &&
+      message.data['type'] == 'new_message') {
+    await NotificationService.init();
+    await NotificationService.showMessage(
+      conversationId: message.data['conversation_id'] as String? ?? 'push',
+      title: 'OpenChat',
+      body: 'You have a new message',
+    );
   }
 }
 

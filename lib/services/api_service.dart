@@ -1174,14 +1174,20 @@ class ApiService {
   Future<Map<String, dynamic>> sendPaymentTransfer({
     required String toUserID,
     required String provider,
-    required double amount,
+    double? amount,
+    double? fiatAmount,
+    String? fiatCurrency,
     String? conversationID,
     String? note,
   }) async {
     final resp = await _post('/api/v1/billing/transfers', {
       'to_user_id': toUserID,
       'provider': provider,
-      'amount': amount,
+      ..._paymentAmountPayload(
+        amount: amount,
+        fiatAmount: fiatAmount,
+        fiatCurrency: fiatCurrency,
+      ),
       'conversation_id': ?conversationID,
       if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
     });
@@ -1191,14 +1197,20 @@ class ApiService {
   Future<Map<String, dynamic>> createExternalPaymentTransfer({
     required String toUserID,
     required String provider,
-    required double amount,
+    double? amount,
+    double? fiatAmount,
+    String? fiatCurrency,
     String? conversationID,
     String? note,
   }) async {
     final resp = await _post('/api/v1/billing/transfers/external', {
       'to_user_id': toUserID,
       'provider': provider,
-      'amount': amount,
+      ..._paymentAmountPayload(
+        amount: amount,
+        fiatAmount: fiatAmount,
+        fiatCurrency: fiatCurrency,
+      ),
       'conversation_id': ?conversationID,
       if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
     });
@@ -1209,13 +1221,19 @@ class ApiService {
     String? payerID,
     String? conversationID,
     required String provider,
-    required double amount,
+    double? amount,
+    double? fiatAmount,
+    String? fiatCurrency,
     String? title,
     String? note,
   }) async {
     final resp = await _post('/api/v1/billing/payment-requests', {
       'provider': provider,
-      'amount': amount,
+      ..._paymentAmountPayload(
+        amount: amount,
+        fiatAmount: fiatAmount,
+        fiatCurrency: fiatCurrency,
+      ),
       'payer_id': ?payerID,
       'conversation_id': ?conversationID,
       if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
@@ -1234,11 +1252,17 @@ class ApiService {
 
   Future<Map<String, dynamic>> payPaymentRequestAmount({
     required String requestID,
-    required double amount,
+    double? amount,
+    double? fiatAmount,
+    String? fiatCurrency,
   }) async {
     final resp = await _post(
       '/api/v1/billing/payment-requests/$requestID/pay',
-      {'amount': amount},
+      _paymentAmountPayload(
+        amount: amount,
+        fiatAmount: fiatAmount,
+        fiatCurrency: fiatCurrency,
+      ),
     );
     return resp['data'] as Map<String, dynamic>;
   }
@@ -1246,12 +1270,32 @@ class ApiService {
   Future<Map<String, dynamic>> payPaymentRequestExternally({
     required String requestID,
     double? amount,
+    double? fiatAmount,
+    String? fiatCurrency,
   }) async {
     final resp = await _post(
       '/api/v1/billing/payment-requests/$requestID/pay-external',
-      {'amount': ?amount},
+      _paymentAmountPayload(
+        amount: amount,
+        fiatAmount: fiatAmount,
+        fiatCurrency: fiatCurrency,
+      ),
     );
     return resp['data'] as Map<String, dynamic>;
+  }
+
+  Map<String, dynamic> _paymentAmountPayload({
+    double? amount,
+    double? fiatAmount,
+    String? fiatCurrency,
+  }) {
+    final normalizedFiatCurrency = fiatCurrency?.trim().toUpperCase();
+    return {
+      if (amount != null) 'amount': amount,
+      if (fiatAmount != null) 'fiat_amount': fiatAmount,
+      if (normalizedFiatCurrency != null && normalizedFiatCurrency.isNotEmpty)
+        'fiat_currency': normalizedFiatCurrency,
+    };
   }
 
   Future<List<dynamic>> listPaymentTransfers() async {

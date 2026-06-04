@@ -2,12 +2,33 @@
 //   --dart-define=OPENCHAT_HOST=chat.example.com
 //   --dart-define=OPENCHAT_PORT=443
 //   --dart-define=OPENCHAT_HTTPS=true
+//   --dart-define=MAPBOX_ACCESS_TOKEN=pk...
+//   --dart-define=MAPBOX_STYLE=mapbox/streets-v12
 //
 // Defaults (localhost:8080 over HTTP) are used for local development.
 class ApiConfig {
-  static const String _host  = String.fromEnvironment('OPENCHAT_HOST',  defaultValue: 'localhost');
-  static const int    _port  = int.fromEnvironment   ('OPENCHAT_PORT',  defaultValue: 8080);
-  static const bool   _https = bool.fromEnvironment  ('OPENCHAT_HTTPS', defaultValue: false);
+  static const String _host = String.fromEnvironment(
+    'OPENCHAT_HOST',
+    defaultValue: 'localhost',
+  );
+  static const int _port = int.fromEnvironment(
+    'OPENCHAT_PORT',
+    defaultValue: 8080,
+  );
+  static const bool _https = bool.fromEnvironment(
+    'OPENCHAT_HTTPS',
+    defaultValue: false,
+  );
+  static const String mapboxAccessToken = String.fromEnvironment(
+    'MAPBOX_ACCESS_TOKEN',
+    defaultValue: '',
+  );
+  static const String mapboxStyle = String.fromEnvironment(
+    'MAPBOX_STYLE',
+    defaultValue: 'mapbox/streets-v12',
+  );
+
+  static bool get hasMapbox => mapboxAccessToken.trim().isNotEmpty;
 
   static String get baseUrl {
     final scheme = _https ? 'https' : 'http';

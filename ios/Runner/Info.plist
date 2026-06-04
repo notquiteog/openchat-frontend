@@ -82,6 +82,8 @@
 	<string>Photo library access is required to send image attachments.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>OpenChat needs location access to share your location in chat.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>OpenChat needs always access to keep live location sharing running.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>OpenChat needs always access to keep live location sharing running.</string>
 	<key>NSFaceIDUsageDescription</key>

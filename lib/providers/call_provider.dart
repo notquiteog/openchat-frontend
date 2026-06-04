@@ -31,7 +31,13 @@ class CallProvider extends ChangeNotifier {
     if (_incomingCall != null) {
       unawaited(_audio.update(incoming: true));
     } else {
-      unawaited(_audio.update(state: session?.state));
+      final s = session;
+      final audioState =
+          s?.isIncoming == true &&
+              (s?.state == CallState.calling || s?.state == CallState.ringing)
+          ? CallState.connecting
+          : s?.state;
+      unawaited(_audio.update(state: audioState));
     }
   }
 
@@ -143,6 +149,9 @@ class CallProvider extends ChangeNotifier {
     _sessionSub = _callService.sessionStream.listen((_) {
       final s = session;
       if (s == null || s.state == CallState.ended) {
+        _incomingCall = null;
+        _pendingOfferSdp = null;
+        unawaited(NotificationService.cancelIncomingCall());
         if (_micMuted) {
           try {
             _callService.setMicMuted(false);
@@ -159,6 +168,9 @@ class CallProvider extends ChangeNotifier {
       }
       if (s?.state == CallState.connected &&
           _lastSessionState != CallState.connected) {
+        _incomingCall = null;
+        _pendingOfferSdp = null;
+        unawaited(NotificationService.cancelIncomingCall());
         unawaited(refreshAudioOutputs());
       }
       _syncAudio();
@@ -261,7 +273,9 @@ class CallProvider extends ChangeNotifier {
     if (incoming == null) return;
 
     _incomingCall = null;
+    _pendingOfferSdp = null;
     unawaited(NotificationService.cancelIncomingCall());
+    _syncAudio();
     notifyListeners();
 
     await _callService.acceptIncomingCall(incoming);
@@ -298,11 +312,15 @@ class CallProvider extends ChangeNotifier {
     try {
       _callService.hangup();
     } catch (_) {}
+    _incomingCall = null;
+    _pendingOfferSdp = null;
     _activeCallNotificationSessionId = null;
     _activeCallNotificationState = null;
     _activeCallNotificationMuted = null;
     unawaited(_foreground.stop());
     unawaited(NotificationService.cancelActiveCall());
+    unawaited(NotificationService.cancelIncomingCall());
+    _syncAudio();
     notifyListeners();
   }
 

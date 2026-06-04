@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -87,11 +88,16 @@ class NotificationService {
   static const String _activeCallCategoryUnmuted =
       'openchat_active_call_unmuted';
   static const String _activeCallCategoryMuted = 'openchat_active_call_muted';
+  static const String _liveLocationCancelActionId =
+      'openchat_live_location_cancel';
+  static const String _liveLocationCategory = 'openchat_live_location';
   static VoidCallback? _activeCallEndHandler;
   static VoidCallback? _activeCallToggleMuteHandler;
   static VoidCallback? _incomingCallAnswerHandler;
   static VoidCallback? _incomingCallDismissHandler;
   static VoidCallback? _incomingCallDeclineHandler;
+  static Future<void> Function(String conversationId, String messageId)?
+  _liveLocationCancelHandler;
   static bool _appFocused = true;
 
   static bool get _supported =>
@@ -222,6 +228,12 @@ class NotificationService {
     _incomingCallDeclineHandler = onDecline;
   }
 
+  static void setLiveLocationHandlers({
+    Future<void> Function(String conversationId, String messageId)? onCancel,
+  }) {
+    _liveLocationCancelHandler = onCancel;
+  }
+
   @visibleForTesting
   static void debugHandleNotificationResponse(NotificationResponse response) =>
       handleNotificationResponse(response);
@@ -245,6 +257,20 @@ class NotificationService {
         return;
       case _activeCallMuteActionId:
         _activeCallToggleMuteHandler?.call();
+        return;
+      case _liveLocationCancelActionId:
+        final payload = response.payload;
+        if (payload == null || payload.isEmpty) return;
+        try {
+          final decoded = jsonDecode(payload);
+          if (decoded is! Map<String, dynamic>) return;
+          final conversationId = decoded['conversation_id'] as String? ?? '';
+          final messageId = decoded['message_id'] as String? ?? '';
+          if (conversationId.isEmpty || messageId.isEmpty) return;
+          unawaited(
+            _liveLocationCancelHandler?.call(conversationId, messageId),
+          );
+        } catch (_) {}
         return;
       default:
         return;
@@ -306,6 +332,19 @@ class NotificationService {
           DarwinNotificationAction.plain(
             _activeCallEndActionId,
             'End',
+            options: {
+              DarwinNotificationActionOption.destructive,
+              DarwinNotificationActionOption.foreground,
+            },
+          ),
+        ],
+      ),
+      DarwinNotificationCategory(
+        _liveLocationCategory,
+        actions: [
+          DarwinNotificationAction.plain(
+            _liveLocationCancelActionId,
+            'Cancel',
             options: {
               DarwinNotificationActionOption.destructive,
               DarwinNotificationActionOption.foreground,
@@ -610,13 +649,23 @@ class NotificationService {
         ongoing: true,
         autoCancel: false,
         onlyAlertOnce: true,
+        actions: [
+          AndroidNotificationAction(
+            _liveLocationCancelActionId,
+            'Cancel',
+            cancelNotification: false,
+            showsUserInterface: true,
+          ),
+        ],
       ),
       iOS: DarwinNotificationDetails(
+        categoryIdentifier: _liveLocationCategory,
         presentBanner: live,
         presentList: live,
         presentSound: false,
       ),
       macOS: DarwinNotificationDetails(
+        categoryIdentifier: _liveLocationCategory,
         presentBanner: live,
         presentList: live,
         presentSound: false,
@@ -633,6 +682,10 @@ class NotificationService {
       title: title,
       body: _liveLocationRemainingLabel(endsAt),
       notificationDetails: details,
+      payload: jsonEncode({
+        'conversation_id': conversationId,
+        'message_id': messageId,
+      }),
     );
   }
 

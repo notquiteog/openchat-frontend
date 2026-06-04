@@ -709,6 +709,7 @@ class _ChatScreenState extends State<ChatScreen> {
     var payMode = true;
     var paymentSource = 'wallet';
     var provider = providers.first;
+    var amountUnit = 'crypto';
     var selectedUserID = members.first.userId;
     var submitting = false;
     final amountCtrl = TextEditingController();
@@ -730,6 +731,8 @@ class _ChatScreenState extends State<ChatScreen> {
         context: rootContext,
         isScrollControlled: true,
         backgroundColor: Colors.transparent,
+        barrierColor: Colors.black.withValues(alpha: 0.18),
+        elevation: 0,
         builder: (sheetCtx) => StatefulBuilder(
           builder: (sheetCtx, setSheet) {
             Future<void> submit() async {
@@ -741,11 +744,18 @@ class _ChatScreenState extends State<ChatScreen> {
                 );
                 return;
               }
+              final isCryptoAmount = amountUnit == 'crypto';
+              final fiatCurrency = isCryptoAmount
+                  ? null
+                  : amountUnit.toUpperCase();
               setSheet(() => submitting = true);
               try {
                 if (payMode) {
-                  if (paymentSource == 'wallet') {
-                    if (amount > balanceFor(provider)) {
+                  final useWallet =
+                      paymentSource == 'wallet' &&
+                      (!isCryptoAmount || amount <= balanceFor(provider));
+                  if (useWallet) {
+                    if (isCryptoAmount && amount > balanceFor(provider)) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
                           content: Text('Not enough app wallet balance'),
@@ -756,7 +766,9 @@ class _ChatScreenState extends State<ChatScreen> {
                     await api.sendPaymentTransfer(
                       toUserID: selectedUserID,
                       provider: provider,
-                      amount: amount,
+                      amount: isCryptoAmount ? amount : null,
+                      fiatAmount: isCryptoAmount ? null : amount,
+                      fiatCurrency: fiatCurrency,
                       conversationID: conv.id,
                       note: noteCtrl.text,
                     );
@@ -764,7 +776,9 @@ class _ChatScreenState extends State<ChatScreen> {
                     final result = await api.createExternalPaymentTransfer(
                       toUserID: selectedUserID,
                       provider: provider,
-                      amount: amount,
+                      amount: isCryptoAmount ? amount : null,
+                      fiatAmount: isCryptoAmount ? null : amount,
+                      fiatCurrency: fiatCurrency,
                       conversationID: conv.id,
                       note: noteCtrl.text,
                     );
@@ -779,7 +793,9 @@ class _ChatScreenState extends State<ChatScreen> {
                     payerID: selectedUserID,
                     conversationID: conv.id,
                     provider: provider,
-                    amount: amount,
+                    amount: isCryptoAmount ? amount : null,
+                    fiatAmount: isCryptoAmount ? null : amount,
+                    fiatCurrency: fiatCurrency,
                     title: 'Payment request',
                     note: noteCtrl.text,
                   );
@@ -800,8 +816,12 @@ class _ChatScreenState extends State<ChatScreen> {
             final bottomInset = MediaQuery.of(sheetCtx).viewInsets.bottom;
             final amount = double.tryParse(amountCtrl.text.trim()) ?? 0;
             final available = balanceFor(provider);
+            final isCryptoAmount = amountUnit == 'crypto';
             final canUseWallet =
-                !payMode || (amount > 0 && available >= amount);
+                !payMode ||
+                !isCryptoAmount ||
+                amount <= 0 ||
+                available >= amount;
             return SafeArea(
               top: false,
               child: Padding(
@@ -870,8 +890,15 @@ class _ChatScreenState extends State<ChatScreen> {
                             ),
                         ],
                         selected: {provider},
-                        onSelectionChanged: (next) =>
-                            setSheet(() => provider = next.first),
+                        onSelectionChanged: (next) => setSheet(() {
+                          provider = next.first;
+                          if (payMode &&
+                              amountUnit == 'crypto' &&
+                              paymentSource == 'wallet' &&
+                              amount > balanceFor(provider)) {
+                            paymentSource = 'external';
+                          }
+                        }),
                       ),
                       const SizedBox(height: 12),
                       if (payMode) ...[
@@ -895,6 +922,28 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                         const SizedBox(height: 12),
                       ],
+                      SegmentedButton<String>(
+                        showSelectedIcon: false,
+                        segments: [
+                          ButtonSegment(
+                            value: 'crypto',
+                            label: Text(provider.toUpperCase()),
+                          ),
+                          const ButtonSegment(value: 'usd', label: Text('USD')),
+                          const ButtonSegment(value: 'eur', label: Text('EUR')),
+                        ],
+                        selected: {amountUnit},
+                        onSelectionChanged: (next) => setSheet(() {
+                          amountUnit = next.first;
+                          if (payMode &&
+                              amountUnit == 'crypto' &&
+                              paymentSource == 'wallet' &&
+                              amount > balanceFor(provider)) {
+                            paymentSource = 'external';
+                          }
+                        }),
+                      ),
+                      const SizedBox(height: 12),
                       TextField(
                         controller: amountCtrl,
                         keyboardType: const TextInputType.numberWithOptions(
@@ -905,6 +954,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               double.tryParse(amountCtrl.text.trim()) ?? 0;
                           setSheet(() {
                             if (payMode &&
+                                amountUnit == 'crypto' &&
                                 paymentSource == 'wallet' &&
                                 nextAmount > balanceFor(provider)) {
                               paymentSource = 'external';
@@ -912,7 +962,9 @@ class _ChatScreenState extends State<ChatScreen> {
                           });
                         },
                         decoration: InputDecoration(
-                          labelText: 'Amount ${provider.toUpperCase()}',
+                          labelText: amountUnit == 'crypto'
+                              ? 'Amount ${provider.toUpperCase()}'
+                              : 'Amount ${amountUnit.toUpperCase()}',
                           border: const OutlineInputBorder(),
                         ),
                       ),
@@ -1324,6 +1376,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final auth = context.watch<AuthProvider>();
     final chat = context.watch<ChatProvider>();
     final messages = chat.messagesFor(conv.id);
+    final liveLocationShare = chat.activeLiveLocationShareForConversation(
+      conv.id,
+    );
     final currentUserID = auth.currentUser?.id ?? '';
     final typingUsers = chat.typingUsersFor(conv.id);
     _handleMessageListChange(messages, currentUserID);
@@ -1447,6 +1502,13 @@ class _ChatScreenState extends State<ChatScreen> {
                                               ),
                                         onReactionTap: (emoji) =>
                                             _toggleReaction(msg, emoji),
+                                        isLiveLocationSharing:
+                                            isMe &&
+                                            msg.location?.isLive == true &&
+                                            chat.isLiveLocationActive(msg.id),
+                                        onCancelLiveLocation: () => context
+                                            .read<ChatProvider>()
+                                            .stopLiveLocation(msg.id),
                                         onLongPress: () => _showMessageMenu(
                                           context,
                                           msg,
@@ -1468,6 +1530,19 @@ class _ChatScreenState extends State<ChatScreen> {
                                   },
                                 ),
                         ),
+                        if (liveLocationShare != null)
+                          Positioned(
+                            left: 12,
+                            right: 12,
+                            top: 10,
+                            child: _LiveLocationShareBanner(
+                              status: liveLocationShare,
+                              onCancel: () =>
+                                  context.read<ChatProvider>().stopLiveLocation(
+                                    liveLocationShare.messageId,
+                                  ),
+                            ),
+                          ),
                         Positioned(
                           left: 0,
                           right: 0,
@@ -1580,6 +1655,9 @@ class _ChatScreenState extends State<ChatScreen> {
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.18),
+      elevation: 0,
       builder: (sheetCtx) => StatefulBuilder(
         builder: (sheetCtx, setSheet) {
           Future<void> apply(
@@ -1598,104 +1676,111 @@ class _ChatScreenState extends State<ChatScreen> {
             setSheet(() {});
           }
 
+          final bottomInset = MediaQuery.of(sheetCtx).viewInsets.bottom;
           return SafeArea(
-            child: SingleChildScrollView(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Text(
-                          'Chat appearance',
-                          style: Theme.of(sheetCtx).textTheme.titleMedium,
-                        ),
-                        const Spacer(),
-                        TextButton(
-                          onPressed: () =>
-                              apply(const ChatStyle(), publishBubble: true),
-                          child: const Text('Reset'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    if (isDm) ...[
-                      const Text('Background color'),
-                      const SizedBox(height: 8),
-                      ColorChoices(
-                        selected: style.backgroundColor,
-                        onSelected: (c) => apply(
-                          c == null
-                              ? style.copyWith(clearBackgroundColor: true)
-                              : style.copyWith(
-                                  backgroundColor: c,
-                                  clearBackgroundImage: true,
-                                ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
+            top: false,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(14, 0, 14, 14 + bottomInset),
+              child: LiquidGlass(
+                blur: 56,
+                borderRadius: const BorderRadius.all(Radius.circular(28)),
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Row(
                         children: [
-                          OutlinedButton.icon(
-                            icon: const Icon(Icons.image_outlined, size: 18),
-                            label: const Text('Background image'),
-                            onPressed: () async {
-                              final picked = await ImagePicker().pickImage(
-                                source: ImageSource.gallery,
-                                imageQuality: 90,
-                              );
-                              if (picked != null) {
-                                apply(
-                                  style.copyWith(
-                                    backgroundImagePath: picked.path,
-                                    clearBackgroundColor: true,
-                                  ),
-                                );
-                              }
-                            },
+                          Text(
+                            'Chat appearance',
+                            style: Theme.of(sheetCtx).textTheme.titleMedium,
                           ),
-                          if (style.backgroundImagePath != null)
-                            TextButton(
-                              onPressed: () => apply(
-                                style.copyWith(clearBackgroundImage: true),
-                              ),
-                              child: const Text('Remove'),
-                            ),
+                          const Spacer(),
+                          TextButton(
+                            onPressed: () =>
+                                apply(const ChatStyle(), publishBubble: true),
+                            child: const Text('Reset'),
+                          ),
                         ],
                       ),
-                      const Divider(height: 24),
-                    ],
-                    const Text('My bubble color'),
-                    const SizedBox(height: 8),
-                    ColorChoices(
-                      selected: style.myBubbleColor,
-                      onSelected: (c) => apply(
-                        c == null
-                            ? style.copyWith(clearMyBubbleColor: true)
-                            : style.copyWith(myBubbleColor: c),
-                        publishBubble: true,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        const Text('Bubble shape'),
-                        Expanded(
-                          child: Slider(
-                            value: style.bubbleRadius,
-                            min: 0,
-                            max: 28,
-                            divisions: 14,
-                            label: style.bubbleRadius.round().toString(),
-                            onChanged: (v) =>
-                                apply(style.copyWith(bubbleRadius: v)),
+                      const SizedBox(height: 8),
+                      if (isDm) ...[
+                        const Text('Background color'),
+                        const SizedBox(height: 8),
+                        ColorChoices(
+                          selected: style.backgroundColor,
+                          onSelected: (c) => apply(
+                            c == null
+                                ? style.copyWith(clearBackgroundColor: true)
+                                : style.copyWith(
+                                    backgroundColor: c,
+                                    clearBackgroundImage: true,
+                                  ),
                           ),
                         ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            OutlinedButton.icon(
+                              icon: const Icon(Icons.image_outlined, size: 18),
+                              label: const Text('Background image'),
+                              onPressed: () async {
+                                final picked = await ImagePicker().pickImage(
+                                  source: ImageSource.gallery,
+                                  imageQuality: 90,
+                                );
+                                if (picked != null) {
+                                  apply(
+                                    style.copyWith(
+                                      backgroundImagePath: picked.path,
+                                      clearBackgroundColor: true,
+                                    ),
+                                  );
+                                }
+                              },
+                            ),
+                            if (style.backgroundImagePath != null)
+                              TextButton(
+                                onPressed: () => apply(
+                                  style.copyWith(clearBackgroundImage: true),
+                                ),
+                                child: const Text('Remove'),
+                              ),
+                          ],
+                        ),
+                        const Divider(height: 24),
                       ],
-                    ),
-                  ],
+                      const Text('My bubble color'),
+                      const SizedBox(height: 8),
+                      ColorChoices(
+                        selected: style.myBubbleColor,
+                        onSelected: (c) => apply(
+                          c == null
+                              ? style.copyWith(clearMyBubbleColor: true)
+                              : style.copyWith(myBubbleColor: c),
+                          publishBubble: true,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          const Text('Bubble shape'),
+                          Expanded(
+                            child: Slider(
+                              value: style.bubbleRadius,
+                              min: 0,
+                              max: 28,
+                              divisions: 14,
+                              label: style.bubbleRadius.round().toString(),
+                              onChanged: (v) =>
+                                  apply(style.copyWith(bubbleRadius: v)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -3224,6 +3309,68 @@ class _ReactionPopup extends StatelessWidget {
                   child: Text(emoji, style: const TextStyle(fontSize: 26)),
                 ),
               ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LiveLocationShareBanner extends StatelessWidget {
+  final LiveLocationShareStatus status;
+  final VoidCallback onCancel;
+
+  const _LiveLocationShareBanner({
+    required this.status,
+    required this.onCancel,
+  });
+
+  String get _remainingLabel {
+    final remaining = status.expiresAt.difference(DateTime.now());
+    if (remaining.inSeconds <= 0) return 'ending';
+    if (remaining.inHours >= 1) {
+      final minutes = remaining.inMinutes % 60;
+      return minutes == 0
+          ? '${remaining.inHours}h left'
+          : '${remaining.inHours}h ${minutes}m left';
+    }
+    if (remaining.inMinutes >= 1) return '${remaining.inMinutes}m left';
+    return '${remaining.inSeconds}s left';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
+      child: LiquidGlass.capsule(
+        blur: 58,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.near_me_rounded, size: 17, color: scheme.primary),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                'Sharing with ${status.sharingWith} · $_remainingLabel',
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            TextButton(
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                minimumSize: const Size(0, 30),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+              onPressed: onCancel,
+              child: const Text('Cancel'),
+            ),
           ],
         ),
       ),

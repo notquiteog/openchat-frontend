@@ -1157,6 +1157,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.18),
+      elevation: 0,
       builder: (sheetCtx) => StatefulBuilder(
         builder: (sheetCtx, setSheet) {
           Future<void> apply(ChatStyle next) async {
@@ -1170,38 +1173,45 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             setSheet(() {});
           }
 
+          final bottomInset = MediaQuery.of(sheetCtx).viewInsets.bottom;
           return SafeArea(
+            top: false,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        'Chat appearance',
-                        style: Theme.of(sheetCtx).textTheme.titleMedium,
-                      ),
-                      const Spacer(),
-                      TextButton(
-                        onPressed: () => apply(const ChatStyle()),
-                        child: const Text('Reset'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  const Text('My bubble color'),
-                  const SizedBox(height: 8),
-                  ColorChoices(
-                    selected: style.myBubbleColor,
-                    onSelected: (color) => apply(
-                      color == null
-                          ? style.copyWith(clearMyBubbleColor: true)
-                          : style.copyWith(myBubbleColor: color),
+              padding: EdgeInsets.fromLTRB(14, 0, 14, 14 + bottomInset),
+              child: LiquidGlass(
+                blur: 56,
+                borderRadius: const BorderRadius.all(Radius.circular(28)),
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'Chat appearance',
+                          style: Theme.of(sheetCtx).textTheme.titleMedium,
+                        ),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: () => apply(const ChatStyle()),
+                          child: const Text('Reset'),
+                        ),
+                      ],
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 12),
+                    const Text('My bubble color'),
+                    const SizedBox(height: 8),
+                    ColorChoices(
+                      selected: style.myBubbleColor,
+                      onSelected: (color) => apply(
+                        color == null
+                            ? style.copyWith(clearMyBubbleColor: true)
+                            : style.copyWith(myBubbleColor: color),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           );
