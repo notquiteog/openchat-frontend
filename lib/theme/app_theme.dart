@@ -61,7 +61,7 @@ class AppTheme {
         backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
-        height: 64,
+        height: 56,
         indicatorShape: const StadiumBorder(),
         indicatorColor: scheme.primary.withValues(alpha: isDark ? 0.26 : 0.20),
         labelTextStyle: WidgetStateProperty.resolveWith(

@@ -1406,6 +1406,19 @@ class _ChatScreenState extends State<ChatScreen> {
             curve: Curves.easeOutCubic,
             child: Column(
               children: [
+                // Live location banner sits above the message list and takes
+                // real layout space so it never floats over messages.
+                if (liveLocationShare != null)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+                    child: _LiveLocationShareBanner(
+                      status: liveLocationShare,
+                      onCancel: () =>
+                          context.read<ChatProvider>().stopLiveLocation(
+                            liveLocationShare.messageId,
+                          ),
+                    ),
+                  ),
                 Expanded(
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
@@ -1530,19 +1543,6 @@ class _ChatScreenState extends State<ChatScreen> {
                                   },
                                 ),
                         ),
-                        if (liveLocationShare != null)
-                          Positioned(
-                            left: 12,
-                            right: 12,
-                            top: 10,
-                            child: _LiveLocationShareBanner(
-                              status: liveLocationShare,
-                              onCancel: () =>
-                                  context.read<ChatProvider>().stopLiveLocation(
-                                    liveLocationShare.messageId,
-                                  ),
-                            ),
-                          ),
                         Positioned(
                           left: 0,
                           right: 0,
@@ -2709,16 +2709,21 @@ class _ChatScreenState extends State<ChatScreen> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      backgroundColor: Colors.transparent,
       builder: (_) => DraggableScrollableSheet(
         initialChildSize: 0.5,
         minChildSize: 0.3,
         maxChildSize: 0.9,
         expand: false,
-        builder: (ctx, scrollCtrl) => SafeArea(
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 8, 8),
+        builder: (ctx, scrollCtrl) => GlassSurface(
+          blur: 56,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          child: SafeArea(
+            top: false,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 8, 8),
                 child: Row(
                   children: [
                     Text(
@@ -2855,6 +2860,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ],
           ),
         ),
+      ),
       ),
     );
   }
@@ -3102,37 +3108,72 @@ class _ChatScreenState extends State<ChatScreen> {
     final chat = context.read<ChatProvider>();
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
-    final action = await showDialog<String>(
+    final action = await showModalBottomSheet<String>(
       context: context,
-      builder: (ctx) => GlassAlertDialog(
-        title: const Text('Delete messages'),
-        content: Text(
-          isAdmin
-              ? 'Choose which messages to remove from this group.'
-              : 'Delete all messages you have sent in this group?',
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          child: LiquidGlass(
+            blur: 56,
+            borderRadius: const BorderRadius.all(Radius.circular(28)),
+            padding: EdgeInsets.zero,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 4),
+                  child: Text(
+                    'Delete messages',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                  child: Text(
+                    isAdmin
+                        ? 'Choose which messages to remove from this group.'
+                        : 'Delete all messages you have sent in this group?',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onSurface.withValues(alpha: 0.6),
+                        ),
+                  ),
+                ),
+                const Divider(height: 1),
+                const SizedBox(height: 4),
+                _MenuTile(
+                  icon: Icons.delete_outline,
+                  label: 'Delete mine',
+                  onTap: () => Navigator.pop(ctx, 'mine'),
+                ),
+                if (isAdmin)
+                  _MenuTile(
+                    icon: Icons.delete_sweep_outlined,
+                    label: 'Delete everyone\'s messages',
+                    color: Colors.red,
+                    onTap: () => Navigator.pop(ctx, 'all'),
+                  ),
+                if (isAdmin)
+                  _MenuTile(
+                    icon: Icons.group_remove_outlined,
+                    label: 'Delete group',
+                    color: Colors.red,
+                    onTap: () => Navigator.pop(ctx, 'group'),
+                  ),
+                _MenuTile(
+                  icon: Icons.close,
+                  label: 'Cancel',
+                  onTap: () => Navigator.pop(ctx),
+                ),
+                const SizedBox(height: 4),
+              ],
+            ),
+          ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, 'mine'),
-            child: const Text('Delete mine'),
-          ),
-          if (isAdmin)
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: Colors.red),
-              onPressed: () => Navigator.pop(ctx, 'all'),
-              child: const Text('Delete everyone'),
-            ),
-          if (isAdmin)
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: Colors.red),
-              onPressed: () => Navigator.pop(ctx, 'group'),
-              child: const Text('Delete group'),
-            ),
-        ],
       ),
     );
     if (action == null || !mounted) return;

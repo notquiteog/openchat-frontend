@@ -55,9 +55,31 @@ class OpenChatApp extends StatelessWidget {
       // Float the call UI above every route so incoming/active calls surface on
       // any screen, not just the chats list. The live connection banner stays
       // above it so a broken websocket is always visible.
-      builder: (context, child) => Stack(
-        children: [?child, const CallOverlay(), const _LiveConnectionBanner()],
-      ),
+      //
+      // When a call is minimized, inflate MediaQuery.padding.top by the bar
+      // height so every screen's SafeArea and AppBar automatically push content
+      // down — no per-screen wiring needed.
+      builder: (context, child) {
+        final extra = context
+            .select<CallProvider, double>((cp) => cp.minimizedContentTopInset);
+        final mq = MediaQuery.of(context);
+        return Stack(
+          children: [
+            MediaQuery(
+              data: extra == 0
+                  ? mq
+                  : mq.copyWith(
+                      padding: mq.padding.copyWith(
+                        top: mq.padding.top + extra,
+                      ),
+                    ),
+              child: child!,
+            ),
+            const CallOverlay(),
+            const _LiveConnectionBanner(),
+          ],
+        );
+      },
     );
   }
 }
@@ -455,7 +477,7 @@ class _HomeShellState extends State<_HomeShell> {
                 16,
                 0,
                 16,
-                MediaQuery.viewPaddingOf(context).bottom + 10,
+                MediaQuery.viewPaddingOf(context).bottom + 6,
               ),
               child: LiquidGlass.capsule(
                 // The capsule already clears the home-bar inset, so stop the

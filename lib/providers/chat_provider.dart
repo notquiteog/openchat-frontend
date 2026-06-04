@@ -546,20 +546,10 @@ class ChatProvider extends ChangeNotifier {
   }) async {
     final conv = _conversations[convID];
     if (conv == null) return;
-    Message? existingMessage;
-    for (final message in _messages[convID] ?? const <Message>[]) {
-      if (message.id == msgID) {
-        existingMessage = message;
-        break;
-      }
-    }
-    final forcePlaintext =
-        existingMessage != null &&
-        _serverStoresPlaintextPayload(existingMessage.type.name);
     final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
     final String encrypted;
     final String signature;
-    if (conv.encryptionEnabled && !forcePlaintext) {
+    if (conv.encryptionEnabled) {
       if (privateKey.isEmpty) return;
       final recipientKeys = await _freshRecipientKeys(convID, conv);
       if (recipientKeys.isEmpty) return;
@@ -642,8 +632,7 @@ class ChatProvider extends ChangeNotifier {
 
     final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
     final userID = await _storage.getUserID() ?? '';
-    final forcePlaintext = _serverStoresPlaintextPayload(messageType);
-    if (conv.encryptionEnabled && !forcePlaintext && privateKey.isEmpty) {
+    if (conv.encryptionEnabled && privateKey.isEmpty) {
       throw const ChatSendException(
         'Your PGP key is locked or missing. Unlock or import it in Settings.',
       );
@@ -656,7 +645,7 @@ class ChatProvider extends ChangeNotifier {
 
     final String encrypted;
     final String signature;
-    if (conv.encryptionEnabled && !forcePlaintext) {
+    if (conv.encryptionEnabled) {
       final recipientKeys = await _freshRecipientKeys(convID, conv);
       if (recipientKeys.isEmpty) {
         throw const ChatSendException(
@@ -721,7 +710,7 @@ class ChatProvider extends ChangeNotifier {
       ),
       encryptedPayload: encrypted,
       signature: signature,
-      isEncrypted: conv.encryptionEnabled && !forcePlaintext,
+      isEncrypted: conv.encryptionEnabled,
       autoDeleteSeconds: conv.messageTtlSeconds,
       autoDeleteExpiresAt: conv.messageTtlSeconds > 0
           ? DateTime.now().add(Duration(seconds: conv.messageTtlSeconds))
@@ -780,19 +769,6 @@ class ChatProvider extends ChangeNotifier {
       }
       rethrow;
     }
-  }
-
-  bool _serverStoresPlaintextPayload(String messageType) {
-    return const {
-      'location',
-      'venue',
-      'contact',
-      'dice',
-      'checklist',
-      'invoice',
-      'payment_request',
-      'payment_transfer',
-    }.contains(messageType);
   }
 
   Future<bool> _sendEncryptedPayload({

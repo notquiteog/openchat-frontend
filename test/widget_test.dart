@@ -15,15 +15,12 @@ void main() {
     });
 
     test('exposes every supported quantum OpenPGP algorithm', () {
-      expect(
-        KeyType.quantumTypes.map((type) => type.algorithm),
-        [
-          Algorithm.MLDSA65ED25519,
-          Algorithm.MLDSA87ED448,
-          Algorithm.MLKEM768X25519,
-          Algorithm.MLKEM1024X448,
-        ],
-      );
+      expect(KeyType.quantumTypes.map((type) => type.algorithm), [
+        Algorithm.MLDSA65ED25519,
+        Algorithm.MLDSA87ED448,
+        Algorithm.MLKEM768X25519,
+        Algorithm.MLKEM1024X448,
+      ]);
     });
   });
 
@@ -57,22 +54,24 @@ void main() {
       expect(PgpService.tryReadEnvelopeCiphertexts(legacy), isNull);
     });
 
-    test('tries envelope ciphertexts until one decrypts after restart',
-        () async {
-      final attempts = <String>[];
+    test(
+      'tries envelope ciphertexts until one decrypts after restart',
+      () async {
+        final attempts = <String>[];
 
-      final plaintext = await PgpService.decryptEnvelopeCiphertextsForTesting(
-        ['recipient-a-copy', 'sender-restart-copy'],
-        (ciphertext) async {
-          attempts.add(ciphertext);
-          if (ciphertext == 'sender-restart-copy') return 'Hi after reopen';
-          throw StateError('not encrypted to this private key');
-        },
-      );
+        final plaintext = await PgpService.decryptEnvelopeCiphertextsForTesting(
+          ['recipient-a-copy', 'sender-restart-copy'],
+          (ciphertext) async {
+            attempts.add(ciphertext);
+            if (ciphertext == 'sender-restart-copy') return 'Hi after reopen';
+            throw StateError('not encrypted to this private key');
+          },
+        );
 
-      expect(plaintext, 'Hi after reopen');
-      expect(attempts, ['recipient-a-copy', 'sender-restart-copy']);
-    });
+        expect(plaintext, 'Hi after reopen');
+        expect(attempts, ['recipient-a-copy', 'sender-restart-copy']);
+      },
+    );
   });
 
   group('Message previews', () {
@@ -114,6 +113,43 @@ void main() {
       });
 
       expect(message.sender?.bubbleColor, 0xFF26323A);
+    });
+  });
+
+  group('Message locations', () {
+    test('parses canonical live location payloads', () {
+      final location = MessageLocation.tryParse(
+        jsonEncode({
+          'kind': 'live',
+          'latitude': 41.8781,
+          'longitude': -87.6298,
+          'accuracy': 12.5,
+          'share_id': 'share-1',
+          'ends_at': DateTime.utc(2026, 6, 3, 18).toIso8601String(),
+          'ended': false,
+        }),
+      );
+
+      expect(location, isNotNull);
+      expect(location!.kind, LocationMessageKind.live);
+      expect(location.latitude, 41.8781);
+      expect(location.longitude, -87.6298);
+      expect(location.shareId, 'share-1');
+    });
+
+    test('rejects legacy location payload aliases', () {
+      expect(
+        MessageLocation.tryParse(
+          jsonEncode({
+            'type': 'live',
+            'lat': 41.8781,
+            'lng': -87.6298,
+            'shareId': 'share-1',
+            'endsAt': DateTime.utc(2026, 6, 3, 18).toIso8601String(),
+          }),
+        ),
+        isNull,
+      );
     });
   });
 

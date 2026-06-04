@@ -132,36 +132,66 @@ class MessageLocation {
   }
 
   static MessageLocation? _fromMap(Map<String, dynamic> raw) {
-    final lat = _parseDouble(raw['latitude']) ?? _parseDouble(raw['lat']);
-    final lng = _parseDouble(raw['longitude']) ?? _parseDouble(raw['lng']);
-    if (lat == null || lng == null) return null;
+    const allowedKeys = {
+      'kind',
+      'latitude',
+      'longitude',
+      'accuracy',
+      'share_id',
+      'ends_at',
+      'ended',
+    };
+    if (raw.keys.any((key) => !allowedKeys.contains(key))) return null;
 
-    final kindRaw = (raw['kind'] as String? ?? raw['type'] as String? ?? '')
-        .toLowerCase();
+    final lat = _parseDouble(raw['latitude']);
+    final lng = _parseDouble(raw['longitude']);
+    if (lat == null || lng == null) return null;
+    if (!lat.isFinite || !lng.isFinite || lat < -90 || lat > 90) return null;
+    if (lng < -180 || lng > 180) return null;
+
+    final kindRaw = raw['kind'];
+    if (kindRaw is! String) return null;
     final kind = switch (kindRaw) {
       'live' => LocationMessageKind.live,
-      'one_time' || 'onetime' => LocationMessageKind.oneTime,
-      _ => LocationMessageKind.oneTime,
+      'one_time' => LocationMessageKind.oneTime,
+      _ => null,
     };
-    final endsAt = raw['ends_at'] != null
-        ? DateTime.tryParse(raw['ends_at'] as String)
-        : raw['endsAt'] != null
-        ? DateTime.tryParse(raw['endsAt'] as String)
-        : null;
+    if (kind == null) return null;
+
+    final shareId = raw['share_id'];
+    if (shareId is! String || shareId.trim().isEmpty) return null;
+
+    final ended = raw['ended'];
+    if (ended is! bool) return null;
+
+    DateTime? endsAt;
+    if (raw.containsKey('ends_at')) {
+      final endsAtRaw = raw['ends_at'];
+      if (endsAtRaw is! String) return null;
+      endsAt = DateTime.tryParse(endsAtRaw);
+      if (endsAt == null) return null;
+    }
+    if (kind == LocationMessageKind.live && endsAt == null) return null;
+
+    double? accuracy;
+    if (raw.containsKey('accuracy')) {
+      accuracy = _parseDouble(raw['accuracy']);
+      if (accuracy == null || !accuracy.isFinite || accuracy < 0) return null;
+    }
+
     return MessageLocation(
       kind: kind,
       latitude: lat,
       longitude: lng,
-      shareId: raw['share_id'] as String? ?? raw['shareId'] as String? ?? '',
-      accuracy: _parseDouble(raw['accuracy']),
+      shareId: shareId,
+      accuracy: accuracy,
       endsAt: endsAt,
-      ended: raw['ended'] == true,
+      ended: ended,
     );
   }
 
   static double? _parseDouble(Object? value) {
     if (value is num) return value.toDouble();
-    if (value is String) return double.tryParse(value);
     return null;
   }
 }
