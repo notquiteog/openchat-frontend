@@ -230,6 +230,7 @@ class CallService {
   CallSession? get currentSession => _session;
   MediaStream? get currentLocalStream => _localStream;
   MediaStream? get currentRemoteStream => _remoteStream;
+  bool get hasLocalMedia => _localStream != null;
 
   StreamSubscription<WsEvent>? _wsSub;
 

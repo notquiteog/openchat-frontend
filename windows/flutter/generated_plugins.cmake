@@ -10,6 +10,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   geolocator_windows
   local_auth_windows
   openpgp
+  permission_handler_windows
   record_windows
   screen_retriever_windows
   url_launcher_windows

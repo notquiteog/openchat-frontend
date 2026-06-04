@@ -920,7 +920,18 @@ class IncomingCallModal extends StatelessWidget {
                             : Icons.call_rounded,
                         label: 'Answer',
                         color: _callAnswerColor,
-                        onTap: cp.acceptIncomingCall,
+                        onTap: () async {
+                          try {
+                            await cp.acceptIncomingCall();
+                          } catch (error) {
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Could not answer call: $error'),
+                              ),
+                            );
+                          }
+                        },
                       ),
                     ],
                   ),

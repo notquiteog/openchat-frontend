@@ -13,9 +13,11 @@ class DesktopTrayService with WindowListener {
   native.Image? _trayIconImage;
   native.Menu? _contextMenu;
   native.MenuItem? _showItem;
-  native.MenuItem? _quitItem;
+  native.MenuItem? _hideItem;
+  native.MenuItem? _exitItem;
   native.TrayIcon? _trayIcon;
   bool _quitting = false;
+  bool _hidingToTray = false;
 
   static bool get supported =>
       !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
@@ -39,18 +41,23 @@ class DesktopTrayService with WindowListener {
     final trayIcon = native.TrayIcon();
     final contextMenu = native.Menu();
     final showItem = native.MenuItem('Show OpenChat');
-    final quitItem = native.MenuItem('Quit OpenChat');
+    final hideItem = native.MenuItem('Hide to tray');
+    final exitItem = native.MenuItem('Exit OpenChat');
 
     showItem.on<native.MenuItemClickedEvent>((_) {
       unawaited(_showWindow());
     });
-    quitItem.on<native.MenuItemClickedEvent>((_) {
-      unawaited(_quit());
+    hideItem.on<native.MenuItemClickedEvent>((_) {
+      unawaited(_hideToTray());
+    });
+    exitItem.on<native.MenuItemClickedEvent>((_) {
+      unawaited(_exitApp());
     });
 
     contextMenu.addItem(showItem);
+    contextMenu.addItem(hideItem);
     contextMenu.addSeparator();
-    contextMenu.addItem(quitItem);
+    contextMenu.addItem(exitItem);
 
     _trayIconImage = native.Image.fromAsset(_appIconAsset);
     if (_trayIconImage != null) {
@@ -70,7 +77,8 @@ class DesktopTrayService with WindowListener {
 
     _contextMenu = contextMenu;
     _showItem = showItem;
-    _quitItem = quitItem;
+    _hideItem = hideItem;
+    _exitItem = exitItem;
     _trayIcon = trayIcon;
   }
 
@@ -82,9 +90,7 @@ class DesktopTrayService with WindowListener {
     }
     final preventClose = await windowManager.isPreventClose();
     if (!preventClose) return;
-    NotificationService.setAppFocused(false);
-    await windowManager.hide();
-    await windowManager.setSkipTaskbar(true);
+    await _hideToTray();
   }
 
   @override
@@ -99,7 +105,13 @@ class DesktopTrayService with WindowListener {
 
   @override
   void onWindowMinimize() {
-    NotificationService.setAppFocused(false);
+    unawaited(_hideToTray());
+  }
+
+  @override
+  void onWindowRestore() {
+    unawaited(windowManager.setSkipTaskbar(false));
+    NotificationService.setAppFocused(true);
   }
 
   Future<void> _showWindow() async {
@@ -109,24 +121,43 @@ class DesktopTrayService with WindowListener {
     NotificationService.setAppFocused(true);
   }
 
-  Future<void> _quit() async {
+  Future<void> _hideToTray() async {
+    if (_quitting || _hidingToTray) return;
+    _hidingToTray = true;
+    try {
+      NotificationService.setAppFocused(false);
+      await windowManager.setSkipTaskbar(true);
+      await windowManager.hide();
+    } finally {
+      _hidingToTray = false;
+    }
+  }
+
+  Future<void> _exitApp() async {
     _quitting = true;
     NotificationService.setAppFocused(false);
     await windowManager.setPreventClose(false);
+    _disposeTray();
     await windowManager.destroy();
+    exit(0);
   }
 
   void dispose() {
     if (!supported) return;
     windowManager.removeListener(this);
+    _disposeTray();
+  }
 
+  void _disposeTray() {
     _trayIcon?.dispose();
     _trayIcon = null;
 
     _showItem?.dispose();
     _showItem = null;
-    _quitItem?.dispose();
-    _quitItem = null;
+    _hideItem?.dispose();
+    _hideItem = null;
+    _exitItem?.dispose();
+    _exitItem = null;
 
     _contextMenu?.dispose();
     _contextMenu = null;

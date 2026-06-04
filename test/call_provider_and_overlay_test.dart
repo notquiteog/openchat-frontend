@@ -9,6 +9,7 @@ import 'package:openchat/providers/call_provider.dart';
 import 'package:openchat/screens/call/call_screen.dart';
 import 'package:openchat/services/call_audio.dart';
 import 'package:openchat/services/call_foreground_service.dart';
+import 'package:openchat/services/call_media_permissions.dart';
 import 'package:openchat/services/call_service.dart';
 import 'package:openchat/services/notification_service.dart';
 import 'package:openchat/services/secure_storage_service.dart';
@@ -85,6 +86,93 @@ void main() {
       provider.dispose();
       service.dispose();
     });
+  });
+
+  group('Call media permissions', () {
+    test('outgoing calls request media permissions before dialing', () async {
+      final service = _FakeCallService();
+      final requested = <bool>[];
+      final provider = CallProvider(
+        service,
+        audio: _FakeCallAudio(),
+        mediaPermissionGate: ({required bool isVideo}) async {
+          requested.add(isVideo);
+        },
+      );
+
+      await provider.startCall(
+        targetUserId: 'u-permission',
+        targetUsername: 'ivy',
+        conversationId: 'dm-permission',
+        isVideo: true,
+      );
+
+      expect(requested, <bool>[true]);
+      expect(service.startCallCalls, 1);
+      expect(service.startCallIsVideo, <bool>[true]);
+
+      provider.dispose();
+      service.dispose();
+    });
+
+    test(
+      'outgoing calls do not dial when media permission is denied',
+      () async {
+        final service = _FakeCallService();
+        final provider = CallProvider(
+          service,
+          audio: _FakeCallAudio(),
+          mediaPermissionGate: ({required bool isVideo}) async {
+            throw const CallPermissionException('Microphone permission denied');
+          },
+        );
+
+        await expectLater(
+          provider.startCall(targetUserId: 'u-denied', isVideo: false),
+          throwsA(isA<CallPermissionException>()),
+        );
+        expect(service.startCallCalls, 0);
+
+        provider.dispose();
+        service.dispose();
+      },
+    );
+
+    test(
+      'incoming calls stay pending when answer media permission is denied',
+      () async {
+        final service = _FakeCallService();
+        final incoming = CallSession(
+          callId: 'c-denied-answer',
+          remoteUserId: 'u-incoming',
+          remoteUsername: 'jules',
+          isVideo: true,
+          isIncoming: true,
+          state: CallState.ringing,
+        );
+        final provider = CallProvider(
+          service,
+          audio: _FakeCallAudio(),
+          mediaPermissionGate: ({required bool isVideo}) async {
+            throw const CallPermissionException('Camera permission denied');
+          },
+        );
+
+        service.emitIncoming(incoming);
+        await Future<void>.delayed(Duration.zero);
+
+        await expectLater(
+          provider.acceptIncomingCall(),
+          throwsA(isA<CallPermissionException>()),
+        );
+
+        expect(provider.incomingCall, same(incoming));
+        expect(service.acceptIncomingCalls, 0);
+
+        provider.dispose();
+        service.dispose();
+      },
+    );
   });
 
   group('Call overlay minimize and expand', () {
@@ -326,7 +414,11 @@ void main() {
       'notification actions answer dismiss and decline incoming calls',
       () async {
         final service = _FakeCallService();
-        final provider = CallProvider(service, audio: _FakeCallAudio());
+        final provider = CallProvider(
+          service,
+          audio: _FakeCallAudio(),
+          mediaPermissionGate: ({required bool isVideo}) async {},
+        );
 
         service.emitIncoming(
           CallSession(
@@ -644,6 +736,39 @@ void main() {
       provider.dispose();
       service.dispose();
     });
+
+    test('foreground service waits until local media is ready', () async {
+      final foreground = _FakeCallForeground();
+      final service = _FakeCallService(hasLocalMedia: false);
+      final session = CallSession(
+        callId: 'c8',
+        remoteUserId: 'u9',
+        remoteUsername: 'hank',
+        isVideo: true,
+        isIncoming: false,
+        state: CallState.calling,
+      );
+      final provider = CallProvider(
+        service,
+        audio: _FakeCallAudio(),
+        foreground: foreground,
+      );
+
+      service.emitSession(session);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(foreground.starts, isEmpty);
+
+      service.localMediaReady = true;
+      service.emitSession(session);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(foreground.starts.length, 1);
+      expect(foreground.starts.single.isVideo, isTrue);
+
+      provider.dispose();
+      service.dispose();
+    });
   });
 }
 
@@ -729,7 +854,9 @@ class _FakeCallService extends CallService {
     this.throwOnSetMicMuted = false,
     this.throwOnSetCameraEnabled = false,
     this.throwOnHangup = false,
-  }) : super(WebSocketService(SecureStorageService()));
+    bool hasLocalMedia = true,
+  }) : localMediaReady = hasLocalMedia,
+       super(WebSocketService(SecureStorageService()));
 
   final bool throwOnSelectAudioOutput;
   final bool throwOnSetMicMuted;
@@ -744,6 +871,9 @@ class _FakeCallService extends CallService {
   int acceptIncomingCalls = 0;
   int rejectCalls = 0;
   int hangupCalls = 0;
+  int startCallCalls = 0;
+  bool localMediaReady;
+  final List<bool> startCallIsVideo = [];
   final List<bool> micMuteValues = [];
   final List<bool> cameraEnabledValues = [];
 
@@ -770,6 +900,30 @@ class _FakeCallService extends CallService {
 
   @override
   Stream<CallEndedEvent> get callEnded => _endedController.stream;
+
+  @override
+  bool get hasLocalMedia => localMediaReady;
+
+  @override
+  Future<void> startCall({
+    required String targetUserId,
+    String? targetUsername,
+    String? conversationId,
+    required bool isVideo,
+  }) async {
+    startCallCalls += 1;
+    startCallIsVideo.add(isVideo);
+    _session = CallSession(
+      callId: 'started-$startCallCalls',
+      remoteUserId: targetUserId,
+      remoteUsername: targetUsername,
+      conversationId: conversationId,
+      isVideo: isVideo,
+      isIncoming: false,
+      state: CallState.calling,
+    );
+    _sessionController.add(_session);
+  }
 
   @override
   Future<void> selectAudioOutput(String deviceId) async {

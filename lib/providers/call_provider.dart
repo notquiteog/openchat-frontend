@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../services/call_audio.dart';
 import '../services/call_foreground_service.dart';
+import '../services/call_media_permissions.dart';
 import '../services/call_service.dart';
 import '../services/notification_service.dart';
 
@@ -13,6 +14,7 @@ class CallProvider extends ChangeNotifier {
   final CallService _callService;
   final CallAudioController _audio;
   final CallForegroundController _foreground;
+  final CallMediaPermissionGate _mediaPermissionGate;
   final DateTime Function() _now;
   Timer? _durationTicker;
   bool _isCallMinimized = false;
@@ -54,7 +56,9 @@ class CallProvider extends ChangeNotifier {
 
   void _syncActiveCallNotification() {
     final s = session;
-    if (s == null || s.state == CallState.ended) {
+    if (s == null ||
+        s.state == CallState.ended ||
+        !_callService.hasLocalMedia) {
       if (_activeCallNotificationSessionId != null) {
         _activeCallNotificationSessionId = null;
         _activeCallNotificationState = null;
@@ -110,6 +114,7 @@ class CallProvider extends ChangeNotifier {
   bool get isCameraEnabled => _cameraEnabled;
   List<CallAudioOutput> get audioOutputs => _audioOutputs;
   String? get selectedAudioOutputId => _selectedAudioOutputId;
+
   /// Extra pixels that every screen's safe-area/AppBar must add at the top
   /// when the call bar is visible, so it never overlaps screen chrome.
   double get minimizedContentTopInset =>
@@ -139,9 +144,11 @@ class CallProvider extends ChangeNotifier {
     this._callService, {
     CallAudioController? audio,
     CallForegroundController? foreground,
+    CallMediaPermissionGate? mediaPermissionGate,
     DateTime Function()? now,
   }) : _audio = audio ?? CallAudio(),
        _foreground = foreground ?? const CallForegroundService(),
+       _mediaPermissionGate = mediaPermissionGate ?? ensureCallMediaPermissions,
        _now = now ?? DateTime.now {
     CallForegroundService.init();
     _foregroundActionSub = CallForegroundService.actions.listen(
@@ -188,10 +195,18 @@ class CallProvider extends ChangeNotifier {
       onToggleMute: () => setMicMuted(!_micMuted),
     );
     NotificationService.setIncomingCallHandlers(
-      onAnswer: () => unawaited(acceptIncomingCall()),
+      onAnswer: () => unawaited(_answerIncomingCallFromNotification()),
       onDismiss: dismissIncomingCall,
       onDecline: rejectIncomingCall,
     );
+  }
+
+  Future<void> _answerIncomingCallFromNotification() async {
+    try {
+      await acceptIncomingCall();
+    } catch (error) {
+      debugPrint('Could not answer incoming call: $error');
+    }
   }
 
   void _handleForegroundAction(CallForegroundAction action) {
@@ -257,6 +272,7 @@ class CallProvider extends ChangeNotifier {
     String? conversationId,
     required bool isVideo,
   }) async {
+    await _mediaPermissionGate(isVideo: isVideo);
     await _callService.startCall(
       targetUserId: targetUserId,
       targetUsername: targetUsername,
@@ -272,6 +288,7 @@ class CallProvider extends ChangeNotifier {
     final incoming = _incomingCall;
     final sdp = _pendingOfferSdp;
     if (incoming == null) return;
+    await _mediaPermissionGate(isVideo: incoming.isVideo);
 
     _incomingCall = null;
     _pendingOfferSdp = null;
