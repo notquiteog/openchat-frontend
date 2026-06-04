@@ -202,35 +202,39 @@ class _VoiceNoteRecorderSheetState extends State<VoiceNoteRecorderSheet> {
                 ),
               ),
               const SizedBox(height: 20),
-              Stack(
-                alignment: Alignment.center,
-                children: [
-                  if (_recording)
-                    _PulseRing(color: scheme.primary.withValues(alpha: 0.26)),
-                  Container(
-                    width: 74,
-                    height: 74,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: _recording
-                          ? scheme.error.withValues(alpha: 0.92)
-                          : scheme.primary,
-                      boxShadow: [
-                        BoxShadow(
-                          color: (_recording ? scheme.error : scheme.primary)
-                              .withValues(alpha: 0.28),
-                          blurRadius: 28,
-                          offset: const Offset(0, 12),
-                        ),
-                      ],
+              SizedBox(
+                width: 116,
+                height: 116,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    if (_recording)
+                      _PulseRing(color: scheme.primary.withValues(alpha: 0.26)),
+                    Container(
+                      width: 74,
+                      height: 74,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: _recording
+                            ? scheme.error.withValues(alpha: 0.92)
+                            : scheme.primary,
+                        boxShadow: [
+                          BoxShadow(
+                            color: (_recording ? scheme.error : scheme.primary)
+                                .withValues(alpha: 0.28),
+                            blurRadius: 28,
+                            offset: const Offset(0, 12),
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        _recording ? Icons.mic : Icons.graphic_eq,
+                        color: Colors.white,
+                        size: 34,
+                      ),
                     ),
-                    child: Icon(
-                      _recording ? Icons.mic : Icons.graphic_eq,
-                      color: Colors.white,
-                      size: 34,
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
               const SizedBox(height: 16),
               Text(

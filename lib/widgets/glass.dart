@@ -44,10 +44,10 @@ class _SpecularBorderPainter extends CustomPainter {
         end: Alignment.bottomCenter,
         stops: const [0.0, 0.15, 0.5, 1.0],
         colors: [
-          Colors.white.withValues(alpha: isDark ? 0.72 : 0.92),
-          Colors.white.withValues(alpha: isDark ? 0.38 : 0.55),
-          Colors.white.withValues(alpha: isDark ? 0.10 : 0.18),
-          Colors.white.withValues(alpha: isDark ? 0.04 : 0.08),
+          Colors.white.withValues(alpha: isDark ? 0.48 : 0.58),
+          Colors.white.withValues(alpha: isDark ? 0.24 : 0.34),
+          Colors.white.withValues(alpha: isDark ? 0.07 : 0.11),
+          Colors.white.withValues(alpha: isDark ? 0.03 : 0.05),
         ],
       ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
     canvas.drawRRect(rrect, paint);
@@ -115,13 +115,13 @@ class LiquidGlass extends StatelessWidget {
         boxShadow ??
         [
           BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.52 : 0.13),
+            color: Colors.black.withValues(alpha: isDark ? 0.42 : 0.10),
             blurRadius: 32,
             spreadRadius: -6,
             offset: const Offset(0, 14),
           ),
           BoxShadow(
-            color: base.withValues(alpha: isDark ? 0.06 : 0.08),
+            color: base.withValues(alpha: isDark ? 0.04 : 0.05),
             blurRadius: 8,
             spreadRadius: 0,
             offset: const Offset(0, 1),
@@ -176,9 +176,9 @@ class LiquidGlass extends StatelessWidget {
                       end: Alignment.bottomCenter,
                       stops: const [0.0, 0.6, 1.0],
                       colors: [
-                        base.withValues(alpha: isDark ? 0.78 : 0.88),
-                        base.withValues(alpha: isDark ? 0.66 : 0.80),
-                        base.withValues(alpha: isDark ? 0.58 : 0.74),
+                        base.withValues(alpha: isDark ? 0.50 : 0.56),
+                        base.withValues(alpha: isDark ? 0.40 : 0.48),
+                        base.withValues(alpha: isDark ? 0.32 : 0.40),
                       ],
                     ),
                   ),
@@ -202,7 +202,7 @@ class LiquidGlass extends StatelessWidget {
                           end: Alignment.bottomCenter,
                           colors: [
                             Colors.white.withValues(
-                              alpha: isDark ? 0.28 : 0.48,
+                              alpha: isDark ? 0.20 : 0.30,
                             ),
                             Colors.transparent,
                           ],
@@ -284,7 +284,7 @@ class GlassSurface extends StatelessWidget {
     final effectiveBorder =
         border ??
         Border.all(
-          color: Colors.white.withValues(alpha: isDark ? 0.14 : 0.38),
+          color: Colors.white.withValues(alpha: isDark ? 0.10 : 0.24),
           width: 0.5,
         );
 
@@ -307,8 +307,8 @@ class GlassSurface extends StatelessWidget {
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    scheme.surface.withValues(alpha: isDark ? 0.76 : 0.86),
-                    scheme.surface.withValues(alpha: isDark ? 0.68 : 0.80),
+                    scheme.surface.withValues(alpha: isDark ? 0.48 : 0.54),
+                    scheme.surface.withValues(alpha: isDark ? 0.38 : 0.46),
                   ],
                 ),
               ),
@@ -402,7 +402,7 @@ class GlassCard extends StatelessWidget {
       tint: base,
       boxShadow: [
         BoxShadow(
-          color: Colors.black.withValues(alpha: isDark ? 0.32 : 0.07),
+          color: Colors.black.withValues(alpha: isDark ? 0.24 : 0.05),
           blurRadius: 20,
           spreadRadius: -4,
           offset: const Offset(0, 8),
@@ -475,7 +475,8 @@ class GlassAlertDialog extends StatelessWidget {
               ),
             if (title != null)
               Padding(
-                padding: titlePadding ??
+                padding:
+                    titlePadding ??
                     EdgeInsets.fromLTRB(24, icon != null ? 12 : 24, 24, 0),
                 child: DefaultTextStyle(
                   style: textTheme.headlineSmall!.copyWith(
@@ -487,8 +488,8 @@ class GlassAlertDialog extends StatelessWidget {
               ),
             if (content != null)
               Padding(
-                padding: contentPadding ??
-                    const EdgeInsets.fromLTRB(24, 16, 24, 24),
+                padding:
+                    contentPadding ?? const EdgeInsets.fromLTRB(24, 16, 24, 24),
                 child: DefaultTextStyle(
                   style: textTheme.bodyMedium!.copyWith(
                     color: scheme.onSurface.withValues(alpha: 0.80),
@@ -503,7 +504,8 @@ class GlassAlertDialog extends StatelessWidget {
                 color: scheme.outlineVariant.withValues(alpha: 0.40),
               ),
               Padding(
-                padding: actionsPadding ??
+                padding:
+                    actionsPadding ??
                     const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                 child: Row(
                   mainAxisAlignment: actionsAlignment,
@@ -557,8 +559,8 @@ class GlassSimpleDialog extends StatelessWidget {
           children: [
             if (title != null)
               Padding(
-                padding: titlePadding ??
-                    const EdgeInsets.fromLTRB(24, 20, 24, 8),
+                padding:
+                    titlePadding ?? const EdgeInsets.fromLTRB(24, 20, 24, 8),
                 child: DefaultTextStyle(
                   style: textTheme.titleMedium!.copyWith(
                     color: scheme.onSurface.withValues(alpha: 0.55),
@@ -570,7 +572,8 @@ class GlassSimpleDialog extends StatelessWidget {
               ),
             if (children != null)
               Padding(
-                padding: contentPadding ?? const EdgeInsets.symmetric(vertical: 8),
+                padding:
+                    contentPadding ?? const EdgeInsets.symmetric(vertical: 8),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,

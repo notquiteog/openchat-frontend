@@ -729,6 +729,7 @@ class _ChatScreenState extends State<ChatScreen> {
       await showModalBottomSheet<void>(
         context: rootContext,
         isScrollControlled: true,
+        backgroundColor: Colors.transparent,
         builder: (sheetCtx) => StatefulBuilder(
           builder: (sheetCtx, setSheet) {
             Future<void> submit() async {
@@ -802,138 +803,149 @@ class _ChatScreenState extends State<ChatScreen> {
             final canUseWallet =
                 !payMode || (amount > 0 && available >= amount);
             return SafeArea(
+              top: false,
               child: Padding(
-                padding: EdgeInsets.fromLTRB(16, 14, 16, 16 + bottomInset),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      children: [
-                        SegmentedButton<bool>(
-                          segments: const [
-                            ButtonSegment(
-                              value: true,
-                              label: Text('Pay'),
-                              icon: Icon(Icons.arrow_upward),
-                            ),
-                            ButtonSegment(
-                              value: false,
-                              label: Text('Request'),
-                              icon: Icon(Icons.arrow_downward),
-                            ),
-                          ],
-                          selected: {payMode},
-                          onSelectionChanged: (next) =>
-                              setSheet(() => payMode = next.first),
-                        ),
-                        const Spacer(),
-                        Text(
-                          '${available.toStringAsFixed(provider == 'btc' ? 8 : 12)} ${provider.toUpperCase()}',
-                          style: Theme.of(context).textTheme.labelMedium,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    DropdownButtonFormField<String>(
-                      initialValue: selectedUserID,
-                      items: [
-                        for (final member in members)
-                          DropdownMenuItem(
-                            value: member.userId,
-                            child: Text('@${member.user!.username}'),
+                padding: EdgeInsets.fromLTRB(14, 0, 14, 14 + bottomInset),
+                child: LiquidGlass(
+                  blur: 56,
+                  borderRadius: const BorderRadius.all(Radius.circular(28)),
+                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          SegmentedButton<bool>(
+                            segments: const [
+                              ButtonSegment(
+                                value: true,
+                                label: Text('Pay'),
+                                icon: Icon(Icons.arrow_upward),
+                              ),
+                              ButtonSegment(
+                                value: false,
+                                label: Text('Request'),
+                                icon: Icon(Icons.arrow_downward),
+                              ),
+                            ],
+                            selected: {payMode},
+                            onSelectionChanged: (next) =>
+                                setSheet(() => payMode = next.first),
                           ),
-                      ],
-                      onChanged: (value) {
-                        if (value != null) {
-                          setSheet(() => selectedUserID = value);
-                        }
-                      },
-                      decoration: InputDecoration(
-                        labelText: payMode ? 'To' : 'From',
-                        border: const OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    SegmentedButton<String>(
-                      segments: [
-                        for (final p in providers)
-                          ButtonSegment(value: p, label: Text(p.toUpperCase())),
-                      ],
-                      selected: {provider},
-                      onSelectionChanged: (next) =>
-                          setSheet(() => provider = next.first),
-                    ),
-                    const SizedBox(height: 12),
-                    if (payMode) ...[
-                      SegmentedButton<String>(
-                        segments: [
-                          ButtonSegment(
-                            value: 'wallet',
-                            label: const Text('App wallet'),
-                            icon: const Icon(Icons.account_balance_wallet),
-                            enabled: canUseWallet,
-                          ),
-                          const ButtonSegment(
-                            value: 'external',
-                            label: Text('External'),
-                            icon: Icon(Icons.qr_code_2),
+                          const Spacer(),
+                          Text(
+                            '${available.toStringAsFixed(provider == 'btc' ? 8 : 12)} ${provider.toUpperCase()}',
+                            style: Theme.of(context).textTheme.labelMedium,
                           ),
                         ],
-                        selected: {canUseWallet ? paymentSource : 'external'},
-                        onSelectionChanged: (next) =>
-                            setSheet(() => paymentSource = next.first),
+                      ),
+                      const SizedBox(height: 14),
+                      DropdownButtonFormField<String>(
+                        initialValue: selectedUserID,
+                        items: [
+                          for (final member in members)
+                            DropdownMenuItem(
+                              value: member.userId,
+                              child: Text('@${member.user!.username}'),
+                            ),
+                        ],
+                        onChanged: (value) {
+                          if (value != null) {
+                            setSheet(() => selectedUserID = value);
+                          }
+                        },
+                        decoration: InputDecoration(
+                          labelText: payMode ? 'To' : 'From',
+                          border: const OutlineInputBorder(),
+                        ),
                       ),
                       const SizedBox(height: 12),
-                    ],
-                    TextField(
-                      controller: amountCtrl,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      onChanged: (_) {
-                        final nextAmount =
-                            double.tryParse(amountCtrl.text.trim()) ?? 0;
-                        setSheet(() {
-                          if (payMode &&
-                              paymentSource == 'wallet' &&
-                              nextAmount > balanceFor(provider)) {
-                            paymentSource = 'external';
-                          }
-                        });
-                      },
-                      decoration: InputDecoration(
-                        labelText: 'Amount ${provider.toUpperCase()}',
-                        border: const OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: noteCtrl,
-                      maxLength: 160,
-                      decoration: const InputDecoration(
-                        labelText: 'Note',
-                        border: OutlineInputBorder(),
-                        counterText: '',
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    FilledButton.icon(
-                      onPressed: submitting ? null : submit,
-                      icon: submitting
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : Icon(
-                              payMode
-                                  ? Icons.send_outlined
-                                  : Icons.request_quote_outlined,
+                      SegmentedButton<String>(
+                        segments: [
+                          for (final p in providers)
+                            ButtonSegment(
+                              value: p,
+                              label: Text(p.toUpperCase()),
                             ),
-                      label: Text(payMode ? 'Pay' : 'Request'),
-                    ),
-                  ],
+                        ],
+                        selected: {provider},
+                        onSelectionChanged: (next) =>
+                            setSheet(() => provider = next.first),
+                      ),
+                      const SizedBox(height: 12),
+                      if (payMode) ...[
+                        SegmentedButton<String>(
+                          segments: [
+                            ButtonSegment(
+                              value: 'wallet',
+                              label: const Text('App wallet'),
+                              icon: const Icon(Icons.account_balance_wallet),
+                              enabled: canUseWallet,
+                            ),
+                            const ButtonSegment(
+                              value: 'external',
+                              label: Text('External'),
+                              icon: Icon(Icons.qr_code_2),
+                            ),
+                          ],
+                          selected: {canUseWallet ? paymentSource : 'external'},
+                          onSelectionChanged: (next) =>
+                              setSheet(() => paymentSource = next.first),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                      TextField(
+                        controller: amountCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        onChanged: (_) {
+                          final nextAmount =
+                              double.tryParse(amountCtrl.text.trim()) ?? 0;
+                          setSheet(() {
+                            if (payMode &&
+                                paymentSource == 'wallet' &&
+                                nextAmount > balanceFor(provider)) {
+                              paymentSource = 'external';
+                            }
+                          });
+                        },
+                        decoration: InputDecoration(
+                          labelText: 'Amount ${provider.toUpperCase()}',
+                          border: const OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: noteCtrl,
+                        maxLength: 160,
+                        decoration: const InputDecoration(
+                          labelText: 'Note',
+                          border: OutlineInputBorder(),
+                          counterText: '',
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      FilledButton.icon(
+                        onPressed: submitting ? null : submit,
+                        icon: submitting
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : Icon(
+                                payMode
+                                    ? Icons.send_outlined
+                                    : Icons.request_quote_outlined,
+                              ),
+                        label: Text(payMode ? 'Pay' : 'Request'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             );
