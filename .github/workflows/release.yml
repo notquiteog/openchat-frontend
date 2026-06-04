@@ -185,6 +185,9 @@ jobs:
             libstdc++-12-dev libunwind-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             desktop-file-utils dpkg-dev flatpak flatpak-builder
+          sudo ln -sfn \
+            /usr/include/libayatana-appindicator3-0.1/libayatana-appindicator \
+            /usr/local/include/libayatana-appindicator
 
       - name: Inject Firebase config
         env:
@@ -196,7 +199,7 @@ jobs:
 
       - name: Build Linux
         env:
-          CPATH: /usr/include/libayatana-appindicator3-0.1
+          CPATH: /usr/local/include:/usr/include/libayatana-appindicator3-0.1
         run: |
           flutter pub get
           flutter build linux --release ${{ env.DART_DEFINES }}
