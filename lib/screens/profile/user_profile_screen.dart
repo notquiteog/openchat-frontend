@@ -466,7 +466,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                         ),
                       ),
                       const SizedBox(height: 12),
-                      FilledButton.icon(
+                      GlassButtonWidget.icon(
                         onPressed: submitting ? null : submit,
                         icon: submitting
                             ? const SizedBox(

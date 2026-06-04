@@ -86,10 +86,13 @@ class LiquidGlass extends StatelessWidget {
     final cornerR = borderRadius.topLeft.x.clamp(0.0, 200.0);
 
     // Map our borderRadius to the package's LiquidShape:
-    // – 999 → LiquidOval (true pill)
+    // – 999 → LiquidRoundedSuperellipse(999) (iOS squircle-capsule)
     // – anything else → LiquidRoundedSuperellipse (Apple squircle)
+    // Note: LiquidOval maps to OvalBorder (a geometric ellipse) which looks
+    // wrong on non-square or wide widgets — use LiquidRoundedSuperellipse(999)
+    // for all capsule/pill shapes instead.
     final shape = isCapsule
-        ? const LiquidOval()
+        ? const LiquidRoundedSuperellipse(borderRadius: 999)
         : LiquidRoundedSuperellipse(borderRadius: cornerR);
 
     final shadow = boxShadow ??
@@ -622,15 +625,20 @@ class GlassButtonWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    // Glass surface tracks the ambient theme — use white text in dark mode
+    // and near-black text in light mode. If a tint color is given, honour it.
     final fg = foregroundColor ??
-        (ThemeData.estimateBrightnessForColor(color ?? scheme.primary) ==
-                Brightness.dark
-            ? Colors.white
-            : Colors.black87);
+        (color != null
+            ? (ThemeData.estimateBrightnessForColor(color!) == Brightness.dark
+                ? Colors.white
+                : Colors.black87)
+            : (isDark ? Colors.white : Colors.black87));
 
     return GlassButton.custom(
       onTap: onPressed ?? () {},
+      enabled: onPressed != null,
+      shape: const LiquidRoundedSuperellipse(borderRadius: 999),
       child: Padding(
         padding: padding,
         child: DefaultTextStyle(

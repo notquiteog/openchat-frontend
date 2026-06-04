@@ -73,8 +73,19 @@ class OpenChatApp extends StatelessWidget {
         );
         final callExtra = context
             .select<CallProvider, double>((cp) => cp.minimizedContentTopInset);
-        final locExtra = context
+        // Suppress the location bar inset during a full-screen video call.
+        // The bar itself is hidden in that state (see _LocationBarOverlay) to
+        // prevent its GlassContainer's BackdropFilter from rendering above the
+        // RTCVideoView platform texture, which causes white tiles on desktop.
+        final isFullScreenVideoCall = context.select<CallProvider, bool>(
+          (cp) =>
+              cp.isInCall &&
+              cp.session?.isVideo == true &&
+              !cp.isCallMinimized,
+        );
+        final rawLocExtra = context
             .select<ChatProvider, double>((chat) => chat.liveLocationTopInset);
+        final locExtra = isFullScreenVideoCall ? 0.0 : rawLocExtra;
         final mq = MediaQuery.of(context);
 
         MediaQueryData withTop(double extra) => extra == 0
@@ -94,13 +105,24 @@ class OpenChatApp extends StatelessWidget {
             ),
             // Call bar — sees location offset so SafeArea places it below the
             // location bar when both are active.
+            // Wrapped in Material(transparency) so Text widgets inside the
+            // overlay get Material's DefaultTextStyle (no yellow underline).
             MediaQuery(
               data: withTop(locExtra),
-              child: const CallOverlay(),
+              child: const Material(
+                type: MaterialType.transparency,
+                child: CallOverlay(),
+              ),
             ),
             // Location bar — sees no extra offset → anchors at the very top.
-            const _LocationBarOverlay(),
-            const _LiveConnectionBanner(),
+            const Material(
+              type: MaterialType.transparency,
+              child: _LocationBarOverlay(),
+            ),
+            const Material(
+              type: MaterialType.transparency,
+              child: _LiveConnectionBanner(),
+            ),
           ],
           ),
         );
@@ -151,6 +173,16 @@ class _LocationBarOverlayState extends State<_LocationBarOverlay> {
     final chat = context.watch<ChatProvider>();
     final share = chat.anyActiveLiveLocationShare;
     if (share == null) return const SizedBox.shrink();
+
+    // During a full-screen video call the RTCVideoView fills the window as a
+    // platform texture. Rendering GlassContainer (BackdropFilter) above it
+    // confuses desktop compositors and produces white tiles + broken hit tests.
+    // Hide the bar until the call ends or is minimised; the inset is also
+    // suppressed in the builder above so the call chrome layout is unaffected.
+    final cp = context.watch<CallProvider>();
+    if (cp.isInCall && cp.session?.isVideo == true && !cp.isCallMinimized) {
+      return const SizedBox.shrink();
+    }
 
     final scheme = Theme.of(context).colorScheme;
     final remaining = share.expiresAt.difference(DateTime.now());

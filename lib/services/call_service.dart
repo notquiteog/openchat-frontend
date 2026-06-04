@@ -434,9 +434,10 @@ class CallService {
 
   bool get _supportsNativeMicrophoneMute {
     if (kIsWeb) return false;
-    return defaultTargetPlatform == TargetPlatform.android ||
-        defaultTargetPlatform == TargetPlatform.iOS ||
-        defaultTargetPlatform == TargetPlatform.macOS;
+    // Try native mute on all non-web platforms — the call already wraps the
+    // invocation in catchError so MissingPluginException on unimplemented
+    // platforms is silently swallowed.
+    return true;
   }
 
   void setCameraEnabled(bool enabled) {
@@ -450,7 +451,8 @@ class CallService {
         defaultTargetPlatform != TargetPlatform.android &&
         defaultTargetPlatform != TargetPlatform.iOS &&
         defaultTargetPlatform != TargetPlatform.macOS &&
-        defaultTargetPlatform != TargetPlatform.windows) {
+        defaultTargetPlatform != TargetPlatform.windows &&
+        defaultTargetPlatform != TargetPlatform.linux) {
       return const [];
     }
     try {

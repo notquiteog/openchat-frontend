@@ -2476,7 +2476,7 @@ class ChannelPostBar extends StatelessWidget {
                   onTap: onPost,
                   onLongPress: onOptions,
                   child: GlassContainer(
-                    shape: const LiquidOval(),
+                    shape: const LiquidRoundedSuperellipse(borderRadius: 999),
                     allowElevation: true,
                     glowIntensity: 0.08,
                     padding: const EdgeInsets.all(12),

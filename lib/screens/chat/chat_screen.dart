@@ -2199,7 +2199,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       onTap: _sendMessage,
                       onLongPress: _showSendOptions,
                       child: GlassContainer(
-                        shape: const LiquidOval(),
+                        shape: const LiquidRoundedSuperellipse(borderRadius: 999),
                         allowElevation: true,
                         glowIntensity: 0.08,
                         padding: const EdgeInsets.all(12),

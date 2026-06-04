@@ -46,7 +46,16 @@ class DesktopTrayService with WindowListener, TrayListener {
     try {
       trayManager.addListener(this);
       await trayManager.setIcon(_appIconAsset);
-      await trayManager.setToolTip(_appName);
+
+      // setToolTip is not implemented on Linux (AppIndicator has no tooltip
+      // API), so wrap it independently so a MissingPluginException here cannot
+      // prevent the context menu from being registered.
+      try {
+        await trayManager.setToolTip(_appName);
+      } catch (_) {
+        // Silently ignore — tooltip is cosmetic only.
+      }
+
       // Two items only: Show brings the window back; Exit quits cleanly.
       // "Hide to tray" is omitted — closing or minimising already hides.
       await trayManager.setContextMenu(Menu(items: [
@@ -67,11 +76,15 @@ class DesktopTrayService with WindowListener, TrayListener {
 
   @override
   void onTrayIconMouseDown() {
-    // On macOS the status-bar item click is handled by the OS: it already pops
-    // the context menu automatically.  Calling _showWindow() here would open
-    // the window *and* the menu at the same time, which is confusing.
-    // On Windows and Linux a left-click means "restore the window".
-    if (Platform.isMacOS) return;
+    if (Platform.isMacOS) {
+      // On macOS the tray_manager native code does NOT auto-show the context
+      // menu — it only fires this event.  We must call popUpContextMenu()
+      // explicitly.  Directly restoring the window on left-click would be
+      // non-standard; showing the menu lets the user choose "Show" or "Exit".
+      unawaited(trayManager.popUpContextMenu());
+      return;
+    }
+    // Windows / Linux: left-click = restore the window immediately.
     unawaited(_showWindow());
   }
 
