@@ -351,6 +351,12 @@ double _balanceFor(List<Map<String, dynamic>> balances, String provider) {
   return 0;
 }
 
+double _asDouble(Object? value) {
+  if (value is num) return value.toDouble();
+  if (value is String) return double.tryParse(value) ?? 0;
+  return 0;
+}
+
 class _PlanCard extends StatelessWidget {
   final String plan;
   final String title;
