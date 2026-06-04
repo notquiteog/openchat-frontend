@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 import 'package:pretty_qr_code/pretty_qr_code.dart';
 
 const openChatFingerprintQrPrefix = 'openchat:fingerprint:';
@@ -80,12 +80,17 @@ class _IdentityQrViewState extends State<IdentityQrView> {
 
   @override
   Widget build(BuildContext context) {
+    final qrColor = MediaQuery.platformBrightnessOf(context) == Brightness.dark
+        ? Colors.white
+        : Colors.black;
+
     return SizedBox.square(
       dimension: widget.size,
       child: PrettyQrView(
         qrImage: _qrImage,
-        decoration: const PrettyQrDecoration(
-          image: PrettyQrDecorationImage(
+        decoration: PrettyQrDecoration(
+          shape: PrettyQrSmoothSymbol(color: qrColor),
+          image: const PrettyQrDecorationImage(
             image: AssetImage(_openChatLogoAsset),
             scale: 0.18,
             padding: EdgeInsets.all(8),
