@@ -18,6 +18,7 @@ enum WsEventType {
   messageEdited,
   messageReaction,
   pollUpdated,
+  paymentRequestUpdated,
   conversationDeleted,
   conversationUpdated,
   // WebRTC call signaling
@@ -352,6 +353,7 @@ class WebSocketService extends ChangeNotifier {
     'message_edited' => WsEventType.messageEdited,
     'message_reaction' => WsEventType.messageReaction,
     'poll_updated' => WsEventType.pollUpdated,
+    'payment_request_updated' => WsEventType.paymentRequestUpdated,
     'conversation_deleted' => WsEventType.conversationDeleted,
     'conversation_updated' => WsEventType.conversationUpdated,
     'call_offer' => WsEventType.callOffer,

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:pretty_qr_code/pretty_qr_code.dart';
 import 'package:provider/provider.dart';
 import '../../crypto/pgp_service.dart';
 import '../../providers/auth_provider.dart';
@@ -542,16 +541,7 @@ class _FingerprintDisplay extends StatelessWidget {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            SizedBox(
-              width: 220,
-              height: 220,
-              child: PrettyQrView.data(
-                data: identityFingerprintQrPayload(fp),
-                decoration: const PrettyQrDecoration(
-                  quietZone: PrettyQrQuietZone.standard,
-                ),
-              ),
-            ),
+            IdentityQrView(data: identityFingerprintQrPayload(fp)),
             const SizedBox(height: 12),
             Text(
               fp

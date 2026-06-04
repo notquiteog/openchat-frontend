@@ -71,7 +71,6 @@ class ChatProvider extends ChangeNotifier {
   bool get isLoading => _isLoading;
 
   StreamSubscription<WsEvent>? _wsSub;
-  Timer? _pollTimer;
   static const Duration _liveLocationInterval = Duration(seconds: 30);
   Future<void>? _conversationRefreshInFlight;
   bool _wasWsMonitoring = false;
@@ -81,12 +80,6 @@ class ChatProvider extends ChangeNotifier {
     _ws.addListener(_onWsConnectionChanged);
     _ws.connect();
     _storage.getUserID().then((id) => _selfId = id);
-    _pollTimer = Timer.periodic(const Duration(seconds: 8), (_) async {
-      final token = await _storage.getAccessToken();
-      if (token == null) return;
-      unawaited(_ws.connect());
-      unawaited(refreshConversationsSilently());
-    });
   }
 
   Future<void> connectWebSocket() => _ws.connect();
@@ -238,10 +231,19 @@ class ChatProvider extends ChangeNotifier {
       final result = <Message>[];
       for (final msg in msgs.reversed) {
         final cached = cachedById[msg.id];
-        if (cached != null && cached.isDecrypted) {
-          _hydrateMessageSender(cached, fresh: msg);
-          result.add(cached);
-          await _syncLiveLocationShareFromMessage(cached);
+        if (cached != null &&
+            cached.isDecrypted &&
+            cached.encryptedPayload == msg.encryptedPayload) {
+          final merged = cached.copyWith(
+            encryptedPayload: msg.encryptedPayload,
+            signature: msg.signature,
+            reactions: msg.reactions,
+            poll: msg.poll,
+            editedAt: msg.editedAt,
+          );
+          _hydrateMessageSender(merged, fresh: msg);
+          result.add(merged);
+          await _syncLiveLocationShareFromMessage(merged);
         } else {
           _hydrateMessageSender(msg);
           await _tryDecrypt(msg, privateKey);
@@ -1047,6 +1049,25 @@ class ChatProvider extends ChangeNotifier {
 
   void sendTyping(String convID) => _ws.sendTyping(convID);
 
+  void setLocalReaction({
+    required String convID,
+    required String msgID,
+    required String emoji,
+    required bool reacted,
+  }) {
+    _updateMessageInMemory(
+      convID: convID,
+      msgID: msgID,
+      update: (msg) => msg.copyWith(
+        reactions: _reactionsWithViewerState(
+          msg.reactions,
+          emoji: emoji,
+          reacted: reacted,
+        ),
+      ),
+    );
+  }
+
   void _handleWsEvent(WsEvent event) {
     switch (event.type) {
       case WsEventType.newMessage:
@@ -1095,6 +1116,9 @@ class ChatProvider extends ChangeNotifier {
       case WsEventType.pollUpdated:
         _handlePollUpdate(event.data);
 
+      case WsEventType.paymentRequestUpdated:
+        unawaited(_handlePaymentRequestUpdate(event.data));
+
       case WsEventType.conversationUpdated:
         // Name / description / avatar (and for channels, handle) changed. Pull
         // the fresh conversation + members so it updates without a manual refresh.
@@ -1142,18 +1166,76 @@ class ChatProvider extends ChangeNotifier {
 
     final rawReactions = data['reactions'];
     if (rawReactions is! List) return;
-    final reactions = rawReactions
+    final incoming = rawReactions
         .whereType<Map>()
         .map(
           (raw) =>
               MessageReactionSummary.fromJson(Map<String, dynamic>.from(raw)),
         )
         .toList(growable: false);
+    final actorID = data['actor_user_id']?.toString();
+    final eventEmoji = data['emoji']?.toString();
+    final removed = data['removed'] == true;
     _updateMessageInMemory(
       convID: convID,
       msgID: msgID,
-      update: (msg) => msg.copyWith(reactions: reactions),
+      update: (msg) {
+        final viewerState = {
+          for (final reaction in msg.reactions)
+            if (reaction.reactedByMe) reaction.emoji: true,
+        };
+        if (_selfId != null && actorID == _selfId && eventEmoji != null) {
+          viewerState[eventEmoji] = !removed;
+        }
+        return msg.copyWith(
+          reactions: incoming
+              .map(
+                (reaction) => reaction.copyWith(
+                  reactedByMe:
+                      reaction.reactedByMe ||
+                      (viewerState[reaction.emoji] ?? false),
+                ),
+              )
+              .toList(growable: false),
+        );
+      },
     );
+  }
+
+  List<MessageReactionSummary> _reactionsWithViewerState(
+    List<MessageReactionSummary> reactions, {
+    required String emoji,
+    required bool reacted,
+  }) {
+    final next = List<MessageReactionSummary>.from(reactions);
+    final idx = next.indexWhere((reaction) => reaction.emoji == emoji);
+    if (reacted) {
+      if (idx == -1) {
+        next.add(
+          MessageReactionSummary(emoji: emoji, count: 1, reactedByMe: true),
+        );
+      } else {
+        final current = next[idx];
+        next[idx] = current.copyWith(
+          count: current.reactedByMe ? current.count : current.count + 1,
+          reactedByMe: true,
+        );
+      }
+    } else if (idx != -1) {
+      final current = next[idx];
+      final nextCount = current.reactedByMe ? current.count - 1 : current.count;
+      if (nextCount <= 0) {
+        next.removeAt(idx);
+      } else {
+        next[idx] = current.copyWith(count: nextCount, reactedByMe: false);
+      }
+    }
+    next.sort((a, b) {
+      final count = b.count.compareTo(a.count);
+      if (count != 0) return count;
+      return a.emoji.compareTo(b.emoji);
+    });
+    return next;
   }
 
   void _handlePollUpdate(Map<String, dynamic> data) {
@@ -1220,6 +1302,8 @@ class ChatProvider extends ChangeNotifier {
       _hydrateMessageSender(displayMsg, fresh: msg);
     }
 
+    _applyPaymentTransferUpdate(displayMsg);
+
     final list = _messages[msg.conversationId] ?? [];
     final idx = list.indexWhere((m) => m.id == msg.id);
     if (idx == -1) {
@@ -1267,6 +1351,133 @@ class ChatProvider extends ChangeNotifier {
     }
 
     notifyListeners();
+  }
+
+  Future<void> _handlePaymentRequestUpdate(Map<String, dynamic> data) async {
+    final convID = data['conversation_id']?.toString();
+    if (convID == null || convID.isEmpty) return;
+
+    final rawRequest = data['request'];
+    final request = rawRequest is Map
+        ? Map<String, dynamic>.from(rawRequest)
+        : null;
+    final requestID =
+        data['request_id']?.toString() ?? request?['id']?.toString();
+    final status = data['status']?.toString() ?? request?['status']?.toString();
+
+    if (requestID != null && requestID.isNotEmpty) {
+      _applyPaymentRequestUpdate(
+        convID: convID,
+        requestID: requestID,
+        request: request,
+        status: status,
+      );
+    }
+
+    unawaited(refreshConversationsSilently());
+    if (_messages.containsKey(convID)) {
+      await loadMessages(convID);
+      if (requestID != null && requestID.isNotEmpty) {
+        _applyPaymentRequestUpdate(
+          convID: convID,
+          requestID: requestID,
+          request: request,
+          status: status,
+        );
+      }
+    }
+  }
+
+  void _applyPaymentTransferUpdate(Message msg) {
+    if (msg.type != MessageType.paymentTransfer) return;
+    try {
+      final raw = jsonDecode(msg.encryptedPayload);
+      if (raw is! Map) return;
+      final transfer = raw['transfer'];
+      final request = raw['request'];
+      final requestID =
+          (transfer is Map ? transfer['request_id']?.toString() : null) ??
+          (request is Map ? request['id']?.toString() : null);
+      if (requestID == null || requestID.isEmpty) return;
+      _applyPaymentRequestUpdate(
+        convID: msg.conversationId,
+        requestID: requestID,
+        request: request is Map ? Map<String, dynamic>.from(request) : null,
+        status: 'confirmed',
+      );
+    } catch (_) {}
+  }
+
+  bool _applyPaymentRequestUpdate({
+    required String convID,
+    required String requestID,
+    Map<String, dynamic>? request,
+    String? status,
+  }) {
+    var changed = false;
+    final list = _messages[convID];
+    if (list != null) {
+      final updated = <Message>[];
+      for (final msg in list) {
+        final next = _updatedPaymentRequestMessage(
+          msg: msg,
+          requestID: requestID,
+          request: request,
+          status: status,
+        );
+        updated.add(next ?? msg);
+        changed = changed || next != null;
+      }
+      if (changed) _messages[convID] = updated;
+    }
+
+    final conv = _conversations[convID];
+    final last = conv?.lastMessage;
+    if (conv != null && last != null) {
+      final nextLast = _updatedPaymentRequestMessage(
+        msg: last,
+        requestID: requestID,
+        request: request,
+        status: status,
+      );
+      if (nextLast != null) {
+        _conversations[convID] = conv.copyWith(lastMessage: nextLast);
+        changed = true;
+      }
+    }
+
+    if (changed) notifyListeners();
+    return changed;
+  }
+
+  Message? _updatedPaymentRequestMessage({
+    required Message msg,
+    required String requestID,
+    Map<String, dynamic>? request,
+    String? status,
+  }) {
+    if (msg.type != MessageType.paymentRequest) return null;
+    try {
+      final raw = jsonDecode(msg.encryptedPayload);
+      if (raw is! Map) return null;
+      final currentRequestRaw = raw['request'];
+      if (currentRequestRaw is! Map) return null;
+      final currentRequest = Map<String, dynamic>.from(currentRequestRaw);
+      if (currentRequest['id']?.toString() != requestID) return null;
+
+      final nextRequest = Map<String, dynamic>.from(currentRequest);
+      if (request != null) nextRequest.addAll(request);
+      if (status != null && status.isNotEmpty) {
+        nextRequest['status'] = status;
+      }
+      final nextPayload = Map<String, dynamic>.from(raw);
+      nextPayload['request'] = nextRequest;
+      final encoded = jsonEncode(nextPayload);
+      if (encoded == msg.encryptedPayload) return null;
+      return msg.copyWith(encryptedPayload: encoded);
+    } catch (_) {
+      return null;
+    }
   }
 
   Message? _cachedDecryptedMessage(Message msg) {
@@ -1363,7 +1574,6 @@ class ChatProvider extends ChangeNotifier {
   @override
   void dispose() {
     _wsSub?.cancel();
-    _pollTimer?.cancel();
     unawaited(_stopAllLiveLocationShares());
     _ws.removeListener(_onWsConnectionChanged);
     _ws.disconnect();

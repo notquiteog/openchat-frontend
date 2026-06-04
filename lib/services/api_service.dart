@@ -1154,11 +1154,9 @@ class ApiService {
 
   Future<Map<String, dynamic>> createPaymentDeposit({
     required String provider,
-    double? expectedAmount,
   }) async {
     final resp = await _post('/api/v1/billing/deposits', {
       'provider': provider,
-      'expected_amount': ?expectedAmount,
     });
     return resp['data'] as Map<String, dynamic>;
   }
@@ -1268,6 +1266,10 @@ class ApiService {
 
   Future<void> cancelPaymentRequest(String requestID) async {
     await _delete('/api/v1/billing/payment-requests/$requestID');
+  }
+
+  Future<void> declinePaymentRequest(String requestID) async {
+    await _post('/api/v1/billing/payment-requests/$requestID/decline', {});
   }
 
   Future<Map<String, dynamic>> withdrawPaymentFunds({

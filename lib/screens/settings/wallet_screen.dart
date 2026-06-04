@@ -73,19 +73,13 @@ class _WalletScreenState extends State<WalletScreen> {
   }
 
   Future<void> _createDeposit(String provider) async {
-    final amountCtrl = TextEditingController();
     try {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogCtx) => GlassAlertDialog(
           title: Text('Deposit ${provider.toUpperCase()}'),
-          content: TextField(
-            controller: amountCtrl,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-              labelText: 'Expected amount',
-              hintText: 'Optional',
-            ),
+          content: Text(
+            'A fresh address will be generated for this deposit. Send any amount to it and OpenChat will detect the received funds automatically after confirmation.',
           ),
           actions: [
             TextButton(
@@ -100,10 +94,8 @@ class _WalletScreenState extends State<WalletScreen> {
         ),
       );
       if (confirmed != true || !mounted) return;
-      final expected = double.tryParse(amountCtrl.text.trim());
       final dep = await context.read<ApiService>().createPaymentDeposit(
         provider: provider,
-        expectedAmount: expected != null && expected > 0 ? expected : null,
       );
       if (!mounted) return;
       await _load();
@@ -114,8 +106,6 @@ class _WalletScreenState extends State<WalletScreen> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Deposit failed: $e')));
-    } finally {
-      amountCtrl.dispose();
     }
   }
 
@@ -306,8 +296,9 @@ class _WalletScreenState extends State<WalletScreen> {
                                 height: 36,
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
-                                  color: theme.colorScheme.primary
-                                      .withValues(alpha: 0.12),
+                                  color: theme.colorScheme.primary.withValues(
+                                    alpha: 0.12,
+                                  ),
                                 ),
                                 child: Icon(
                                   provider == 'btc'
@@ -342,7 +333,10 @@ class _WalletScreenState extends State<WalletScreen> {
                             children: [
                               OutlinedButton.icon(
                                 onPressed: () => _createDeposit(provider),
-                                icon: const Icon(Icons.arrow_downward, size: 16),
+                                icon: const Icon(
+                                  Icons.arrow_downward,
+                                  size: 16,
+                                ),
                                 label: const Text('Deposit'),
                                 style: OutlinedButton.styleFrom(
                                   shape: const StadiumBorder(),
@@ -407,7 +401,11 @@ class _WalletScreenState extends State<WalletScreen> {
                       padding: EdgeInsets.zero,
                       child: Column(
                         children: [
-                          for (var i = 0; i < _historyItems(currentUserID).length; i++) ...[
+                          for (
+                            var i = 0;
+                            i < _historyItems(currentUserID).length;
+                            i++
+                          ) ...[
                             if (i > 0)
                               Divider(
                                 height: 1,
@@ -453,23 +451,24 @@ class _WalletScreenState extends State<WalletScreen> {
                                           ),
                                         ),
                                         Text(
-                                          _historyItems(currentUserID)[i]
-                                                  .subtitle
-                                                  .isEmpty
-                                              ? _historyItems(currentUserID)[i]
-                                                  .dateLabel
+                                          _historyItems(
+                                                currentUserID,
+                                              )[i].subtitle.isEmpty
+                                              ? _historyItems(
+                                                  currentUserID,
+                                                )[i].dateLabel
                                               : '${_historyItems(currentUserID)[i].subtitle} — ${_historyItems(currentUserID)[i].dateLabel}',
                                           style: TextStyle(
                                             fontSize: 12,
-                                            color:
-                                                theme.colorScheme.onSurface
-                                                    .withValues(alpha: 0.55),
+                                            color: theme.colorScheme.onSurface
+                                                .withValues(alpha: 0.55),
                                           ),
                                         ),
                                       ],
                                     ),
                                   ),
-                                  if (_historyItems(currentUserID)[i].amount != null)
+                                  if (_historyItems(currentUserID)[i].amount !=
+                                      null)
                                     Text(
                                       _historyItems(currentUserID)[i].amount!,
                                       style: const TextStyle(

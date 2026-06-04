@@ -549,17 +549,22 @@ class Message {
   };
 
   Message copyWith({
+    String? encryptedPayload,
+    String? signature,
     List<MessageReactionSummary>? reactions,
     Poll? poll,
+    DateTime? editedAt,
     User? sender,
   }) {
+    final payloadChanged =
+        encryptedPayload != null && encryptedPayload != this.encryptedPayload;
     final msg = Message(
       id: id,
       conversationId: conversationId,
       senderId: senderId,
       type: type,
-      encryptedPayload: encryptedPayload,
-      signature: signature,
+      encryptedPayload: encryptedPayload ?? this.encryptedPayload,
+      signature: signature ?? this.signature,
       isEncrypted: isEncrypted,
       autoDeleteSeconds: autoDeleteSeconds,
       autoDeleteExpiresAt: autoDeleteExpiresAt,
@@ -571,11 +576,17 @@ class Message {
       reactions: reactions ?? this.reactions,
       poll: poll ?? this.poll,
       createdAt: createdAt,
-      editedAt: editedAt,
+      editedAt: editedAt ?? this.editedAt,
       sender: sender ?? this.sender,
     );
-    if (_content != null) msg._content = _content;
-    if (_location != null) msg._location = _location;
+    if (payloadChanged) {
+      if (!isEncrypted) {
+        msg.setDecryptedContent(msg.encryptedPayload);
+      }
+    } else {
+      if (_content != null) msg._content = _content;
+      if (_location != null) msg._location = _location;
+    }
     msg._decryptionFailed = _decryptionFailed;
     return msg;
   }
@@ -674,13 +685,30 @@ class PollOption {
 class MessageReactionSummary {
   final String emoji;
   final int count;
+  final bool reactedByMe;
 
-  const MessageReactionSummary({required this.emoji, required this.count});
+  const MessageReactionSummary({
+    required this.emoji,
+    required this.count,
+    this.reactedByMe = false,
+  });
 
   factory MessageReactionSummary.fromJson(Map<String, dynamic> json) =>
       MessageReactionSummary(
         emoji: json['emoji'] as String? ?? '',
         count: json['count'] as int? ?? 0,
+        reactedByMe:
+            json['reacted_by_me'] as bool? ??
+            json['viewer_reacted'] as bool? ??
+            json['selected'] as bool? ??
+            false,
+      );
+
+  MessageReactionSummary copyWith({int? count, bool? reactedByMe}) =>
+      MessageReactionSummary(
+        emoji: emoji,
+        count: count ?? this.count,
+        reactedByMe: reactedByMe ?? this.reactedByMe,
       );
 }
 

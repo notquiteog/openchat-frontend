@@ -29,6 +29,7 @@ import '../../widgets/custom_emoji_picker.dart';
 import '../../widgets/custom_emoji_text_controller.dart';
 import '../../widgets/disappearing_messages_picker.dart';
 import '../../widgets/glass.dart';
+import '../../widgets/location_map_preview.dart';
 import '../../widgets/message_bubble.dart';
 import '../../widgets/sticker_picker.dart';
 import '../../widgets/voice_note_recorder.dart';
@@ -1011,7 +1012,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void _openLocationMessage(Message msg) {
     final location = msg.location;
     if (location == null) return;
-    final coords = '${location.latitude.toStringAsFixed(6)}, ${location.longitude.toStringAsFixed(6)}';
+    final coords =
+        '${location.latitude.toStringAsFixed(6)}, ${location.longitude.toStringAsFixed(6)}';
     final status = location.isLive
         ? location.isActive
               ? 'Live location${location.remainingLabel}'
@@ -1040,18 +1042,10 @@ class _ChatScreenState extends State<ChatScreen> {
                       child: InteractiveViewer(
                         minScale: 1,
                         maxScale: 5,
-                        child: CachedNetworkImage(
-                          imageUrl: location.mapUrl,
-                          fit: BoxFit.contain,
-                          placeholder: (_, _) =>
-                              const Center(child: CircularProgressIndicator()),
-                          errorWidget: (_, _, _) => const Center(
-                            child: Icon(
-                              Icons.map_outlined,
-                              color: Colors.white54,
-                              size: 48,
-                            ),
-                          ),
+                        child: LocationMapPreview(
+                          location: location,
+                          compact: false,
+                          showCoordinates: true,
                         ),
                       ),
                     ),
@@ -1066,19 +1060,19 @@ class _ChatScreenState extends State<ChatScreen> {
                       borderRadius: BorderRadius.circular(14),
                     ),
                     padding: const EdgeInsets.all(12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (location.previewLabel.isNotEmpty)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 4),
-                                child: Text(
-                                  location.previewLabel,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (location.previewLabel.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Text(
+                              location.previewLabel,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ),
                         Text(
                           coords,
@@ -1092,11 +1086,14 @@ class _ChatScreenState extends State<ChatScreen> {
                           onPressed: () {
                             Clipboard.setData(
                               ClipboardData(
-                                text: '${location.latitude}, ${location.longitude}',
+                                text:
+                                    '${location.latitude}, ${location.longitude}',
                               ),
                             );
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Coordinates copied')),
+                              const SnackBar(
+                                content: Text('Coordinates copied'),
+                              ),
                             );
                           },
                           child: const Text('Copy coordinates'),
@@ -1431,12 +1428,13 @@ class _ChatScreenState extends State<ChatScreen> {
                                             : null,
                                         onTapUp: isLocationMessage
                                             ? null
-                                            : (details) =>
-                                                _showReactionMenu(
-                                                  context,
-                                                  msg,
-                                                  details.globalPosition,
-                                                ),
+                                            : (details) => _showReactionMenu(
+                                                context,
+                                                msg,
+                                                details.globalPosition,
+                                              ),
+                                        onReactionTap: (emoji) =>
+                                            _toggleReaction(msg, emoji),
                                         onLongPress: () => _showMessageMenu(
                                           context,
                                           msg,
@@ -1847,12 +1845,8 @@ class _ChatScreenState extends State<ChatScreen> {
         IconButton(
           icon: const Icon(Icons.more_vert),
           tooltip: 'More options',
-          onPressed: () => _showChatMenu(
-            context,
-            conv,
-            currentUserID,
-            exitLabel,
-          ),
+          onPressed: () =>
+              _showChatMenu(context, conv, currentUserID, exitLabel),
         ),
       ],
     );
@@ -1864,8 +1858,9 @@ class _ChatScreenState extends State<ChatScreen> {
     String currentUserID,
     String exitLabel,
   ) {
-    final isAdmin =
-        conv.members.any((m) => m.userId == currentUserID && m.isAdmin);
+    final isAdmin = conv.members.any(
+      (m) => m.userId == currentUserID && m.isAdmin,
+    );
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -2180,7 +2175,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 emojis: emojis,
                 onSelected: (emoji) {
                   Navigator.pop(ctx);
-                  _reactToMessage(msg, emoji);
+                  _toggleReaction(msg, emoji);
                 },
               ),
             ),
@@ -2260,12 +2255,32 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Future<void> _reactToMessage(Message msg, String emoji) async {
+  Future<void> _toggleReaction(Message msg, String emoji) async {
     final messenger = ScaffoldMessenger.of(context);
+    final alreadyReacted = msg.reactions.any(
+      (reaction) => reaction.emoji == emoji && reaction.reactedByMe,
+    );
+    final chat = context.read<ChatProvider>();
+    chat.setLocalReaction(
+      convID: conv.id,
+      msgID: msg.id,
+      emoji: emoji,
+      reacted: !alreadyReacted,
+    );
     try {
-      await context.read<ApiService>().reactToMessage(msg.id, emoji);
-      if (mounted) await context.read<ChatProvider>().loadMessages(conv.id);
+      final api = context.read<ApiService>();
+      if (alreadyReacted) {
+        await api.removeReaction(msg.id, emoji);
+      } else {
+        await api.reactToMessage(msg.id, emoji);
+      }
     } catch (e) {
+      chat.setLocalReaction(
+        convID: conv.id,
+        msgID: msg.id,
+        emoji: emoji,
+        reacted: alreadyReacted,
+      );
       if (mounted) {
         messenger.showSnackBar(SnackBar(content: Text('Reaction failed: $e')));
       }
@@ -2656,11 +2671,16 @@ class _ChatScreenState extends State<ChatScreen> {
                                     top: false,
                                     child: Padding(
                                       padding: const EdgeInsets.fromLTRB(
-                                          14, 0, 14, 14),
+                                        14,
+                                        0,
+                                        14,
+                                        14,
+                                      ),
                                       child: LiquidGlass(
                                         blur: 56,
                                         borderRadius: const BorderRadius.all(
-                                            Radius.circular(28)),
+                                          Radius.circular(28),
+                                        ),
                                         padding: EdgeInsets.zero,
                                         child: Column(
                                           mainAxisSize: MainAxisSize.min,
@@ -2668,7 +2688,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                             const SizedBox(height: 8),
                                             if (!m.isAdmin)
                                               _MenuTile(
-                                                icon: Icons.star_outline_rounded,
+                                                icon:
+                                                    Icons.star_outline_rounded,
                                                 label: 'Make admin',
                                                 onTap: () {
                                                   Navigator.pop(context);
@@ -2695,13 +2716,17 @@ class _ChatScreenState extends State<ChatScreen> {
                                                 },
                                               ),
                                             _MenuTile(
-                                              icon: Icons.person_remove_outlined,
+                                              icon:
+                                                  Icons.person_remove_outlined,
                                               label: 'Remove member',
                                               color: Colors.red,
                                               onTap: () {
                                                 Navigator.pop(context);
                                                 _removeMember(
-                                                    context, m.userId, username);
+                                                  context,
+                                                  m.userId,
+                                                  username,
+                                                );
                                               },
                                             ),
                                             const SizedBox(height: 8),
@@ -3180,7 +3205,10 @@ class _ReactionPopup extends StatelessWidget {
               GestureDetector(
                 onTap: () => onSelected(emoji),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 6,
+                  ),
                   child: Text(emoji, style: const TextStyle(fontSize: 26)),
                 ),
               ),
@@ -3384,9 +3412,13 @@ class _AttachTile extends StatelessWidget {
                   child: Icon(icon, size: 18, color: scheme.primary),
                 ),
                 const SizedBox(width: 14),
-                Text(label,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w600, fontSize: 15)),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                  ),
+                ),
               ],
             ),
           ),

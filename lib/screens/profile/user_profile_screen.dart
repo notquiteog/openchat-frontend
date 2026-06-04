@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/services.dart';
-import 'package:pretty_qr_code/pretty_qr_code.dart';
 import 'package:provider/provider.dart';
 import '../../config/api_config.dart';
 import '../../models/conversation.dart';
@@ -498,15 +497,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            SizedBox(
-              width: 220,
-              height: 220,
-              child: PrettyQrView.data(
-                data: identityFingerprintQrPayload(_user.keyFingerprint),
-                decoration: const PrettyQrDecoration(
-                  quietZone: PrettyQrQuietZone.standard,
-                ),
-              ),
+            IdentityQrView(
+              data: identityFingerprintQrPayload(_user.keyFingerprint),
             ),
             const SizedBox(height: 12),
             GestureDetector(

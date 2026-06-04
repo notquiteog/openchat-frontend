@@ -18,6 +18,7 @@ import '../providers/chat_provider.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
 import 'glass.dart';
+import 'location_map_preview.dart';
 import 'message_image_layout.dart';
 
 class MessageBubble extends StatelessWidget {
@@ -28,6 +29,7 @@ class MessageBubble extends StatelessWidget {
   final GestureTapUpCallback? onTapUp;
   final VoidCallback? onLongPress;
   final VoidCallback? onAvatarTap;
+  final ValueChanged<String>? onReactionTap;
   // The current user's own bubble can be previewed locally while the published
   // sender bubble color remains authoritative for incoming messages.
   final Color? meBubbleColor;
@@ -42,6 +44,7 @@ class MessageBubble extends StatelessWidget {
     this.onTapUp,
     this.onLongPress,
     this.onAvatarTap,
+    this.onReactionTap,
     this.meBubbleColor,
     this.bubbleRadius = 18,
   });
@@ -148,6 +151,7 @@ class MessageBubble extends StatelessWidget {
       final payment = _PaymentEnvelope.tryParse(message);
       if (payment != null) {
         return _PaymentBubble(
+          key: ValueKey('payment-${message.id}-${payment.kind}-${payment.id}'),
           message: message,
           isMe: isMe,
           payment: payment,
@@ -174,6 +178,7 @@ class MessageBubble extends StatelessWidget {
         bubbleColor: bubbleColor,
         textColor: textColor,
         radii: radii,
+        onReactionTap: onReactionTap,
       );
     }
 
@@ -226,6 +231,7 @@ class MessageBubble extends StatelessWidget {
       bubbleColor: bubbleColor,
       textColor: textColor,
       radii: radii,
+      onReactionTap: onReactionTap,
     );
   }
 
@@ -371,6 +377,7 @@ class _TextBubble extends StatelessWidget {
   final Color bubbleColor;
   final Color textColor;
   final BorderRadius radii;
+  final ValueChanged<String>? onReactionTap;
 
   const _TextBubble({
     required this.message,
@@ -378,6 +385,7 @@ class _TextBubble extends StatelessWidget {
     required this.bubbleColor,
     required this.textColor,
     required this.radii,
+    this.onReactionTap,
   });
 
   @override
@@ -411,7 +419,11 @@ class _TextBubble extends StatelessWidget {
           ),
           if (message.reactions.isNotEmpty) ...[
             const SizedBox(height: 6),
-            _ReactionChips(reactions: message.reactions, textColor: textColor),
+            _ReactionChips(
+              reactions: message.reactions,
+              textColor: textColor,
+              onReactionTap: onReactionTap,
+            ),
           ],
           const SizedBox(height: 2),
           _Timestamp(message: message, textColor: textColor),
@@ -428,6 +440,7 @@ class _LocationBubble extends StatelessWidget {
   final Color bubbleColor;
   final Color textColor;
   final BorderRadius radii;
+  final ValueChanged<String>? onReactionTap;
 
   const _LocationBubble({
     required this.message,
@@ -436,6 +449,7 @@ class _LocationBubble extends StatelessWidget {
     required this.bubbleColor,
     required this.textColor,
     required this.radii,
+    this.onReactionTap,
   });
 
   @override
@@ -475,88 +489,31 @@ class _LocationBubble extends StatelessWidget {
               children: [
                 AspectRatio(
                   aspectRatio: 16 / 10,
-                  child: CachedNetworkImage(
-                    imageUrl: location.thumbnailUrl,
-                    fit: BoxFit.cover,
-                    width: double.infinity,
-                    placeholder: (context, url) =>
-                        const Center(child: CircularProgressIndicator()),
-                    errorWidget: (_, _, _) => Container(
-                      color: Colors.black26,
-                      alignment: Alignment.center,
-                      child: const Icon(Icons.map_outlined, size: 32),
-                    ),
-                  ),
+                  child: LocationMapPreview(location: location),
                 ),
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  top: 0,
-                  bottom: 0,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          Colors.black.withValues(alpha: 0.3),
-                          Colors.transparent,
-                        ],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                      ),
-                    ),
-                  ),
-                ),
-                const Center(
-                  child: Icon(
-                    Icons.location_on,
-                    size: 36,
-                    color: Colors.redAccent,
-                    shadows: [Shadow(blurRadius: 10, color: Colors.black54)],
-                  ),
-                ),
-                if (location.isLive)
-                  Positioned(
-                    top: 8,
-                    left: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(999),
-                        color: Colors.redAccent.withValues(alpha: 0.9),
-                      ),
-                      child: const Text(
-                        'Live',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ),
               ],
             ),
           ),
           const SizedBox(height: 8),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 2),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    status,
-                    style: TextStyle(color: textColor, fontWeight: FontWeight.w600),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  status,
+                  style: TextStyle(
+                    color: textColor,
+                    fontWeight: FontWeight.w600,
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    previewText,
-                    style: TextStyle(
-                      color: textColor.withValues(alpha: 0.8),
-                      fontSize: 12,
-                    ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  previewText,
+                  style: TextStyle(
+                    color: textColor.withValues(alpha: 0.8),
+                    fontSize: 12,
+                  ),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -579,6 +536,7 @@ class _LocationBubble extends StatelessWidget {
               child: _ReactionChips(
                 reactions: message.reactions,
                 textColor: textColor,
+                onReactionTap: onReactionTap,
               ),
             ),
           ],
@@ -817,28 +775,59 @@ class _SpoilerTextState extends State<_SpoilerText> {
 class _ReactionChips extends StatelessWidget {
   final List<MessageReactionSummary> reactions;
   final Color textColor;
+  final ValueChanged<String>? onReactionTap;
 
-  const _ReactionChips({required this.reactions, required this.textColor});
+  const _ReactionChips({
+    required this.reactions,
+    required this.textColor,
+    this.onReactionTap,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Wrap(
       spacing: 4,
       runSpacing: 4,
       children: [
-        for (final reaction in reactions)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-            decoration: BoxDecoration(
-              color: textColor.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: textColor.withValues(alpha: 0.16)),
-            ),
-            child: Text(
-              '${reaction.emoji} ${reaction.count}',
-              style: TextStyle(color: textColor, fontSize: 12),
-            ),
+        for (final reaction in reactions) ...[
+          Builder(
+            builder: (context) {
+              final selected = reaction.reactedByMe;
+              final color = selected ? scheme.primary : textColor;
+              final chip = AnimatedContainer(
+                duration: const Duration(milliseconds: 140),
+                curve: Curves.easeOutCubic,
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? scheme.primary.withValues(alpha: 0.20)
+                      : textColor.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: selected
+                        ? scheme.primary.withValues(alpha: 0.72)
+                        : textColor.withValues(alpha: 0.16),
+                  ),
+                ),
+                child: Text(
+                  '${reaction.emoji} ${reaction.count}',
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
+                  ),
+                ),
+              );
+              if (onReactionTap == null) return chip;
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => onReactionTap!(reaction.emoji),
+                child: chip,
+              );
+            },
           ),
+        ],
       ],
     );
   }
@@ -953,6 +942,7 @@ class _PaymentBubble extends StatefulWidget {
   final BorderRadius radii;
 
   const _PaymentBubble({
+    super.key,
     required this.message,
     required this.isMe,
     required this.payment,
@@ -967,6 +957,8 @@ class _PaymentBubble extends StatefulWidget {
 
 class _PaymentBubbleState extends State<_PaymentBubble> {
   bool _paying = false;
+  bool _declining = false;
+  bool _declined = false;
   bool _loadingBalance = false;
   String? _balanceProvider;
   double? _availableBalance;
@@ -982,6 +974,7 @@ class _PaymentBubbleState extends State<_PaymentBubble> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.payment.id != widget.payment.id ||
         oldWidget.payment.provider != widget.payment.provider) {
+      _declined = false;
       _balanceProvider = null;
       _availableBalance = null;
       _ensureBalanceLoaded();
@@ -1030,7 +1023,7 @@ class _PaymentBubbleState extends State<_PaymentBubble> {
   }
 
   Future<void> _pay() async {
-    if (_paying) return;
+    if (_paying || _declining || _declined) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (dialogCtx) => GlassAlertDialog(
@@ -1067,7 +1060,7 @@ class _PaymentBubbleState extends State<_PaymentBubble> {
   }
 
   Future<void> _payExternal() async {
-    if (_paying) return;
+    if (_paying || _declining || _declined) return;
     setState(() => _paying = true);
     try {
       final result = await context
@@ -1083,6 +1076,44 @@ class _PaymentBubbleState extends State<_PaymentBubble> {
       ).showSnackBar(SnackBar(content: Text(e.toString())));
     } finally {
       if (mounted) setState(() => _paying = false);
+    }
+  }
+
+  Future<void> _decline() async {
+    if (_paying || _declining || _declined) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => GlassAlertDialog(
+        title: const Text('Decline request'),
+        content: Text('Decline ${widget.payment.amountLabel}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogCtx, true),
+            child: const Text('Decline'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _declining = true);
+    try {
+      await context.read<ApiService>().declinePaymentRequest(widget.payment.id);
+      if (!mounted) return;
+      setState(() => _declined = true);
+      await context.read<ChatProvider>().loadMessages(
+        widget.message.conversationId,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => _declining = false);
     }
   }
 
@@ -1123,18 +1154,23 @@ class _PaymentBubbleState extends State<_PaymentBubble> {
     final canPay =
         payment.isRequest &&
         !widget.isMe &&
+        !_declined &&
         payment.status == 'nothing_sent' &&
         payment.id.isNotEmpty &&
         (payment.payerId == null || payment.payerId == currentUserID);
+    final canDecline = canPay && payment.payerId == currentUserID;
     final canPayWithWallet =
         canPay &&
         _availableBalance != null &&
         _availableBalance! >= payment.amount;
+    final isBusy = _paying || _declining;
     final icon = payment.isTransfer
         ? Icons.check_circle_outline
         : Icons.payments_outlined;
     final statusText = payment.isTransfer
         ? 'Confirmed'
+        : _declined
+        ? 'Declined'
         : payment.status == 'nothing_sent'
         ? 'Requested'
         : payment.status.replaceAll('_', ' ');
@@ -1219,14 +1255,12 @@ class _PaymentBubbleState extends State<_PaymentBubble> {
           ],
           if (canPay) ...[
             const SizedBox(height: 10),
-            Wrap(
-              alignment: WrapAlignment.end,
-              spacing: 8,
-              runSpacing: 8,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (canPayWithWallet)
                   FilledButton.icon(
-                    onPressed: _paying ? null : _pay,
+                    onPressed: isBusy ? null : _pay,
                     icon: _paying
                         ? const SizedBox(
                             width: 14,
@@ -1236,11 +1270,26 @@ class _PaymentBubbleState extends State<_PaymentBubble> {
                         : const Icon(Icons.account_balance_wallet, size: 16),
                     label: const Text('App wallet'),
                   ),
+                if (canPayWithWallet) const SizedBox(height: 8),
                 OutlinedButton.icon(
-                  onPressed: _paying ? null : _payExternal,
+                  onPressed: isBusy ? null : _payExternal,
                   icon: const Icon(Icons.qr_code_2, size: 16),
                   label: const Text('External'),
                 ),
+                if (canDecline) ...[
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    onPressed: isBusy ? null : _decline,
+                    icon: _declining
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.close_rounded, size: 16),
+                    label: const Text('Decline'),
+                  ),
+                ],
               ],
             ),
           ],

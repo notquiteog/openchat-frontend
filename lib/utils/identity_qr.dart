@@ -1,6 +1,10 @@
 import 'dart:convert';
 
+import 'package:flutter/widgets.dart';
+import 'package:pretty_qr_code/pretty_qr_code.dart';
+
 const openChatFingerprintQrPrefix = 'openchat:fingerprint:';
+const _openChatLogoAsset = 'assets/images/logo.png';
 
 String identityFingerprintQrPayload(String fingerprint) =>
     '$openChatFingerprintQrPrefix${normalizeIdentityFingerprint(fingerprint)}';
@@ -37,4 +41,58 @@ String formatIdentityFingerprint(String fingerprint) {
     groups.add(normalized.substring(i, (i + 4).clamp(0, normalized.length)));
   }
   return groups.join(' ');
+}
+
+class IdentityQrView extends StatefulWidget {
+  final String data;
+  final double size;
+
+  const IdentityQrView({super.key, required this.data, this.size = 220});
+
+  @override
+  State<IdentityQrView> createState() => _IdentityQrViewState();
+}
+
+class _IdentityQrViewState extends State<IdentityQrView> {
+  late QrImage _qrImage;
+
+  @override
+  void initState() {
+    super.initState();
+    _qrImage = _createQrImage(widget.data);
+  }
+
+  @override
+  void didUpdateWidget(covariant IdentityQrView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.data != widget.data) {
+      _qrImage = _createQrImage(widget.data);
+    }
+  }
+
+  static QrImage _createQrImage(String data) {
+    final qrCode = QrCode.fromData(
+      data: data,
+      errorCorrectLevel: QrErrorCorrectLevel.H,
+    );
+    return QrImage(qrCode);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox.square(
+      dimension: widget.size,
+      child: PrettyQrView(
+        qrImage: _qrImage,
+        decoration: const PrettyQrDecoration(
+          image: PrettyQrDecorationImage(
+            image: AssetImage(_openChatLogoAsset),
+            scale: 0.18,
+            padding: EdgeInsets.all(8),
+          ),
+          quietZone: PrettyQrQuietZone.standard,
+        ),
+      ),
+    );
+  }
 }

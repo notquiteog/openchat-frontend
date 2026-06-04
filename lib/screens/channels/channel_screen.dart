@@ -294,8 +294,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                               : null,
                           child: ch.avatarUrl == null
                               ? Text(
-                                  ch.name?.substring(0, 1).toUpperCase() ??
-                                      'C',
+                                  ch.name?.substring(0, 1).toUpperCase() ?? 'C',
                                 )
                               : null,
                         ),
@@ -1530,7 +1529,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   borderRadius: BorderRadius.circular(22),
                   onTap: () {
                     Navigator.pop(ctx);
-                    _reactToMessage(msg, emoji);
+                    _toggleReaction(msg, emoji);
                   },
                   child: Padding(
                     padding: const EdgeInsets.all(8),
@@ -1576,16 +1575,67 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     );
   }
 
-  Future<void> _reactToMessage(Message msg, String emoji) async {
+  Future<void> _toggleReaction(Message msg, String emoji) async {
     final messenger = ScaffoldMessenger.of(context);
+    final alreadyReacted = msg.reactions.any(
+      (reaction) => reaction.emoji == emoji && reaction.reactedByMe,
+    );
+    _setLocalReaction(msg.id, emoji, !alreadyReacted);
     try {
-      await context.read<ApiService>().reactToMessage(msg.id, emoji);
-      if (mounted) await _load();
+      final api = context.read<ApiService>();
+      if (alreadyReacted) {
+        await api.removeReaction(msg.id, emoji);
+      } else {
+        await api.reactToMessage(msg.id, emoji);
+      }
     } catch (e) {
+      _setLocalReaction(msg.id, emoji, alreadyReacted);
       if (mounted) {
         messenger.showSnackBar(SnackBar(content: Text('Reaction failed: $e')));
       }
     }
+  }
+
+  void _setLocalReaction(String msgID, String emoji, bool reacted) {
+    final idx = _posts.indexWhere((post) => post.id == msgID);
+    if (idx == -1) return;
+    final reactions = List<MessageReactionSummary>.from(_posts[idx].reactions);
+    final reactionIdx = reactions.indexWhere(
+      (reaction) => reaction.emoji == emoji,
+    );
+    if (reacted) {
+      if (reactionIdx == -1) {
+        reactions.add(
+          MessageReactionSummary(emoji: emoji, count: 1, reactedByMe: true),
+        );
+      } else {
+        final current = reactions[reactionIdx];
+        reactions[reactionIdx] = current.copyWith(
+          count: current.reactedByMe ? current.count : current.count + 1,
+          reactedByMe: true,
+        );
+      }
+    } else if (reactionIdx != -1) {
+      final current = reactions[reactionIdx];
+      final count = current.reactedByMe ? current.count - 1 : current.count;
+      if (count <= 0) {
+        reactions.removeAt(reactionIdx);
+      } else {
+        reactions[reactionIdx] = current.copyWith(
+          count: count,
+          reactedByMe: false,
+        );
+      }
+    }
+    reactions.sort((a, b) {
+      final count = b.count.compareTo(a.count);
+      if (count != 0) return count;
+      return a.emoji.compareTo(b.emoji);
+    });
+    if (!mounted) return;
+    setState(() {
+      _posts[idx] = _posts[idx].copyWith(reactions: reactions);
+    });
   }
 
   Future<void> _deletePost(Message msg) async {
@@ -1840,14 +1890,14 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   vertical: 10,
                 ),
                 decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.onSurface.withValues(
-                    alpha: 0.08,
-                  ),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.onSurface.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(
-                    color: Theme.of(context).colorScheme.onSurface.withValues(
-                      alpha: 0.16,
-                    ),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.16),
                     width: 0.7,
                   ),
                 ),
@@ -1856,17 +1906,18 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                     Icon(
                       Icons.archive_outlined,
                       size: 15,
-                      color: Theme.of(context).colorScheme.onSurface.withValues(
-                        alpha: 0.55,
-                      ),
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.onSurface.withValues(alpha: 0.55),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         'This channel has been archived and is read-only.',
                         style: TextStyle(
-                          color: Theme.of(context).colorScheme.onSurface
-                              .withValues(alpha: 0.60),
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onSurface.withValues(alpha: 0.60),
                           fontSize: 13,
                         ),
                       ),
@@ -1892,10 +1943,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                             'No posts yet',
                             style: TextStyle(
                               fontSize: 14,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurface
-                                  .withValues(alpha: 0.55),
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurface.withValues(alpha: 0.55),
                               fontWeight: FontWeight.w500,
                             ),
                           ),
@@ -1924,6 +1974,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                             showAvatar: showAvatar,
                             meBubbleColor: meBubbleColor,
                             onTap: () => _showReactionMenu(msg),
+                            onReactionTap: (emoji) =>
+                                _toggleReaction(msg, emoji),
                             onLongPress: () => _showPostMenu(msg, isMe),
                             onAvatarTap: msg.sender != null
                                 ? () => _showChannelUserActions(msg)

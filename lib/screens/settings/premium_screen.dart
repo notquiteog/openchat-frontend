@@ -18,8 +18,6 @@ class _PremiumScreenState extends State<PremiumScreen> {
   Map<String, dynamic>? _status;
   List<Map<String, dynamic>> _invoices = const [];
   List<Map<String, dynamic>> _balances = const [];
-  List<Map<String, dynamic>> _deposits = const [];
-  List<Map<String, dynamic>> _withdrawals = const [];
   bool _loading = true;
   String? _loadError;
 
@@ -39,15 +37,11 @@ class _PremiumScreenState extends State<PremiumScreen> {
       final s = await api.getBillingStatus();
       final invoices = await api.listInvoices();
       final balances = await api.getPaymentBalances();
-      final deposits = await api.listPaymentDeposits();
-      final withdrawals = await api.listPaymentWithdrawals();
       if (mounted) {
         setState(() {
           _status = s;
           _invoices = invoices.cast<Map<String, dynamic>>();
           _balances = balances.cast<Map<String, dynamic>>();
-          _deposits = deposits.cast<Map<String, dynamic>>();
-          _withdrawals = withdrawals.cast<Map<String, dynamic>>();
           _loading = false;
         });
       }
@@ -166,20 +160,6 @@ class _PremiumScreenState extends State<PremiumScreen> {
                 padding: const EdgeInsets.all(16),
                 children: [
                   _PremiumStatusCard(user: user),
-                  _WalletBalanceSection(
-                    providers: ((_status?['providers'] as List?) ?? const [])
-                        .whereType<String>()
-                        .where((p) => p == 'btc' || p == 'xmr')
-                        .toList(),
-                    balances: _balances,
-                    deposits: _deposits,
-                    withdrawals: _withdrawals,
-                    feeRate:
-                        (_status?['withdrawal_fee_rate'] as num?)?.toDouble() ??
-                        0.03,
-                    onDeposit: _createDeposit,
-                    onWithdraw: _withdrawFunds,
-                  ),
                   _PaymentSections(
                     invoices: _invoices,
                     onCancel: _cancelInvoice,
@@ -223,11 +203,15 @@ class _PremiumScreenState extends State<PremiumScreen> {
                             height: 32,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              color: theme.colorScheme.error
-                                  .withValues(alpha: 0.14),
+                              color: theme.colorScheme.error.withValues(
+                                alpha: 0.14,
+                              ),
                             ),
-                            child: Icon(Icons.warning_amber_rounded,
-                                size: 16, color: theme.colorScheme.error),
+                            child: Icon(
+                              Icons.warning_amber_rounded,
+                              size: 16,
+                              color: theme.colorScheme.error,
+                            ),
                           ),
                           const SizedBox(width: 12),
                           Expanded(
@@ -270,156 +254,6 @@ class _PremiumScreenState extends State<PremiumScreen> {
       messenger.showSnackBar(SnackBar(content: Text('Cancel failed: $e')));
     }
   }
-
-  Future<void> _createDeposit(String provider) async {
-    final amountCtrl = TextEditingController();
-    try {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (dialogCtx) => GlassAlertDialog(
-          title: Text('Deposit ${provider.toUpperCase()}'),
-          content: TextField(
-            controller: amountCtrl,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-              labelText: 'Expected amount',
-              hintText: 'Optional',
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogCtx, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogCtx, true),
-              child: const Text('Create'),
-            ),
-          ],
-        ),
-      );
-      if (confirmed != true || !mounted) return;
-      final expected = double.tryParse(amountCtrl.text.trim());
-      final dep = await context.read<ApiService>().createPaymentDeposit(
-        provider: provider,
-        expectedAmount: expected != null && expected > 0 ? expected : null,
-      );
-      if (!mounted) return;
-      await _loadStatus();
-      if (!mounted) return;
-      _showDepositAddress(dep);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Deposit failed: $e')));
-    } finally {
-      amountCtrl.dispose();
-    }
-  }
-
-  void _showDepositAddress(Map<String, dynamic> deposit) {
-    final address = deposit['crypto_address'] as String? ?? '';
-    showDialog<void>(
-      context: context,
-      builder: (dialogCtx) => GlassAlertDialog(
-        title: Text('Send ${deposit['provider'].toString().toUpperCase()}'),
-        content: SelectableText(address),
-        actions: [
-          TextButton(
-            onPressed: () async {
-              await Clipboard.setData(ClipboardData(text: address));
-              if (mounted && dialogCtx.mounted) Navigator.pop(dialogCtx);
-            },
-            child: const Text('Copy'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogCtx),
-            child: const Text('Done'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _withdrawFunds(String provider, double available) async {
-    final addressCtrl = TextEditingController();
-    final amountCtrl = TextEditingController();
-    final feeRate =
-        (_status?['withdrawal_fee_rate'] as num?)?.toDouble() ?? 0.03;
-    try {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (dialogCtx) => StatefulBuilder(
-          builder: (dialogCtx, setDialog) {
-            final amount = double.tryParse(amountCtrl.text.trim()) ?? 0;
-            final fee = amount * feeRate;
-            final net = amount - fee;
-            return GlassAlertDialog(
-              title: Text('Withdraw ${provider.toUpperCase()}'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: addressCtrl,
-                    decoration: const InputDecoration(labelText: 'Address'),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: amountCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: InputDecoration(
-                      labelText: 'Amount ${provider.toUpperCase()}',
-                      helperText:
-                          'Available ${_formatCrypto(available, provider)}',
-                    ),
-                    onChanged: (_) => setDialog(() {}),
-                  ),
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'Fee ${_formatCrypto(fee, provider)} • Net ${_formatCrypto(net > 0 ? net : 0, provider)}',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(dialogCtx, false),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton(
-                  onPressed: amount > 0 && addressCtrl.text.trim().isNotEmpty
-                      ? () => Navigator.pop(dialogCtx, true)
-                      : null,
-                  child: const Text('Withdraw'),
-                ),
-              ],
-            );
-          },
-        ),
-      );
-      if (confirmed != true || !mounted) return;
-      await context.read<ApiService>().withdrawPaymentFunds(
-        provider: provider,
-        address: addressCtrl.text.trim(),
-        amount: double.parse(amountCtrl.text.trim()),
-      );
-      if (mounted) await _loadStatus();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Withdrawal failed: $e')));
-    } finally {
-      addressCtrl.dispose();
-      amountCtrl.dispose();
-    }
-  }
 }
 
 class _PremiumStatusCard extends StatelessWidget {
@@ -459,7 +293,9 @@ class _PremiumStatusCard extends StatelessWidget {
                   ? Icons.workspace_premium
                   : Icons.workspace_premium_outlined,
               size: 26,
-              color: isPremium ? Colors.amber : scheme.onSurface.withValues(alpha: 0.45),
+              color: isPremium
+                  ? Colors.amber
+                  : scheme.onSurface.withValues(alpha: 0.45),
             ),
           ),
           const SizedBox(width: 14),
@@ -513,160 +349,6 @@ double _balanceFor(List<Map<String, dynamic>> balances, String provider) {
     }
   }
   return 0;
-}
-
-double _asDouble(Object? value) {
-  if (value is num) return value.toDouble();
-  if (value is String) return double.tryParse(value) ?? 0;
-  return 0;
-}
-
-class _WalletBalanceSection extends StatelessWidget {
-  final List<String> providers;
-  final List<Map<String, dynamic>> balances;
-  final List<Map<String, dynamic>> deposits;
-  final List<Map<String, dynamic>> withdrawals;
-  final double feeRate;
-  final void Function(String provider) onDeposit;
-  final void Function(String provider, double available) onWithdraw;
-
-  const _WalletBalanceSection({
-    required this.providers,
-    required this.balances,
-    required this.deposits,
-    required this.withdrawals,
-    required this.feeRate,
-    required this.onDeposit,
-    required this.onWithdraw,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (providers.isEmpty) return const SizedBox.shrink();
-    final scheme = Theme.of(context).colorScheme;
-    final recentDeposits = deposits.take(2).toList();
-    final recentWithdrawals = withdrawals.take(2).toList();
-    return GlassCard(
-      padding: const EdgeInsets.all(18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: scheme.primary.withValues(alpha: 0.12),
-                ),
-                child: Icon(
-                  Icons.account_balance_wallet_outlined,
-                  size: 18,
-                  color: scheme.primary,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                'Balances',
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                '${(feeRate * 100).toStringAsFixed(0)}% fee',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: scheme.onSurface.withValues(alpha: 0.45),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          for (final provider in providers) ...[
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    _formatCrypto(_balanceFor(balances, provider), provider),
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                TextButton(
-                  onPressed: () => onDeposit(provider),
-                  child: const Text('Deposit'),
-                ),
-                TextButton(
-                  onPressed: () =>
-                      onWithdraw(provider, _balanceFor(balances, provider)),
-                  child: const Text('Withdraw'),
-                ),
-              ],
-            ),
-            if (provider != providers.last)
-              Divider(
-                height: 16,
-                thickness: 0.5,
-                color: scheme.onSurface.withValues(alpha: 0.10),
-              ),
-          ],
-          if (recentDeposits.isNotEmpty || recentWithdrawals.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Divider(
-              height: 12,
-              thickness: 0.5,
-              color: scheme.onSurface.withValues(alpha: 0.10),
-            ),
-            for (final dep in recentDeposits)
-              _LedgerMiniRow(
-                icon: Icons.arrow_downward,
-                label: 'Deposit',
-                provider: dep['provider'] as String? ?? '',
-                status: dep['status'] as String? ?? '',
-              ),
-            for (final withdrawal in recentWithdrawals)
-              _LedgerMiniRow(
-                icon: Icons.arrow_upward,
-                label: 'Withdrawal',
-                provider: withdrawal['provider'] as String? ?? '',
-                status: withdrawal['status'] as String? ?? '',
-              ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _LedgerMiniRow extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String provider;
-  final String status;
-
-  const _LedgerMiniRow({
-    required this.icon,
-    required this.label,
-    required this.provider,
-    required this.status,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, size: 16),
-        const SizedBox(width: 8),
-        Expanded(child: Text('$label ${provider.toUpperCase()}')),
-        Text(status.replaceAll('_', ' ')),
-      ],
-    );
-  }
 }
 
 class _PlanCard extends StatelessWidget {
@@ -888,20 +570,21 @@ class _ProviderPickerSheet extends StatelessWidget {
             children: [
               Text(
                 'Pay for ${plan == 'year' ? 'yearly' : 'monthly'} premium',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w700),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 16),
               if (walletProviders.isNotEmpty) ...[
-                Text('App wallet',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: scheme.primary,
-                      letterSpacing: 1.1,
-                    )),
+                Text(
+                  'App wallet',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: scheme.primary,
+                    letterSpacing: 1.1,
+                  ),
+                ),
                 const SizedBox(height: 8),
                 GlassCard(
                   padding: EdgeInsets.zero,
@@ -918,8 +601,7 @@ class _ProviderPickerSheet extends StatelessWidget {
                         _ProviderTile(
                           icon: _icon(p),
                           title: '${p.toUpperCase()} balance',
-                          subtitle:
-                              _formatCrypto(_balanceFor(balances, p), p),
+                          subtitle: _formatCrypto(_balanceFor(balances, p), p),
                           onTap: () => onPicked(p, 'wallet'),
                         ),
                       ],
@@ -928,13 +610,15 @@ class _ProviderPickerSheet extends StatelessWidget {
                 ),
                 const SizedBox(height: 16),
               ],
-              Text('External wallet or card',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: scheme.primary,
-                    letterSpacing: 1.1,
-                  )),
+              Text(
+                'External wallet or card',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: scheme.primary,
+                  letterSpacing: 1.1,
+                ),
+              ),
               const SizedBox(height: 8),
               GlassCard(
                 padding: EdgeInsets.zero,
@@ -955,10 +639,11 @@ class _ProviderPickerSheet extends StatelessWidget {
                             ? 'A pending payment already exists'
                             : null,
                         trailing: pendingProviders.contains(p)
-                            ? Icon(Icons.hourglass_top,
+                            ? Icon(
+                                Icons.hourglass_top,
                                 size: 18,
-                                color:
-                                    scheme.onSurface.withValues(alpha: 0.45))
+                                color: scheme.onSurface.withValues(alpha: 0.45),
+                              )
                             : null,
                         enabled: !pendingProviders.contains(p),
                         onTap: pendingProviders.contains(p)
@@ -998,7 +683,9 @@ class _ProviderTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final color = enabled ? scheme.primary : scheme.onSurface.withValues(alpha: 0.35);
+    final color = enabled
+        ? scheme.primary
+        : scheme.onSurface.withValues(alpha: 0.35);
     return ClipRRect(
       child: Material(
         color: Colors.transparent,
@@ -1023,24 +710,32 @@ class _ProviderTile extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(title,
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            color: enabled ? null : scheme.onSurface.withValues(alpha: 0.45),
-                          )),
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: enabled
+                              ? null
+                              : scheme.onSurface.withValues(alpha: 0.45),
+                        ),
+                      ),
                       if (subtitle != null)
-                        Text(subtitle!,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: scheme.onSurface.withValues(alpha: 0.55),
-                            )),
+                        Text(
+                          subtitle!,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: scheme.onSurface.withValues(alpha: 0.55),
+                          ),
+                        ),
                     ],
                   ),
                 ),
                 trailing ??
-                    Icon(Icons.chevron_right,
-                        size: 18,
-                        color: scheme.onSurface.withValues(alpha: 0.35)),
+                    Icon(
+                      Icons.chevron_right,
+                      size: 18,
+                      color: scheme.onSurface.withValues(alpha: 0.35),
+                    ),
               ],
             ),
           ),
