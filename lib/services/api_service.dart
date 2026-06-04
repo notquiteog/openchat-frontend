@@ -1291,8 +1291,8 @@ class ApiService {
   }) {
     final normalizedFiatCurrency = fiatCurrency?.trim().toUpperCase();
     return {
-      if (amount != null) 'amount': amount,
-      if (fiatAmount != null) 'fiat_amount': fiatAmount,
+      'amount': ?amount,
+      'fiat_amount': ?fiatAmount,
       if (normalizedFiatCurrency != null && normalizedFiatCurrency.isNotEmpty)
         'fiat_currency': normalizedFiatCurrency,
     };

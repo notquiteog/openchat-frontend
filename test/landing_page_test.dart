@@ -17,43 +17,48 @@ Widget _authHarness(Widget child) {
       ChangeNotifierProvider<AuthProvider>(
         create: (_) => AuthProvider(api, storage),
       ),
-      ChangeNotifierProvider<KeyProvider>(
-        create: (_) => KeyProvider(storage),
-      ),
+      ChangeNotifierProvider<KeyProvider>(create: (_) => KeyProvider(storage)),
     ],
     child: MaterialApp(home: child),
   );
 }
 
 void main() {
-  testWidgets('login screen is the full-height landing hero', (tester) async {
+  testWidgets('login screen uses the glass landing card', (tester) async {
     await tester.pumpWidget(_authHarness(const LoginScreen()));
 
     final scaffold = tester.getSize(find.byType(Scaffold));
     final hero = tester.getSize(find.byKey(const Key('auth-landing-hero')));
 
-    expect(hero.height, scaffold.height);
-    expect(find.text('Secure. Open. Encrypted.'), findsOneWidget);
+    expect(hero.width, lessThan(scaffold.width));
+    expect(hero.height, greaterThan(0));
+    expect(find.text('OpenChat'), findsOneWidget);
+    expect(find.text('Secure · Open · Encrypted'), findsOneWidget);
     expect(find.byType(Image), findsNothing);
     expect(find.widgetWithText(TextButton, 'Sign in'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Sign up'), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'Create your account'),
-        findsOneWidget);
+    expect(
+      find.widgetWithText(FilledButton, 'Create your account'),
+      findsOneWidget,
+    );
   });
 
-  testWidgets('register screen keeps the landing visual language',
-      (tester) async {
+  testWidgets('register screen keeps the landing visual language', (
+    tester,
+  ) async {
     await tester.pumpWidget(_authHarness(const RegisterScreen()));
 
     expect(find.byType(AppBar), findsNothing);
     expect(find.byKey(const Key('auth-landing-hero')), findsOneWidget);
-    expect(find.text('Secure. Open. Encrypted.'), findsOneWidget);
+    expect(find.text('Create account'), findsWidgets);
+    expect(find.text('Your keys stay on your device'), findsOneWidget);
     expect(find.widgetWithText(TextButton, 'Sign in'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Create account'), findsOneWidget);
   });
 
-  testWidgets('register advanced options list every supported key algorithm',
-      (tester) async {
+  testWidgets('register advanced options list every supported key algorithm', (
+    tester,
+  ) async {
     await tester.pumpWidget(_authHarness(const RegisterScreen()));
 
     await tester.tap(find.text('Advanced options'));

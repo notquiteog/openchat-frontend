@@ -177,7 +177,7 @@ class _FallbackMapImageState extends State<_FallbackMapImage> {
       width: double.infinity,
       height: double.infinity,
       gaplessPlayback: true,
-      errorBuilder: (_, __, ___) {
+      errorBuilder: (_, _, _) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) {
             setState(() => _index += 1);
