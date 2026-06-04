@@ -173,7 +173,7 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
               Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
             ],
             const SizedBox(height: 20),
-            FilledButton.icon(
+            GlassButtonWidget.icon(
               onPressed: pending == null || _posting ? null : _publish,
               icon: _posting
                   ? const SizedBox(
@@ -210,12 +210,12 @@ class _PickPanel extends StatelessWidget {
         runSpacing: 12,
         alignment: WrapAlignment.center,
         children: [
-          FilledButton.icon(
+          GlassButtonWidget.icon(
             onPressed: busy ? null : onPickImage,
             icon: const Icon(Icons.image_outlined),
             label: const Text('Photo'),
           ),
-          FilledButton.tonalIcon(
+          GlassButtonWidget.icon(
             onPressed: busy ? null : onPickVideo,
             icon: const Icon(Icons.videocam_outlined),
             label: const Text('Video'),
@@ -260,12 +260,12 @@ class _SelectedMediaPanel extends StatelessWidget {
           Wrap(
             spacing: 8,
             children: [
-              OutlinedButton.icon(
+              GlassButtonWidget.icon(
                 onPressed: onReplaceImage,
                 icon: const Icon(Icons.image_outlined),
                 label: const Text('Replace photo'),
               ),
-              OutlinedButton.icon(
+              GlassButtonWidget.icon(
                 onPressed: onReplaceVideo,
                 icon: const Icon(Icons.videocam_outlined),
                 label: const Text('Replace video'),

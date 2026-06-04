@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -236,7 +238,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 32),
           child: GlassContainer(
-            shape: const LiquidOval(),
+            shape: LiquidRoundedSuperellipse(borderRadius: 999),
             allowElevation: true,
             glowIntensity: 0.05,
             child: Padding(
@@ -1816,6 +1818,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }
 
   Future<void> _showAttachmentPicker() async {
+    final cameraSupported =
+        kIsWeb ||
+        defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+
     final choice = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -1837,6 +1844,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   label: 'Photo from gallery',
                   onTap: () => Navigator.pop(context, 'gallery_image'),
                 ),
+                if (cameraSupported)
+                  _ChanTile(
+                    icon: Icons.camera_alt_outlined,
+                    label: 'Take photo',
+                    onTap: () => Navigator.pop(context, 'camera_image'),
+                  ),
                 _ChanTile(
                   icon: Icons.videocam_outlined,
                   label: 'Video from gallery',
@@ -1848,9 +1861,24 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   onTap: () => Navigator.pop(context, 'file'),
                 ),
                 _ChanTile(
+                  icon: Icons.poll_outlined,
+                  label: 'Poll',
+                  onTap: () => Navigator.pop(context, 'poll'),
+                ),
+                _ChanTile(
                   icon: Icons.mic_none_outlined,
                   label: 'Voice note',
                   onTap: () => Navigator.pop(context, 'voice'),
+                ),
+                _ChanTile(
+                  icon: Icons.share_location_outlined,
+                  label: 'Share location',
+                  onTap: () => Navigator.pop(context, 'location_once'),
+                ),
+                _ChanTile(
+                  icon: Icons.location_on_outlined,
+                  label: 'Share live location',
+                  onTap: () => Navigator.pop(context, 'location_live'),
                 ),
                 const SizedBox(height: 8),
               ],
@@ -1861,12 +1889,28 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     );
     if (choice == null || !mounted) return;
 
+    // Non-attachment actions handled separately.
+    if (choice == 'poll') {
+      await _showCreatePollDialog();
+      return;
+    }
+    if (choice == 'location_once') {
+      await _shareOneTimeLocation();
+      return;
+    }
+    if (choice == 'location_live') {
+      await _shareLiveLocation();
+      return;
+    }
+
+
     final attachmentService = AttachmentService(context.read<ApiService>());
     PendingAttachment? pending;
     VoiceNoteRecording? voiceNote;
     try {
       pending = switch (choice) {
         'gallery_image' => await attachmentService.pickImage(),
+        'camera_image' => await attachmentService.pickImage(fromCamera: true),
         'gallery_video' => await attachmentService.pickVideo(),
         'file' => await attachmentService.pickFile(),
         'voice' => await (() async {
@@ -1900,6 +1944,179 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       plaintextOverride: jsonEncode(pending.toPayloadJson()),
       messageType: pending.messageType.name,
       attachmentId: pending.attachmentId,
+    );
+  }
+
+  Future<void> _showCreatePollDialog() async {
+    final questionCtrl = TextEditingController();
+    final optionCtrls = [TextEditingController(), TextEditingController()];
+    var anonymous = true;
+    var multiple = false;
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogCtx) => StatefulBuilder(
+          builder: (dialogCtx, setDialog) {
+            Future<void> submit() async {
+              final question = questionCtrl.text.trim();
+              final options = optionCtrls
+                  .map((c) => c.text.trim())
+                  .where((t) => t.isNotEmpty)
+                  .toList();
+              if (question.isEmpty || options.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Question and option required')),
+                );
+                return;
+              }
+              Navigator.pop(dialogCtx);
+              try {
+                await context.read<ChatProvider>().sendPoll(
+                  convID: channel.id,
+                  question: question,
+                  options: options,
+                  isAnonymous: anonymous,
+                  allowsMultipleAnswers: multiple,
+                );
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(SnackBar(content: Text(e.toString())));
+              }
+            }
+
+            return GlassAlertDialog(
+              title: const Text('New poll'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: questionCtrl,
+                      decoration:
+                          const InputDecoration(labelText: 'Question'),
+                      textInputAction: TextInputAction.next,
+                    ),
+                    const SizedBox(height: 12),
+                    for (var i = 0; i < optionCtrls.length; i++)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: TextField(
+                          controller: optionCtrls[i],
+                          decoration:
+                              InputDecoration(labelText: 'Option ${i + 1}'),
+                          textInputAction: TextInputAction.next,
+                        ),
+                      ),
+                    Row(
+                      children: [
+                        TextButton.icon(
+                          icon: const Icon(Icons.add),
+                          label: const Text('Option'),
+                          onPressed: optionCtrls.length >= 10
+                              ? null
+                              : () => setDialog(
+                                    () => optionCtrls
+                                        .add(TextEditingController()),
+                                  ),
+                        ),
+                        const Spacer(),
+                        if (optionCtrls.length > 1)
+                          IconButton(
+                            tooltip: 'Remove option',
+                            icon: const Icon(Icons.remove_circle_outline),
+                            onPressed: () => setDialog(
+                              () => optionCtrls.removeLast().dispose(),
+                            ),
+                          ),
+                      ],
+                    ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Anonymous'),
+                      value: anonymous,
+                      onChanged: (v) => setDialog(() => anonymous = v),
+                    ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Multiple answers'),
+                      value: multiple,
+                      onChanged: (v) => setDialog(() => multiple = v),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogCtx),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(onPressed: submit, child: const Text('Post')),
+              ],
+            );
+          },
+        ),
+      );
+    } finally {
+      questionCtrl.dispose();
+      for (final ctrl in optionCtrls) {
+        ctrl.dispose();
+      }
+    }
+  }
+
+  Future<void> _shareOneTimeLocation() async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await context.read<ChatProvider>().sendOneTimeLocation(
+        convID: channel.id,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
+  Future<void> _shareLiveLocation() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final duration = await _selectLiveLocationDuration();
+    if (duration == null || !mounted) return;
+    try {
+      await context.read<ChatProvider>().sendLiveLocation(
+        convID: channel.id,
+        duration: duration,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
+  Future<Duration?> _selectLiveLocationDuration() {
+    const options = <(String, Duration)>[
+      ('15 minutes', Duration(minutes: 15)),
+      ('30 minutes', Duration(minutes: 30)),
+      ('1 hour', Duration(hours: 1)),
+      ('2 hours', Duration(hours: 2)),
+      ('8 hours', Duration(hours: 8)),
+      ('1 day', Duration(days: 1)),
+    ];
+    return showDialog<Duration>(
+      context: context,
+      builder: (ctx) => GlassSimpleDialog(
+        title: const Text('Live location duration'),
+        children: [
+          for (final option in options)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, option.$2),
+              child: Text(option.$1),
+            ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -2050,7 +2267,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   : _posts.isEmpty
                   ? Center(
                       child: GlassContainer(
-                        shape: const LiquidOval(),
+                        shape: LiquidRoundedSuperellipse(borderRadius: 999),
                         allowElevation: true,
                         glowIntensity: 0.05,
                         child: Padding(
@@ -2244,22 +2461,25 @@ class ChannelPostBar extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 4),
-              IconButton(
-                icon: const Icon(Icons.attach_file_outlined),
-                tooltip: 'Attach file',
-                onPressed: onAttach,
+              Tooltip(
+                message: 'Attach file',
+                child: GlassButtonWidget(
+                  onPressed: onAttach,
+                  padding: const EdgeInsets.all(10),
+                  child: const Icon(Icons.attach_file_outlined, size: 22),
+                ),
               ),
+              const SizedBox(width: 4),
               Tooltip(
                 message: 'Hold for post options',
                 child: GestureDetector(
+                  onTap: onPost,
                   onLongPress: onOptions,
-                  child: FilledButton(
-                    onPressed: onPost,
-                    style: FilledButton.styleFrom(
-                      shape: const CircleBorder(),
-                      padding: const EdgeInsets.all(12),
-                      minimumSize: Size.zero,
-                    ),
+                  child: GlassContainer(
+                    shape: const LiquidOval(),
+                    allowElevation: true,
+                    glowIntensity: 0.08,
+                    padding: const EdgeInsets.all(12),
                     child: Icon(
                       hasOptions ? Icons.schedule_send_outlined : Icons.send,
                       size: 18,

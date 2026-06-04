@@ -22,14 +22,14 @@ class _LoginScreenState extends State<LoginScreen>
 
   late final AnimationController _entranceCtrl = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 680),
+    duration: const Duration(milliseconds: 720),
   );
   late final Animation<double> _entranceFade =
       CurvedAnimation(parent: _entranceCtrl, curve: Curves.easeOutCubic);
-  late final Animation<double> _entranceScale = Tween<double>(
-    begin: 0.88,
-    end: 1.0,
-  ).animate(CurvedAnimation(parent: _entranceCtrl, curve: Curves.easeOutBack));
+  late final Animation<Offset> _entranceSlide = Tween<Offset>(
+    begin: const Offset(0, 0.06),
+    end: Offset.zero,
+  ).animate(CurvedAnimation(parent: _entranceCtrl, curve: Curves.easeOutCubic));
 
   @override
   void initState() {
@@ -59,6 +59,7 @@ class _LoginScreenState extends State<LoginScreen>
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
     final scheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
       resizeToAvoidBottomInset: true,
@@ -69,256 +70,298 @@ class _LoginScreenState extends State<LoginScreen>
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
               child: FadeTransition(
                 opacity: _entranceFade,
-                child: ScaleTransition(
-                  scale: _entranceScale,
+                child: SlideTransition(
+                  position: _entranceSlide,
                   child: GlassContainer(
-                key: const Key('auth-landing-hero'),
-                shape: LiquidRoundedSuperellipse(borderRadius: 36),
-                allowElevation: true,
-                glowIntensity: 0.06,
-                padding: const EdgeInsets.fromLTRB(28, 32, 28, 32),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 420),
-                  child: Form(
-                    key: _formKey,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Logo + wordmark
-                        Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                width: 72,
-                                height: 72,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  gradient: RadialGradient(
-                                    colors: [
-                                      scheme.primary,
-                                      scheme.tertiary,
+                    key: const Key('auth-landing-hero'),
+                    shape: LiquidRoundedSuperellipse(borderRadius: 36),
+                    allowElevation: true,
+                    glowIntensity: 0.07,
+                    padding: EdgeInsets.zero,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 440),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // ── Brand section ─────────────────────────────────
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(28, 36, 28, 28),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                // Logo
+                                Container(
+                                  width: 80,
+                                  height: 80,
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(22),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: scheme.primary.withValues(alpha: 0.35),
+                                        blurRadius: 28,
+                                        spreadRadius: -4,
+                                        offset: const Offset(0, 10),
+                                      ),
                                     ],
                                   ),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: scheme.primary.withValues(alpha: 0.42),
-                                      blurRadius: 24,
-                                      spreadRadius: -4,
-                                      offset: const Offset(0, 10),
-                                    ),
-                                  ],
-                                ),
-                                child: const Icon(
-                                  Icons.lock_outline_rounded,
-                                  color: Colors.white,
-                                  size: 34,
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                              Text(
-                                'OpenChat',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .headlineMedium
-                                    ?.copyWith(fontWeight: FontWeight.w800),
-                                textAlign: TextAlign.center,
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                'Secure · Open · Encrypted',
-                                textAlign: TextAlign.center,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .bodyMedium
-                                    ?.copyWith(
-                                      color: scheme.onSurface
-                                          .withValues(alpha: 0.55),
-                                      letterSpacing: 0.8,
-                                    ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 36),
-                        // Username
-                        TextFormField(
-                          controller: _usernameCtrl,
-                          decoration: const InputDecoration(
-                            labelText: 'Username',
-                            prefixIcon: Icon(Icons.alternate_email_rounded),
-                          ),
-                          autocorrect: false,
-                          textInputAction: TextInputAction.next,
-                          validator: (v) =>
-                              v?.isEmpty == true ? 'Required' : null,
-                        ),
-                        const SizedBox(height: 14),
-                        // Password
-                        TextFormField(
-                          controller: _passwordCtrl,
-                          decoration: InputDecoration(
-                            labelText: 'Password',
-                            prefixIcon: const Icon(Icons.lock_outline_rounded),
-                            suffixIcon: IconButton(
-                              icon: Icon(
-                                _obscurePassword
-                                    ? Icons.visibility_outlined
-                                    : Icons.visibility_off_outlined,
-                              ),
-                              onPressed: () => setState(
-                                () => _obscurePassword = !_obscurePassword,
-                              ),
-                            ),
-                          ),
-                          obscureText: _obscurePassword,
-                          textInputAction: TextInputAction.done,
-                          onFieldSubmitted: (_) => _login(),
-                          validator: (v) =>
-                              v?.isEmpty == true ? 'Required' : null,
-                        ),
-                        // 2FA (conditional)
-                        if (auth.twoFactorRequired ||
-                            _twoFactorCtrl.text.isNotEmpty) ...[
-                          const SizedBox(height: 14),
-                          TextFormField(
-                            controller: _twoFactorCtrl,
-                            decoration: const InputDecoration(
-                              labelText: '2FA password',
-                              prefixIcon:
-                                  Icon(Icons.security_outlined),
-                            ),
-                            obscureText: true,
-                            textInputAction: TextInputAction.done,
-                            onChanged: (_) => setState(() {}),
-                            onFieldSubmitted: (_) => _login(),
-                          ),
-                        ],
-                        const SizedBox(height: 24),
-                        // Warnings
-                        if (auth.storageWarning != null)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 14),
-                            child: SecureStorageWarning(
-                              message: auth.storageWarning!,
-                            ),
-                          ),
-                        if (auth.error != null &&
-                            auth.error != auth.storageWarning)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 14),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 10,
-                              ),
-                              decoration: BoxDecoration(
-                                color: scheme.error.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(14),
-                                border: Border.all(
-                                  color: scheme.error.withValues(alpha: 0.28),
-                                  width: 0.7,
-                                ),
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    Icons.error_outline_rounded,
-                                    color: scheme.error,
-                                    size: 18,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      auth.error!,
-                                      style: TextStyle(
-                                        color: scheme.error,
-                                        fontSize: 13,
+                                  clipBehavior: Clip.antiAlias,
+                                  child: Image.asset(
+                                    'assets/images/logo.png',
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, _, _) => Container(
+                                      color: scheme.primary,
+                                      child: const Icon(
+                                        Icons.chat_bubble_outline_rounded,
+                                        color: Colors.white,
+                                        size: 40,
                                       ),
                                     ),
+                                  ),
+                                ),
+                                const SizedBox(height: 18),
+                                Text(
+                                  'OpenChat',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .headlineMedium
+                                      ?.copyWith(
+                                        fontWeight: FontWeight.w800,
+                                        letterSpacing: -0.5,
+                                      ),
+                                  textAlign: TextAlign.center,
+                                ),
+                                const SizedBox(height: 5),
+                                Text(
+                                  'Secure · Open · Encrypted',
+                                  textAlign: TextAlign.center,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(
+                                        color: scheme.onSurface
+                                            .withValues(alpha: 0.50),
+                                        letterSpacing: 1.0,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                ),
+                              ],
+                            ),
+                          ),
+
+                          // Divider
+                          Divider(
+                            height: 1,
+                            thickness: 0.5,
+                            color: (isDark ? Colors.white : Colors.black)
+                                .withValues(alpha: 0.08),
+                          ),
+
+                          // ── Form section ──────────────────────────────────
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(28, 28, 28, 28),
+                            child: Form(
+                              key: _formKey,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    'Sign in',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleLarge
+                                        ?.copyWith(fontWeight: FontWeight.w700),
+                                  ),
+                                  const SizedBox(height: 20),
+                                  TextFormField(
+                                    controller: _usernameCtrl,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Username',
+                                      prefixIcon: Icon(
+                                        Icons.alternate_email_rounded,
+                                      ),
+                                    ),
+                                    autocorrect: false,
+                                    textInputAction: TextInputAction.next,
+                                    validator: (v) =>
+                                        v?.isEmpty == true ? 'Required' : null,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  TextFormField(
+                                    controller: _passwordCtrl,
+                                    decoration: InputDecoration(
+                                      labelText: 'Password',
+                                      prefixIcon:
+                                          const Icon(Icons.lock_outline_rounded),
+                                      suffixIcon: IconButton(
+                                        icon: Icon(
+                                          _obscurePassword
+                                              ? Icons.visibility_outlined
+                                              : Icons.visibility_off_outlined,
+                                        ),
+                                        onPressed: () => setState(
+                                          () => _obscurePassword =
+                                              !_obscurePassword,
+                                        ),
+                                      ),
+                                    ),
+                                    obscureText: _obscurePassword,
+                                    textInputAction: TextInputAction.done,
+                                    onFieldSubmitted: (_) => _login(),
+                                    validator: (v) =>
+                                        v?.isEmpty == true ? 'Required' : null,
+                                  ),
+                                  if (auth.twoFactorRequired ||
+                                      _twoFactorCtrl.text.isNotEmpty) ...[
+                                    const SizedBox(height: 12),
+                                    TextFormField(
+                                      controller: _twoFactorCtrl,
+                                      decoration: const InputDecoration(
+                                        labelText: '2FA code',
+                                        prefixIcon: Icon(
+                                          Icons.security_outlined,
+                                        ),
+                                      ),
+                                      obscureText: true,
+                                      keyboardType: TextInputType.number,
+                                      textInputAction: TextInputAction.done,
+                                      onChanged: (_) => setState(() {}),
+                                      onFieldSubmitted: (_) => _login(),
+                                    ),
+                                  ],
+                                  const SizedBox(height: 22),
+
+                                  // Errors
+                                  if (auth.storageWarning != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: 14),
+                                      child: SecureStorageWarning(
+                                        message: auth.storageWarning!,
+                                      ),
+                                    ),
+                                  if (auth.error != null &&
+                                      auth.error != auth.storageWarning)
+                                    _ErrorBox(message: auth.error!),
+
+                                  // Sign-in button
+                                  Row(children: [
+                                    Expanded(
+                                      child: GlassButtonWidget(
+                                        onPressed:
+                                            auth.isLoading ? null : _login,
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 16,
+                                        ),
+                                        child: auth.isLoading
+                                            ? const SizedBox(
+                                                height: 20,
+                                                width: 20,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                  strokeWidth: 2,
+                                                ),
+                                              )
+                                            : const Text('Sign in'),
+                                      ),
+                                    ),
+                                  ]),
+                                  const SizedBox(height: 10),
+                                  Row(children: [
+                                    Expanded(
+                                      child: GlassButtonWidget(
+                                        onPressed: () => Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) =>
+                                                const RegisterScreen(),
+                                          ),
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 16,
+                                        ),
+                                        child: const Text('Create your account'),
+                                      ),
+                                    ),
+                                  ]),
+                                  const SizedBox(height: 20),
+                                  Divider(
+                                    color: Colors.white.withValues(alpha: 0.12),
+                                    height: 1,
+                                  ),
+                                  const SizedBox(height: 14),
+                                  TextButton.icon(
+                                    icon: const Icon(
+                                      Icons.vpn_key_outlined,
+                                      size: 16,
+                                    ),
+                                    label:
+                                        const Text('Import existing PGP key'),
+                                    onPressed: () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => const PgpKeysScreen(),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Sign-in requires your private key on this device.',
+                                    textAlign: TextAlign.center,
+                                    style:
+                                        Theme.of(context).textTheme.bodySmall
+                                            ?.copyWith(
+                                              color: scheme.onSurface
+                                                  .withValues(alpha: 0.38),
+                                            ),
                                   ),
                                 ],
                               ),
                             ),
                           ),
-                        // Sign in button
-                        SizedBox(
-                          height: 52,
-                          child: FilledButton(
-                            onPressed: auth.isLoading ? null : _login,
-                            style: FilledButton.styleFrom(
-                              shape: const StadiumBorder(),
-                              textStyle: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            child: auth.isLoading
-                                ? SizedBox(
-                                    height: 20,
-                                    width: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: scheme.onPrimary,
-                                    ),
-                                  )
-                                : const Text('Sign in'),
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        // Create account button
-                        SizedBox(
-                          height: 52,
-                          child: FilledButton.tonal(
-                            onPressed: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const RegisterScreen(),
-                              ),
-                            ),
-                            style: FilledButton.styleFrom(
-                              shape: const StadiumBorder(),
-                            ),
-                            child: const Text('Create your account'),
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        Divider(
-                          color: Colors.white.withValues(alpha: 0.12),
-                          height: 1,
-                        ),
-                        const SizedBox(height: 12),
-                        TextButton.icon(
-                          icon: const Icon(Icons.vpn_key_outlined, size: 17),
-                          label: const Text('Import existing PGP key'),
-                          onPressed: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const PgpKeysScreen(),
-                            ),
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.only(top: 6),
-                          child: Text(
-                            'Sign-in requires your private key to be on this device.',
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  color: scheme.onSurface.withValues(alpha: 0.40),
-                                ),
-                          ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
-                ), // ScaleTransition
-                ), // FadeTransition
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ErrorBox extends StatelessWidget {
+  final String message;
+  const _ErrorBox({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+        decoration: BoxDecoration(
+          color: scheme.error.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: scheme.error.withValues(alpha: 0.26),
+            width: 0.7,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.error_outline_rounded, color: scheme.error, size: 17),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                message,
+                style: TextStyle(color: scheme.error, fontSize: 13),
+              ),
+            ),
+          ],
         ),
       ),
     );

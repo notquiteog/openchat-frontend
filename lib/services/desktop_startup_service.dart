@@ -9,6 +9,16 @@ typedef DesktopTrayInitializer = Future<void> Function();
 class DesktopStartupService {
   static const trayStartupTimeout = Duration(seconds: 2);
 
+  /// Persists the [DesktopTrayService] for the lifetime of the process.
+  ///
+  /// The service registers itself as a [WindowListener] inside [init], and the
+  /// window_manager plugin holds a strong reference to it through its internal
+  /// listener list. However, to be explicit and defensive against any future
+  /// refactoring of window_manager, we also keep a static reference here so
+  /// Dart's GC can never collect the instance between app startup and the first
+  /// window event.
+  static DesktopTrayService? _instance;
+
   static bool get supported =>
       !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
 
@@ -17,10 +27,15 @@ class DesktopStartupService {
     Duration timeout = trayStartupTimeout,
   }) async {
     if (!supported) return;
-    await runTrayInitializerWithTimeout(
-      initializer ?? DesktopTrayService().init,
-      timeout,
-    );
+
+    if (initializer == null) {
+      // Create and persist the canonical singleton instance.
+      _instance = DesktopTrayService();
+      await runTrayInitializerWithTimeout(_instance!.init, timeout);
+    } else {
+      // Test path: caller supplies a custom initializer.
+      await runTrayInitializerWithTimeout(initializer, timeout);
+    }
   }
 
   @visibleForTesting

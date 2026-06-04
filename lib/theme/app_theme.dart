@@ -55,12 +55,16 @@ class AppTheme {
 
   static const Color _seed = Color(0xFF3D5AFE);
 
-  static ThemeData light({Color? seed}) =>
-      _build(Brightness.light, seed ?? _seed);
-  static ThemeData dark({Color? seed}) =>
-      _build(Brightness.dark, seed ?? _seed);
+  static ThemeData light({Color? seed, bool reduceTransparency = false}) =>
+      _build(Brightness.light, seed ?? _seed, reduceTransparency);
+  static ThemeData dark({Color? seed, bool reduceTransparency = false}) =>
+      _build(Brightness.dark, seed ?? _seed, reduceTransparency);
 
-  static ThemeData _build(Brightness brightness, Color seed) {
+  static ThemeData _build(
+    Brightness brightness,
+    Color seed,
+    bool reduceTransparency,
+  ) {
     final isDark = brightness == Brightness.dark;
 
     // Pure black / pure white base — maximum contrast beneath glass layers.
@@ -73,6 +77,12 @@ class AppTheme {
       surface: scaffoldBg,
       onSurface: isDark ? Colors.white : Colors.black,
     );
+
+    // When the user enables Reduce Transparency, opaque-ify glass-adjacent
+    // surfaces in the non-GlassContainer parts of the theme (app bars, cards,
+    // input fields). GlassContainer itself is handled by GlassAccessibilityScope.
+    double rt(double normal, double reduced) =>
+        reduceTransparency ? reduced : normal;
 
     final base = ThemeData(
       colorScheme: scheme,
@@ -98,7 +108,9 @@ class AppTheme {
 
       appBarTheme: AppBarTheme(
         // GlassAppBar paints its own surface; this is just the theming fallback.
-        backgroundColor: scheme.surface.withValues(alpha: isDark ? 0.20 : 0.28),
+        backgroundColor: scheme.surface.withValues(
+          alpha: isDark ? rt(0.20, 0.86) : rt(0.28, 0.90),
+        ),
         surfaceTintColor: Colors.transparent,
         foregroundColor: scheme.onSurface,
         elevation: 0,
@@ -145,7 +157,9 @@ class AppTheme {
       // Cards are glass-backed; remove any default elevation/tint.
       cardTheme: CardThemeData(
         elevation: 0,
-        color: scheme.surfaceContainerLow.withValues(alpha: isDark ? 0.24 : 0.32),
+        color: scheme.surfaceContainerLow.withValues(
+          alpha: isDark ? rt(0.24, 0.84) : rt(0.32, 0.90),
+        ),
         surfaceTintColor: Colors.transparent,
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         shape: RoundedRectangleBorder(
@@ -173,7 +187,7 @@ class AppTheme {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: scheme.surfaceContainerHighest.withValues(
-          alpha: isDark ? 0.16 : 0.20,
+          alpha: isDark ? rt(0.16, 0.76) : rt(0.20, 0.84),
         ),
         contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
         border: OutlineInputBorder(

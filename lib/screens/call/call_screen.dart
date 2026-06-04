@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../../config/api_config.dart';
 import '../../providers/call_provider.dart';
 import '../../services/call_service.dart';
+import '../../widgets/glass.dart';
 
 const _callEndColor = Color(0xFFFF453A);
 const _callAnswerColor = Color(0xFF30D158);
@@ -36,9 +37,9 @@ class _CallSurface extends StatelessWidget {
     required this.child,
     this.blur = 0,
     this.padding,
-    this.boxShadow,
-    this.tint,
-  }) : borderRadius = const BorderRadius.all(Radius.circular(999));
+  })  : borderRadius = const BorderRadius.all(Radius.circular(999)),
+        boxShadow = null,
+        tint = null;
 
   @override
   Widget build(BuildContext context) {
@@ -704,23 +705,17 @@ class _MinimizedCallOverlay extends StatelessWidget {
           child: GestureDetector(
             key: const Key('minimized-call-overlay'),
             onTap: () => cp.setCallMinimized(false),
-            child: _CallSurface.capsule(
-              blur: 50,
-              tint: scheme.surface,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.28),
-                  blurRadius: 24,
-                  spreadRadius: -4,
-                  offset: const Offset(0, 8),
-                ),
-              ],
+            child: GlassContainer(
+              shape: LiquidRoundedSuperellipse(borderRadius: 999),
+              allowElevation: true,
+              glowIntensity: 0.10,
+              padding: EdgeInsets.zero,
               child: SizedBox(
                 height: CallProvider.minimizedCallBarHeight,
                 width: double.infinity,
                 child: Row(
                   children: [
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 14),
                     // Green pulse dot — shows call is live
                     Container(
                       width: 8,
@@ -759,17 +754,21 @@ class _MinimizedCallOverlay extends StatelessWidget {
                     GestureDetector(
                       key: const Key('expand-call-button'),
                       onTap: () => cp.setCallMinimized(false),
-                      child: _CallSurface(
-                        blur: 36,
-                        borderRadius: BorderRadius.circular(18),
-                        child: const SizedBox(
-                          width: 32,
-                          height: 32,
-                          child: Icon(
-                            Icons.open_in_full_rounded,
-                            color: Colors.white70,
-                            size: 15,
+                      child: Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white.withValues(alpha: 0.14),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.22),
+                            width: 0.5,
                           ),
+                        ),
+                        child: const Icon(
+                          Icons.open_in_full_rounded,
+                          color: Colors.white70,
+                          size: 15,
                         ),
                       ),
                     ),
@@ -777,26 +776,25 @@ class _MinimizedCallOverlay extends StatelessWidget {
                     // End call button
                     GestureDetector(
                       onTap: cp.hangup,
-                      child: _CallSurface(
-                        blur: 36,
-                        borderRadius: BorderRadius.circular(18),
-                        tint: _callEndColor,
-                        boxShadow: [
-                          BoxShadow(
-                            color: _callEndColor.withValues(alpha: 0.40),
-                            blurRadius: 12,
-                            spreadRadius: -3,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                        child: const SizedBox(
-                          width: 32,
-                          height: 32,
-                          child: Icon(
-                            Icons.call_end_rounded,
-                            color: Colors.white,
-                            size: 16,
-                          ),
+                      child: Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: _callEndColor.withValues(alpha: 0.88),
+                          boxShadow: [
+                            BoxShadow(
+                              color: _callEndColor.withValues(alpha: 0.40),
+                              blurRadius: 12,
+                              spreadRadius: -3,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.call_end_rounded,
+                          color: Colors.white,
+                          size: 16,
                         ),
                       ),
                     ),

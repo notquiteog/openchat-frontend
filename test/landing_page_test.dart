@@ -34,12 +34,9 @@ void main() {
     expect(hero.height, greaterThan(0));
     expect(find.text('OpenChat'), findsOneWidget);
     expect(find.text('Secure · Open · Encrypted'), findsOneWidget);
-    expect(find.byType(Image), findsNothing);
-    expect(find.widgetWithText(FilledButton, 'Sign in'), findsOneWidget);
-    expect(
-      find.widgetWithText(FilledButton, 'Create your account'),
-      findsOneWidget,
-    );
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.text('Sign in'), findsWidgets);
+    expect(find.text('Create your account'), findsOneWidget);
   });
 
   testWidgets('register screen keeps the landing visual language', (
@@ -48,10 +45,10 @@ void main() {
     await tester.pumpWidget(_authHarness(const RegisterScreen()));
 
     expect(find.byType(AppBar), findsNothing);
-    expect(find.byKey(const Key('auth-landing-hero')), findsOneWidget);
+    expect(find.byKey(const Key('auth-register-hero')), findsOneWidget);
     expect(find.text('Create account'), findsWidgets);
     expect(find.text('Your keys stay on your device'), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'Create account'), findsOneWidget);
+    expect(find.text('Create account'), findsWidgets);
   });
 
   testWidgets('register advanced options list every supported key algorithm', (

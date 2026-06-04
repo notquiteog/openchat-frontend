@@ -2,20 +2,25 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:nativeapi/nativeapi.dart' as native;
+import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'notification_service.dart';
 
-class DesktopTrayService with WindowListener {
+/// Manages the system-tray icon and window-lifecycle interception on desktop.
+///
+/// Uses [tray_manager] (pub.dev/packages/tray_manager), which ships a proper
+/// Win32 Shell_NotifyIcon implementation for Windows, AppKit NSStatusItem for
+/// macOS, and AppIndicator/libayatana for Linux.
+///
+/// The [DesktopStartupService] stores the service instance in a static field
+/// so Dart's GC cannot collect it while the app is running.
+class DesktopTrayService with WindowListener, TrayListener {
+  static const _appName = 'OpenChat';
   static const _appIconAsset = 'assets/images/logo.png';
 
-  native.Image? _trayIconImage;
-  native.Menu? _contextMenu;
-  native.MenuItem? _showItem;
-  native.MenuItem? _hideItem;
-  native.MenuItem? _exitItem;
-  native.TrayIcon? _trayIcon;
+  bool _initialized = false;
+  bool _trayInitialized = false;
   bool _quitting = false;
   bool _hidingToTray = false;
 
@@ -23,64 +28,68 @@ class DesktopTrayService with WindowListener {
       !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
 
   Future<void> init() async {
-    if (!supported) return;
-    if (_trayIcon != null) return;
+    if (!supported || _initialized) return;
+    _initialized = true;
 
     await windowManager.ensureInitialized();
     windowManager.addListener(this);
+
+    // Always prevent close so we can intercept the × button.
     await windowManager.setPreventClose(true);
-    await windowManager.setTitle('OpenChat');
+    await windowManager.setTitle(_appName);
     NotificationService.setAppFocused(await windowManager.isFocused());
 
-    if (!native.TrayManager.instance.isSupported) {
-      await windowManager.setPreventClose(false);
-      windowManager.removeListener(this);
-      return;
-    }
-
-    final trayIcon = native.TrayIcon();
-    final contextMenu = native.Menu();
-    final showItem = native.MenuItem('Show OpenChat');
-    final hideItem = native.MenuItem('Hide to tray');
-    final exitItem = native.MenuItem('Exit OpenChat');
-
-    showItem.on<native.MenuItemClickedEvent>((_) {
-      unawaited(_showWindow());
-    });
-    hideItem.on<native.MenuItemClickedEvent>((_) {
-      unawaited(_hideToTray());
-    });
-    exitItem.on<native.MenuItemClickedEvent>((_) {
-      unawaited(_exitApp());
-    });
-
-    contextMenu.addItem(showItem);
-    contextMenu.addItem(hideItem);
-    contextMenu.addSeparator();
-    contextMenu.addItem(exitItem);
-
-    _trayIconImage = native.Image.fromAsset(_appIconAsset);
-    if (_trayIconImage != null) {
-      trayIcon.icon = _trayIconImage;
-    }
-    trayIcon.title = 'OpenChat';
-    trayIcon.tooltip = 'OpenChat';
-    trayIcon.contextMenu = contextMenu;
-    trayIcon.contextMenuTrigger = native.ContextMenuTrigger.rightClicked;
-    trayIcon.on<native.TrayIconClickedEvent>((_) {
-      unawaited(_showWindow());
-    });
-    trayIcon.on<native.TrayIconDoubleClickedEvent>((_) {
-      unawaited(_showWindow());
-    });
-    trayIcon.isVisible = true;
-
-    _contextMenu = contextMenu;
-    _showItem = showItem;
-    _hideItem = hideItem;
-    _exitItem = exitItem;
-    _trayIcon = trayIcon;
+    await _initTray();
   }
+
+  Future<void> _initTray() async {
+    try {
+      trayManager.addListener(this);
+      await trayManager.setIcon(_appIconAsset);
+      await trayManager.setToolTip(_appName);
+      // Two items only: Show brings the window back; Exit quits cleanly.
+      // "Hide to tray" is omitted — closing or minimising already hides.
+      await trayManager.setContextMenu(Menu(items: [
+        MenuItem(key: 'show', label: 'Show $_appName'),
+        MenuItem.separator(),
+        MenuItem(key: 'exit', label: 'Exit $_appName'),
+      ]));
+      _trayInitialized = true;
+    } catch (e, st) {
+      debugPrint(
+        'DesktopTrayService: tray init failed — $e\n$st\n'
+        'Close/minimize will fall back to taskbar minimize.',
+      );
+    }
+  }
+
+  // ── TrayListener ──────────────────────────────────────────────────────────
+
+  @override
+  void onTrayIconMouseDown() {
+    // On macOS the status-bar item click is handled by the OS: it already pops
+    // the context menu automatically.  Calling _showWindow() here would open
+    // the window *and* the menu at the same time, which is confusing.
+    // On Windows and Linux a left-click means "restore the window".
+    if (Platform.isMacOS) return;
+    unawaited(_showWindow());
+  }
+
+  @override
+  void onTrayIconRightMouseDown() =>
+      unawaited(trayManager.popUpContextMenu());
+
+  @override
+  void onTrayMenuItemClick(MenuItem menuItem) {
+    switch (menuItem.key) {
+      case 'show':
+        unawaited(_showWindow());
+      case 'exit':
+        unawaited(_exitApp());
+    }
+  }
+
+  // ── WindowListener ────────────────────────────────────────────────────────
 
   @override
   Future<void> onWindowClose() async {
@@ -94,18 +103,17 @@ class DesktopTrayService with WindowListener {
   }
 
   @override
-  void onWindowFocus() {
-    NotificationService.setAppFocused(true);
-  }
+  void onWindowFocus() => NotificationService.setAppFocused(true);
 
   @override
-  void onWindowBlur() {
-    NotificationService.setAppFocused(false);
-  }
+  void onWindowBlur() => NotificationService.setAppFocused(false);
 
   @override
   void onWindowMinimize() {
-    unawaited(_hideToTray());
+    if (_trayInitialized) {
+      unawaited(_hideToTray());
+    }
+    // When the tray icon is unavailable, let the OS handle minimize normally.
   }
 
   @override
@@ -113,6 +121,8 @@ class DesktopTrayService with WindowListener {
     unawaited(windowManager.setSkipTaskbar(false));
     NotificationService.setAppFocused(true);
   }
+
+  // ── Private helpers ───────────────────────────────────────────────────────
 
   Future<void> _showWindow() async {
     await windowManager.setSkipTaskbar(false);
@@ -123,6 +133,14 @@ class DesktopTrayService with WindowListener {
 
   Future<void> _hideToTray() async {
     if (_quitting || _hidingToTray) return;
+
+    if (!_trayInitialized) {
+      // Tray icon unavailable — minimize to taskbar so the user can restore.
+      await windowManager.minimize();
+      NotificationService.setAppFocused(false);
+      return;
+    }
+
     _hidingToTray = true;
     try {
       NotificationService.setAppFocused(false);
@@ -137,7 +155,8 @@ class DesktopTrayService with WindowListener {
     _quitting = true;
     NotificationService.setAppFocused(false);
     await windowManager.setPreventClose(false);
-    _disposeTray();
+    await _destroyTray();
+    windowManager.removeListener(this);
     await windowManager.destroy();
     exit(0);
   }
@@ -145,24 +164,13 @@ class DesktopTrayService with WindowListener {
   void dispose() {
     if (!supported) return;
     windowManager.removeListener(this);
-    _disposeTray();
+    unawaited(_destroyTray());
   }
 
-  void _disposeTray() {
-    _trayIcon?.dispose();
-    _trayIcon = null;
-
-    _showItem?.dispose();
-    _showItem = null;
-    _hideItem?.dispose();
-    _hideItem = null;
-    _exitItem?.dispose();
-    _exitItem = null;
-
-    _contextMenu?.dispose();
-    _contextMenu = null;
-
-    _trayIconImage?.dispose();
-    _trayIconImage = null;
+  Future<void> _destroyTray() async {
+    if (!_trayInitialized) return;
+    _trayInitialized = false;
+    trayManager.removeListener(this);
+    await trayManager.destroy();
   }
 }

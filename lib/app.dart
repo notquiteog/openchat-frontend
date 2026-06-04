@@ -14,6 +14,7 @@ import 'screens/auth/login_screen.dart';
 import 'screens/bots/bot_chats_screen.dart';
 import 'screens/call/call_screen.dart';
 import 'screens/channels/channel_screen.dart';
+import 'screens/chat/chat_screen.dart';
 import 'screens/home/conversations_screen.dart';
 import 'screens/settings/pgp_keys_screen.dart';
 import 'services/api_service.dart';
@@ -42,14 +43,16 @@ class OpenChatApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final seed = context.watch<SettingsProvider>().seedColor;
+    final settings = context.watch<SettingsProvider>();
+    final seed = settings.seedColor;
+    final reduceTransparency = settings.reduceTransparency;
     return MaterialApp(
       title: 'OpenChat',
       navigatorKey: navigatorKey,
       scaffoldMessengerKey: scaffoldMessengerKey,
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.light(seed: seed),
-      darkTheme: AppTheme.dark(seed: seed),
+      theme: AppTheme.light(seed: seed, reduceTransparency: reduceTransparency),
+      darkTheme: AppTheme.dark(seed: seed, reduceTransparency: reduceTransparency),
       themeMode: ThemeMode.system,
       home: const _AppRoot(),
       // Float call + live-location bars above every route so they persist while
@@ -65,6 +68,9 @@ class OpenChatApp extends StatelessWidget {
       //   3. _LocationBarOverlay — original MediaQuery → sits at very top.
       //   4. _LiveConnectionBanner — connection error, always topmost.
       builder: (context, child) {
+        final reduceTransparency = context.select<SettingsProvider, bool>(
+          (s) => s.reduceTransparency,
+        );
         final callExtra = context
             .select<CallProvider, double>((cp) => cp.minimizedContentTopInset);
         final locExtra = context
@@ -77,7 +83,9 @@ class OpenChatApp extends StatelessWidget {
                 padding: mq.padding.copyWith(top: mq.padding.top + extra),
               );
 
-        return Stack(
+        return GlassAccessibilityScope(
+          reduceTransparency: reduceTransparency,
+          child: Stack(
           children: [
             // Screens — pushed down past both bars.
             MediaQuery(
@@ -94,6 +102,7 @@ class OpenChatApp extends StatelessWidget {
             const _LocationBarOverlay(),
             const _LiveConnectionBanner(),
           ],
+          ),
         );
       },
     );
@@ -125,6 +134,18 @@ class _LocationBarOverlayState extends State<_LocationBarOverlay> {
     super.dispose();
   }
 
+  void _openConversation(BuildContext context, String conversationId) {
+    try {
+      final chat = context.read<ChatProvider>();
+      final conv = chat.conversations.firstWhere((c) => c.id == conversationId);
+      Navigator.of(context, rootNavigator: true).push(
+        MaterialPageRoute(builder: (_) => ChatScreen(conversation: conv)),
+      );
+    } catch (_) {
+      // Conversation may not be loaded yet; ignore.
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final chat = context.watch<ChatProvider>();
@@ -151,43 +172,107 @@ class _LocationBarOverlayState extends State<_LocationBarOverlay> {
         right: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
-          child: SizedBox(
-            height: ChatProvider.liveLocationBarHeight,
+          child: GestureDetector(
+            onTap: () => _openConversation(context, share.conversationId),
             child: GlassContainer(
-              shape: const LiquidOval(),
+              shape: LiquidRoundedSuperellipse(borderRadius: 999),
               allowElevation: true,
-              glowIntensity: 0.08,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const SizedBox(width: 4),
-                  Icon(Icons.near_me_rounded, size: 17, color: scheme.primary),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Text(
-                      'Sharing · $label',
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
+              glowIntensity: 0.10,
+              padding: EdgeInsets.zero,
+              child: SizedBox(
+                height: ChatProvider.liveLocationBarHeight,
+                width: double.infinity,
+                child: Row(
+                  children: [
+                    const SizedBox(width: 14),
+                    // Green live-location dot — mirrors call bar's green pulse dot.
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF34C759),
+                        shape: BoxShape.circle,
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 4),
-                  TextButton(
-                    style: TextButton.styleFrom(
-                      visualDensity: VisualDensity.compact,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      minimumSize: const Size(0, 30),
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Sharing with ${share.sharingWith}',
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: scheme.onSurface,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                            ),
+                          ),
+                          Text(
+                            'Live location · $label',
+                            style: TextStyle(
+                              color: scheme.onSurface.withValues(alpha: 0.55),
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    onPressed: () =>
-                        context.read<ChatProvider>().stopLiveLocation(
-                          share.messageId,
+                    // Open conversation button — mirrors expand button in call bar.
+                    GestureDetector(
+                      onTap: () =>
+                          _openConversation(context, share.conversationId),
+                      child: Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white.withValues(alpha: 0.14),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.22),
+                            width: 0.5,
+                          ),
                         ),
-                    child: const Text('Stop'),
-                  ),
-                ],
+                        child: const Icon(
+                          Icons.open_in_full_rounded,
+                          color: Colors.white70,
+                          size: 15,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    // Stop sharing button — mirrors end-call button in call bar.
+                    GestureDetector(
+                      onTap: () => context
+                          .read<ChatProvider>()
+                          .stopLiveLocation(share.messageId),
+                      child: Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: const Color(0xFFFF3B30).withValues(alpha: 0.88),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFFFF3B30)
+                                  .withValues(alpha: 0.38),
+                              blurRadius: 10,
+                              spreadRadius: -3,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.location_off_rounded,
+                          color: Colors.white,
+                          size: 16,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                ),
               ),
             ),
           ),
@@ -235,7 +320,7 @@ class _LiveConnectionBanner extends StatelessWidget {
                     padding: const EdgeInsets.only(top: 8),
                     child: Center(
                       child: GlassContainer(
-                        shape: const LiquidOval(),
+                        shape: LiquidRoundedSuperellipse(borderRadius: 999),
                         allowElevation: true,
                         glowIntensity: 0.14,
                         child: Padding(

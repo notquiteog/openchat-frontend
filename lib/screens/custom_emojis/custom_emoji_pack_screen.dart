@@ -1,6 +1,7 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:file_selector/file_selector.dart' as fs;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import '../../config/api_config.dart';
@@ -153,11 +154,9 @@ class _CustomEmojiPackScreenState extends State<CustomEmojiPackScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  FilledButton.icon(
+                  GlassButtonWidget.icon(
                     icon: const Icon(Icons.add),
                     label: const Text('Create a pack'),
-                    style: FilledButton.styleFrom(
-                        shape: const StadiumBorder()),
                     onPressed: _createPack,
                   ),
                 ],
@@ -341,38 +340,63 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
       text: picked.name.split('.').first.replaceAll('_', ' '),
     );
     final emojiCtrl = TextEditingController(text: '🙂');
+    String? emojiError;
 
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => GlassAlertDialog(
-        title: const Text('Add Custom Emoji'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameCtrl,
-              decoration: const InputDecoration(labelText: 'Name'),
-              maxLength: _customEmojiNameMax,
-              autofocus: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => GlassAlertDialog(
+          title: const Text('Add Custom Emoji'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(labelText: 'Name'),
+                maxLength: _customEmojiNameMax,
+                autofocus: true,
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: emojiCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Base emoji',
+                  helperText: 'One emoji only',
+                  errorText: emojiError,
+                ),
+                // Clamp input to a single grapheme cluster (handles ZWJ
+                // sequences, skin-tone modifiers, flags, etc. correctly).
+                inputFormatters: [const _SingleEmojiFormatter()],
+                onChanged: (_) {
+                  if (emojiError != null) {
+                    setDialogState(() => emojiError = null);
+                  }
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
             ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: emojiCtrl,
-              decoration: const InputDecoration(labelText: 'Base emoji'),
-              maxLength: 8,
+            FilledButton(
+              onPressed: () {
+                final text = emojiCtrl.text.trim();
+                if (text.isEmpty) {
+                  setDialogState(() => emojiError = 'Enter an emoji');
+                  return;
+                }
+                if (text.characters.length != 1) {
+                  setDialogState(() => emojiError = 'Use exactly one emoji');
+                  return;
+                }
+                Navigator.pop(ctx, true);
+              },
+              child: const Text('Upload'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Upload'),
-          ),
-        ],
       ),
     );
     if (confirmed != true || !mounted) return;
@@ -597,7 +621,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                               ),
                               if (isOwner) ...[
                                 const SizedBox(height: 8),
-                                FilledButton.icon(
+                                GlassButtonWidget.icon(
                                   icon: const Icon(Icons.add),
                                   label: const Text('Add custom emoji'),
                                   onPressed: _addCustomEmoji,
@@ -686,12 +710,38 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
               ],
             ),
       floatingActionButton: isOwner
-          ? FloatingActionButton.extended(
+          ? GlassButtonWidget.icon(
               onPressed: _addCustomEmoji,
               icon: const Icon(Icons.add_reaction_outlined),
               label: const Text('Add Custom Emoji'),
             )
           : null,
+    );
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Limits a [TextField] to exactly one Unicode grapheme cluster.
+///
+/// Grapheme clusters correctly handle complex emoji: skin-tone modifier
+/// sequences (👋🏽), ZWJ family sequences (👨‍👩‍👧), flag indicators (🇺🇸),
+/// and variation-selector forms (❤️) all count as a single character.
+class _SingleEmojiFormatter extends TextInputFormatter {
+  const _SingleEmojiFormatter();
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final chars = newValue.text.characters;
+    if (chars.length <= 1) return newValue;
+    // More than one grapheme cluster — keep only the first.
+    final first = chars.first;
+    return TextEditingValue(
+      text: first,
+      selection: TextSelection.collapsed(offset: first.length),
     );
   }
 }

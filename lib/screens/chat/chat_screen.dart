@@ -1440,7 +1440,9 @@ class _ChatScreenState extends State<ChatScreen> {
                           child: messages.isEmpty
                               ? Center(
                                   child: GlassContainer(
-                                    shape: const LiquidOval(),
+                                    shape: LiquidRoundedSuperellipse(
+                                      borderRadius: 999,
+                                    ),
                                     allowElevation: true,
                                     glowIntensity: 0.05,
                                     child: Padding(
@@ -1576,7 +1578,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                   child: GestureDetector(
                                     onTap: _scrollToBottom,
                                     child: GlassContainer(
-                                      shape: const LiquidOval(),
+                                      shape: LiquidRoundedSuperellipse(
+                                        borderRadius: 999,
+                                      ),
                                       allowElevation: true,
                                       glowIntensity: 0.08,
                                       child: Padding(
@@ -2183,21 +2187,22 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ),
                   const SizedBox(width: 4),
-                  IconButton(
-                    icon: const Icon(Icons.attach_file_outlined),
+                  GlassButtonWidget(
                     onPressed: _showAttachmentPicker,
+                    padding: const EdgeInsets.all(10),
+                    child: const Icon(Icons.attach_file_outlined, size: 22),
                   ),
+                  const SizedBox(width: 4),
                   Tooltip(
                     message: 'Hold for send options',
                     child: GestureDetector(
+                      onTap: _sendMessage,
                       onLongPress: _showSendOptions,
-                      child: FilledButton(
-                        onPressed: _sendMessage,
-                        style: FilledButton.styleFrom(
-                          shape: const CircleBorder(),
-                          padding: const EdgeInsets.all(12),
-                          minimumSize: Size.zero,
-                        ),
+                      child: GlassContainer(
+                        shape: const LiquidOval(),
+                        allowElevation: true,
+                        glowIntensity: 0.08,
+                        padding: const EdgeInsets.all(12),
                         child: Icon(
                           _scheduledFor != null
                               ? Icons.schedule_send_outlined
@@ -3373,7 +3378,7 @@ class _ReactionPopup extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GlassContainer(
-      shape: const LiquidOval(),
+      shape: LiquidRoundedSuperellipse(borderRadius: 999),
       allowElevation: true,
       glowIntensity: 0.08,
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
@@ -3444,7 +3449,7 @@ class _TypingIndicatorState extends State<_TypingIndicator>
       child: Row(
         children: [
           GlassContainer(
-            shape: const LiquidOval(),
+            shape: LiquidRoundedSuperellipse(borderRadius: 999),
             allowElevation: true,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             child: Row(

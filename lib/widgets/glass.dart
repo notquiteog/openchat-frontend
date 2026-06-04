@@ -25,11 +25,18 @@ export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
         LiquidGlassSettings,
         LiquidShape,
         LiquidOval,
-        LiquidRoundedSuperellipse;
+        LiquidRoundedSuperellipse,
+        GlassAccessibilityScope,
+        GlassAccessibilityData;
 
-/// Whether the platform/user has asked for reduced transparency.
+/// Whether the user or the platform has requested reduced transparency.
+///
+/// Checks (in priority order):
+///  1. An explicit [GlassAccessibilityScope] in the widget tree — this is how
+///     the app's in-app "Reduce transparency" setting propagates down.
+///  2. The system `MediaQuery.highContrastOf` flag (iOS/Android accessibility).
 bool glassReduceTransparency(BuildContext context) =>
-    MediaQuery.highContrastOf(context);
+    GlassAccessibilityData.of(context).reduceTransparency;
 
 // ── LiquidGlass ─────────────────────────────────────────────────────────────
 

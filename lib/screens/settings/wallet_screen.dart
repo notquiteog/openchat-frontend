@@ -331,27 +331,21 @@ class _WalletScreenState extends State<WalletScreen> {
                           const SizedBox(height: 14),
                           Row(
                             children: [
-                              OutlinedButton.icon(
+                              GlassButtonWidget.icon(
                                 onPressed: () => _createDeposit(provider),
                                 icon: const Icon(
                                   Icons.arrow_downward,
                                   size: 16,
                                 ),
                                 label: const Text('Deposit'),
-                                style: OutlinedButton.styleFrom(
-                                  shape: const StadiumBorder(),
-                                ),
                               ),
                               const SizedBox(width: 8),
-                              FilledButton.icon(
+                              GlassButtonWidget.icon(
                                 onPressed: _balanceFor(provider) > 0
                                     ? () => _withdraw(provider)
                                     : null,
                                 icon: const Icon(Icons.arrow_upward, size: 16),
                                 label: const Text('Withdraw'),
-                                style: FilledButton.styleFrom(
-                                  shape: const StadiumBorder(),
-                                ),
                               ),
                             ],
                           ),

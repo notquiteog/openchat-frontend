@@ -154,11 +154,9 @@ class _StickerPackScreenState extends State<StickerPackScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  FilledButton.icon(
+                  GlassButtonWidget.icon(
                     icon: const Icon(Icons.add),
                     label: const Text('Create a pack'),
-                    style: FilledButton.styleFrom(
-                        shape: const StadiumBorder()),
                     onPressed: _createPack,
                   ),
                 ],
@@ -631,7 +629,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                               ),
                               if (isOwner) ...[
                                 const SizedBox(height: 8),
-                                FilledButton.icon(
+                                GlassButtonWidget.icon(
                                   icon: const Icon(Icons.add),
                                   label: const Text('Add sticker'),
                                   onPressed: _addSticker,
@@ -722,7 +720,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
               ],
             ),
       floatingActionButton: isOwner && count < 50
-          ? FloatingActionButton.extended(
+          ? GlassButtonWidget.icon(
               onPressed: _addSticker,
               icon: const Icon(Icons.add_photo_alternate),
               label: const Text('Add Sticker'),

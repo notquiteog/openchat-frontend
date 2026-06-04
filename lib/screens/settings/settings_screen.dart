@@ -364,8 +364,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     Color(SettingsProvider.defaultSeed), // OpenChat blue (default)
     Color(0xFF6750A4), Color(0xFF7E57C2), Color(0xFFAB47BC),
     Color(0xFFEC407A), Color(0xFFEF5350), Color(0xFFFF7043),
-    Color(0xFFFFA726), Color(0xFF66BB6A), Color(0xFF26A69A),
-    Color(0xFF26C6DA), Color(0xFF42A5F5),
+    Color(0xFFFFA726), Color(0xFFFFCA28), Color(0xFF66BB6A),
+    Color(0xFF26A69A), Color(0xFF26C6DA), Color(0xFF42A5F5),
+    Color(0xFF546E7A), Color(0xFF37474F),
   ];
 
   Future<void> _pickAccentColor(
@@ -398,9 +399,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           : Colors.transparent,
                       width: 3,
                     ),
+                    boxShadow: settings.seedColorValue == c.toARGB32()
+                        ? [
+                            BoxShadow(
+                              color: c.withValues(alpha: 0.5),
+                              blurRadius: 10,
+                              spreadRadius: -2,
+                            ),
+                          ]
+                        : null,
                   ),
                 ),
               ),
+            // Custom color button
+            GestureDetector(
+              onTap: () async {
+                Navigator.pop(ctx);
+                await _pickCustomAccentColor(context, settings);
+              },
+              child: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: const SweepGradient(
+                    colors: [
+                      Color(0xFFFF0000), Color(0xFFFFFF00),
+                      Color(0xFF00FF00), Color(0xFF00FFFF),
+                      Color(0xFF0000FF), Color(0xFFFF00FF),
+                      Color(0xFFFF0000),
+                    ],
+                  ),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.4),
+                    width: 1.5,
+                  ),
+                ),
+                child: const Icon(
+                  Icons.colorize,
+                  size: 18,
+                  color: Colors.white,
+                ),
+              ),
+            ),
           ],
         ),
         actions: [
@@ -414,6 +455,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _pickCustomAccentColor(
+    BuildContext context,
+    SettingsProvider settings,
+  ) async {
+    final initial = settings.seedColor;
+    final picked = await showDialog<Color>(
+      context: context,
+      builder: (_) => _CustomAccentColorDialog(initial: initial),
+    );
+    if (picked != null) {
+      await settings.setSeedColor(picked);
+    }
   }
 
   Future<void> _changePassword() async {
@@ -1265,6 +1320,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: 'Off: bot chats appear in your Chats list',
                   value: settings.botsOwnTab,
                   onChanged: settings.setBotsOwnTab,
+                ),
+                _GlassDivider(),
+                _GlassSwitchTile(
+                  icon: Icons.water_drop_outlined,
+                  title: 'Reduce transparency',
+                  subtitle: 'Use more opaque surfaces throughout the app',
+                  value: settings.reduceTransparency,
+                  onChanged: settings.setReduceTransparency,
                   isLast: true,
                 ),
               ],
@@ -1633,6 +1696,221 @@ class _GlassSwitchTile extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ── Custom accent color HSV picker ───────────────────────────────────────────
+
+class _CustomAccentColorDialog extends StatefulWidget {
+  final Color initial;
+  const _CustomAccentColorDialog({required this.initial});
+
+  @override
+  State<_CustomAccentColorDialog> createState() =>
+      _CustomAccentColorDialogState();
+}
+
+class _CustomAccentColorDialogState extends State<_CustomAccentColorDialog> {
+  late double _hue;
+  late double _sat;
+  late double _val;
+
+  @override
+  void initState() {
+    super.initState();
+    final hsv = HSVColor.fromColor(widget.initial);
+    _hue = hsv.hue;
+    _sat = hsv.saturation;
+    _val = hsv.value;
+  }
+
+  Color get _current => HSVColor.fromAHSV(1, _hue, _sat, _val).toColor();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return AlertDialog(
+      title: const Text('Custom accent color'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 80),
+            width: double.infinity,
+            height: 52,
+            decoration: BoxDecoration(
+              color: _current,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: _current.withValues(alpha: 0.45),
+                  blurRadius: 14,
+                  spreadRadius: -2,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          _label(context, 'Hue'),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 14,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+              trackShape: _HueTrackShape(),
+            ),
+            child: Slider(
+              value: _hue,
+              min: 0,
+              max: 360,
+              onChanged: (v) => setState(() => _hue = v),
+            ),
+          ),
+          _label(context, 'Saturation'),
+          _gradientSlider(
+            value: _sat,
+            left: HSVColor.fromAHSV(1, _hue, 0, _val).toColor(),
+            right: HSVColor.fromAHSV(1, _hue, 1, _val).toColor(),
+            onChanged: (v) => setState(() => _sat = v),
+          ),
+          _label(context, 'Brightness'),
+          _gradientSlider(
+            value: _val,
+            left: Colors.black,
+            right: HSVColor.fromAHSV(1, _hue, _sat, 1).toColor(),
+            onChanged: (v) => setState(() => _val = v),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Icon(Icons.tag, size: 15, color: scheme.onSurface.withValues(alpha: 0.6)),
+              const SizedBox(width: 4),
+              Text(
+                _current.toARGB32().toRadixString(16).toUpperCase().padLeft(8, '0').substring(2),
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 1.2,
+                  color: scheme.onSurface.withValues(alpha: 0.8),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _current),
+          child: const Text('Apply'),
+        ),
+      ],
+    );
+  }
+
+  Widget _label(BuildContext context, String text) => Padding(
+        padding: const EdgeInsets.only(bottom: 2),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            text,
+            style: TextStyle(
+              fontSize: 11,
+              color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55),
+            ),
+          ),
+        ),
+      );
+
+  Widget _gradientSlider({
+    required double value,
+    required Color left,
+    required Color right,
+    required ValueChanged<double> onChanged,
+  }) {
+    return SliderTheme(
+      data: SliderTheme.of(context).copyWith(
+        trackHeight: 14,
+        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
+        overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+        trackShape: _GradientTrackShape(left: left, right: right),
+      ),
+      child: Slider(value: value, onChanged: onChanged),
+    );
+  }
+}
+
+class _HueTrackShape extends RoundedRectSliderTrackShape {
+  @override
+  void paint(
+    PaintingContext context,
+    Offset offset, {
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    required Animation<double> enableAnimation,
+    required TextDirection textDirection,
+    required Offset thumbCenter,
+    Offset? secondaryOffset,
+    bool isDiscrete = false,
+    bool isEnabled = false,
+    double additionalActiveTrackHeight = 2,
+  }) {
+    final Rect trackRect = getPreferredRect(
+      parentBox: parentBox,
+      offset: offset,
+      sliderTheme: sliderTheme,
+      isEnabled: isEnabled,
+      isDiscrete: isDiscrete,
+    );
+    context.canvas.drawRRect(
+      RRect.fromRectAndRadius(trackRect, const Radius.circular(7)),
+      Paint()
+        ..shader = const LinearGradient(colors: [
+          Color(0xFFFF0000), Color(0xFFFFFF00), Color(0xFF00FF00),
+          Color(0xFF00FFFF), Color(0xFF0000FF), Color(0xFFFF00FF),
+          Color(0xFFFF0000),
+        ]).createShader(trackRect),
+    );
+  }
+}
+
+class _GradientTrackShape extends RoundedRectSliderTrackShape {
+  final Color left;
+  final Color right;
+  const _GradientTrackShape({required this.left, required this.right});
+
+  @override
+  void paint(
+    PaintingContext context,
+    Offset offset, {
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    required Animation<double> enableAnimation,
+    required TextDirection textDirection,
+    required Offset thumbCenter,
+    Offset? secondaryOffset,
+    bool isDiscrete = false,
+    bool isEnabled = false,
+    double additionalActiveTrackHeight = 2,
+  }) {
+    final Rect trackRect = getPreferredRect(
+      parentBox: parentBox,
+      offset: offset,
+      sliderTheme: sliderTheme,
+      isEnabled: isEnabled,
+      isDiscrete: isDiscrete,
+    );
+    context.canvas.drawRRect(
+      RRect.fromRectAndRadius(trackRect, const Radius.circular(7)),
+      Paint()
+        ..shader = LinearGradient(
+          colors: [left, right],
+        ).createShader(trackRect),
     );
   }
 }

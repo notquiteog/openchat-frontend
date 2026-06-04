@@ -542,12 +542,12 @@ class _LocationBubble extends StatelessWidget {
                   const SizedBox(height: 8),
                   Align(
                     alignment: Alignment.centerLeft,
-                    child: FilledButton.tonalIcon(
-                      style: FilledButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
+                    child: GlassButtonWidget.icon(
                       onPressed: onCancelSharing,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
                       icon: const Icon(Icons.location_off_outlined, size: 16),
                       label: const Text('Stop sharing'),
                     ),
@@ -1287,8 +1287,12 @@ class _PaymentBubbleState extends State<_PaymentBubble> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (canPayWithWallet)
-                  FilledButton.icon(
+                  GlassButtonWidget.icon(
                     onPressed: isBusy ? null : _pay,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
                     icon: _paying
                         ? const SizedBox(
                             width: 14,
@@ -1299,8 +1303,12 @@ class _PaymentBubbleState extends State<_PaymentBubble> {
                     label: const Text('App wallet'),
                   ),
                 if (canPayWithWallet) const SizedBox(height: 8),
-                OutlinedButton.icon(
+                GlassButtonWidget.icon(
                   onPressed: isBusy ? null : _payExternal,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
                   icon: const Icon(Icons.qr_code_2, size: 16),
                   label: const Text('External'),
                 ),
@@ -2686,8 +2694,12 @@ class _StickerPackSheetState extends State<_StickerPackSheet> {
                     ],
                   ),
                 ),
-                FilledButton.icon(
+                GlassButtonWidget.icon(
                   onPressed: _adding ? null : _addToLibrary,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
                   icon: _adding
                       ? const SizedBox(
                           width: 16,

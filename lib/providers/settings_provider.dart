@@ -80,6 +80,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kPushEnabled = 'push_notifications_enabled';
   static const _kWsBgEnabled = 'ws_background_enabled';
   static const _kNotifSensitive = 'notification_sensitive_content';
+  static const _kReduceTransparency = 'reduce_transparency';
 
   /// OpenChat brand blue — the historical default seed.
   static const int defaultSeed = 0xFF3D5AFE;
@@ -94,12 +95,17 @@ class SettingsProvider extends ChangeNotifier {
   bool _pushEnabled = false;
   bool _wsBgEnabled = false;
   bool _notifSensitive = false;
+  bool _reduceTransparency = false;
 
   int get seedColorValue => _seedColor;
   Color get seedColor => Color(_seedColor);
   bool get channelsOwnTab => _channelsOwnTab;
   bool get botsOwnTab => _botsOwnTab;
   bool get isLoaded => _loaded;
+
+  /// When true the app replaces shader-backed glass with solid frosted panels
+  /// throughout, reducing visual complexity for users who prefer it.
+  bool get reduceTransparency => _reduceTransparency;
 
   /// Firebase/APNs push notifications. Off by default (opt-in, privacy warning shown on enable).
   bool get pushNotificationsEnabled => _pushEnabled;
@@ -128,6 +134,7 @@ class SettingsProvider extends ChangeNotifier {
       await _prefs!.setBool(_kWsBgEnabled, false);
     }
     _notifSensitive = _prefs!.getBool(_kNotifSensitive) ?? false;
+    _reduceTransparency = _prefs!.getBool(_kReduceTransparency) ?? false;
     _loaded = true;
     notifyListeners();
   }
@@ -180,6 +187,12 @@ class SettingsProvider extends ChangeNotifier {
     _notifSensitive = value;
     notifyListeners();
     await _prefs?.setBool(_kNotifSensitive, value);
+  }
+
+  Future<void> setReduceTransparency(bool value) async {
+    _reduceTransparency = value;
+    notifyListeners();
+    await _prefs?.setBool(_kReduceTransparency, value);
   }
 
   ChatStyle chatStyleFor(String convID) {

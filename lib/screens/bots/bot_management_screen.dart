@@ -162,11 +162,9 @@ class _BotManagementScreenState extends State<BotManagementScreen> {
                         ),
                       ),
                       const SizedBox(height: 16),
-                      FilledButton.icon(
+                      GlassButtonWidget.icon(
                         icon: const Icon(Icons.add),
                         label: const Text('Create a bot'),
-                        style: FilledButton.styleFrom(
-                            shape: const StadiumBorder()),
                         onPressed: _createBot,
                       ),
                     ],

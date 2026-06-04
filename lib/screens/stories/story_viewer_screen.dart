@@ -316,7 +316,7 @@ class _StoryHeader extends StatelessWidget {
             ),
             if (story.viewCount > 0)
               GlassContainer(
-                shape: const LiquidOval(),
+                shape: LiquidRoundedSuperellipse(borderRadius: 999),
                 allowElevation: true,
                 glowIntensity: 0.06,
                 child: Padding(
@@ -366,7 +366,7 @@ class _StoryFooter extends StatelessWidget {
       children: [
         if (story.caption.isNotEmpty)
           GlassContainer(
-            shape: const LiquidOval(),
+            shape: LiquidRoundedSuperellipse(borderRadius: 999),
             allowElevation: true,
             glowIntensity: 0.06,
             child: Padding(
@@ -383,7 +383,7 @@ class _StoryFooter extends StatelessWidget {
           ),
         const SizedBox(height: 10),
         GlassContainer(
-          shape: const LiquidOval(),
+          shape: LiquidRoundedSuperellipse(borderRadius: 999),
           allowElevation: true,
           glowIntensity: 0.06,
           child: Padding(

@@ -279,11 +279,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 20),
-              FilledButton.icon(
+              GlassButtonWidget.icon(
                 onPressed: () => _showSearch(context),
                 icon: const Icon(Icons.search_rounded, size: 18),
                 label: const Text('Find someone'),
-                style: FilledButton.styleFrom(shape: const StadiumBorder()),
               ),
             ],
           ),

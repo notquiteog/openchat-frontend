@@ -818,7 +818,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                       // Online status pill
                       const SizedBox(height: 8),
                       GlassContainer(
-                        shape: const LiquidOval(),
+                        shape: LiquidRoundedSuperellipse(borderRadius: 999),
                         allowElevation: true,
                         glowIntensity: 0.06,
                         child: Padding(
@@ -878,16 +878,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                       // Pay button
                       if (!_isOwnProfile) ...[
                         const SizedBox(height: 18),
-                        SizedBox(
-                          height: 44,
-                          child: FilledButton.icon(
-                            onPressed: _showPaymentSheet,
-                            icon: const Icon(Icons.payments_outlined, size: 18),
-                            label: const Text('Pay or request'),
-                            style: FilledButton.styleFrom(
-                              shape: const StadiumBorder(),
-                            ),
-                          ),
+                        GlassButtonWidget.icon(
+                          onPressed: _showPaymentSheet,
+                          icon: const Icon(Icons.payments_outlined, size: 18),
+                          label: const Text('Pay or request'),
                         ),
                       ],
                     ],
