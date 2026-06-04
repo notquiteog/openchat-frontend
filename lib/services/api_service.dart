@@ -147,7 +147,8 @@ class ApiService {
   }
 
   Future<User> getUserByFingerprint(String fingerprint) async {
-    final resp = await _get('/api/v1/users/fingerprint/$fingerprint');
+    final encoded = Uri.encodeComponent(fingerprint);
+    final resp = await _get('/api/v1/users/fingerprint/$encoded');
     return User.fromJson(resp['data'] as Map<String, dynamic>);
   }
 

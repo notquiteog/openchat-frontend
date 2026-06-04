@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -8,11 +7,74 @@ import 'package:provider/provider.dart';
 import '../../config/api_config.dart';
 import '../../providers/call_provider.dart';
 import '../../services/call_service.dart';
-import '../../widgets/glass.dart';
 
 const _callEndColor = Color(0xFFFF453A);
 const _callAnswerColor = Color(0xFF30D158);
 const _callDismissColor = Color(0xFF8E8E93);
+
+/// Call chrome intentionally avoids BackdropFilter/ImageFilter. WebRTC video
+/// surfaces and desktop compositors can glitch when blurred glass is stacked
+/// above them, producing white tiles and broken hit testing.
+class _CallSurface extends StatelessWidget {
+  final Widget child;
+  final double blur;
+  final BorderRadius borderRadius;
+  final EdgeInsetsGeometry? padding;
+  final List<BoxShadow>? boxShadow;
+  final Color? tint;
+
+  const _CallSurface({
+    required this.child,
+    this.blur = 0,
+    this.borderRadius = const BorderRadius.all(Radius.circular(28)),
+    this.padding,
+    this.boxShadow,
+    this.tint,
+  });
+
+  const _CallSurface.capsule({
+    required this.child,
+    this.blur = 0,
+    this.padding,
+    this.boxShadow,
+    this.tint,
+  }) : borderRadius = const BorderRadius.all(Radius.circular(999));
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final fill = tint == null
+        ? Colors.black.withValues(alpha: isDark ? 0.62 : 0.52)
+        : tint!.withValues(alpha: tint == Colors.white ? 0.88 : 0.92);
+    final shadowBlur = (blur * 0.45).clamp(18.0, 32.0).toDouble();
+    final shadows =
+        boxShadow ??
+        [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.30),
+            blurRadius: shadowBlur,
+            spreadRadius: -6,
+            offset: const Offset(0, 12),
+          ),
+        ];
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: fill,
+        borderRadius: borderRadius,
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.18),
+          width: 0.7,
+        ),
+        boxShadow: shadows,
+      ),
+      child: ClipRRect(
+        borderRadius: borderRadius,
+        child: Padding(padding: padding ?? EdgeInsets.zero, child: child),
+      ),
+    );
+  }
+}
 
 @visibleForTesting
 bool shouldUseCallVideoRenderersForTesting(CallSession? session) {
@@ -134,7 +196,7 @@ class _CallScreenState extends State<CallScreen> {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: LiquidGlass(
+          child: _CallSurface(
             blur: 56,
             borderRadius: const BorderRadius.all(Radius.circular(28)),
             padding: const EdgeInsets.fromLTRB(0, 20, 0, 8),
@@ -264,7 +326,7 @@ class _CallScreenState extends State<CallScreen> {
                     ),
                     const Spacer(),
                     // Status chip
-                    LiquidGlass.capsule(
+                    _CallSurface.capsule(
                       blur: 36,
                       padding: const EdgeInsets.symmetric(
                         horizontal: 14,
@@ -318,7 +380,7 @@ class _CallScreenState extends State<CallScreen> {
             child: SafeArea(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                child: LiquidGlass(
+                child: _CallSurface(
                   blur: 56,
                   borderRadius: const BorderRadius.all(Radius.circular(36)),
                   padding: const EdgeInsets.symmetric(
@@ -403,14 +465,11 @@ class _CallBackground extends StatelessWidget {
         // Avatar blurred behind everything (gives a "bokeh" call background)
         if (avatarUrl != null)
           Positioned.fill(
-            child: ImageFiltered(
-              imageFilter: ImageFilter.blur(sigmaX: 60, sigmaY: 60),
-              child: Opacity(
-                opacity: 0.22,
-                child: CachedNetworkImage(
-                  imageUrl: ApiConfig.resolveMedia(avatarUrl!),
-                  fit: BoxFit.cover,
-                ),
+            child: Opacity(
+              opacity: 0.14,
+              child: CachedNetworkImage(
+                imageUrl: ApiConfig.resolveMedia(avatarUrl!),
+                fit: BoxFit.cover,
               ),
             ),
           ),
@@ -508,7 +567,7 @@ class _CallIconButton extends StatelessWidget {
       message: tooltip,
       child: GestureDetector(
         onTap: onTap,
-        child: LiquidGlass(
+        child: _CallSurface(
           blur: 36,
           borderRadius: BorderRadius.circular(22),
           child: SizedBox(
@@ -542,7 +601,7 @@ class _ControlButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tint = active ? Colors.white : (color ?? Colors.white);
+    final tint = active ? Colors.white : color;
     final iconColor = active
         ? Colors.black87
         : color != null
@@ -556,7 +615,7 @@ class _ControlButton extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            LiquidGlass(
+            _CallSurface(
               blur: 40,
               borderRadius: BorderRadius.circular(30),
               tint: tint,
@@ -645,7 +704,7 @@ class _MinimizedCallOverlay extends StatelessWidget {
           child: GestureDetector(
             key: const Key('minimized-call-overlay'),
             onTap: () => cp.setCallMinimized(false),
-            child: LiquidGlass.capsule(
+            child: _CallSurface.capsule(
               blur: 50,
               tint: scheme.surface,
               boxShadow: [
@@ -700,7 +759,7 @@ class _MinimizedCallOverlay extends StatelessWidget {
                     GestureDetector(
                       key: const Key('expand-call-button'),
                       onTap: () => cp.setCallMinimized(false),
-                      child: LiquidGlass(
+                      child: _CallSurface(
                         blur: 36,
                         borderRadius: BorderRadius.circular(18),
                         child: const SizedBox(
@@ -718,7 +777,7 @@ class _MinimizedCallOverlay extends StatelessWidget {
                     // End call button
                     GestureDetector(
                       onTap: cp.hangup,
-                      child: LiquidGlass(
+                      child: _CallSurface(
                         blur: 36,
                         borderRadius: BorderRadius.circular(18),
                         tint: _callEndColor,
@@ -785,12 +844,8 @@ class IncomingCallModal extends StatelessWidget {
               username: incoming.remoteUsername ?? '',
             ),
           ),
-          // Glass overlay
           Positioned.fill(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-              child: Container(color: Colors.black.withValues(alpha: 0.20)),
-            ),
+            child: Container(color: Colors.black.withValues(alpha: 0.34)),
           ),
           SafeArea(
             child: Padding(
@@ -814,7 +869,7 @@ class IncomingCallModal extends StatelessWidget {
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 8),
-                  LiquidGlass.capsule(
+                  _CallSurface.capsule(
                     blur: 36,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 16,
@@ -947,7 +1002,7 @@ class _CallAction extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          LiquidGlass(
+          _CallSurface(
             blur: 44,
             borderRadius: BorderRadius.circular(38),
             tint: color,

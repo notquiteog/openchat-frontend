@@ -444,6 +444,7 @@ class CallService {
   }
 
   Future<List<CallAudioOutput>> getAudioOutputs() async {
+    final isMobile = _isMobilePlatform;
     if (!kIsWeb &&
         defaultTargetPlatform != TargetPlatform.android &&
         defaultTargetPlatform != TargetPlatform.iOS &&
@@ -456,29 +457,23 @@ class CallService {
       if (outputs.isNotEmpty) {
         final detected = outputs
             .where((d) => d.deviceId.isNotEmpty)
-            .map((d) {
-              final label = _labelForAudioOutput(d.label);
-              final deviceId =
-                  !kIsWeb &&
-                      (defaultTargetPlatform == TargetPlatform.android ||
-                          defaultTargetPlatform == TargetPlatform.iOS)
-                  ? _mobileAudioOutputId(label, d.deviceId)
-                  : d.deviceId;
-              return CallAudioOutput(deviceId: deviceId, label: label);
-            })
+            .map(
+              (d) => CallAudioOutput(
+                deviceId: isMobile
+                    ? _mobileAudioOutputId(d.deviceId, d.label)
+                    : d.deviceId,
+                label: _labelForAudioOutput(d.label),
+              ),
+            )
             .toList(growable: false);
-        if (!kIsWeb &&
-            (defaultTargetPlatform == TargetPlatform.android ||
-                defaultTargetPlatform == TargetPlatform.iOS)) {
+        if (isMobile) {
           return _mergeMobileAudioOutputs(detected);
         }
         return detected;
       }
     } catch (_) {}
 
-    if (!kIsWeb &&
-        (defaultTargetPlatform == TargetPlatform.android ||
-            defaultTargetPlatform == TargetPlatform.iOS)) {
+    if (isMobile) {
       return const [
         CallAudioOutput(deviceId: 'speaker', label: 'Speaker'),
         CallAudioOutput(deviceId: 'earpiece', label: 'Earpiece'),
@@ -489,9 +484,7 @@ class CallService {
 
   Future<void> selectAudioOutput(String deviceId) async {
     try {
-      if (!kIsWeb &&
-          (defaultTargetPlatform == TargetPlatform.android ||
-              defaultTargetPlatform == TargetPlatform.iOS)) {
+      if (_isMobilePlatform) {
         await _selectMobileAudioOutput(deviceId);
         return;
       }
@@ -505,6 +498,8 @@ class CallService {
     if (defaultTargetPlatform == TargetPlatform.android) {
       switch (deviceId) {
         case 'speaker':
+          await Helper.setSpeakerphoneOn(true);
+          return;
         case 'earpiece':
         case 'bluetooth':
         case 'wired-headset':
@@ -521,17 +516,17 @@ class CallService {
 
     switch (deviceId) {
       case 'speaker':
-        await Helper.selectAudioOutput('Speaker');
+        await Helper.setSpeakerphoneOn(true);
         return;
       case 'bluetooth':
         await Helper.setSpeakerphoneOnButPreferBluetooth();
         return;
       case 'earpiece':
       case 'wired-headset':
-        await Helper.selectAudioOutput(deviceId);
+        await Helper.setSpeakerphoneOn(false);
         return;
     }
-    await Helper.selectAudioOutput(deviceId);
+    await Helper.setSpeakerphoneOn(false);
   }
 
   String _labelForAudioOutput(String raw) {
@@ -556,8 +551,20 @@ class CallService {
     return label;
   }
 
-  String _mobileAudioOutputId(String label, String fallback) {
-    switch (label) {
+  bool get _isMobilePlatform =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
+
+  String _mobileAudioOutputId(String deviceId, String label) {
+    switch (deviceId) {
+      case 'speaker':
+      case 'earpiece':
+      case 'bluetooth':
+      case 'wired-headset':
+        return deviceId;
+    }
+    switch (_labelForAudioOutput(label)) {
       case 'Speaker':
         return 'speaker';
       case 'Earpiece':
@@ -567,7 +574,7 @@ class CallService {
       case 'Headset':
         return 'wired-headset';
       default:
-        return fallback;
+        return deviceId;
     }
   }
 
@@ -802,10 +809,7 @@ class CallService {
   }
 
   Future<void> _captureLocalMedia({required bool isVideo}) async {
-    final isMobile =
-        !kIsWeb &&
-        (defaultTargetPlatform == TargetPlatform.android ||
-            defaultTargetPlatform == TargetPlatform.iOS);
+    final isMobile = _isMobilePlatform;
 
     _localStream = await _createLocalMediaStream(
       isVideo: isVideo,

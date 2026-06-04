@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/services.dart';
+import 'package:pretty_qr_code/pretty_qr_code.dart';
 import 'package:provider/provider.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 import '../../config/api_config.dart';
 import '../../models/conversation.dart';
 import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
+import '../../utils/identity_qr.dart';
 import '../../widgets/glass.dart';
+import '../settings/identity_qr_scanner_screen.dart';
 
 /// Public profile screen — shown when tapping a user's name/avatar anywhere in the app.
 class UserProfileScreen extends StatefulWidget {
@@ -496,10 +498,15 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            QrImageView(
-              data: _user.keyFingerprint,
-              version: QrVersions.auto,
-              size: 220,
+            SizedBox(
+              width: 220,
+              height: 220,
+              child: PrettyQrView.data(
+                data: identityFingerprintQrPayload(_user.keyFingerprint),
+                decoration: const PrettyQrDecoration(
+                  quietZone: PrettyQrQuietZone.standard,
+                ),
+              ),
             ),
             const SizedBox(height: 12),
             GestureDetector(
@@ -526,7 +533,28 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             onPressed: () => Navigator.pop(context),
             child: const Text('Close'),
           ),
+          TextButton.icon(
+            onPressed: () {
+              Navigator.pop(context);
+              _scanFingerprintQR();
+            },
+            icon: const Icon(Icons.qr_code_scanner_rounded),
+            label: const Text('Scan to verify'),
+          ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _scanFingerprintQR() async {
+    if (_user.keyFingerprint.isEmpty) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => IdentityQrScannerScreen(
+          expectedFingerprint: _user.keyFingerprint,
+          expectedUsername: _user.username,
+        ),
       ),
     );
   }
@@ -909,7 +937,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                                     style: TextStyle(
                                       fontFamily: 'monospace',
                                       fontSize: 12,
-                                      color: cs.onSurface.withValues(alpha: 0.55),
+                                      color: cs.onSurface.withValues(
+                                        alpha: 0.55,
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -920,6 +950,13 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                                 icon: const Icon(Icons.qr_code_rounded),
                                 tooltip: 'Verify fingerprint',
                                 onPressed: _showFingerprintQR,
+                                color: cs.primary,
+                              ),
+                            if (_user.keyFingerprint.isNotEmpty)
+                              IconButton(
+                                icon: const Icon(Icons.qr_code_scanner_rounded),
+                                tooltip: 'Scan fingerprint QR',
+                                onPressed: _scanFingerprintQR,
                                 color: cs.primary,
                               ),
                           ],
@@ -964,8 +1001,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                             ),
                           );
                         }
-                        final convs =
-                            snapshot.data ?? const <Conversation>[];
+                        final convs = snapshot.data ?? const <Conversation>[];
                         if (convs.isEmpty) {
                           return Padding(
                             padding: const EdgeInsets.all(20),
@@ -989,9 +1025,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                         }
                         return Column(
                           children: [
-                            for (var i = 0;
-                                i < convs.take(8).length;
-                                i++) ...[
+                            for (var i = 0; i < convs.take(8).length; i++) ...[
                               if (i > 0)
                                 Divider(
                                   height: 1,
