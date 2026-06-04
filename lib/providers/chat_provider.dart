@@ -408,8 +408,33 @@ class ChatProvider extends ChangeNotifier {
     await _stopLiveLocationShare(messageID, shouldNotify: true);
   }
 
+  /// Height of the app-wide live-location bar (matches the call bar height).
+  static const double liveLocationBarHeight = 48.0;
+
   bool isLiveLocationActive(String messageID) =>
       _liveLocationShares.containsKey(messageID);
+
+  /// The first active live-location share across ALL conversations, or null.
+  /// Used by the app-wide overlay so the bar persists when navigating away.
+  LiveLocationShareStatus? get anyActiveLiveLocationShare {
+    for (final entry in _liveLocationShares.entries) {
+      if (entry.value.isActive) {
+        return LiveLocationShareStatus(
+          conversationId: entry.value.conversationId,
+          messageId: entry.key,
+          sharingWith: entry.value.sharingWith,
+          expiresAt: entry.value.expiresAt,
+        );
+      }
+    }
+    return null;
+  }
+
+  /// Extra pixels that every screen must reserve at the top when the
+  /// live-location bar is visible (mirrors [CallProvider.minimizedContentTopInset]).
+  double get liveLocationTopInset => anyActiveLiveLocationShare != null
+      ? liveLocationBarHeight + 8.0
+      : 0.0;
 
   LiveLocationShareStatus? activeLiveLocationShareForConversation(
     String conversationId,

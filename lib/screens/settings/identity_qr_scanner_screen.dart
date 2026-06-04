@@ -230,9 +230,10 @@ class _IdentityQrScannerScreenState extends State<IdentityQrScannerScreen> {
             right: 16,
             bottom: 24,
             child: SafeArea(
-              child: LiquidGlass(
-                blur: 40,
-                borderRadius: const BorderRadius.all(Radius.circular(24)),
+              child: GlassContainer(
+                shape: LiquidRoundedSuperellipse(borderRadius: 24),
+                allowElevation: true,
+                glowIntensity: 0.06,
                 padding: const EdgeInsets.all(16),
                 child: Text(
                   _message ??

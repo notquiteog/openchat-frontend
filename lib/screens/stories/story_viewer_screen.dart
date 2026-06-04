@@ -315,7 +315,10 @@ class _StoryHeader extends StatelessWidget {
               ),
             ),
             if (story.viewCount > 0)
-              LiquidGlass.capsule(
+              GlassContainer(
+                shape: const LiquidOval(),
+                allowElevation: true,
+                glowIntensity: 0.06,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 10,
@@ -362,7 +365,10 @@ class _StoryFooter extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (story.caption.isNotEmpty)
-          LiquidGlass.capsule(
+          GlassContainer(
+            shape: const LiquidOval(),
+            allowElevation: true,
+            glowIntensity: 0.06,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               child: Text(
@@ -376,7 +382,10 @@ class _StoryFooter extends StatelessWidget {
             ),
           ),
         const SizedBox(height: 10),
-        LiquidGlass.capsule(
+        GlassContainer(
+          shape: const LiquidOval(),
+          allowElevation: true,
+          glowIntensity: 0.06,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
             child: Row(

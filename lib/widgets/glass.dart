@@ -1,70 +1,42 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+
+// Re-export the package's key types so call-sites can import them from a
+// single place instead of importing both libraries.
+// Note: GlassAppBar, GlassCard, GlassScaffold are intentionally excluded here
+// because this file defines its own drop-in-compatible versions with extended
+// APIs (e.g. GlassAppBar supports a `bottom` TabBar slot; GlassScaffold keeps
+// the MediaQuery-inflation architecture for the call/location overlays).
+export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
+    show
+        GlassContainer,
+        GlassPanel,
+        GlassButton,
+        GlassSwitch,
+        GlassSlider,
+        GlassSheet,
+        GlassDialog,
+        GlassDialogAction,
+        GlassModalSheet,
+        GlassBottomBar,
+        GlassBottomBarTab,
+        GlassQuality,
+        LiquidGlassSettings,
+        LiquidShape,
+        LiquidOval,
+        LiquidRoundedSuperellipse;
 
 /// Whether the platform/user has asked for reduced transparency.
 bool glassReduceTransparency(BuildContext context) =>
     MediaQuery.highContrastOf(context);
 
-// ── Gradient border painter ─────────────────────────────────────────────────
-
-/// Paints the iOS 26-style prismatic specular rim: bright white at the top
-/// edge fading to a near-invisible accent at the bottom. The topmost arc
-/// acts as a "dew-drop" highlight that makes the surface look truly liquid.
-class _SpecularBorderPainter extends CustomPainter {
-  final BorderRadius borderRadius;
-  final double strokeWidth;
-  final bool isDark;
-
-  const _SpecularBorderPainter({
-    required this.borderRadius,
-    required this.strokeWidth,
-    required this.isDark,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final hw = strokeWidth / 2;
-    final rrect = RRect.fromRectAndCorners(
-      Rect.fromLTWH(
-        hw,
-        hw,
-        size.width - strokeWidth,
-        size.height - strokeWidth,
-      ),
-      topLeft: borderRadius.topLeft,
-      topRight: borderRadius.topRight,
-      bottomLeft: borderRadius.bottomLeft,
-      bottomRight: borderRadius.bottomRight,
-    );
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        stops: const [0.0, 0.15, 0.5, 1.0],
-        colors: [
-          Colors.white.withValues(alpha: isDark ? 0.48 : 0.58),
-          Colors.white.withValues(alpha: isDark ? 0.24 : 0.34),
-          Colors.white.withValues(alpha: isDark ? 0.07 : 0.11),
-          Colors.white.withValues(alpha: isDark ? 0.03 : 0.05),
-        ],
-      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
-    canvas.drawRRect(rrect, paint);
-  }
-
-  @override
-  bool shouldRepaint(_SpecularBorderPainter old) =>
-      old.isDark != isDark ||
-      old.strokeWidth != strokeWidth ||
-      old.borderRadius != borderRadius;
-}
-
 // ── LiquidGlass ─────────────────────────────────────────────────────────────
 
-/// The primary iOS 26 Liquid Glass surface: free-floating chrome that hovers
-/// above content with a heavy backdrop blur (30–36 sigma), a prismatic top-rim
-/// highlight, a soft inner glow and a generous ambient shadow.
+/// The primary iOS 26 Liquid Glass surface backed by the liquid_glass_widgets
+/// shader pipeline. On Impeller (iOS/Android) this renders real refraction
+/// distortion and chromatic aberration; on Skia/desktop it uses a lightweight
+/// fragment shader with BackdropFilter fallback.
 ///
 /// Use this for any chrome that *floats* over the canvas: nav pills, the
 /// message composer, floating action controls. Edge-to-edge chrome (app bars,
@@ -75,12 +47,7 @@ class LiquidGlass extends StatelessWidget {
   final BorderRadius borderRadius;
   final EdgeInsetsGeometry? padding;
   final List<BoxShadow>? boxShadow;
-
-  /// Fill tint. Defaults to the theme surface so the canvas colour bleeds
-  /// through. Pass a brand colour for accented controls (e.g. a send button).
   final Color? tint;
-
-  /// Specular stroke width (Apple spec ≈ 0.5–0.8 dp).
   final double stroke;
 
   const LiquidGlass({
@@ -107,12 +74,18 @@ class LiquidGlass extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final base = tint ?? scheme.surface;
+    final isCapsule = borderRadius == const BorderRadius.all(Radius.circular(999));
+    final cornerR = borderRadius.topLeft.x.clamp(0.0, 200.0);
 
-    final shadow =
-        boxShadow ??
+    // Map our borderRadius to the package's LiquidShape:
+    // – 999 → LiquidOval (true pill)
+    // – anything else → LiquidRoundedSuperellipse (Apple squircle)
+    final shape = isCapsule
+        ? const LiquidOval()
+        : LiquidRoundedSuperellipse(borderRadius: cornerR);
+
+    final shadow = boxShadow ??
         [
           BoxShadow(
             color: Colors.black.withValues(alpha: isDark ? 0.42 : 0.10),
@@ -120,114 +93,34 @@ class LiquidGlass extends StatelessWidget {
             spreadRadius: -6,
             offset: const Offset(0, 14),
           ),
-          BoxShadow(
-            color: base.withValues(alpha: isDark ? 0.04 : 0.05),
-            blurRadius: 8,
-            spreadRadius: 0,
-            offset: const Offset(0, 1),
-          ),
         ];
 
-    // Reduced transparency fallback: flat, opaque, legible.
-    if (glassReduceTransparency(context)) {
-      return DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: borderRadius,
-          boxShadow: shadow,
+    Widget container = GlassContainer(
+      shape: shape,
+      padding: padding,
+      allowElevation: true,
+      glowIntensity: isDark ? 0.06 : 0.04,
+      child: child,
+    );
+
+    // Apply tint overlay when explicitly set (e.g. primary-coloured FAB).
+    if (tint != null) {
+      container = ColorFiltered(
+        colorFilter: ColorFilter.mode(
+          tint!.withValues(alpha: isDark ? 0.16 : 0.10),
+          BlendMode.srcATop,
         ),
-        child: ClipRRect(
-          borderRadius: borderRadius,
-          child: Container(
-            padding: padding,
-            decoration: BoxDecoration(
-              color: base.withValues(alpha: isDark ? 0.97 : 0.99),
-              borderRadius: borderRadius,
-              border: Border.all(
-                color: scheme.outlineVariant.withValues(alpha: 0.5),
-                width: 0.5,
-              ),
-            ),
-            child: child,
-          ),
-        ),
+        child: container,
       );
     }
 
-    return RepaintBoundary(
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: borderRadius,
-          boxShadow: shadow,
-        ),
-        child: ClipRRect(
-          borderRadius: borderRadius,
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-            child: Stack(
-              children: [
-                // Main glass fill: highly transparent, gradient from
-                // slightly more opaque at top to very clear at bottom.
-                Container(
-                  padding: padding,
-                  decoration: BoxDecoration(
-                    borderRadius: borderRadius,
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      stops: const [0.0, 0.6, 1.0],
-                      colors: [
-                        base.withValues(alpha: isDark ? 0.50 : 0.56),
-                        base.withValues(alpha: isDark ? 0.40 : 0.48),
-                        base.withValues(alpha: isDark ? 0.32 : 0.40),
-                      ],
-                    ),
-                  ),
-                  child: child,
-                ),
-                // Inner top-highlight: a very narrow white glow at the top
-                // edge inside the glass — the "dew-drop" effect.
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  height: borderRadius.topLeft.x.clamp(0.0, 16.0),
-                  child: IgnorePointer(
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.vertical(
-                          top: borderRadius.topLeft,
-                        ),
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Colors.white.withValues(
-                              alpha: isDark ? 0.20 : 0.30,
-                            ),
-                            Colors.transparent,
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                // Prismatic specular rim — gradient stroke drawn on top.
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: CustomPaint(
-                      painter: _SpecularBorderPainter(
-                        borderRadius: borderRadius,
-                        strokeWidth: stroke,
-                        isDark: isDark,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        boxShadow: shadow,
+        borderRadius: isCapsule ? null : borderRadius,
+        shape: isCapsule ? BoxShape.rectangle : BoxShape.rectangle,
       ),
+      child: container,
     );
   }
 }
@@ -235,8 +128,9 @@ class LiquidGlass extends StatelessWidget {
 // ── GlassSurface ─────────────────────────────────────────────────────────────
 
 /// Edge-to-edge frosted glass for chrome that fills its slot: app bars,
-/// the incoming call overlay, the voice recorder tray. New *floating* chrome
-/// should use [LiquidGlass].
+/// the incoming call overlay, the voice recorder tray. Uses BackdropFilter
+/// since GlassContainer needs a bounded context that edge-to-edge surfaces
+/// can't always provide.
 class GlassSurface extends StatelessWidget {
   final Widget child;
   final double blur;
@@ -261,28 +155,22 @@ class GlassSurface extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     if (glassReduceTransparency(context)) {
-      return DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: borderRadius,
-          boxShadow: boxShadow,
-        ),
-        child: ClipRRect(
-          borderRadius: borderRadius,
-          child: Container(
-            padding: padding,
-            decoration: BoxDecoration(
-              color: scheme.surface.withValues(alpha: isDark ? 0.97 : 0.99),
-              borderRadius: borderRadius,
-              border: border,
-            ),
-            child: child,
+      return ClipRRect(
+        borderRadius: borderRadius,
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            color: scheme.surface.withValues(alpha: isDark ? 0.97 : 0.99),
+            borderRadius: borderRadius,
+            border: border,
+            boxShadow: boxShadow,
           ),
+          child: child,
         ),
       );
     }
 
-    final effectiveBorder =
-        border ??
+    final effectiveBorder = border ??
         Border.all(
           color: Colors.white.withValues(alpha: isDark ? 0.10 : 0.24),
           width: 0.5,
@@ -307,8 +195,8 @@ class GlassSurface extends StatelessWidget {
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    scheme.surface.withValues(alpha: isDark ? 0.48 : 0.54),
-                    scheme.surface.withValues(alpha: isDark ? 0.38 : 0.46),
+                    scheme.surface.withValues(alpha: isDark ? 0.20 : 0.26),
+                    scheme.surface.withValues(alpha: isDark ? 0.14 : 0.18),
                   ],
                 ),
               ),
@@ -368,9 +256,8 @@ class GlassAppBar extends StatelessWidget implements PreferredSizeWidget {
 
 // ── GlassCard ────────────────────────────────────────────────────────────────
 
-/// A raised, glass-backed panel for grouping content — used in settings,
-/// profile screens, and info panels. Lighter fill than [LiquidGlass] since
-/// it sits on a static background rather than live-scrolling content.
+/// A raised glass-backed panel for grouping content — uses the package's
+/// GlassContainer for real shader-backed glass rendering.
 class GlassCard extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry? padding;
@@ -392,22 +279,13 @@ class GlassCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final scheme = Theme.of(context).colorScheme;
-    final base = tint ?? scheme.surfaceContainerLow;
+    final r = borderRadius.topLeft.x.clamp(0.0, 200.0);
 
-    Widget glass = LiquidGlass(
-      blur: blur,
-      borderRadius: borderRadius,
+    Widget glass = GlassContainer(
+      shape: LiquidRoundedSuperellipse(borderRadius: r),
       padding: padding,
-      tint: base,
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: isDark ? 0.24 : 0.05),
-          blurRadius: 20,
-          spreadRadius: -4,
-          offset: const Offset(0, 8),
-        ),
-      ],
+      allowElevation: true,
+      glowIntensity: isDark ? 0.04 : 0.02,
       child: child,
     );
 
@@ -421,9 +299,8 @@ class GlassCard extends StatelessWidget {
 // ── GlassAlertDialog ─────────────────────────────────────────────────────────
 
 /// iOS 26 glass alert dialog — drop-in replacement for [AlertDialog].
-///
-/// Renders as a transparent [Dialog] backed by [LiquidGlass] so the
-/// backdrop blur punches through the modal barrier for a true frosted effect.
+/// Renders as a transparent [Dialog] backed by [GlassContainer] so the
+/// shader pipeline renders true refraction through the modal barrier.
 class GlassAlertDialog extends StatelessWidget {
   final Widget? icon;
   final Widget? title;
@@ -457,9 +334,10 @@ class GlassAlertDialog extends StatelessWidget {
       backgroundColor: Colors.transparent,
       elevation: 0,
       insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
-      child: LiquidGlass(
-        blur: 56,
-        borderRadius: const BorderRadius.all(Radius.circular(28)),
+      child: GlassContainer(
+        shape: const LiquidRoundedSuperellipse(borderRadius: 28),
+        allowElevation: true,
+        glowIntensity: 0.05,
         padding: EdgeInsets.zero,
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -475,8 +353,7 @@ class GlassAlertDialog extends StatelessWidget {
               ),
             if (title != null)
               Padding(
-                padding:
-                    titlePadding ??
+                padding: titlePadding ??
                     EdgeInsets.fromLTRB(24, icon != null ? 12 : 24, 24, 0),
                 child: DefaultTextStyle(
                   style: textTheme.headlineSmall!.copyWith(
@@ -488,8 +365,8 @@ class GlassAlertDialog extends StatelessWidget {
               ),
             if (content != null)
               Padding(
-                padding:
-                    contentPadding ?? const EdgeInsets.fromLTRB(24, 16, 24, 24),
+                padding: contentPadding ??
+                    const EdgeInsets.fromLTRB(24, 16, 24, 24),
                 child: DefaultTextStyle(
                   style: textTheme.bodyMedium!.copyWith(
                     color: scheme.onSurface.withValues(alpha: 0.80),
@@ -504,8 +381,7 @@ class GlassAlertDialog extends StatelessWidget {
                 color: scheme.outlineVariant.withValues(alpha: 0.40),
               ),
               Padding(
-                padding:
-                    actionsPadding ??
+                padding: actionsPadding ??
                     const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                 child: Row(
                   mainAxisAlignment: actionsAlignment,
@@ -523,9 +399,6 @@ class GlassAlertDialog extends StatelessWidget {
 // ── GlassSimpleDialog ─────────────────────────────────────────────────────────
 
 /// iOS 26 glass simple dialog — drop-in replacement for [SimpleDialog].
-///
-/// Uses [LiquidGlass] as its container so the backdrop blur is applied through
-/// the modal barrier, giving a true frosted-glass appearance.
 class GlassSimpleDialog extends StatelessWidget {
   final Widget? title;
   final List<Widget>? children;
@@ -549,9 +422,10 @@ class GlassSimpleDialog extends StatelessWidget {
       backgroundColor: Colors.transparent,
       elevation: 0,
       insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
-      child: LiquidGlass(
-        blur: 56,
-        borderRadius: const BorderRadius.all(Radius.circular(28)),
+      child: GlassContainer(
+        shape: const LiquidRoundedSuperellipse(borderRadius: 28),
+        allowElevation: true,
+        glowIntensity: 0.05,
         padding: EdgeInsets.zero,
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -618,7 +492,6 @@ class LiquidMeshBackground extends StatelessWidget {
 
     return Stack(
       children: [
-        // Base gradient
         Positioned.fill(
           child: DecoratedBox(
             decoration: BoxDecoration(
@@ -658,9 +531,8 @@ class LiquidMeshBackground extends StatelessWidget {
               shape: BoxShape.circle,
               gradient: RadialGradient(
                 colors: [
-                  const Color(
-                    0xFF00B4D8,
-                  ).withValues(alpha: isDark ? 0.22 : 0.10),
+                  const Color(0xFF00B4D8)
+                      .withValues(alpha: isDark ? 0.22 : 0.10),
                   Colors.transparent,
                 ],
               ),
@@ -677,9 +549,8 @@ class LiquidMeshBackground extends StatelessWidget {
               shape: BoxShape.circle,
               gradient: RadialGradient(
                 colors: [
-                  const Color(
-                    0xFF7B2FFF,
-                  ).withValues(alpha: isDark ? 0.16 : 0.08),
+                  const Color(0xFF7B2FFF)
+                      .withValues(alpha: isDark ? 0.16 : 0.08),
                   Colors.transparent,
                 ],
               ),
@@ -691,3 +562,86 @@ class LiquidMeshBackground extends StatelessWidget {
     );
   }
 }
+
+// ── GlassButtonWidget ─────────────────────────────────────────────────────────
+
+/// iOS 26 glass capsule button with physics-driven jelly animations.
+///
+/// Wraps the package's [GlassButton.custom] so callers get real Impeller
+/// shader-backed glass + squish/stretch on tap, while keeping the same
+/// constructor API as the old BackdropFilter-based button.
+class GlassButtonWidget extends StatelessWidget {
+  final VoidCallback? onPressed;
+  final Widget child;
+  final Color? color;
+  final Color? foregroundColor;
+  final EdgeInsetsGeometry padding;
+  final double blur;
+
+  const GlassButtonWidget({
+    super.key,
+    required this.onPressed,
+    required this.child,
+    this.color,
+    this.foregroundColor,
+    this.padding = const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+    this.blur = 24,
+  });
+
+  factory GlassButtonWidget.icon({
+    Key? key,
+    required VoidCallback? onPressed,
+    required Widget icon,
+    required Widget label,
+    Color? color,
+    Color? foregroundColor,
+    EdgeInsetsGeometry padding =
+        const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+    double blur = 24,
+  }) {
+    return GlassButtonWidget(
+      key: key,
+      onPressed: onPressed,
+      color: color,
+      foregroundColor: foregroundColor,
+      padding: padding,
+      blur: blur,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [icon, const SizedBox(width: 8), label],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final fg = foregroundColor ??
+        (ThemeData.estimateBrightnessForColor(color ?? scheme.primary) ==
+                Brightness.dark
+            ? Colors.white
+            : Colors.black87);
+
+    return GlassButton.custom(
+      onTap: onPressed ?? () {},
+      child: Padding(
+        padding: padding,
+        child: DefaultTextStyle(
+          style: TextStyle(
+            color: fg,
+            fontWeight: FontWeight.w700,
+            fontSize: 15,
+            letterSpacing: -0.2,
+          ),
+          child: IconTheme(
+            data: IconThemeData(color: fg, size: 18),
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Keep old name as alias for backwards compat
+typedef OldGlassButton = GlassButtonWidget;

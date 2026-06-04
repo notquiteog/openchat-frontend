@@ -566,9 +566,10 @@ class _ProviderPickerSheet extends StatelessWidget {
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-        child: LiquidGlass(
-          blur: 56,
-          borderRadius: const BorderRadius.all(Radius.circular(28)),
+        child: GlassContainer(
+          shape: LiquidRoundedSuperellipse(borderRadius: 28),
+          allowElevation: true,
+          glowIntensity: 0.06,
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
           child: Column(
             mainAxisSize: MainAxisSize.min,

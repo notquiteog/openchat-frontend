@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
+    show GlassButton, GlassModalSheet, SheetState;
 import '../../models/conversation.dart';
 import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
@@ -96,22 +98,34 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                     SizedBox(height: 360, child: _buildEmpty(context))
                   else
                     for (var index = 0; index < conversations.length; index++)
-                      _ConversationTile(
-                        conversation: conversations[index],
-                        currentUserID: currentUserID,
-                        onTap: () =>
-                            _openConversation(context, conversations[index]),
-                        onLongPress: () =>
-                            _confirmDelete(context, conversations[index]),
+                      _AnimatedConversationTile(
+                        key: ValueKey(conversations[index].id),
+                        index: index,
+                        child: _ConversationTile(
+                          conversation: conversations[index],
+                          currentUserID: currentUserID,
+                          onTap: () =>
+                              _openConversation(context, conversations[index]),
+                          onLongPress: () =>
+                              _confirmDelete(context, conversations[index]),
+                        ),
                       ),
                 ],
               ),
             ),
       floatingActionButton: Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.paddingOf(context).bottom),
-        child: _GlassFab(
-          onPressed: () => _showNewConversation(context),
-          icon: Icons.edit_outlined,
+        child: GlassButton(
+          icon: const Icon(Icons.edit_outlined, color: Colors.white, size: 24),
+          label: '',
+          onTap: () => _showNewConversation(context),
+          width: 56,
+          height: 56,
+          iconColor: Colors.white,
+          glowColor: Theme.of(context).colorScheme.primary,
+          glowRadius: 1.2,
+          interactionScale: 1.08,
+          stretch: 0.6,
         ),
       ),
     );
@@ -308,65 +322,59 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   Future<void> _showNewConversation(BuildContext context) async {
-    showModalBottomSheet(
+    await GlassModalSheet.show(
       context: context,
-      backgroundColor: Colors.transparent,
+      initialState: SheetState.half,
+      halfSize: 0.38,
+      enableInteractionGlow: true,
       builder: (ctx) => SafeArea(
         top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: LiquidGlass(
-            blur: 56,
-            borderRadius: const BorderRadius.all(Radius.circular(28)),
-            padding: EdgeInsets.zero,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 8),
-                _SheetTile(
-                  icon: Icons.person_outline_rounded,
-                  label: 'New Direct Message',
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _showSearch(context);
-                  },
-                ),
-                _SheetTile(
-                  icon: Icons.bookmark_border_rounded,
-                  label: 'Saved Messages',
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    await _openSavedMessages(context);
-                  },
-                ),
-                _SheetTile(
-                  icon: Icons.group_outlined,
-                  label: 'New Group',
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _showCreateGroup(context);
-                  },
-                ),
-                _SheetTile(
-                  icon: Icons.campaign_outlined,
-                  label: 'New Channel',
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    final channel = await showCreateChannelDialog(context);
-                    if (channel != null && context.mounted) {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => ChannelFeedScreen(channel: channel),
-                        ),
-                      );
-                    }
-                  },
-                ),
-                const SizedBox(height: 8),
-              ],
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            _SheetTile(
+              icon: Icons.person_outline_rounded,
+              label: 'New Direct Message',
+              onTap: () {
+                Navigator.pop(ctx);
+                _showSearch(context);
+              },
             ),
-          ),
+            _SheetTile(
+              icon: Icons.bookmark_border_rounded,
+              label: 'Saved Messages',
+              onTap: () async {
+                Navigator.pop(ctx);
+                await _openSavedMessages(context);
+              },
+            ),
+            _SheetTile(
+              icon: Icons.group_outlined,
+              label: 'New Group',
+              onTap: () {
+                Navigator.pop(ctx);
+                _showCreateGroup(context);
+              },
+            ),
+            _SheetTile(
+              icon: Icons.campaign_outlined,
+              label: 'New Channel',
+              onTap: () async {
+                Navigator.pop(ctx);
+                final channel = await showCreateChannelDialog(context);
+                if (channel != null && context.mounted) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ChannelFeedScreen(channel: channel),
+                    ),
+                  );
+                }
+              },
+            ),
+            const SizedBox(height: 16),
+          ],
         ),
       ),
     );
@@ -426,39 +434,60 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 }
 
-// ── Glass FAB ──────────────────────────────────────────────────────────────────
+// ── Animated conversation tile ────────────────────────────────────────────────
 
-class _GlassFab extends StatelessWidget {
-  final VoidCallback onPressed;
-  final IconData icon;
+/// Staggered slide-up + fade-in entrance for each conversation row.
+/// Tiles cascade in with a 40ms delay per index so the list appears to
+/// materialise from top to bottom rather than popping in all at once.
+class _AnimatedConversationTile extends StatefulWidget {
+  final Widget child;
+  final int index;
 
-  const _GlassFab({required this.onPressed, required this.icon});
+  const _AnimatedConversationTile({
+    super.key,
+    required this.child,
+    required this.index,
+  });
 
   @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return GestureDetector(
-      onTap: onPressed,
-      child: LiquidGlass(
-        blur: 50,
-        borderRadius: const BorderRadius.all(Radius.circular(24)),
-        tint: scheme.primary,
-        boxShadow: [
-          BoxShadow(
-            color: scheme.primary.withValues(alpha: 0.40),
-            blurRadius: 22,
-            spreadRadius: -4,
-            offset: const Offset(0, 10),
-          ),
-        ],
-        child: SizedBox(
-          width: 56,
-          height: 56,
-          child: Icon(icon, color: Colors.white, size: 24),
-        ),
-      ),
-    );
+  State<_AnimatedConversationTile> createState() =>
+      _AnimatedConversationTileState();
+}
+
+class _AnimatedConversationTileState extends State<_AnimatedConversationTile>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 420),
+  );
+  late final Animation<double> _fade =
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic);
+  late final Animation<Offset> _slide = Tween<Offset>(
+    begin: const Offset(0, 0.18),
+    end: Offset.zero,
+  ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+
+  @override
+  void initState() {
+    super.initState();
+    // Cascade delay: max 8 tiles stagger so the list doesn't take too long.
+    final delay = Duration(milliseconds: 40 * widget.index.clamp(0, 8));
+    Future.delayed(delay, () {
+      if (mounted) _ctrl.forward();
+    });
   }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => FadeTransition(
+        opacity: _fade,
+        child: SlideTransition(position: _slide, child: widget.child),
+      );
 }
 
 // ── Conversation Tile ─────────────────────────────────────────────────────────
@@ -497,13 +526,17 @@ class _ConversationTile extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           child: Row(
             children: [
-              // Avatar with optional unread ring
-              _ConvAvatar(
-                avatarUrl: avatar,
-                name: name,
-                isGroup: conversation.isGroup,
-                isChannel: conversation.isChannel,
-                hasUnread: hasUnread,
+              // Hero wraps the avatar so it morphs smoothly into the chat
+              // header avatar when the conversation is opened.
+              Hero(
+                tag: 'avatar_${conversation.id}',
+                child: _ConvAvatar(
+                  avatarUrl: avatar,
+                  name: name,
+                  isGroup: conversation.isGroup,
+                  isChannel: conversation.isChannel,
+                  hasUnread: hasUnread,
+                ),
               ),
               const SizedBox(width: 14),
               // Content

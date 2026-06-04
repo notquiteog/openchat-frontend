@@ -1,5 +1,51 @@
 import 'package:flutter/material.dart';
 
+// ── iOS 26 glass page transition ─────────────────────────────────────────────
+
+/// Custom [PageTransitionsBuilder] that produces the iOS 26 depth-of-glass
+/// transition: the entering page slides in from the right edge with a fade
+/// while the exiting page fades and very slightly scales down, creating a
+/// perceptual depth-of-field through the glass surface layers.
+class _GlassPageTransitionsBuilder extends PageTransitionsBuilder {
+  const _GlassPageTransitionsBuilder();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    final curved = CurvedAnimation(
+      parent: animation,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    final secondaryCurved = CurvedAnimation(
+      parent: secondaryAnimation,
+      curve: Curves.easeInCubic,
+    );
+    return FadeTransition(
+      opacity: Tween<double>(begin: 0.88, end: 1.0).animate(secondaryCurved)
+          ..drive(Tween<double>(begin: 1.0, end: 0.88)),
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0.05, 0),
+          end: Offset.zero,
+        ).animate(curved),
+        child: FadeTransition(
+          opacity: CurvedAnimation(
+            parent: animation,
+            curve: const Interval(0.0, 0.6, curve: Curves.easeOut),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
 /// Central Material 3 theme for OpenChat. Both light and dark variants are
 /// generated from a single brand seed, then refined for iOS 26 Liquid Glass:
 /// softer backgrounds, ultra-rounded surfaces, specular-rim chrome and
@@ -15,17 +61,18 @@ class AppTheme {
       _build(Brightness.dark, seed ?? _seed);
 
   static ThemeData _build(Brightness brightness, Color seed) {
+    final isDark = brightness == Brightness.dark;
+
+    // Pure black / pure white base — maximum contrast beneath glass layers.
+    final scaffoldBg = isDark ? Colors.black : Colors.white;
+
     final scheme = ColorScheme.fromSeed(
       seedColor: seed,
       brightness: brightness,
+      // Anchor surface to the scaffold colour so glass tints read cleanly.
+      surface: scaffoldBg,
+      onSurface: isDark ? Colors.white : Colors.black,
     );
-
-    // Scaffold surfaces sit behind glass panes, so they should be richer and
-    // deeper than a plain flat colour. We use a very dark navy (dark) / pure
-    // near-white (light) so the glass tints read clearly against them.
-    final scaffoldBg = brightness == Brightness.dark
-        ? const Color(0xFF070E1B)
-        : const Color(0xFFF5F7FF);
 
     final base = ThemeData(
       colorScheme: scheme,
@@ -33,16 +80,25 @@ class AppTheme {
       scaffoldBackgroundColor: scaffoldBg,
       splashFactory: InkSparkle.splashFactory,
       visualDensity: VisualDensity.standard,
+      // Apply the depth-of-glass transition on every platform.
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: {
+          TargetPlatform.iOS: _GlassPageTransitionsBuilder(),
+          TargetPlatform.android: _GlassPageTransitionsBuilder(),
+          TargetPlatform.macOS: _GlassPageTransitionsBuilder(),
+          TargetPlatform.windows: _GlassPageTransitionsBuilder(),
+          TargetPlatform.linux: _GlassPageTransitionsBuilder(),
+          TargetPlatform.fuchsia: _GlassPageTransitionsBuilder(),
+        },
+      ),
     );
-
-    final isDark = brightness == Brightness.dark;
 
     return base.copyWith(
       textTheme: _textTheme(base.textTheme),
 
       appBarTheme: AppBarTheme(
         // GlassAppBar paints its own surface; this is just the theming fallback.
-        backgroundColor: scheme.surface.withValues(alpha: isDark ? 0.48 : 0.62),
+        backgroundColor: scheme.surface.withValues(alpha: isDark ? 0.20 : 0.28),
         surfaceTintColor: Colors.transparent,
         foregroundColor: scheme.onSurface,
         elevation: 0,
@@ -89,7 +145,7 @@ class AppTheme {
       // Cards are glass-backed; remove any default elevation/tint.
       cardTheme: CardThemeData(
         elevation: 0,
-        color: scheme.surfaceContainerLow.withValues(alpha: isDark ? 0.55 : 0.72),
+        color: scheme.surfaceContainerLow.withValues(alpha: isDark ? 0.24 : 0.32),
         surfaceTintColor: Colors.transparent,
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         shape: RoundedRectangleBorder(
@@ -117,7 +173,7 @@ class AppTheme {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: scheme.surfaceContainerHighest.withValues(
-          alpha: isDark ? 0.32 : 0.42,
+          alpha: isDark ? 0.16 : 0.20,
         ),
         contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
         border: OutlineInputBorder(
@@ -144,35 +200,87 @@ class AppTheme {
         ),
       ),
 
+      // ── Buttons — iOS 26 Liquid Glass ────────────────────────────────────
+      // All buttons use a stadium (full-pill) shape. FilledButton gains a thin
+      // white specular rim; TextButton becomes a ghost capsule; OutlinedButton
+      // gets a refined glass-quality border; FAB picks up a specular ring.
+
       filledButtonTheme: FilledButtonThemeData(
-        style: FilledButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 15),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+        style: ButtonStyle(
+          padding: WidgetStateProperty.all(
+            const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
           ),
-          textStyle: const TextStyle(
-            fontWeight: FontWeight.w700,
-            fontSize: 15,
-            letterSpacing: -0.1,
+          shape: WidgetStateProperty.all(const StadiumBorder()),
+          textStyle: WidgetStateProperty.all(
+            const TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 15,
+              letterSpacing: -0.2,
+            ),
           ),
+          elevation: WidgetStateProperty.all(0),
+          // Specular rim — white highlight that gives the glass-pill quality.
+          side: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.disabled)) return BorderSide.none;
+            return BorderSide(
+              color: Colors.white.withValues(
+                alpha: isDark ? 0.22 : 0.38,
+              ),
+              width: 0.5,
+            );
+          }),
+          overlayColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.pressed)) {
+              return Colors.white.withValues(alpha: 0.14);
+            }
+            if (states.contains(WidgetState.hovered)) {
+              return Colors.white.withValues(alpha: 0.08);
+            }
+            return null;
+          }),
         ),
       ),
 
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+          shape: const StadiumBorder(),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          textStyle: const TextStyle(
+            fontWeight: FontWeight.w600,
+            fontSize: 14,
+            letterSpacing: -0.1,
           ),
-          textStyle: const TextStyle(fontWeight: FontWeight.w600),
         ),
       ),
 
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           elevation: 0,
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 15),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+          shape: const StadiumBorder(),
+          backgroundColor: scheme.surfaceContainerHigh.withValues(
+            alpha: isDark ? 0.60 : 0.78,
+          ),
+          foregroundColor: scheme.onSurface,
+          side: BorderSide(
+            color: Colors.white.withValues(alpha: isDark ? 0.14 : 0.30),
+            width: 0.5,
+          ),
+        ),
+      ),
+
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+          shape: const StadiumBorder(),
+          side: BorderSide(
+            color: scheme.outline.withValues(alpha: isDark ? 0.50 : 0.65),
+            width: 0.8,
+          ),
+          textStyle: const TextStyle(
+            fontWeight: FontWeight.w600,
+            fontSize: 15,
+            letterSpacing: -0.1,
           ),
         ),
       ),
@@ -180,9 +288,21 @@ class AppTheme {
       floatingActionButtonTheme: FloatingActionButtonThemeData(
         elevation: 0,
         highlightElevation: 0,
-        backgroundColor: scheme.primary,
+        backgroundColor: scheme.primary.withValues(alpha: isDark ? 0.82 : 0.92),
         foregroundColor: scheme.onPrimary,
-        shape: const CircleBorder(),
+        shape: CircleBorder(
+          side: BorderSide(
+            color: Colors.white.withValues(alpha: isDark ? 0.24 : 0.40),
+            width: 0.5,
+          ),
+        ),
+        extendedPadding: const EdgeInsets.symmetric(horizontal: 24),
+        extendedTextStyle: const TextStyle(
+          fontWeight: FontWeight.w700,
+          fontSize: 15,
+          letterSpacing: -0.2,
+        ),
+        extendedIconLabelSpacing: 10,
       ),
 
       // Dialogs use GlassAlertDialog which manages its own surface — set the
@@ -205,7 +325,7 @@ class AppTheme {
       ),
 
       bottomSheetTheme: BottomSheetThemeData(
-        backgroundColor: scheme.surface.withValues(alpha: isDark ? 0.55 : 0.70),
+        backgroundColor: scheme.surface.withValues(alpha: isDark ? 0.26 : 0.32),
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         modalElevation: 0,
@@ -241,7 +361,7 @@ class AppTheme {
 
       // PopupMenus follow the glass card treatment.
       popupMenuTheme: PopupMenuThemeData(
-        color: scheme.surface.withValues(alpha: isDark ? 0.80 : 0.88),
+        color: scheme.surface.withValues(alpha: isDark ? 0.38 : 0.44),
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         shape: RoundedRectangleBorder(

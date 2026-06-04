@@ -55,9 +55,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: LiquidGlass(
-            blur: 56,
-            borderRadius: const BorderRadius.all(Radius.circular(28)),
+          child: GlassContainer(
+            shape: LiquidRoundedSuperellipse(borderRadius: 28),
+            allowElevation: true,
+            glowIntensity: 0.06,
             padding: EdgeInsets.zero,
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -313,9 +314,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               top: false,
               child: Padding(
                 padding: EdgeInsets.fromLTRB(14, 0, 14, 14 + bottomInset),
-                child: LiquidGlass(
-                  blur: 56,
-                  borderRadius: const BorderRadius.all(Radius.circular(28)),
+                child: GlassContainer(
+                  shape: LiquidRoundedSuperellipse(borderRadius: 28),
+                  allowElevation: true,
+                  glowIntensity: 0.06,
                   padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -762,7 +764,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                       ),
                       // Online status pill
                       const SizedBox(height: 8),
-                      LiquidGlass.capsule(
+                      GlassContainer(
+                        shape: const LiquidOval(),
+                        allowElevation: true,
+                        glowIntensity: 0.06,
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 12,

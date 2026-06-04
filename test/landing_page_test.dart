@@ -35,8 +35,7 @@ void main() {
     expect(find.text('OpenChat'), findsOneWidget);
     expect(find.text('Secure · Open · Encrypted'), findsOneWidget);
     expect(find.byType(Image), findsNothing);
-    expect(find.widgetWithText(TextButton, 'Sign in'), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'Sign up'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Sign in'), findsOneWidget);
     expect(
       find.widgetWithText(FilledButton, 'Create your account'),
       findsOneWidget,
@@ -52,7 +51,6 @@ void main() {
     expect(find.byKey(const Key('auth-landing-hero')), findsOneWidget);
     expect(find.text('Create account'), findsWidgets);
     expect(find.text('Your keys stay on your device'), findsOneWidget);
-    expect(find.widgetWithText(TextButton, 'Sign in'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Create account'), findsOneWidget);
   });
 

@@ -2536,6 +2536,7 @@ class _StickerBubbleState extends State<_StickerBubble> {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
+      backgroundColor: Colors.transparent,
       builder: (_) =>
           _StickerPackSheet(packID: packId, api: context.read<ApiService>()),
     );
@@ -2636,11 +2637,14 @@ class _StickerPackSheetState extends State<_StickerPackSheet> {
       initialChildSize: 0.55,
       minChildSize: 0.35,
       maxChildSize: 0.85,
-      builder: (_, controller) => Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Row(
+      builder: (_, controller) => GlassSurface(
+        blur: 56,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Row(
               children: [
                 if (coverUrl != null) ...[
                   ClipRRect(
@@ -2730,6 +2734,7 @@ class _StickerPackSheetState extends State<_StickerPackSheet> {
                   ),
           ),
         ],
+        ),
       ),
     );
   }

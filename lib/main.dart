@@ -1,5 +1,6 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:provider/provider.dart';
 import 'app.dart';
 import 'providers/auth_provider.dart';
@@ -43,6 +44,10 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Pre-warm the liquid glass shader pipeline before any UI is painted.
+  // On Impeller (iOS/Android) this unlocks real refraction + chromatic
+  // aberration; on Skia it primes the lightweight fragment shader.
+  await LiquidGlassWidgets.initialize();
   await DesktopStartupService.startTray();
   // Register Firebase background message handler before runApp so the
   // messaging plugin can dispatch messages when the app is terminated.
@@ -52,7 +57,14 @@ void main() async {
   );
   // Configure the background WS service isolate; must run before any UI.
   await BackgroundWsService.configure();
-  runApp(const _Providers());
+  runApp(
+    LiquidGlassWidgets.wrap(
+      // Adaptive quality: benchmarks the device on first launch and adjusts
+      // shader complexity (premium → standard → minimal) to keep 60 fps.
+      adaptiveQuality: true,
+      child: const _Providers(),
+    ),
+  );
 }
 
 class _Providers extends StatelessWidget {

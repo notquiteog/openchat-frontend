@@ -52,34 +52,147 @@ class OpenChatApp extends StatelessWidget {
       darkTheme: AppTheme.dark(seed: seed),
       themeMode: ThemeMode.system,
       home: const _AppRoot(),
-      // Float the call UI above every route so incoming/active calls surface on
-      // any screen, not just the chats list. The live connection banner stays
-      // above it so a broken websocket is always visible.
+      // Float call + live-location bars above every route so they persist while
+      // navigating. The live connection banner stays topmost.
       //
-      // When a call is minimized, inflate MediaQuery.padding.top by the bar
-      // height so every screen's SafeArea and AppBar automatically push content
-      // down — no per-screen wiring needed.
+      // MediaQuery.padding.top inflation means every screen's SafeArea/AppBar
+      // automatically reserves space — no per-screen wiring needed.
+      //
+      // Stack layer order (bottom → top / back → front):
+      //   1. child wrapped in fully-inflated MediaQuery (call + location inset)
+      //   2. CallOverlay wrapped in location-only-inflated MediaQuery so its
+      //      internal SafeArea places the call bar below the location bar.
+      //   3. _LocationBarOverlay — original MediaQuery → sits at very top.
+      //   4. _LiveConnectionBanner — connection error, always topmost.
       builder: (context, child) {
-        final extra = context
+        final callExtra = context
             .select<CallProvider, double>((cp) => cp.minimizedContentTopInset);
+        final locExtra = context
+            .select<ChatProvider, double>((chat) => chat.liveLocationTopInset);
         final mq = MediaQuery.of(context);
+
+        MediaQueryData withTop(double extra) => extra == 0
+            ? mq
+            : mq.copyWith(
+                padding: mq.padding.copyWith(top: mq.padding.top + extra),
+              );
+
         return Stack(
           children: [
+            // Screens — pushed down past both bars.
             MediaQuery(
-              data: extra == 0
-                  ? mq
-                  : mq.copyWith(
-                      padding: mq.padding.copyWith(
-                        top: mq.padding.top + extra,
-                      ),
-                    ),
+              data: withTop(callExtra + locExtra),
               child: child!,
             ),
-            const CallOverlay(),
+            // Call bar — sees location offset so SafeArea places it below the
+            // location bar when both are active.
+            MediaQuery(
+              data: withTop(locExtra),
+              child: const CallOverlay(),
+            ),
+            // Location bar — sees no extra offset → anchors at the very top.
+            const _LocationBarOverlay(),
             const _LiveConnectionBanner(),
           ],
         );
       },
+    );
+  }
+}
+
+// ── Global live-location bar ──────────────────────────────────────────────────
+
+/// App-wide overlay that mirrors the minimized call bar: sits in the SafeArea
+/// top zone, reserves space via MediaQuery inflation, and persists across
+/// navigation. Positioned above the call bar when both are active.
+class _LocationBarOverlay extends StatefulWidget {
+  const _LocationBarOverlay();
+
+  @override
+  State<_LocationBarOverlay> createState() => _LocationBarOverlayState();
+}
+
+class _LocationBarOverlayState extends State<_LocationBarOverlay> {
+  // Tick every second so the remaining-time label stays fresh.
+  late final _ticker = Stream<void>.periodic(const Duration(seconds: 1));
+  late final _sub = _ticker.listen((_) {
+    if (mounted) setState(() {});
+  });
+
+  @override
+  void dispose() {
+    _sub.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final chat = context.watch<ChatProvider>();
+    final share = chat.anyActiveLiveLocationShare;
+    if (share == null) return const SizedBox.shrink();
+
+    final scheme = Theme.of(context).colorScheme;
+    final remaining = share.expiresAt.difference(DateTime.now());
+    final label = remaining.inSeconds <= 0
+        ? 'ending'
+        : remaining.inHours >= 1
+            ? (remaining.inMinutes % 60 == 0
+                ? '${remaining.inHours}h left'
+                : '${remaining.inHours}h ${remaining.inMinutes % 60}m left')
+            : remaining.inMinutes >= 1
+                ? '${remaining.inMinutes}m left'
+                : '${remaining.inSeconds}s left';
+
+    return Align(
+      alignment: Alignment.topCenter,
+      child: SafeArea(
+        bottom: false,
+        left: false,
+        right: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+          child: SizedBox(
+            height: ChatProvider.liveLocationBarHeight,
+            child: GlassContainer(
+              shape: const LiquidOval(),
+              allowElevation: true,
+              glowIntensity: 0.08,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(width: 4),
+                  Icon(Icons.near_me_rounded, size: 17, color: scheme.primary),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      'Sharing · $label',
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      minimumSize: const Size(0, 30),
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    onPressed: () =>
+                        context.read<ChatProvider>().stopLiveLocation(
+                          share.messageId,
+                        ),
+                    child: const Text('Stop'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -121,8 +234,10 @@ class _LiveConnectionBanner extends StatelessWidget {
                     key: const Key('websocket-connecting-banner'),
                     padding: const EdgeInsets.only(top: 8),
                     child: Center(
-                      child: LiquidGlass.capsule(
-                        tint: scheme.primary,
+                      child: GlassContainer(
+                        shape: const LiquidOval(),
+                        allowElevation: true,
+                        glowIntensity: 0.14,
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 16,
@@ -389,9 +504,10 @@ class _AppRootState extends State<_AppRoot> {
       AuthState.unknown => Scaffold(
         body: LiquidMeshBackground(
           child: Center(
-            child: LiquidGlass(
-              blur: 32,
-              borderRadius: const BorderRadius.all(Radius.circular(32)),
+            child: GlassContainer(
+              shape: const LiquidRoundedSuperellipse(borderRadius: 32),
+              allowElevation: true,
+              glowIntensity: 0.10,
               padding: const EdgeInsets.all(36),
               child: const SizedBox(
                 width: 36,
@@ -416,41 +532,59 @@ class _HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<_HomeShell> {
   int _tab = 0;
+  late final _pageController = PageController(initialPage: 0);
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  void _onTabSelected(int i) {
+    if (i == _tab) return;
+    setState(() => _tab = i);
+    _pageController.animateToPage(
+      i,
+      duration: const Duration(milliseconds: 340),
+      curve: Curves.easeOutCubic,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final user = context.watch<AuthProvider>().currentUser;
     final settings = context.watch<SettingsProvider>();
 
-    // Chats is always present. Channels and Bots get their own tab only when the
-    // user opts in; otherwise those conversations surface inside Chats.
+    // Chats is always present. Channels and Bots get their own tab only when
+    // the user opts in; otherwise those conversations surface inside Chats.
     final screens = <Widget>[const ConversationsScreen()];
-    final destinations = <NavigationDestination>[
-      const NavigationDestination(
-        icon: Icon(Icons.chat_bubble_outline),
-        selectedIcon: Icon(Icons.chat_bubble),
+    final scheme = Theme.of(context).colorScheme;
+    final tabs = <GlassBottomBarTab>[
+      GlassBottomBarTab(
+        icon: const Icon(Icons.chat_bubble_outline),
+        activeIcon: const Icon(Icons.chat_bubble),
         label: 'Chats',
+        glowColor: scheme.primary,
       ),
     ];
+
     if (settings.channelsOwnTab) {
       screens.add(const ChannelListScreen());
-      destinations.add(
-        const NavigationDestination(
-          icon: Icon(Icons.campaign_outlined),
-          selectedIcon: Icon(Icons.campaign),
-          label: 'Channels',
-        ),
-      );
+      tabs.add(GlassBottomBarTab(
+        icon: const Icon(Icons.campaign_outlined),
+        activeIcon: const Icon(Icons.campaign),
+        label: 'Channels',
+        glowColor: scheme.tertiary,
+      ));
     }
     if (settings.botsOwnTab) {
       screens.add(const BotChatsScreen());
-      destinations.add(
-        const NavigationDestination(
-          icon: Icon(Icons.smart_toy_outlined),
-          selectedIcon: Icon(Icons.smart_toy),
-          label: 'Bots',
-        ),
-      );
+      tabs.add(GlassBottomBarTab(
+        icon: const Icon(Icons.smart_toy_outlined),
+        activeIcon: const Icon(Icons.smart_toy),
+        label: 'Bots',
+        glowColor: scheme.secondary,
+      ));
     }
 
     // Clamp in case a tab was just turned off while it was selected.
@@ -463,33 +597,33 @@ class _HomeShellState extends State<_HomeShell> {
         children: [
           if (user != null && user.isKeyExpired) _ExpiredKeyBanner(user: user),
           Expanded(
-            child: IndexedStack(index: _tab, children: screens),
+            child: screens.length == 1
+                // Single screen — no paging overhead.
+                ? screens.first
+                : PageView(
+                    controller: _pageController,
+                    physics: const NeverScrollableScrollPhysics(),
+                    children: screens,
+                  ),
           ),
         ],
       ),
-      // A single-entry nav bar carries no information, so hide it entirely.
-      // Otherwise it floats as a detached Liquid Glass capsule (16dp side
-      // margins) so the conversation canvas refracts beneath it as it scrolls.
-      bottomNavigationBar: destinations.length < 2
+      // Single-tab apps don't need a bar at all.
+      bottomNavigationBar: tabs.length < 2
           ? null
-          : Padding(
-              padding: EdgeInsets.fromLTRB(
-                16,
-                0,
-                16,
-                MediaQuery.viewPaddingOf(context).bottom + 6,
-              ),
-              child: LiquidGlass.capsule(
-                // The capsule already clears the home-bar inset, so stop the
-                // NavigationBar from adding its own and double-padding.
-                child: MediaQuery.removePadding(
-                  context: context,
-                  removeBottom: true,
-                  child: NavigationBar(
-                    selectedIndex: _tab,
-                    onDestinationSelected: (i) => setState(() => _tab = i),
-                    destinations: destinations,
-                  ),
+          : SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                child: GlassBottomBar(
+                  tabs: tabs,
+                  selectedIndex: _tab,
+                  onTabSelected: _onTabSelected,
+                  // Physics + glow for the iOS 26 feel.
+                  glowBlurRadius: 18,
+                  glowSpreadRadius: 2,
+                  glowOpacity: 0.55,
+                  barBorderRadius: 999,
+                  barHeight: 60,
                 ),
               ),
             ),
@@ -510,9 +644,10 @@ class _AppLockScreen extends StatelessWidget {
           child: Center(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: LiquidGlass(
-                blur: 36,
-                borderRadius: const BorderRadius.all(Radius.circular(40)),
+              child: GlassContainer(
+                shape: const LiquidRoundedSuperellipse(borderRadius: 40),
+                allowElevation: true,
+                glowIntensity: 0.08,
                 padding: const EdgeInsets.fromLTRB(32, 40, 32, 40),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -671,3 +806,4 @@ class _ExpiredKeyBanner extends StatelessWidget {
     );
   }
 }
+

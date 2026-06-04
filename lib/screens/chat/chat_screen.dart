@@ -319,76 +319,101 @@ class _ChatScreenState extends State<ChatScreen> {
         : minimumSchedule;
     await showModalBottomSheet<void>(
       context: context,
-      showDragHandle: true,
+      backgroundColor: Colors.transparent,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) => SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SwitchListTile(
-                secondary: const Icon(Icons.notifications_off_outlined),
-                title: const Text('Send silently'),
-                value: _sendSilent,
-                onChanged: (v) {
-                  setState(() => _sendSilent = v);
-                  setSheetState(() {});
-                },
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-                child: Row(
-                  children: [
-                    const Icon(Icons.schedule_outlined),
-                    const SizedBox(width: 12),
-                    Text(
-                      'Schedule delivery',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(
-                height: 216,
-                child: CupertinoDatePicker(
-                  mode: CupertinoDatePickerMode.dateAndTime,
-                  minimumDate: minimumSchedule,
-                  initialDateTime: draftSchedule,
-                  minuteInterval: 1,
-                  onDateTimeChanged: (value) =>
-                      setSheetState(() => draftSchedule = value),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-                child: Row(
-                  children: [
-                    if (_scheduledFor != null)
-                      TextButton.icon(
-                        icon: const Icon(Icons.event_busy_outlined),
-                        label: const Text('Clear'),
-                        onPressed: () {
-                          setState(() => _scheduledFor = null);
-                          Navigator.pop(ctx);
-                        },
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+            child: GlassContainer(
+              shape: LiquidRoundedSuperellipse(borderRadius: 28),
+              allowElevation: true,
+              glowIntensity: 0.06,
+              padding: EdgeInsets.zero,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // drag handle
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12, bottom: 4),
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurface
+                            .withValues(alpha: 0.24),
+                        borderRadius: BorderRadius.circular(2),
                       ),
-                    const Spacer(),
-                    TextButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text('Done'),
                     ),
-                    const SizedBox(width: 8),
-                    FilledButton.icon(
-                      icon: const Icon(Icons.schedule_send_outlined),
-                      label: const Text('Set'),
-                      onPressed: () {
-                        setState(() => _scheduledFor = draftSchedule);
-                        Navigator.pop(ctx);
-                      },
+                  ),
+                  SwitchListTile(
+                    secondary: const Icon(Icons.notifications_off_outlined),
+                    title: const Text('Send silently'),
+                    value: _sendSilent,
+                    onChanged: (v) {
+                      setState(() => _sendSilent = v);
+                      setSheetState(() {});
+                    },
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.schedule_outlined),
+                        const SizedBox(width: 12),
+                        Text(
+                          'Schedule delivery',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                  SizedBox(
+                    height: 216,
+                    child: CupertinoDatePicker(
+                      mode: CupertinoDatePickerMode.dateAndTime,
+                      minimumDate: minimumSchedule,
+                      initialDateTime: draftSchedule,
+                      minuteInterval: 1,
+                      onDateTimeChanged: (value) =>
+                          setSheetState(() => draftSchedule = value),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                    child: Row(
+                      children: [
+                        if (_scheduledFor != null)
+                          TextButton.icon(
+                            icon: const Icon(Icons.event_busy_outlined),
+                            label: const Text('Clear'),
+                            onPressed: () {
+                              setState(() => _scheduledFor = null);
+                              Navigator.pop(ctx);
+                            },
+                          ),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('Done'),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton.icon(
+                          icon: const Icon(Icons.schedule_send_outlined),
+                          label: const Text('Set'),
+                          onPressed: () {
+                            setState(() => _scheduledFor = draftSchedule);
+                            Navigator.pop(ctx);
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -529,9 +554,10 @@ class _ChatScreenState extends State<ChatScreen> {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: LiquidGlass(
-            blur: 56,
-            borderRadius: const BorderRadius.all(Radius.circular(28)),
+          child: GlassContainer(
+            shape: LiquidRoundedSuperellipse(borderRadius: 28),
+            allowElevation: true,
+            glowIntensity: 0.06,
             padding: EdgeInsets.zero,
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -826,9 +852,10 @@ class _ChatScreenState extends State<ChatScreen> {
               top: false,
               child: Padding(
                 padding: EdgeInsets.fromLTRB(14, 0, 14, 14 + bottomInset),
-                child: LiquidGlass(
-                  blur: 56,
-                  borderRadius: const BorderRadius.all(Radius.circular(28)),
+                child: GlassContainer(
+                  shape: LiquidRoundedSuperellipse(borderRadius: 28),
+                  allowElevation: true,
+                  glowIntensity: 0.06,
                   padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -1376,9 +1403,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final auth = context.watch<AuthProvider>();
     final chat = context.watch<ChatProvider>();
     final messages = chat.messagesFor(conv.id);
-    final liveLocationShare = chat.activeLiveLocationShareForConversation(
-      conv.id,
-    );
     final currentUserID = auth.currentUser?.id ?? '';
     final typingUsers = chat.typingUsersFor(conv.id);
     _handleMessageListChange(messages, currentUserID);
@@ -1406,19 +1430,6 @@ class _ChatScreenState extends State<ChatScreen> {
             curve: Curves.easeOutCubic,
             child: Column(
               children: [
-                // Live location banner sits above the message list and takes
-                // real layout space so it never floats over messages.
-                if (liveLocationShare != null)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
-                    child: _LiveLocationShareBanner(
-                      status: liveLocationShare,
-                      onCancel: () =>
-                          context.read<ChatProvider>().stopLiveLocation(
-                            liveLocationShare.messageId,
-                          ),
-                    ),
-                  ),
                 Expanded(
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
@@ -1428,7 +1439,10 @@ class _ChatScreenState extends State<ChatScreen> {
                         Positioned.fill(
                           child: messages.isEmpty
                               ? Center(
-                                  child: LiquidGlass.capsule(
+                                  child: GlassContainer(
+                                    shape: const LiquidOval(),
+                                    allowElevation: true,
+                                    glowIntensity: 0.05,
                                     child: Padding(
                                       padding: const EdgeInsets.symmetric(
                                         horizontal: 20,
@@ -1561,7 +1575,10 @@ class _ChatScreenState extends State<ChatScreen> {
                                 child: Center(
                                   child: GestureDetector(
                                     onTap: _scrollToBottom,
-                                    child: LiquidGlass.capsule(
+                                    child: GlassContainer(
+                                      shape: const LiquidOval(),
+                                      allowElevation: true,
+                                      glowIntensity: 0.08,
                                       child: Padding(
                                         padding: const EdgeInsets.symmetric(
                                           horizontal: 16,
@@ -1681,9 +1698,10 @@ class _ChatScreenState extends State<ChatScreen> {
             top: false,
             child: Padding(
               padding: EdgeInsets.fromLTRB(14, 0, 14, 14 + bottomInset),
-              child: LiquidGlass(
-                blur: 56,
-                borderRadius: const BorderRadius.all(Radius.circular(28)),
+              child: GlassContainer(
+                shape: LiquidRoundedSuperellipse(borderRadius: 28),
+                allowElevation: true,
+                glowIntensity: 0.06,
                 padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
                 child: SingleChildScrollView(
                   child: Column(
@@ -1810,22 +1828,36 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final action = await showModalBottomSheet<String>(
       context: context,
+      backgroundColor: Colors.transparent,
       builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.image_outlined),
-              title: const Text('Choose background image'),
-              onTap: () => Navigator.pop(context, 'pick'),
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          child: GlassContainer(
+            shape: LiquidRoundedSuperellipse(borderRadius: 28),
+            allowElevation: true,
+            glowIntensity: 0.06,
+            padding: EdgeInsets.zero,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 8),
+                _MenuTile(
+                  icon: Icons.image_outlined,
+                  label: 'Choose background image',
+                  onTap: () => Navigator.pop(context, 'pick'),
+                ),
+                if (conv.backgroundUrl != null)
+                  _MenuTile(
+                    icon: Icons.delete_outline,
+                    label: 'Remove background',
+                    color: Colors.red,
+                    onTap: () => Navigator.pop(context, 'remove'),
+                  ),
+                const SizedBox(height: 8),
+              ],
             ),
-            if (conv.backgroundUrl != null)
-              ListTile(
-                leading: const Icon(Icons.delete_outline, color: Colors.red),
-                title: const Text('Remove background'),
-                onTap: () => Navigator.pop(context, 'remove'),
-              ),
-          ],
+          ),
         ),
       ),
     );
@@ -1891,18 +1923,21 @@ class _ChatScreenState extends State<ChatScreen> {
         onTap: openInfo,
         child: Row(
           children: [
-            CircleAvatar(
-              radius: 18,
-              backgroundImage: avatarUrl != null
-                  ? CachedNetworkImageProvider(
-                      ApiConfig.resolveMedia(avatarUrl),
-                    )
-                  : null,
-              child: avatarUrl == null
-                  ? (conv.isGroup
-                        ? const Icon(Icons.group, size: 18)
-                        : Text(name.isNotEmpty ? name[0].toUpperCase() : '?'))
-                  : null,
+            Hero(
+              tag: 'avatar_${conv.id}',
+              child: CircleAvatar(
+                radius: 18,
+                backgroundImage: avatarUrl != null
+                    ? CachedNetworkImageProvider(
+                        ApiConfig.resolveMedia(avatarUrl),
+                      )
+                    : null,
+                child: avatarUrl == null
+                    ? (conv.isGroup
+                          ? const Icon(Icons.group, size: 18)
+                          : Text(name.isNotEmpty ? name[0].toUpperCase() : '?'))
+                    : null,
+              ),
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -1965,9 +2000,10 @@ class _ChatScreenState extends State<ChatScreen> {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: LiquidGlass(
-            blur: 56,
-            borderRadius: const BorderRadius.all(Radius.circular(28)),
+          child: GlassContainer(
+            shape: LiquidRoundedSuperellipse(borderRadius: 28),
+            allowElevation: true,
+            glowIntensity: 0.06,
             padding: EdgeInsets.zero,
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -2084,9 +2120,10 @@ class _ChatScreenState extends State<ChatScreen> {
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 2, 12, 14),
-        child: LiquidGlass(
-          blur: 50,
-          borderRadius: const BorderRadius.all(Radius.circular(28)),
+        child: GlassContainer(
+          shape: const LiquidRoundedSuperellipse(borderRadius: 28),
+          allowElevation: true,
+          glowIntensity: 0.06,
           padding: const EdgeInsets.fromLTRB(4, 4, 6, 4),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -2778,11 +2815,12 @@ class _ChatScreenState extends State<ChatScreen> {
                                         14,
                                         14,
                                       ),
-                                      child: LiquidGlass(
-                                        blur: 56,
-                                        borderRadius: const BorderRadius.all(
-                                          Radius.circular(28),
+                                      child: GlassContainer(
+                                        shape: LiquidRoundedSuperellipse(
+                                          borderRadius: 28,
                                         ),
+                                        allowElevation: true,
+                                        glowIntensity: 0.06,
                                         padding: EdgeInsets.zero,
                                         child: Column(
                                           mainAxisSize: MainAxisSize.min,
@@ -3115,9 +3153,10 @@ class _ChatScreenState extends State<ChatScreen> {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: LiquidGlass(
-            blur: 56,
-            borderRadius: const BorderRadius.all(Radius.circular(28)),
+          child: GlassContainer(
+            shape: LiquidRoundedSuperellipse(borderRadius: 28),
+            allowElevation: true,
+            glowIntensity: 0.06,
             padding: EdgeInsets.zero,
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -3333,91 +3372,31 @@ class _ReactionPopup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LiquidGlass.capsule(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            for (final emoji in emojis)
-              GestureDetector(
-                onTap: () => onSelected(emoji),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 6,
-                  ),
-                  child: Text(emoji, style: const TextStyle(fontSize: 26)),
+    return GlassContainer(
+      shape: const LiquidOval(),
+      allowElevation: true,
+      glowIntensity: 0.08,
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          for (final emoji in emojis)
+            GestureDetector(
+              onTap: () => onSelected(emoji),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 6,
+                  vertical: 6,
                 ),
+                child: Text(emoji, style: const TextStyle(fontSize: 26)),
               ),
-          ],
-        ),
+            ),
+        ],
       ),
     );
   }
 }
 
-class _LiveLocationShareBanner extends StatelessWidget {
-  final LiveLocationShareStatus status;
-  final VoidCallback onCancel;
-
-  const _LiveLocationShareBanner({
-    required this.status,
-    required this.onCancel,
-  });
-
-  String get _remainingLabel {
-    final remaining = status.expiresAt.difference(DateTime.now());
-    if (remaining.inSeconds <= 0) return 'ending';
-    if (remaining.inHours >= 1) {
-      final minutes = remaining.inMinutes % 60;
-      return minutes == 0
-          ? '${remaining.inHours}h left'
-          : '${remaining.inHours}h ${minutes}m left';
-    }
-    if (remaining.inMinutes >= 1) return '${remaining.inMinutes}m left';
-    return '${remaining.inSeconds}s left';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Center(
-      child: LiquidGlass.capsule(
-        blur: 58,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.near_me_rounded, size: 17, color: scheme.primary),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                'Sharing with ${status.sharingWith} · $_remainingLabel',
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            TextButton(
-              style: TextButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                minimumSize: const Size(0, 30),
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-              ),
-              onPressed: onCancel,
-              child: const Text('Cancel'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 double _asDouble(Object? value) {
   if (value is num) return value.toDouble();
@@ -3464,25 +3443,25 @@ class _TypingIndicatorState extends State<_TypingIndicator>
       padding: const EdgeInsets.fromLTRB(12, 2, 12, 2),
       child: Row(
         children: [
-          LiquidGlass.capsule(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _BouncingDots(controller: _ctrl),
-                  const SizedBox(width: 8),
-                  Text(
-                    widget.label,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: scheme.onSurface.withValues(alpha: 0.60),
-                      fontWeight: FontWeight.w500,
-                    ),
+          GlassContainer(
+            shape: const LiquidOval(),
+            allowElevation: true,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _BouncingDots(controller: _ctrl),
+                const SizedBox(width: 8),
+                Text(
+                  widget.label,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.onSurface.withValues(alpha: 0.60),
+                    fontWeight: FontWeight.w500,
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ],

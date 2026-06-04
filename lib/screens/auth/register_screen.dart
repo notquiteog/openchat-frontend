@@ -12,7 +12,8 @@ class RegisterScreen extends StatefulWidget {
   State<RegisterScreen> createState() => _RegisterScreenState();
 }
 
-class _RegisterScreenState extends State<RegisterScreen> {
+class _RegisterScreenState extends State<RegisterScreen>
+    with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
   final _usernameCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
@@ -22,8 +23,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _obscurePassword = true;
   bool _showAdvanced = false;
 
+  late final AnimationController _entranceCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 680),
+  );
+  late final Animation<double> _fade =
+      CurvedAnimation(parent: _entranceCtrl, curve: Curves.easeOutCubic);
+  late final Animation<double> _scale = Tween<double>(begin: 0.88, end: 1.0)
+      .animate(CurvedAnimation(
+          parent: _entranceCtrl, curve: Curves.easeOutBack));
+
+  @override
+  void initState() {
+    super.initState();
+    _entranceCtrl.forward();
+  }
+
   @override
   void dispose() {
+    _entranceCtrl.dispose();
     _usernameCtrl.dispose();
     _passwordCtrl.dispose();
     _confirmCtrl.dispose();
@@ -56,10 +74,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
           child: Center(
             child: SingleChildScrollView(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-              child: LiquidGlass(
+              child: FadeTransition(
+                opacity: _fade,
+                child: ScaleTransition(
+                  scale: _scale,
+                  child: GlassContainer(
                 key: const Key('auth-landing-hero'),
-                blur: 36,
-                borderRadius: const BorderRadius.all(Radius.circular(36)),
+                shape: LiquidRoundedSuperellipse(borderRadius: 36),
+                allowElevation: true,
+                glowIntensity: 0.06,
                 padding: const EdgeInsets.fromLTRB(28, 32, 28, 32),
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 420),
@@ -69,22 +92,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // Tab row
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            TextButton(
-                              onPressed: () => Navigator.maybePop(context),
-                              child: const Text('Sign in'),
-                            ),
-                            const SizedBox(width: 4),
-                            const FilledButton(
-                              onPressed: null,
-                              child: Text('Sign up'),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 28),
                         // Logo
                         Center(
                           child: Column(
@@ -374,6 +381,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   ),
                 ),
               ),
+                ), // ScaleTransition
+                ), // FadeTransition
             ),
           ),
         ),

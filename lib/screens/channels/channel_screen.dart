@@ -235,7 +235,10 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
       return Center(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 32),
-          child: LiquidGlass.capsule(
+          child: GlassContainer(
+            shape: const LiquidOval(),
+            allowElevation: true,
+            glowIntensity: 0.05,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
               child: Text(
@@ -588,9 +591,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: LiquidGlass(
-            blur: 56,
-            borderRadius: const BorderRadius.all(Radius.circular(28)),
+          child: GlassContainer(
+            shape: LiquidRoundedSuperellipse(borderRadius: 28),
+            allowElevation: true,
+            glowIntensity: 0.06,
             padding: EdgeInsets.zero,
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1021,9 +1025,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: LiquidGlass(
-            blur: 56,
-            borderRadius: const BorderRadius.all(Radius.circular(28)),
+          child: GlassContainer(
+            shape: LiquidRoundedSuperellipse(borderRadius: 28),
+            allowElevation: true,
+            glowIntensity: 0.06,
             padding: EdgeInsets.zero,
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1199,9 +1204,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             top: false,
             child: Padding(
               padding: EdgeInsets.fromLTRB(14, 0, 14, 14 + bottomInset),
-              child: LiquidGlass(
-                blur: 56,
-                borderRadius: const BorderRadius.all(Radius.circular(28)),
+              child: GlassContainer(
+                shape: LiquidRoundedSuperellipse(borderRadius: 28),
+                allowElevation: true,
+                glowIntensity: 0.06,
                 padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -1261,9 +1267,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: LiquidGlass(
-            blur: 56,
-            borderRadius: const BorderRadius.all(Radius.circular(28)),
+          child: GlassContainer(
+            shape: LiquidRoundedSuperellipse(borderRadius: 28),
+            allowElevation: true,
+            glowIntensity: 0.06,
             padding: EdgeInsets.zero,
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1332,9 +1339,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: LiquidGlass(
-            blur: 56,
-            borderRadius: const BorderRadius.all(Radius.circular(28)),
+          child: GlassContainer(
+            shape: LiquidRoundedSuperellipse(borderRadius: 28),
+            allowElevation: true,
+            glowIntensity: 0.06,
             padding: EdgeInsets.zero,
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1507,9 +1515,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           top: false,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-            child: LiquidGlass(
-              blur: 56,
-              borderRadius: const BorderRadius.all(Radius.circular(28)),
+            child: GlassContainer(
+              shape: LiquidRoundedSuperellipse(borderRadius: 28),
+              allowElevation: true,
+              glowIntensity: 0.06,
               padding: const EdgeInsets.fromLTRB(0, 8, 0, 4),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -1608,9 +1617,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: LiquidGlass(
-            blur: 56,
-            borderRadius: const BorderRadius.all(Radius.circular(28)),
+          child: GlassContainer(
+            shape: LiquidRoundedSuperellipse(borderRadius: 28),
+            allowElevation: true,
+            glowIntensity: 0.06,
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
             child: Wrap(
               alignment: WrapAlignment.center,
@@ -1813,9 +1823,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: LiquidGlass(
-            blur: 56,
-            borderRadius: const BorderRadius.all(Radius.circular(28)),
+          child: GlassContainer(
+            shape: LiquidRoundedSuperellipse(borderRadius: 28),
+            allowElevation: true,
+            glowIntensity: 0.06,
             padding: EdgeInsets.zero,
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -2038,7 +2049,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   ? const Center(child: CircularProgressIndicator())
                   : _posts.isEmpty
                   ? Center(
-                      child: LiquidGlass.capsule(
+                      child: GlassContainer(
+                        shape: const LiquidOval(),
+                        allowElevation: true,
+                        glowIntensity: 0.05,
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 20,
@@ -2181,9 +2195,10 @@ class ChannelPostBar extends StatelessWidget {
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 2, 12, 14),
-        child: LiquidGlass(
-          blur: 50,
-          borderRadius: const BorderRadius.all(Radius.circular(28)),
+        child: GlassContainer(
+          shape: LiquidRoundedSuperellipse(borderRadius: 28),
+          allowElevation: true,
+          glowIntensity: 0.06,
           padding: const EdgeInsets.fromLTRB(4, 4, 6, 4),
           child: Row(
             children: [

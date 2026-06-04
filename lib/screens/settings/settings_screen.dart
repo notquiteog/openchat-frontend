@@ -110,30 +110,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     if (value) {
       // Show privacy warning before enabling.
-      final confirmed = await showDialog<bool>(
+      var confirmed = false;
+      await GlassDialog.show<void>(
         context: context,
-        builder: (ctx) => GlassAlertDialog(
-          title: const Text('Privacy notice'),
-          content: const Text(
-            'Push notifications route metadata (sender, device ID) through '
-            'Google Firebase servers. No message content is sent — only '
-            'a notification trigger.\n\n'
-            'If you value full metadata privacy, use Background WebSocket '
-            'notifications instead.',
+        title: 'Privacy notice',
+        message: 'Push notifications route metadata (sender, device ID) '
+            'through Google Firebase servers. No message content is sent.\n\n'
+            'For full metadata privacy, use Background WebSocket instead.',
+        actions: [
+          GlassDialogAction(
+            label: 'Cancel',
+            onPressed: () => Navigator.pop(context),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Enable'),
-            ),
-          ],
-        ),
+          GlassDialogAction(
+            label: 'Enable',
+            isPrimary: true,
+            onPressed: () {
+              confirmed = true;
+              Navigator.pop(context);
+            },
+          ),
+        ],
       );
-      if (confirmed != true || !mounted) return;
+      if (!confirmed || !mounted) return;
 
       // Disable WebSocket background before enabling push — only one
       // notification channel should be active at a time.
@@ -167,30 +166,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final messenger = ScaffoldMessenger.of(context);
     if (value) {
       // Show battery warning before enabling.
-      final confirmed = await showDialog<bool>(
+      var confirmed = false;
+      await GlassDialog.show<void>(
         context: context,
-        builder: (ctx) => GlassAlertDialog(
-          title: const Text('Battery notice'),
-          content: const Text(
-            'Background WebSocket keeps a persistent connection to the server '
-            'even when the app is closed. This provides real-time notifications '
-            'without relying on Google Firebase, but will increase battery usage.\n\n'
-            'On iOS the OS may still suspend the connection; push notifications '
-            'are more reliable there.',
+        title: 'Battery notice',
+        message: 'Background WebSocket keeps a live connection even when the '
+            'app is closed, providing real-time notifications without Firebase. '
+            'On iOS the OS may still suspend it.',
+        actions: [
+          GlassDialogAction(
+            label: 'Cancel',
+            onPressed: () => Navigator.pop(context),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Enable'),
-            ),
-          ],
-        ),
+          GlassDialogAction(
+            label: 'Enable',
+            isPrimary: true,
+            onPressed: () {
+              confirmed = true;
+              Navigator.pop(context);
+            },
+          ),
+        ],
       );
-      if (confirmed != true || !mounted) return;
+      if (!confirmed || !mounted) return;
 
       // Disable Firebase push before enabling WebSocket — only one
       // notification channel should be active at a time.
@@ -865,32 +863,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _clearAllData() async {
     final messenger = ScaffoldMessenger.of(context);
-    final confirmed = await showDialog<bool>(
+    var confirmed = false;
+    await GlassDialog.show<void>(
       context: context,
-      builder: (ctx) => GlassAlertDialog(
-        title: const Text('Clear all local data?'),
-        content: const Text(
-          'This permanently removes everything stored on this device: '
-          'your PGP private key, session tokens, and all app preferences.\n\n'
-          'Use this to fix problems caused by stale data from a previous '
-          'install — the secure storage on desktop persists across reinstalls.\n\n'
-          'You will be signed out and will need to sign in again and '
-          're-import your PGP key.',
+      title: 'Clear all local data?',
+      message: 'This permanently removes your PGP private key, session '
+          'tokens, and all app preferences. You will be signed out and '
+          'need to re-import your PGP key.',
+      actions: [
+        GlassDialogAction(
+          label: 'Cancel',
+          onPressed: () => Navigator.pop(context),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Clear'),
-          ),
-        ],
-      ),
+        GlassDialogAction(
+          label: 'Clear',
+          isDestructive: true,
+          onPressed: () {
+            confirmed = true;
+            Navigator.pop(context);
+          },
+        ),
+      ],
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
 
     // Capture service references before any async gap that could unmount the widget.
     final storage = context.read<SecureStorageService>();
@@ -1338,18 +1333,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: version.isEmpty
                       ? 'Open Source • E2E Encrypted'
                       : '$version • Open Source • E2E Encrypted',
-                  onTap: () => showAboutDialog(
+                  onTap: () => showDialog<void>(
                     context: context,
-                    applicationName: 'OpenChat',
-                    applicationVersion: version,
-                    applicationIcon: Image.asset(
-                      'assets/images/logo.png',
-                      height: 48,
-                      errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                    builder: (ctx) => GlassAlertDialog(
+                      title: const Text('OpenChat'),
+                      content: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Image.asset(
+                            'assets/images/logo.png',
+                            height: 56,
+                            errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                          ),
+                          if (version.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              version,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                          const SizedBox(height: 12),
+                          const Text(
+                            'Open source, end-to-end encrypted messenger.\n'
+                            'Uses OpenPGP (RFC 4880) for encryption.',
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('OK'),
+                        ),
+                      ],
                     ),
-                    applicationLegalese:
-                        'Open source, end-to-end encrypted messenger.\n'
-                        'Uses OpenPGP (RFC 4880) for encryption.',
                   ),
                   isLast: true,
                 );
@@ -1369,26 +1386,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   title: 'Sign Out',
                   titleColor: scheme.error,
                   onTap: () async {
-                    final confirmed = await showDialog<bool>(
+                    var doSignOut = false;
+                    await GlassDialog.show<void>(
                       context: context,
-                      builder: (ctx) => GlassAlertDialog(
-                        title: const Text('Sign Out'),
-                        content: const Text(
-                          'Your PGP keys will remain on this device.',
+                      title: 'Sign Out',
+                      message: 'Your PGP keys will remain on this device.',
+                      actions: [
+                        GlassDialogAction(
+                          label: 'Cancel',
+                          onPressed: () => Navigator.pop(context),
                         ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, false),
-                            child: const Text('Cancel'),
-                          ),
-                          FilledButton(
-                            onPressed: () => Navigator.pop(ctx, true),
-                            child: const Text('Sign Out'),
-                          ),
-                        ],
-                      ),
+                        GlassDialogAction(
+                          label: 'Sign Out',
+                          isPrimary: true,
+                          onPressed: () {
+                            doSignOut = true;
+                            Navigator.pop(context);
+                          },
+                        ),
+                      ],
                     );
-                    if (confirmed == true && context.mounted) {
+                    if (doSignOut && context.mounted) {
                       await context.read<AuthProvider>().logout();
                     }
                   },
@@ -1604,7 +1622,12 @@ class _GlassSwitchTile extends StatelessWidget {
                     ],
                   ),
                 ),
-                Switch(value: value, onChanged: onChanged),
+                GlassSwitch(
+                  value: value,
+                  onChanged: onChanged,
+                  activeColor: scheme.primary,
+                  enableHaptics: true,
+                ),
               ],
             ),
           ),
