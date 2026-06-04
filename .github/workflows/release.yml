@@ -179,7 +179,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y \
-            clang cmake ninja-build pkg-config \
+            clang lld cmake ninja-build pkg-config \
             libgtk-3-dev liblzma-dev libsecret-1-dev libayatana-appindicator3-dev \
             libx11-dev libxi-dev \
             libstdc++-12-dev libunwind-dev \
@@ -200,9 +200,10 @@ jobs:
       - name: Build Linux
         env:
           CPATH: /usr/local/include:/usr/include/libayatana-appindicator3-0.1
+          LDFLAGS: -fuse-ld=lld
         run: |
           flutter pub get
-          flutter build linux --release ${{ env.DART_DEFINES }}
+          flutter build linux --verbose --release ${{ env.DART_DEFINES }}
 
       - name: Package tar.gz
         run: |
