@@ -269,10 +269,9 @@ class PushNotificationService {
     if (_firebaseInitialized) return true;
     try {
       if (Firebase.apps.isEmpty) {
-        if (DefaultFirebaseOptions.currentPlatformConfigured) {
-          await Firebase.initializeApp(
-            options: DefaultFirebaseOptions.currentPlatform,
-          );
+        final dartOptions = _firebaseOptionsForCurrentPlatform();
+        if (dartOptions != null) {
+          await Firebase.initializeApp(options: dartOptions);
         } else {
           await Firebase.initializeApp();
         }
@@ -294,6 +293,22 @@ class PushNotificationService {
     } catch (e) {
       debugPrint('PushNotificationService: Firebase init failed — $e');
       return false;
+    }
+  }
+
+  static FirebaseOptions? _firebaseOptionsForCurrentPlatform() {
+    try {
+      final options = DefaultFirebaseOptions.currentPlatform;
+      if (options.projectId == 'your-firebase-project-id' ||
+          options.apiKey.startsWith('REPLACE_WITH')) {
+        return null;
+      }
+      return options;
+    } on UnsupportedError {
+      return null;
+    } catch (e) {
+      debugPrint('PushNotificationService: Firebase Dart config unavailable — $e');
+      return null;
     }
   }
 
