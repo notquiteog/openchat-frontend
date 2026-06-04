@@ -24,7 +24,7 @@ class LocationMapPreview extends StatelessWidget {
         ? 0.0
         : (compact ? 22.0 : 44.0) +
               math.min(compact ? 58.0 : 150.0, math.sqrt(accuracy) * 3.4);
-    final mapUrls = _staticMapUrls();
+    final mapUrls = _mapboxStaticMapUrls();
 
     return Stack(
       fit: StackFit.expand,
@@ -37,6 +37,7 @@ class LocationMapPreview extends StatelessWidget {
             compact: compact,
           ),
         ),
+        _OpenStreetMapTileLayer(location: location),
         if (mapUrls.isNotEmpty) _FallbackMapImage(urls: mapUrls),
         if (accuracy != null)
           Center(
@@ -123,7 +124,7 @@ class LocationMapPreview extends StatelessWidget {
     );
   }
 
-  List<String> _staticMapUrls() {
+  List<String> _mapboxStaticMapUrls() {
     final lat = location.latitude.toStringAsFixed(6);
     final lng = location.longitude.toStringAsFixed(6);
     final size = compact ? '560x350' : '960x640';
@@ -139,10 +140,114 @@ class LocationMapPreview extends StatelessWidget {
         'https://api.mapbox.com/styles/v1/$style/static/pin-s+e53935($lng,$lat)/$lng,$lat,15,0/$size@2x?access_token=$token',
       );
     }
-    urls.add(
-      'https://staticmap.openstreetmap.de/staticmap.php?center=$lat,$lng&zoom=15&size=$size&markers=$lat,$lng,red-pushpin',
-    );
     return urls;
+  }
+}
+
+@visibleForTesting
+class OpenStreetMapTileSpec {
+  final String url;
+  final double left;
+  final double top;
+
+  const OpenStreetMapTileSpec({
+    required this.url,
+    required this.left,
+    required this.top,
+  });
+}
+
+@visibleForTesting
+List<OpenStreetMapTileSpec> openStreetMapTilesForPreview({
+  required double latitude,
+  required double longitude,
+  required double width,
+  required double height,
+  int zoom = 15,
+  double tileSize = 256,
+}) {
+  const maxLatitude = 85.05112878;
+  final lat = latitude.clamp(-maxLatitude, maxLatitude).toDouble();
+  final lon = (((longitude + 180) % 360) + 360) % 360 - 180;
+  final scale = math.pow(2, zoom).toInt();
+  final latRad = lat * math.pi / 180;
+  final centerTileX = (lon + 180) / 360 * scale;
+  final centerTileY =
+      (1 - math.log(math.tan(latRad) + 1 / math.cos(latRad)) / math.pi) /
+      2 *
+      scale;
+  final centerPixelX = centerTileX * tileSize;
+  final centerPixelY = centerTileY * tileSize;
+  final topLeftPixelX = centerPixelX - width / 2;
+  final topLeftPixelY = centerPixelY - height / 2;
+  final startTileX = (topLeftPixelX / tileSize).floor();
+  final endTileX = ((topLeftPixelX + width) / tileSize).floor();
+  final startTileY = (topLeftPixelY / tileSize).floor();
+  final endTileY = ((topLeftPixelY + height) / tileSize).floor();
+  final specs = <OpenStreetMapTileSpec>[];
+
+  for (var tileY = startTileY; tileY <= endTileY; tileY++) {
+    if (tileY < 0 || tileY >= scale) continue;
+    for (var tileX = startTileX; tileX <= endTileX; tileX++) {
+      final wrappedX = ((tileX % scale) + scale) % scale;
+      specs.add(
+        OpenStreetMapTileSpec(
+          url: 'https://tile.openstreetmap.org/$zoom/$wrappedX/$tileY.png',
+          left: tileX * tileSize - topLeftPixelX,
+          top: tileY * tileSize - topLeftPixelY,
+        ),
+      );
+    }
+  }
+
+  return specs;
+}
+
+class _OpenStreetMapTileLayer extends StatelessWidget {
+  final MessageLocation location;
+
+  const _OpenStreetMapTileLayer({required this.location});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : 560.0;
+        final height = constraints.maxHeight.isFinite
+            ? constraints.maxHeight
+            : 350.0;
+        final tiles = openStreetMapTilesForPreview(
+          latitude: location.latitude,
+          longitude: location.longitude,
+          width: width,
+          height: height,
+        );
+
+        return ClipRect(
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              for (final tile in tiles)
+                Positioned(
+                  left: tile.left,
+                  top: tile.top,
+                  width: 256,
+                  height: 256,
+                  child: Image.network(
+                    tile.url,
+                    fit: BoxFit.cover,
+                    filterQuality: FilterQuality.medium,
+                    gaplessPlayback: true,
+                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
   }
 }
 

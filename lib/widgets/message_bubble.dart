@@ -340,11 +340,13 @@ class _BubbleShell extends StatelessWidget {
   final Color color;
   final BorderRadius radii;
   final Widget child;
+  final double? maxWidth;
 
   const _BubbleShell({
     required this.color,
     required this.radii,
     required this.child,
+    this.maxWidth,
   });
 
   @override
@@ -356,7 +358,7 @@ class _BubbleShell extends StatelessWidget {
     // BackdropFilter per message). A soft ambient shadow lifts it off the canvas.
     return Container(
       constraints: BoxConstraints(
-        maxWidth: MediaQuery.of(context).size.width * 0.75,
+        maxWidth: maxWidth ?? MediaQuery.of(context).size.width * 0.75,
       ),
       decoration: BoxDecoration(
         color: color,
@@ -473,10 +475,14 @@ class _LocationBubble extends StatelessWidget {
     final accuracyText = location.accuracy != null
         ? 'Accuracy ±${location.accuracy!.toStringAsFixed(0)}m'
         : null;
+    final layout = MessageImageLayout.forViewport(MediaQuery.of(context).size);
+    final mapWidth = math.max(1.0, layout.maxBubbleWidth - 24);
+    final mapHeight = math.min(layout.maxImageHeight, mapWidth * 0.75);
 
     return _BubbleShell(
       color: bubbleColor,
       radii: radii,
+      maxWidth: layout.maxBubbleWidth,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
@@ -495,13 +501,10 @@ class _LocationBubble extends StatelessWidget {
             ),
           ClipRRect(
             borderRadius: BorderRadius.circular(10),
-            child: Stack(
-              children: [
-                AspectRatio(
-                  aspectRatio: 16 / 10,
-                  child: LocationMapPreview(location: location),
-                ),
-              ],
+            child: SizedBox(
+              width: mapWidth,
+              height: mapHeight,
+              child: LocationMapPreview(location: location),
             ),
           ),
           const SizedBox(height: 8),

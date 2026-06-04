@@ -231,6 +231,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     var payMode = true;
     var paymentSource = 'wallet';
     var provider = providers.first;
+    var amountUnit = 'crypto';
     var submitting = false;
     final amountCtrl = TextEditingController();
     final noteCtrl = TextEditingController();
@@ -258,25 +259,36 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 _snack('Enter an amount.');
                 return;
               }
+              final isCryptoAmount = amountUnit == 'crypto';
+              final fiatCurrency = isCryptoAmount
+                  ? null
+                  : amountUnit.toUpperCase();
               setSheet(() => submitting = true);
               try {
                 if (payMode) {
-                  if (paymentSource == 'wallet') {
-                    if (amount > balanceFor(provider)) {
+                  final useWallet =
+                      paymentSource == 'wallet' &&
+                      (!isCryptoAmount || amount <= balanceFor(provider));
+                  if (useWallet) {
+                    if (isCryptoAmount && amount > balanceFor(provider)) {
                       _snack('Not enough app wallet balance.');
                       return;
                     }
                     await api.sendPaymentTransfer(
                       toUserID: _user.id,
                       provider: provider,
-                      amount: amount,
+                      amount: isCryptoAmount ? amount : null,
+                      fiatAmount: isCryptoAmount ? null : amount,
+                      fiatCurrency: fiatCurrency,
                       note: noteCtrl.text,
                     );
                   } else {
                     final result = await api.createExternalPaymentTransfer(
                       toUserID: _user.id,
                       provider: provider,
-                      amount: amount,
+                      amount: isCryptoAmount ? amount : null,
+                      fiatAmount: isCryptoAmount ? null : amount,
+                      fiatCurrency: fiatCurrency,
                       note: noteCtrl.text,
                     );
                     if (!mounted || !sheetCtx.mounted) return;
@@ -289,7 +301,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                   await api.createPaymentRequest(
                     payerID: _user.id,
                     provider: provider,
-                    amount: amount,
+                    amount: isCryptoAmount ? amount : null,
+                    fiatAmount: isCryptoAmount ? null : amount,
+                    fiatCurrency: fiatCurrency,
                     title: 'Payment request',
                     note: noteCtrl.text,
                   );
@@ -308,8 +322,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             final bottomInset = MediaQuery.of(sheetCtx).viewInsets.bottom;
             final amount = double.tryParse(amountCtrl.text.trim()) ?? 0;
             final available = balanceFor(provider);
+            final isCryptoAmount = amountUnit == 'crypto';
             final canUseWallet =
-                !payMode || (amount > 0 && available >= amount);
+                !payMode ||
+                !isCryptoAmount ||
+                amount <= 0 ||
+                available >= amount;
             return SafeArea(
               top: false,
               child: Padding(
@@ -354,11 +372,20 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                         segments: [
                           for (final p in providers)
                             ButtonSegment(
-                                value: p, label: Text(p.toUpperCase())),
+                              value: p,
+                              label: Text(p.toUpperCase()),
+                            ),
                         ],
                         selected: {provider},
-                        onSelectionChanged: (next) =>
-                            setSheet(() => provider = next.first),
+                        onSelectionChanged: (next) => setSheet(() {
+                          provider = next.first;
+                          if (payMode &&
+                              amountUnit == 'crypto' &&
+                              paymentSource == 'wallet' &&
+                              amount > balanceFor(provider)) {
+                            paymentSource = 'external';
+                          }
+                        }),
                       ),
                       const SizedBox(height: 12),
                       if (payMode) ...[
@@ -382,6 +409,28 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                         ),
                         const SizedBox(height: 12),
                       ],
+                      SegmentedButton<String>(
+                        showSelectedIcon: false,
+                        segments: [
+                          ButtonSegment(
+                            value: 'crypto',
+                            label: Text(provider.toUpperCase()),
+                          ),
+                          const ButtonSegment(value: 'usd', label: Text('USD')),
+                          const ButtonSegment(value: 'eur', label: Text('EUR')),
+                        ],
+                        selected: {amountUnit},
+                        onSelectionChanged: (next) => setSheet(() {
+                          amountUnit = next.first;
+                          if (payMode &&
+                              amountUnit == 'crypto' &&
+                              paymentSource == 'wallet' &&
+                              amount > balanceFor(provider)) {
+                            paymentSource = 'external';
+                          }
+                        }),
+                      ),
+                      const SizedBox(height: 12),
                       TextField(
                         controller: amountCtrl,
                         keyboardType: const TextInputType.numberWithOptions(
@@ -392,6 +441,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                               double.tryParse(amountCtrl.text.trim()) ?? 0;
                           setSheet(() {
                             if (payMode &&
+                                amountUnit == 'crypto' &&
                                 paymentSource == 'wallet' &&
                                 nextAmount > balanceFor(provider)) {
                               paymentSource = 'external';
@@ -399,7 +449,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                           });
                         },
                         decoration: InputDecoration(
-                          labelText: 'Amount ${provider.toUpperCase()}',
+                          labelText: amountUnit == 'crypto'
+                              ? 'Amount ${provider.toUpperCase()}'
+                              : 'Amount ${amountUnit.toUpperCase()}',
                           border: const OutlineInputBorder(),
                         ),
                       ),
@@ -420,8 +472,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                             ? const SizedBox(
                                 width: 16,
                                 height: 16,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               )
                             : const Icon(Icons.payments_outlined),
                         label: Text(

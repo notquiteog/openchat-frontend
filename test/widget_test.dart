@@ -5,6 +5,7 @@ import 'package:openpgp/openpgp.dart';
 import 'package:openchat/crypto/pgp_service.dart';
 import 'package:openchat/models/message.dart';
 import 'package:openchat/models/user.dart';
+import 'package:openchat/widgets/location_map_preview.dart';
 
 void main() {
   group('KeyType options', () {
@@ -150,6 +151,23 @@ void main() {
         ),
         isNull,
       );
+    });
+
+    test('builds OpenStreetMap street tile previews around the coordinate', () {
+      final tiles = openStreetMapTilesForPreview(
+        latitude: 41.8781,
+        longitude: -87.6298,
+        width: 436,
+        height: 327,
+      );
+
+      expect(tiles, isNotEmpty);
+      expect(
+        tiles.map((tile) => tile.url),
+        everyElement(startsWith('https://tile.openstreetmap.org/15/')),
+      );
+      expect(tiles.any((tile) => tile.left < 0), isTrue);
+      expect(tiles.any((tile) => tile.top < 0), isTrue);
     });
   });
 
