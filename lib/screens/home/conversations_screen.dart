@@ -83,8 +83,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 await chat.loadConversations();
                 if (mounted) setState(() => _storiesRefreshKey += 1);
               },
-              displacement:
-                  MediaQuery.paddingOf(context).top + kToolbarHeight,
+              displacement: MediaQuery.paddingOf(context).top + kToolbarHeight,
               child: ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 padding: EdgeInsets.only(
@@ -265,17 +264,17 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
               const SizedBox(height: 16),
               Text(
                 'No conversations yet',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 6),
               Text(
                 'Start a conversation to get going',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: scheme.onSurface.withValues(alpha: 0.50),
-                    ),
+                  color: scheme.onSurface.withValues(alpha: 0.50),
+                ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 20),
@@ -328,52 +327,54 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       enableInteractionGlow: true,
       builder: (ctx) => SafeArea(
         top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            _SheetTile(
-              icon: Icons.person_outline_rounded,
-              label: 'New Direct Message',
-              onTap: () {
-                Navigator.pop(ctx);
-                _showSearch(context);
-              },
-            ),
-            _SheetTile(
-              icon: Icons.bookmark_border_rounded,
-              label: 'Saved Messages',
-              onTap: () async {
-                Navigator.pop(ctx);
-                await _openSavedMessages(context);
-              },
-            ),
-            _SheetTile(
-              icon: Icons.group_outlined,
-              label: 'New Group',
-              onTap: () {
-                Navigator.pop(ctx);
-                _showCreateGroup(context);
-              },
-            ),
-            _SheetTile(
-              icon: Icons.campaign_outlined,
-              label: 'New Channel',
-              onTap: () async {
-                Navigator.pop(ctx);
-                final channel = await showCreateChannelDialog(context);
-                if (channel != null && context.mounted) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ChannelFeedScreen(channel: channel),
-                    ),
-                  );
-                }
-              },
-            ),
-            const SizedBox(height: 16),
-          ],
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              _SheetTile(
+                icon: Icons.person_outline_rounded,
+                label: 'New Direct Message',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showSearch(context);
+                },
+              ),
+              _SheetTile(
+                icon: Icons.bookmark_border_rounded,
+                label: 'Saved Messages',
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  await _openSavedMessages(context);
+                },
+              ),
+              _SheetTile(
+                icon: Icons.group_outlined,
+                label: 'New Group',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showCreateGroup(context);
+                },
+              ),
+              _SheetTile(
+                icon: Icons.campaign_outlined,
+                label: 'New Channel',
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  final channel = await showCreateChannelDialog(context);
+                  if (channel != null && context.mounted) {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ChannelFeedScreen(channel: channel),
+                      ),
+                    );
+                  }
+                },
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
         ),
       ),
     );
@@ -459,8 +460,10 @@ class _AnimatedConversationTileState extends State<_AnimatedConversationTile>
     vsync: this,
     duration: const Duration(milliseconds: 420),
   );
-  late final Animation<double> _fade =
-      CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic);
+  late final Animation<double> _fade = CurvedAnimation(
+    parent: _ctrl,
+    curve: Curves.easeOutCubic,
+  );
   late final Animation<Offset> _slide = Tween<Offset>(
     begin: const Offset(0, 0.18),
     end: Offset.zero,
@@ -484,9 +487,9 @@ class _AnimatedConversationTileState extends State<_AnimatedConversationTile>
 
   @override
   Widget build(BuildContext context) => FadeTransition(
-        opacity: _fade,
-        child: SlideTransition(position: _slide, child: widget.child),
-      );
+    opacity: _fade,
+    child: SlideTransition(position: _slide, child: widget.child),
+  );
 }
 
 // ── Conversation Tile ─────────────────────────────────────────────────────────
@@ -590,8 +593,9 @@ class _ConversationTile extends StatelessWidget {
                               ? scheme.onSurface.withValues(alpha: 0.75)
                               : scheme.onSurface.withValues(alpha: 0.45),
                           fontSize: 13,
-                          fontWeight:
-                              hasUnread ? FontWeight.w500 : FontWeight.w400,
+                          fontWeight: hasUnread
+                              ? FontWeight.w500
+                              : FontWeight.w400,
                         ),
                       ),
                     ],
@@ -612,7 +616,9 @@ class _ConversationTile extends StatelessWidget {
                         color: hasUnread
                             ? scheme.primary
                             : scheme.onSurface.withValues(alpha: 0.38),
-                        fontWeight: hasUnread ? FontWeight.w600 : FontWeight.w400,
+                        fontWeight: hasUnread
+                            ? FontWeight.w600
+                            : FontWeight.w400,
                       ),
                     ),
                   if (hasUnread) ...[
@@ -683,18 +689,18 @@ class _ConvAvatar extends StatelessWidget {
           : null,
       child: avatarUrl == null
           ? (isGroup || isChannel
-              ? Icon(
-                  isChannel ? Icons.campaign_rounded : Icons.group_rounded,
-                  size: 22,
-                  color: scheme.onSurfaceVariant,
-                )
-              : Text(
-                  name.isNotEmpty ? name[0].toUpperCase() : '?',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 17,
-                  ),
-                ))
+                ? Icon(
+                    isChannel ? Icons.campaign_rounded : Icons.group_rounded,
+                    size: 22,
+                    color: scheme.onSurfaceVariant,
+                  )
+                : Text(
+                    name.isNotEmpty ? name[0].toUpperCase() : '?',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 17,
+                    ),
+                  ))
           : null,
     );
 
@@ -779,7 +785,11 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
                     if (u.isBot)
                       const Padding(
                         padding: EdgeInsets.only(left: 6),
-                        child: Icon(Icons.smart_toy, size: 14, color: Colors.grey),
+                        child: Icon(
+                          Icons.smart_toy,
+                          size: 14,
+                          color: Colors.grey,
+                        ),
                       ),
                   ],
                 ),
@@ -880,9 +890,13 @@ class _SheetTile extends StatelessWidget {
                   child: Icon(icon, size: 18, color: scheme.primary),
                 ),
                 const SizedBox(width: 14),
-                Text(label,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w600, fontSize: 15)),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                  ),
+                ),
               ],
             ),
           ),

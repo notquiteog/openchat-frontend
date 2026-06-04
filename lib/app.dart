@@ -105,23 +105,48 @@ class OpenChatApp extends StatelessWidget {
             ),
             // Call bar — sees location offset so SafeArea places it below the
             // location bar when both are active.
-            // Wrapped in Material(transparency) so Text widgets inside the
-            // overlay get Material's DefaultTextStyle (no yellow underline).
+            //
+            // Why DefaultTextStyle.merge instead of Material(transparency):
+            //
+            // MaterialApp.builder runs inside AnimatedTheme but OUTSIDE any
+            // Material widget, so DefaultTextStyle.of() returns Flutter's debug
+            // fallback (monospace font, yellow underline) — wrapping in something
+            // that sets a real DefaultTextStyle is required for correct text style.
+            //
+            // We CANNOT use Material(type: MaterialType.transparency) because it
+            // adds _InkFeatures / PhysicalShape render objects. Those render objects
+            // alter the compositing chain around LightweightLiquidGlass's
+            // BackdropFilterLayer, causing it to read from an isolated or empty
+            // layer and paint the glass surface solid white over the entire app.
+            // Additionally, _LiveConnectionBanner.build() returns a Positioned
+            // widget that MUST be a direct RenderStack child; inserting any widget
+            // with its own RenderObject (Material has several) between the Stack
+            // and the Positioned breaks applyParentData and the banner inherits
+            // full-screen constraints, compounding the white-layer corruption.
+            //
+            // DefaultTextStyle.merge is safe: it composes Builder + InheritedWidget,
+            // neither of which introduce RenderObjects. In the render tree every
+            // overlay widget remains a direct child of RenderStack, so Positioned
+            // and BackdropFilterLayer both work exactly as if the wrapper
+            // weren't there.
             MediaQuery(
               data: withTop(locExtra),
-              child: const Material(
-                type: MaterialType.transparency,
-                child: CallOverlay(),
+              child: DefaultTextStyle.merge(
+                style: const TextStyle(decoration: TextDecoration.none),
+                child: const CallOverlay(),
               ),
             ),
             // Location bar — sees no extra offset → anchors at the very top.
-            const Material(
-              type: MaterialType.transparency,
-              child: _LocationBarOverlay(),
+            DefaultTextStyle.merge(
+              style: const TextStyle(decoration: TextDecoration.none),
+              child: const _LocationBarOverlay(),
             ),
-            const Material(
-              type: MaterialType.transparency,
-              child: _LiveConnectionBanner(),
+            // Connection banner — build() returns Positioned, which needs to be
+            // an effective direct RenderStack child. DefaultTextStyle.merge
+            // satisfies that requirement (no render objects in the path).
+            DefaultTextStyle.merge(
+              style: const TextStyle(decoration: TextDecoration.none),
+              child: const _LiveConnectionBanner(),
             ),
           ],
           ),

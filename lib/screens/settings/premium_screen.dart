@@ -562,109 +562,100 @@ class _ProviderPickerSheet extends StatelessWidget {
         .where((provider) => provider == 'btc' || provider == 'xmr')
         .toList(growable: false);
     final scheme = Theme.of(context).colorScheme;
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-        child: GlassContainer(
-          shape: LiquidRoundedSuperellipse(borderRadius: 28),
-          allowElevation: true,
-          glowIntensity: 0.06,
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Pay for ${plan == 'year' ? 'yearly' : 'monthly'} premium',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 16),
-              if (walletProviders.isNotEmpty) ...[
-                Text(
-                  'App wallet',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: scheme.primary,
-                    letterSpacing: 1.1,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                GlassCard(
-                  padding: EdgeInsets.zero,
-                  child: Column(
-                    children: [
-                      for (final (i, p) in walletProviders.indexed) ...[
-                        if (i > 0)
-                          Divider(
-                            height: 1,
-                            thickness: 0.5,
-                            indent: 66,
-                            color: scheme.onSurface.withValues(alpha: 0.10),
-                          ),
-                        _ProviderTile(
-                          icon: _icon(p),
-                          title: '${p.toUpperCase()} balance',
-                          subtitle: _formatCrypto(_balanceFor(balances, p), p),
-                          onTap: () => onPicked(p, 'wallet'),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-              ],
-              Text(
-                'External wallet or card',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: scheme.primary,
-                  letterSpacing: 1.1,
-                ),
-              ),
-              const SizedBox(height: 8),
-              GlassCard(
-                padding: EdgeInsets.zero,
-                child: Column(
-                  children: [
-                    for (final (i, p) in providers.indexed) ...[
-                      if (i > 0)
-                        Divider(
-                          height: 1,
-                          thickness: 0.5,
-                          indent: 66,
-                          color: scheme.onSurface.withValues(alpha: 0.10),
-                        ),
-                      _ProviderTile(
-                        icon: _icon(p),
-                        title: _label(p),
-                        subtitle: pendingProviders.contains(p)
-                            ? 'A pending payment already exists'
-                            : null,
-                        trailing: pendingProviders.contains(p)
-                            ? Icon(
-                                Icons.hourglass_top,
-                                size: 18,
-                                color: scheme.onSurface.withValues(alpha: 0.45),
-                              )
-                            : null,
-                        enabled: !pendingProviders.contains(p),
-                        onTap: pendingProviders.contains(p)
-                            ? null
-                            : () => onPicked(p, 'external'),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-            ],
+    return GlassBottomSheetFrame(
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Pay for ${plan == 'year' ? 'yearly' : 'monthly'} premium',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
           ),
-        ),
+          const SizedBox(height: 16),
+          if (walletProviders.isNotEmpty) ...[
+            Text(
+              'App wallet',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: scheme.primary,
+                letterSpacing: 1.1,
+              ),
+            ),
+            const SizedBox(height: 8),
+            GlassCard(
+              padding: EdgeInsets.zero,
+              child: Column(
+                children: [
+                  for (final (i, p) in walletProviders.indexed) ...[
+                    if (i > 0)
+                      Divider(
+                        height: 1,
+                        thickness: 0.5,
+                        indent: 66,
+                        color: scheme.onSurface.withValues(alpha: 0.10),
+                      ),
+                    _ProviderTile(
+                      icon: _icon(p),
+                      title: '${p.toUpperCase()} balance',
+                      subtitle: _formatCrypto(_balanceFor(balances, p), p),
+                      onTap: () => onPicked(p, 'wallet'),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+          Text(
+            'External wallet or card',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: scheme.primary,
+              letterSpacing: 1.1,
+            ),
+          ),
+          const SizedBox(height: 8),
+          GlassCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                for (final (i, p) in providers.indexed) ...[
+                  if (i > 0)
+                    Divider(
+                      height: 1,
+                      thickness: 0.5,
+                      indent: 66,
+                      color: scheme.onSurface.withValues(alpha: 0.10),
+                    ),
+                  _ProviderTile(
+                    icon: _icon(p),
+                    title: _label(p),
+                    subtitle: pendingProviders.contains(p)
+                        ? 'A pending payment already exists'
+                        : null,
+                    trailing: pendingProviders.contains(p)
+                        ? Icon(
+                            Icons.hourglass_top,
+                            size: 18,
+                            color: scheme.onSurface.withValues(alpha: 0.45),
+                          )
+                        : null,
+                    enabled: !pendingProviders.contains(p),
+                    onTap: pendingProviders.contains(p)
+                        ? null
+                        : () => onPicked(p, 'external'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
       ),
     );
   }

@@ -182,117 +182,109 @@ class _VoiceNoteRecorderSheetState extends State<VoiceNoteRecorderSheet> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final canSend = _file != null && !_busy;
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-        child: GlassContainer(
-          shape: LiquidRoundedSuperellipse(borderRadius: 28),
-          allowElevation: true,
-          glowIntensity: 0.07,
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 42,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: scheme.onSurface.withValues(alpha: 0.18),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: 116,
-                height: 116,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    if (_recording)
-                      _PulseRing(color: scheme.primary.withValues(alpha: 0.26)),
-                    Container(
-                      width: 74,
-                      height: 74,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: _recording
-                            ? scheme.error.withValues(alpha: 0.92)
-                            : scheme.primary,
-                        boxShadow: [
-                          BoxShadow(
-                            color: (_recording ? scheme.error : scheme.primary)
-                                .withValues(alpha: 0.28),
-                            blurRadius: 28,
-                            offset: const Offset(0, 12),
-                          ),
-                        ],
+    return GlassBottomSheetFrame(
+      glowIntensity: 0.07,
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 42,
+            height: 4,
+            decoration: BoxDecoration(
+              color: scheme.onSurface.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+          const SizedBox(height: 20),
+          SizedBox(
+            width: 116,
+            height: 116,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                if (_recording)
+                  _PulseRing(color: scheme.primary.withValues(alpha: 0.26)),
+                Container(
+                  width: 74,
+                  height: 74,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _recording
+                        ? scheme.error.withValues(alpha: 0.92)
+                        : scheme.primary,
+                    boxShadow: [
+                      BoxShadow(
+                        color: (_recording ? scheme.error : scheme.primary)
+                            .withValues(alpha: 0.28),
+                        blurRadius: 28,
+                        offset: const Offset(0, 12),
                       ),
-                      child: Icon(
-                        _recording ? Icons.mic : Icons.graphic_eq,
-                        color: Colors.white,
-                        size: 34,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                _durationLabel(_elapsed),
-                style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0,
-                ),
-              ),
-              const SizedBox(height: 14),
-              SizedBox(
-                height: 46,
-                child: _Waveform(levels: _levels, color: scheme.primary),
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: 10),
-                Text(
-                  _error!,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: scheme.error),
+                    ],
+                  ),
+                  child: Icon(
+                    _recording ? Icons.mic : Icons.graphic_eq,
+                    color: Colors.white,
+                    size: 34,
+                  ),
                 ),
               ],
-              const SizedBox(height: 18),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  IconButton.filledTonal(
-                    tooltip: 'Cancel',
-                    onPressed: _busy ? null : _cancel,
-                    icon: const Icon(Icons.close),
-                  ),
-                  IconButton.filled(
-                    tooltip: _recording ? 'Stop' : 'Record',
-                    onPressed: _busy
-                        ? null
-                        : _recording
-                        ? _stop
-                        : _start,
-                    icon: _busy
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : Icon(_recording ? Icons.stop : Icons.mic),
-                  ),
-                  IconButton.filled(
-                    tooltip: 'Send',
-                    onPressed: canSend ? _send : null,
-                    icon: const Icon(Icons.send),
-                  ),
-                ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            _durationLabel(_elapsed),
+            style: Theme.of(context).textTheme.displaySmall?.copyWith(
+              fontFeatures: const [FontFeature.tabularFigures()],
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0,
+            ),
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            height: 46,
+            child: _Waveform(levels: _levels, color: scheme.primary),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              _error!,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: scheme.error),
+            ),
+          ],
+          const SizedBox(height: 18),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton.filledTonal(
+                tooltip: 'Cancel',
+                onPressed: _busy ? null : _cancel,
+                icon: const Icon(Icons.close),
+              ),
+              IconButton.filled(
+                tooltip: _recording ? 'Stop' : 'Record',
+                onPressed: _busy
+                    ? null
+                    : _recording
+                    ? _stop
+                    : _start,
+                icon: _busy
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Icon(_recording ? Icons.stop : Icons.mic),
+              ),
+              IconButton.filled(
+                tooltip: 'Send',
+                onPressed: canSend ? _send : null,
+                icon: const Icon(Icons.send),
               ),
             ],
           ),
-        ),
+        ],
       ),
     );
   }

@@ -588,43 +588,34 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         msg.senderId != context.read<AuthProvider>().currentUser?.id;
     final action = await showModalBottomSheet<String>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: GlassContainer(
-            shape: LiquidRoundedSuperellipse(borderRadius: 28),
-            allowElevation: true,
-            glowIntensity: 0.06,
-            padding: EdgeInsets.zero,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 8),
-                _ChanTile(
-                  icon: Icons.person_outline_rounded,
-                  label: '@${user.username}',
-                  onTap: () => Navigator.pop(context, 'profile'),
-                ),
-                if (canModerateUser) ...[
-                  _ChanTile(
-                    icon: Icons.delete_sweep_outlined,
-                    label: 'Delete their messages',
-                    color: Colors.red,
-                    onTap: () => Navigator.pop(context, 'delete_messages'),
-                  ),
-                  _ChanTile(
-                    icon: Icons.block_rounded,
-                    label: 'Ban from channel',
-                    color: Colors.red,
-                    onTap: () => Navigator.pop(context, 'ban'),
-                  ),
-                ],
-                const SizedBox(height: 8),
-              ],
+      builder: (_) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            _ChanTile(
+              icon: Icons.person_outline_rounded,
+              label: '@${user.username}',
+              onTap: () => Navigator.pop(context, 'profile'),
             ),
-          ),
+            if (canModerateUser) ...[
+              _ChanTile(
+                icon: Icons.delete_sweep_outlined,
+                label: 'Delete their messages',
+                color: Colors.red,
+                onTap: () => Navigator.pop(context, 'delete_messages'),
+              ),
+              _ChanTile(
+                icon: Icons.block_rounded,
+                label: 'Ban from channel',
+                color: Colors.red,
+                onTap: () => Navigator.pop(context, 'ban'),
+              ),
+            ],
+            const SizedBox(height: 8),
+          ],
         ),
       ),
     );
@@ -1022,36 +1013,27 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
 
     final action = await showModalBottomSheet<String>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: GlassContainer(
-            shape: LiquidRoundedSuperellipse(borderRadius: 28),
-            allowElevation: true,
-            glowIntensity: 0.06,
-            padding: EdgeInsets.zero,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 8),
-                _ChanTile(
-                  icon: Icons.image_outlined,
-                  label: 'Choose background image',
-                  onTap: () => Navigator.pop(context, 'pick'),
-                ),
-                if (channel.backgroundUrl != null)
-                  _ChanTile(
-                    icon: Icons.delete_outline_rounded,
-                    label: 'Remove background',
-                    color: Colors.red,
-                    onTap: () => Navigator.pop(context, 'remove'),
-                  ),
-                const SizedBox(height: 8),
-              ],
+      builder: (_) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            _ChanTile(
+              icon: Icons.image_outlined,
+              label: 'Choose background image',
+              onTap: () => Navigator.pop(context, 'pick'),
             ),
-          ),
+            if (channel.backgroundUrl != null)
+              _ChanTile(
+                icon: Icons.delete_outline_rounded,
+                label: 'Remove background',
+                color: Colors.red,
+                onTap: () => Navigator.pop(context, 'remove'),
+              ),
+            const SizedBox(height: 8),
+          ],
         ),
       ),
     );
@@ -1201,47 +1183,37 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             setSheet(() {});
           }
 
-          final bottomInset = MediaQuery.of(sheetCtx).viewInsets.bottom;
-          return SafeArea(
-            top: false,
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(14, 0, 14, 14 + bottomInset),
-              child: GlassContainer(
-                shape: LiquidRoundedSuperellipse(borderRadius: 28),
-                allowElevation: true,
-                glowIntensity: 0.06,
-                padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
+          return GlassBottomSheetFrame(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
                   children: [
-                    Row(
-                      children: [
-                        Text(
-                          'Chat appearance',
-                          style: Theme.of(sheetCtx).textTheme.titleMedium,
-                        ),
-                        const Spacer(),
-                        TextButton(
-                          onPressed: () => apply(const ChatStyle()),
-                          child: const Text('Reset'),
-                        ),
-                      ],
+                    Text(
+                      'Chat appearance',
+                      style: Theme.of(sheetCtx).textTheme.titleMedium,
                     ),
-                    const SizedBox(height: 12),
-                    const Text('My bubble color'),
-                    const SizedBox(height: 8),
-                    ColorChoices(
-                      selected: style.myBubbleColor,
-                      onSelected: (color) => apply(
-                        color == null
-                            ? style.copyWith(clearMyBubbleColor: true)
-                            : style.copyWith(myBubbleColor: color),
-                      ),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () => apply(const ChatStyle()),
+                      child: const Text('Reset'),
                     ),
                   ],
                 ),
-              ),
+                const SizedBox(height: 12),
+                const Text('My bubble color'),
+                const SizedBox(height: 8),
+                ColorChoices(
+                  selected: style.myBubbleColor,
+                  onSelected: (color) => apply(
+                    color == null
+                        ? style.copyWith(clearMyBubbleColor: true)
+                        : style.copyWith(myBubbleColor: color),
+                  ),
+                ),
+              ],
             ),
           );
         },
@@ -1264,45 +1236,35 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     );
     final action = await showModalBottomSheet<ChannelModerationAction>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: GlassContainer(
-            shape: LiquidRoundedSuperellipse(borderRadius: 28),
-            allowElevation: true,
-            glowIntensity: 0.06,
-            padding: EdgeInsets.zero,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 8),
-                for (final item in placement.moderationMenu)
-                  _ChanTile(
-                    icon: switch (item) {
-                      ChannelModerationAction.openModeration =>
-                        Icons.shield_outlined,
-                      ChannelModerationAction.archive => Icons.archive_outlined,
-                      ChannelModerationAction.unarchive =>
-                        Icons.unarchive_outlined,
-                      ChannelModerationAction.delete => Icons.delete_outline,
-                    },
-                    label: switch (item) {
-                      ChannelModerationAction.openModeration => 'Moderation',
-                      ChannelModerationAction.archive => 'Archive channel',
-                      ChannelModerationAction.unarchive => 'Unarchive channel',
-                      ChannelModerationAction.delete => 'Delete channel',
-                    },
-                    color: item == ChannelModerationAction.delete
-                        ? Colors.red
-                        : null,
-                    onTap: () => Navigator.pop(context, item),
-                  ),
-                const SizedBox(height: 8),
-              ],
-            ),
-          ),
+      builder: (_) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            for (final item in placement.moderationMenu)
+              _ChanTile(
+                icon: switch (item) {
+                  ChannelModerationAction.openModeration =>
+                    Icons.shield_outlined,
+                  ChannelModerationAction.archive => Icons.archive_outlined,
+                  ChannelModerationAction.unarchive => Icons.unarchive_outlined,
+                  ChannelModerationAction.delete => Icons.delete_outline,
+                },
+                label: switch (item) {
+                  ChannelModerationAction.openModeration => 'Moderation',
+                  ChannelModerationAction.archive => 'Archive channel',
+                  ChannelModerationAction.unarchive => 'Unarchive channel',
+                  ChannelModerationAction.delete => 'Delete channel',
+                },
+                color: item == ChannelModerationAction.delete
+                    ? Colors.red
+                    : null,
+                onTap: () => Navigator.pop(context, item),
+              ),
+            const SizedBox(height: 8),
+          ],
         ),
       ),
     );
@@ -1336,59 +1298,48 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     );
     final action = await showModalBottomSheet<ChannelSettingsAction>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: GlassContainer(
-            shape: LiquidRoundedSuperellipse(borderRadius: 28),
-            allowElevation: true,
-            glowIntensity: 0.06,
-            padding: EdgeInsets.zero,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 8),
-                for (final item in placement.settingsMenu)
-                  _ChanTile(
-                    icon: switch (item) {
-                      ChannelSettingsAction.appearance =>
-                        Icons.format_color_fill_outlined,
-                      ChannelSettingsAction.edit => Icons.settings_outlined,
-                      ChannelSettingsAction.background =>
-                        Icons.wallpaper_outlined,
-                      ChannelSettingsAction.autoDelete => Icons.timer_outlined,
-                      ChannelSettingsAction.encryption =>
-                        channel.encryptionEnabled
-                            ? Icons.lock_outline_rounded
-                            : Icons.lock_open_outlined,
-                      ChannelSettingsAction.deleteOwnMessages =>
-                        Icons.delete_sweep_outlined,
-                    },
-                    label: switch (item) {
-                      ChannelSettingsAction.appearance => 'Chat appearance',
-                      ChannelSettingsAction.edit => 'Channel settings',
-                      ChannelSettingsAction.background =>
-                        'Set chat background (Premium)',
-                      ChannelSettingsAction.autoDelete =>
-                        'Disappearing messages',
-                      ChannelSettingsAction.encryption =>
-                        channel.encryptionEnabled
-                            ? 'Turn encryption off'
-                            : 'Turn encryption on',
-                      ChannelSettingsAction.deleteOwnMessages =>
-                        'Delete my messages',
-                    },
-                    color: item == ChannelSettingsAction.deleteOwnMessages
-                        ? Colors.red
-                        : null,
-                    onTap: () => Navigator.pop(context, item),
-                  ),
-                const SizedBox(height: 8),
-              ],
-            ),
-          ),
+      builder: (_) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            for (final item in placement.settingsMenu)
+              _ChanTile(
+                icon: switch (item) {
+                  ChannelSettingsAction.appearance =>
+                    Icons.format_color_fill_outlined,
+                  ChannelSettingsAction.edit => Icons.settings_outlined,
+                  ChannelSettingsAction.background => Icons.wallpaper_outlined,
+                  ChannelSettingsAction.autoDelete => Icons.timer_outlined,
+                  ChannelSettingsAction.encryption =>
+                    channel.encryptionEnabled
+                        ? Icons.lock_outline_rounded
+                        : Icons.lock_open_outlined,
+                  ChannelSettingsAction.deleteOwnMessages =>
+                    Icons.delete_sweep_outlined,
+                },
+                label: switch (item) {
+                  ChannelSettingsAction.appearance => 'Chat appearance',
+                  ChannelSettingsAction.edit => 'Channel settings',
+                  ChannelSettingsAction.background =>
+                    'Set chat background (Premium)',
+                  ChannelSettingsAction.autoDelete => 'Disappearing messages',
+                  ChannelSettingsAction.encryption =>
+                    channel.encryptionEnabled
+                        ? 'Turn encryption off'
+                        : 'Turn encryption on',
+                  ChannelSettingsAction.deleteOwnMessages =>
+                    'Delete my messages',
+                },
+                color: item == ChannelSettingsAction.deleteOwnMessages
+                    ? Colors.red
+                    : null,
+                onTap: () => Navigator.pop(context, item),
+              ),
+            const SizedBox(height: 8),
+          ],
         ),
       ),
     );
@@ -1511,99 +1462,90 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         : minimumSchedule;
     await showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) => SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-            child: GlassContainer(
-              shape: LiquidRoundedSuperellipse(borderRadius: 28),
-              allowElevation: true,
-              glowIntensity: 0.06,
-              padding: const EdgeInsets.fromLTRB(0, 8, 0, 4),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Drag handle
-                  Container(
-                    width: 36,
-                    height: 4,
-                    margin: const EdgeInsets.only(bottom: 8),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withValues(alpha: 0.30),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  SwitchListTile(
-                    secondary: const Icon(Icons.notifications_off_outlined),
-                    title: const Text('Post silently'),
-                    value: _sendSilent,
-                    onChanged: (v) {
-                      setState(() => _sendSilent = v);
-                      setSheetState(() {});
-                    },
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.schedule_outlined),
-                        const SizedBox(width: 12),
-                        Text(
-                          'Schedule delivery',
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                      ],
-                    ),
-                  ),
-                  SizedBox(
-                    height: 216,
-                    child: CupertinoDatePicker(
-                      mode: CupertinoDatePickerMode.dateAndTime,
-                      minimumDate: minimumSchedule,
-                      initialDateTime: draftSchedule,
-                      minuteInterval: 1,
-                      onDateTimeChanged: (value) =>
-                          setSheetState(() => draftSchedule = value),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-                    child: Row(
-                      children: [
-                        if (_scheduledFor != null)
-                          TextButton.icon(
-                            icon: const Icon(Icons.event_busy_outlined),
-                            label: const Text('Clear'),
-                            onPressed: () {
-                              setState(() => _scheduledFor = null);
-                              Navigator.pop(ctx);
-                            },
-                          ),
-                        const Spacer(),
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx),
-                          child: const Text('Done'),
-                        ),
-                        const SizedBox(width: 8),
-                        FilledButton.icon(
-                          icon: const Icon(Icons.schedule_send_outlined),
-                          label: const Text('Set'),
-                          onPressed: () {
-                            setState(() => _scheduledFor = draftSchedule);
-                            Navigator.pop(ctx);
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+        builder: (ctx, setSheetState) => GlassBottomSheetFrame(
+          padding: const EdgeInsets.fromLTRB(0, 8, 0, 4),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Drag handle
+              Container(
+                width: 36,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 8),
+                decoration: BoxDecoration(
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.onSurface.withValues(alpha: 0.30),
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
-            ),
+              SwitchListTile(
+                secondary: const Icon(Icons.notifications_off_outlined),
+                title: const Text('Post silently'),
+                value: _sendSilent,
+                onChanged: (v) {
+                  setState(() => _sendSilent = v);
+                  setSheetState(() {});
+                },
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: Row(
+                  children: [
+                    const Icon(Icons.schedule_outlined),
+                    const SizedBox(width: 12),
+                    Text(
+                      'Schedule delivery',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(
+                height: 216,
+                child: CupertinoDatePicker(
+                  mode: CupertinoDatePickerMode.dateAndTime,
+                  minimumDate: minimumSchedule,
+                  initialDateTime: draftSchedule,
+                  minuteInterval: 1,
+                  onDateTimeChanged: (value) =>
+                      setSheetState(() => draftSchedule = value),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                child: Row(
+                  children: [
+                    if (_scheduledFor != null)
+                      TextButton.icon(
+                        icon: const Icon(Icons.event_busy_outlined),
+                        label: const Text('Clear'),
+                        onPressed: () {
+                          setState(() => _scheduledFor = null);
+                          Navigator.pop(ctx);
+                        },
+                      ),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Done'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton.icon(
+                      icon: const Icon(Icons.schedule_send_outlined),
+                      label: const Text('Set'),
+                      onPressed: () {
+                        setState(() => _scheduledFor = draftSchedule);
+                        Navigator.pop(ctx);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -1614,35 +1556,27 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     if (msg.type == MessageType.system) return;
     showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: GlassContainer(
-            shape: LiquidRoundedSuperellipse(borderRadius: 28),
-            allowElevation: true,
-            glowIntensity: 0.06,
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-            child: Wrap(
-              alignment: WrapAlignment.center,
-              spacing: 10,
-              children: [
-                for (final emoji in const ['👍', '❤️', '😂', '🔥', '🎉', '👀'])
-                  InkWell(
-                    borderRadius: BorderRadius.circular(22),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _toggleReaction(msg, emoji);
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.all(8),
-                      child: Text(emoji, style: const TextStyle(fontSize: 26)),
-                    ),
-                  ),
-              ],
-            ),
-          ),
+      builder: (ctx) => GlassBottomSheetFrame(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+        child: Wrap(
+          alignment: WrapAlignment.center,
+          spacing: 10,
+          children: [
+            for (final emoji in const ['👍', '❤️', '😂', '🔥', '🎉', '👀'])
+              InkWell(
+                borderRadius: BorderRadius.circular(22),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _toggleReaction(msg, emoji);
+                },
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Text(emoji, style: const TextStyle(fontSize: 26)),
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -1825,65 +1759,56 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
 
     final choice = await showModalBottomSheet<String>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: GlassContainer(
-            shape: LiquidRoundedSuperellipse(borderRadius: 28),
-            allowElevation: true,
-            glowIntensity: 0.06,
-            padding: EdgeInsets.zero,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 8),
-                _ChanTile(
-                  icon: Icons.photo_library_outlined,
-                  label: 'Photo from gallery',
-                  onTap: () => Navigator.pop(context, 'gallery_image'),
-                ),
-                if (cameraSupported)
-                  _ChanTile(
-                    icon: Icons.camera_alt_outlined,
-                    label: 'Take photo',
-                    onTap: () => Navigator.pop(context, 'camera_image'),
-                  ),
-                _ChanTile(
-                  icon: Icons.videocam_outlined,
-                  label: 'Video from gallery',
-                  onTap: () => Navigator.pop(context, 'gallery_video'),
-                ),
-                _ChanTile(
-                  icon: Icons.attach_file,
-                  label: 'File',
-                  onTap: () => Navigator.pop(context, 'file'),
-                ),
-                _ChanTile(
-                  icon: Icons.poll_outlined,
-                  label: 'Poll',
-                  onTap: () => Navigator.pop(context, 'poll'),
-                ),
-                _ChanTile(
-                  icon: Icons.mic_none_outlined,
-                  label: 'Voice note',
-                  onTap: () => Navigator.pop(context, 'voice'),
-                ),
-                _ChanTile(
-                  icon: Icons.share_location_outlined,
-                  label: 'Share location',
-                  onTap: () => Navigator.pop(context, 'location_once'),
-                ),
-                _ChanTile(
-                  icon: Icons.location_on_outlined,
-                  label: 'Share live location',
-                  onTap: () => Navigator.pop(context, 'location_live'),
-                ),
-                const SizedBox(height: 8),
-              ],
+      builder: (_) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            _ChanTile(
+              icon: Icons.photo_library_outlined,
+              label: 'Photo from gallery',
+              onTap: () => Navigator.pop(context, 'gallery_image'),
             ),
-          ),
+            if (cameraSupported)
+              _ChanTile(
+                icon: Icons.camera_alt_outlined,
+                label: 'Take photo',
+                onTap: () => Navigator.pop(context, 'camera_image'),
+              ),
+            _ChanTile(
+              icon: Icons.videocam_outlined,
+              label: 'Video from gallery',
+              onTap: () => Navigator.pop(context, 'gallery_video'),
+            ),
+            _ChanTile(
+              icon: Icons.attach_file,
+              label: 'File',
+              onTap: () => Navigator.pop(context, 'file'),
+            ),
+            _ChanTile(
+              icon: Icons.poll_outlined,
+              label: 'Poll',
+              onTap: () => Navigator.pop(context, 'poll'),
+            ),
+            _ChanTile(
+              icon: Icons.mic_none_outlined,
+              label: 'Voice note',
+              onTap: () => Navigator.pop(context, 'voice'),
+            ),
+            _ChanTile(
+              icon: Icons.share_location_outlined,
+              label: 'Share location',
+              onTap: () => Navigator.pop(context, 'location_once'),
+            ),
+            _ChanTile(
+              icon: Icons.location_on_outlined,
+              label: 'Share live location',
+              onTap: () => Navigator.pop(context, 'location_live'),
+            ),
+            const SizedBox(height: 8),
+          ],
         ),
       ),
     );
@@ -1902,7 +1827,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       await _shareLiveLocation();
       return;
     }
-
 
     final attachmentService = AttachmentService(context.read<ApiService>());
     PendingAttachment? pending;
@@ -1980,8 +1904,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                 );
               } catch (e) {
                 if (!mounted) return;
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(SnackBar(content: Text(e.toString())));
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text(e.toString())));
               }
             }
 
@@ -1993,8 +1918,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   children: [
                     TextField(
                       controller: questionCtrl,
-                      decoration:
-                          const InputDecoration(labelText: 'Question'),
+                      decoration: const InputDecoration(labelText: 'Question'),
                       textInputAction: TextInputAction.next,
                     ),
                     const SizedBox(height: 12),
@@ -2003,8 +1927,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                         padding: const EdgeInsets.only(bottom: 8),
                         child: TextField(
                           controller: optionCtrls[i],
-                          decoration:
-                              InputDecoration(labelText: 'Option ${i + 1}'),
+                          decoration: InputDecoration(
+                            labelText: 'Option ${i + 1}',
+                          ),
                           textInputAction: TextInputAction.next,
                         ),
                       ),
@@ -2016,9 +1941,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                           onPressed: optionCtrls.length >= 10
                               ? null
                               : () => setDialog(
-                                    () => optionCtrls
-                                        .add(TextEditingController()),
-                                  ),
+                                  () =>
+                                      optionCtrls.add(TextEditingController()),
+                                ),
                         ),
                         const Spacer(),
                         if (optionCtrls.length > 1)
@@ -2461,13 +2386,10 @@ class ChannelPostBar extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 4),
-              Tooltip(
-                message: 'Attach file',
-                child: GlassButtonWidget(
-                  onPressed: onAttach,
-                  padding: const EdgeInsets.all(10),
-                  child: const Icon(Icons.attach_file_outlined, size: 22),
-                ),
+              GlassCircleIconButton(
+                onPressed: onAttach,
+                tooltip: 'Attach file',
+                icon: const Icon(Icons.attach_file_outlined, size: 22),
               ),
               const SizedBox(width: 4),
               Tooltip(

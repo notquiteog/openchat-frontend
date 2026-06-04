@@ -50,70 +50,61 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   void _showAdminMenu(BuildContext context) {
     showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: GlassContainer(
-            shape: LiquidRoundedSuperellipse(borderRadius: 28),
-            allowElevation: true,
-            glowIntensity: 0.06,
-            padding: EdgeInsets.zero,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 8),
-                if (!_user.isBanned)
-                  _ProfileMenuTile(
-                    icon: Icons.block_rounded,
-                    label: 'Ban user',
-                    color: Colors.red,
-                    onTap: () {
-                      Navigator.pop(context);
-                      _ban();
-                    },
-                  )
-                else
-                  _ProfileMenuTile(
-                    icon: Icons.check_circle_outline_rounded,
-                    label: 'Unban user',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _unban();
-                    },
-                  ),
-                if (!_user.isFlaggedScammer)
-                  _ProfileMenuTile(
-                    icon: Icons.flag_outlined,
-                    label: 'Flag as scammer',
-                    color: Colors.orange,
-                    onTap: () {
-                      Navigator.pop(context);
-                      _flagScammer();
-                    },
-                  )
-                else
-                  _ProfileMenuTile(
-                    icon: Icons.flag_outlined,
-                    label: 'Remove scammer flag',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _unflagScammer();
-                    },
-                  ),
-                _ProfileMenuTile(
-                  icon: Icons.workspace_premium_outlined,
-                  label: 'Give Premium for 1 month',
-                  onTap: () {
-                    Navigator.pop(context);
-                    _grantPremiumMonth();
-                  },
-                ),
-                const SizedBox(height: 8),
-              ],
+      builder: (_) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            if (!_user.isBanned)
+              _ProfileMenuTile(
+                icon: Icons.block_rounded,
+                label: 'Ban user',
+                color: Colors.red,
+                onTap: () {
+                  Navigator.pop(context);
+                  _ban();
+                },
+              )
+            else
+              _ProfileMenuTile(
+                icon: Icons.check_circle_outline_rounded,
+                label: 'Unban user',
+                onTap: () {
+                  Navigator.pop(context);
+                  _unban();
+                },
+              ),
+            if (!_user.isFlaggedScammer)
+              _ProfileMenuTile(
+                icon: Icons.flag_outlined,
+                label: 'Flag as scammer',
+                color: Colors.orange,
+                onTap: () {
+                  Navigator.pop(context);
+                  _flagScammer();
+                },
+              )
+            else
+              _ProfileMenuTile(
+                icon: Icons.flag_outlined,
+                label: 'Remove scammer flag',
+                onTap: () {
+                  Navigator.pop(context);
+                  _unflagScammer();
+                },
+              ),
+            _ProfileMenuTile(
+              icon: Icons.workspace_premium_outlined,
+              label: 'Give Premium for 1 month',
+              onTap: () {
+                Navigator.pop(context);
+                _grantPremiumMonth();
+              },
             ),
-          ),
+            const SizedBox(height: 8),
+          ],
         ),
       ),
     );
@@ -319,7 +310,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               }
             }
 
-            final bottomInset = MediaQuery.of(sheetCtx).viewInsets.bottom;
             final amount = double.tryParse(amountCtrl.text.trim()) ?? 0;
             final available = balanceFor(provider);
             final isCryptoAmount = amountUnit == 'crypto';
@@ -328,164 +318,150 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 !isCryptoAmount ||
                 amount <= 0 ||
                 available >= amount;
-            return SafeArea(
-              top: false,
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(14, 0, 14, 14 + bottomInset),
-                child: GlassContainer(
-                  shape: LiquidRoundedSuperellipse(borderRadius: 28),
-                  allowElevation: true,
-                  glowIntensity: 0.06,
-                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+            return GlassBottomSheetFrame(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
                     children: [
-                      Row(
-                        children: [
-                          SegmentedButton<bool>(
-                            segments: const [
-                              ButtonSegment(
-                                value: true,
-                                label: Text('Pay'),
-                                icon: Icon(Icons.arrow_upward),
-                              ),
-                              ButtonSegment(
-                                value: false,
-                                label: Text('Request'),
-                                icon: Icon(Icons.arrow_downward),
-                              ),
-                            ],
-                            selected: {payMode},
-                            onSelectionChanged: (next) =>
-                                setSheet(() => payMode = next.first),
-                          ),
-                          const Spacer(),
-                          Text(
-                            _formatCrypto(available, provider),
-                            style: Theme.of(context).textTheme.labelMedium,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      SegmentedButton<String>(
-                        segments: [
-                          for (final p in providers)
-                            ButtonSegment(
-                              value: p,
-                              label: Text(p.toUpperCase()),
-                            ),
-                        ],
-                        selected: {provider},
-                        onSelectionChanged: (next) => setSheet(() {
-                          provider = next.first;
-                          if (payMode &&
-                              amountUnit == 'crypto' &&
-                              paymentSource == 'wallet' &&
-                              amount > balanceFor(provider)) {
-                            paymentSource = 'external';
-                          }
-                        }),
-                      ),
-                      const SizedBox(height: 12),
-                      if (payMode) ...[
-                        SegmentedButton<String>(
-                          segments: [
-                            ButtonSegment(
-                              value: 'wallet',
-                              label: const Text('App wallet'),
-                              icon: const Icon(Icons.account_balance_wallet),
-                              enabled: canUseWallet,
-                            ),
-                            const ButtonSegment(
-                              value: 'external',
-                              label: Text('External'),
-                              icon: Icon(Icons.qr_code_2),
-                            ),
-                          ],
-                          selected: {canUseWallet ? paymentSource : 'external'},
-                          onSelectionChanged: (next) =>
-                              setSheet(() => paymentSource = next.first),
-                        ),
-                        const SizedBox(height: 12),
-                      ],
-                      SegmentedButton<String>(
-                        showSelectedIcon: false,
-                        segments: [
+                      SegmentedButton<bool>(
+                        segments: const [
                           ButtonSegment(
-                            value: 'crypto',
-                            label: Text(provider.toUpperCase()),
+                            value: true,
+                            label: Text('Pay'),
+                            icon: Icon(Icons.arrow_upward),
                           ),
-                          const ButtonSegment(value: 'usd', label: Text('USD')),
-                          const ButtonSegment(value: 'eur', label: Text('EUR')),
+                          ButtonSegment(
+                            value: false,
+                            label: Text('Request'),
+                            icon: Icon(Icons.arrow_downward),
+                          ),
                         ],
-                        selected: {amountUnit},
-                        onSelectionChanged: (next) => setSheet(() {
-                          amountUnit = next.first;
-                          if (payMode &&
-                              amountUnit == 'crypto' &&
-                              paymentSource == 'wallet' &&
-                              amount > balanceFor(provider)) {
-                            paymentSource = 'external';
-                          }
-                        }),
+                        selected: {payMode},
+                        onSelectionChanged: (next) =>
+                            setSheet(() => payMode = next.first),
                       ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: amountCtrl,
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        onChanged: (_) {
-                          final nextAmount =
-                              double.tryParse(amountCtrl.text.trim()) ?? 0;
-                          setSheet(() {
-                            if (payMode &&
-                                amountUnit == 'crypto' &&
-                                paymentSource == 'wallet' &&
-                                nextAmount > balanceFor(provider)) {
-                              paymentSource = 'external';
-                            }
-                          });
-                        },
-                        decoration: InputDecoration(
-                          labelText: amountUnit == 'crypto'
-                              ? 'Amount ${provider.toUpperCase()}'
-                              : 'Amount ${amountUnit.toUpperCase()}',
-                          border: const OutlineInputBorder(),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: noteCtrl,
-                        maxLength: 160,
-                        decoration: const InputDecoration(
-                          labelText: 'Note',
-                          border: OutlineInputBorder(),
-                          counterText: '',
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      GlassButtonWidget.icon(
-                        onPressed: submitting ? null : submit,
-                        icon: submitting
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.payments_outlined),
-                        label: Text(
-                          payMode
-                              ? 'Pay @${_user.username}'
-                              : 'Request from @${_user.username}',
-                        ),
+                      const Spacer(),
+                      Text(
+                        _formatCrypto(available, provider),
+                        style: Theme.of(context).textTheme.labelMedium,
                       ),
                     ],
                   ),
-                ),
+                  const SizedBox(height: 12),
+                  SegmentedButton<String>(
+                    segments: [
+                      for (final p in providers)
+                        ButtonSegment(value: p, label: Text(p.toUpperCase())),
+                    ],
+                    selected: {provider},
+                    onSelectionChanged: (next) => setSheet(() {
+                      provider = next.first;
+                      if (payMode &&
+                          amountUnit == 'crypto' &&
+                          paymentSource == 'wallet' &&
+                          amount > balanceFor(provider)) {
+                        paymentSource = 'external';
+                      }
+                    }),
+                  ),
+                  const SizedBox(height: 12),
+                  if (payMode) ...[
+                    SegmentedButton<String>(
+                      segments: [
+                        ButtonSegment(
+                          value: 'wallet',
+                          label: const Text('App wallet'),
+                          icon: const Icon(Icons.account_balance_wallet),
+                          enabled: canUseWallet,
+                        ),
+                        const ButtonSegment(
+                          value: 'external',
+                          label: Text('External'),
+                          icon: Icon(Icons.qr_code_2),
+                        ),
+                      ],
+                      selected: {canUseWallet ? paymentSource : 'external'},
+                      onSelectionChanged: (next) =>
+                          setSheet(() => paymentSource = next.first),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  SegmentedButton<String>(
+                    showSelectedIcon: false,
+                    segments: [
+                      ButtonSegment(
+                        value: 'crypto',
+                        label: Text(provider.toUpperCase()),
+                      ),
+                      const ButtonSegment(value: 'usd', label: Text('USD')),
+                      const ButtonSegment(value: 'eur', label: Text('EUR')),
+                    ],
+                    selected: {amountUnit},
+                    onSelectionChanged: (next) => setSheet(() {
+                      amountUnit = next.first;
+                      if (payMode &&
+                          amountUnit == 'crypto' &&
+                          paymentSource == 'wallet' &&
+                          amount > balanceFor(provider)) {
+                        paymentSource = 'external';
+                      }
+                    }),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: amountCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    onChanged: (_) {
+                      final nextAmount =
+                          double.tryParse(amountCtrl.text.trim()) ?? 0;
+                      setSheet(() {
+                        if (payMode &&
+                            amountUnit == 'crypto' &&
+                            paymentSource == 'wallet' &&
+                            nextAmount > balanceFor(provider)) {
+                          paymentSource = 'external';
+                        }
+                      });
+                    },
+                    decoration: InputDecoration(
+                      labelText: amountUnit == 'crypto'
+                          ? 'Amount ${provider.toUpperCase()}'
+                          : 'Amount ${amountUnit.toUpperCase()}',
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: noteCtrl,
+                    maxLength: 160,
+                    decoration: const InputDecoration(
+                      labelText: 'Note',
+                      border: OutlineInputBorder(),
+                      counterText: '',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  GlassButtonWidget.icon(
+                    onPressed: submitting ? null : submit,
+                    icon: submitting
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.payments_outlined),
+                    label: Text(
+                      payMode
+                          ? 'Pay @${_user.username}'
+                          : 'Request from @${_user.username}',
+                    ),
+                  ),
+                ],
               ),
             );
           },

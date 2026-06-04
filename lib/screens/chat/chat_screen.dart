@@ -319,101 +319,91 @@ class _ChatScreenState extends State<ChatScreen> {
         : minimumSchedule;
     await showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) => SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-            child: GlassContainer(
-              shape: LiquidRoundedSuperellipse(borderRadius: 28),
-              allowElevation: true,
-              glowIntensity: 0.06,
-              padding: EdgeInsets.zero,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // drag handle
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12, bottom: 4),
-                    child: Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurface
-                            .withValues(alpha: 0.24),
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
+        builder: (ctx, setSheetState) => GlassBottomSheetFrame(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // drag handle
+              Padding(
+                padding: const EdgeInsets.only(top: 12, bottom: 4),
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.24),
+                    borderRadius: BorderRadius.circular(2),
                   ),
-                  SwitchListTile(
-                    secondary: const Icon(Icons.notifications_off_outlined),
-                    title: const Text('Send silently'),
-                    value: _sendSilent,
-                    onChanged: (v) {
-                      setState(() => _sendSilent = v);
-                      setSheetState(() {});
-                    },
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.schedule_outlined),
-                        const SizedBox(width: 12),
-                        Text(
-                          'Schedule delivery',
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                      ],
-                    ),
-                  ),
-                  SizedBox(
-                    height: 216,
-                    child: CupertinoDatePicker(
-                      mode: CupertinoDatePickerMode.dateAndTime,
-                      minimumDate: minimumSchedule,
-                      initialDateTime: draftSchedule,
-                      minuteInterval: 1,
-                      onDateTimeChanged: (value) =>
-                          setSheetState(() => draftSchedule = value),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-                    child: Row(
-                      children: [
-                        if (_scheduledFor != null)
-                          TextButton.icon(
-                            icon: const Icon(Icons.event_busy_outlined),
-                            label: const Text('Clear'),
-                            onPressed: () {
-                              setState(() => _scheduledFor = null);
-                              Navigator.pop(ctx);
-                            },
-                          ),
-                        const Spacer(),
-                        TextButton(
-                          onPressed: () => Navigator.pop(ctx),
-                          child: const Text('Done'),
-                        ),
-                        const SizedBox(width: 8),
-                        FilledButton.icon(
-                          icon: const Icon(Icons.schedule_send_outlined),
-                          label: const Text('Set'),
-                          onPressed: () {
-                            setState(() => _scheduledFor = draftSchedule);
-                            Navigator.pop(ctx);
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+                ),
               ),
-            ),
+              SwitchListTile(
+                secondary: const Icon(Icons.notifications_off_outlined),
+                title: const Text('Send silently'),
+                value: _sendSilent,
+                onChanged: (v) {
+                  setState(() => _sendSilent = v);
+                  setSheetState(() {});
+                },
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: Row(
+                  children: [
+                    const Icon(Icons.schedule_outlined),
+                    const SizedBox(width: 12),
+                    Text(
+                      'Schedule delivery',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(
+                height: 216,
+                child: CupertinoDatePicker(
+                  mode: CupertinoDatePickerMode.dateAndTime,
+                  minimumDate: minimumSchedule,
+                  initialDateTime: draftSchedule,
+                  minuteInterval: 1,
+                  onDateTimeChanged: (value) =>
+                      setSheetState(() => draftSchedule = value),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                child: Row(
+                  children: [
+                    if (_scheduledFor != null)
+                      TextButton.icon(
+                        icon: const Icon(Icons.event_busy_outlined),
+                        label: const Text('Clear'),
+                        onPressed: () {
+                          setState(() => _scheduledFor = null);
+                          Navigator.pop(ctx);
+                        },
+                      ),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Done'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton.icon(
+                      icon: const Icon(Icons.schedule_send_outlined),
+                      label: const Text('Set'),
+                      onPressed: () {
+                        setState(() => _scheduledFor = draftSchedule);
+                        Navigator.pop(ctx);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -549,70 +539,61 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final choice = await showModalBottomSheet<String>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: GlassContainer(
-            shape: LiquidRoundedSuperellipse(borderRadius: 28),
-            allowElevation: true,
-            glowIntensity: 0.06,
-            padding: EdgeInsets.zero,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 8),
-                _AttachTile(
-                  icon: Icons.photo_library_outlined,
-                  label: 'Photo from gallery',
-                  onTap: () => Navigator.pop(context, 'gallery_image'),
-                ),
-                _AttachTile(
-                  icon: Icons.share_location_outlined,
-                  label: 'Share location',
-                  onTap: () => Navigator.pop(context, 'location_once'),
-                ),
-                _AttachTile(
-                  icon: Icons.location_on_outlined,
-                  label: 'Share live location',
-                  onTap: () => Navigator.pop(context, 'location_live'),
-                ),
-                if (cameraSupported)
-                  _AttachTile(
-                    icon: Icons.camera_alt_outlined,
-                    label: 'Take photo',
-                    onTap: () => Navigator.pop(context, 'camera_image'),
-                  ),
-                _AttachTile(
-                  icon: Icons.videocam_outlined,
-                  label: 'Video from gallery',
-                  onTap: () => Navigator.pop(context, 'gallery_video'),
-                ),
-                _AttachTile(
-                  icon: Icons.attach_file_rounded,
-                  label: 'File',
-                  onTap: () => Navigator.pop(context, 'file'),
-                ),
-                _AttachTile(
-                  icon: Icons.poll_outlined,
-                  label: 'Poll',
-                  onTap: () => Navigator.pop(context, 'poll'),
-                ),
-                _AttachTile(
-                  icon: Icons.mic_none_outlined,
-                  label: 'Voice note',
-                  onTap: () => Navigator.pop(context, 'voice'),
-                ),
-                _AttachTile(
-                  icon: Icons.payments_outlined,
-                  label: 'Pay or request',
-                  onTap: () => Navigator.pop(context, 'payment'),
-                ),
-                const SizedBox(height: 8),
-              ],
+      builder: (_) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            _AttachTile(
+              icon: Icons.photo_library_outlined,
+              label: 'Photo from gallery',
+              onTap: () => Navigator.pop(context, 'gallery_image'),
             ),
-          ),
+            _AttachTile(
+              icon: Icons.share_location_outlined,
+              label: 'Share location',
+              onTap: () => Navigator.pop(context, 'location_once'),
+            ),
+            _AttachTile(
+              icon: Icons.location_on_outlined,
+              label: 'Share live location',
+              onTap: () => Navigator.pop(context, 'location_live'),
+            ),
+            if (cameraSupported)
+              _AttachTile(
+                icon: Icons.camera_alt_outlined,
+                label: 'Take photo',
+                onTap: () => Navigator.pop(context, 'camera_image'),
+              ),
+            _AttachTile(
+              icon: Icons.videocam_outlined,
+              label: 'Video from gallery',
+              onTap: () => Navigator.pop(context, 'gallery_video'),
+            ),
+            _AttachTile(
+              icon: Icons.attach_file_rounded,
+              label: 'File',
+              onTap: () => Navigator.pop(context, 'file'),
+            ),
+            _AttachTile(
+              icon: Icons.poll_outlined,
+              label: 'Poll',
+              onTap: () => Navigator.pop(context, 'poll'),
+            ),
+            _AttachTile(
+              icon: Icons.mic_none_outlined,
+              label: 'Voice note',
+              onTap: () => Navigator.pop(context, 'voice'),
+            ),
+            _AttachTile(
+              icon: Icons.payments_outlined,
+              label: 'Pay or request',
+              onTap: () => Navigator.pop(context, 'payment'),
+            ),
+            const SizedBox(height: 8),
+          ],
         ),
       ),
     );
@@ -839,7 +820,6 @@ class _ChatScreenState extends State<ChatScreen> {
               }
             }
 
-            final bottomInset = MediaQuery.of(sheetCtx).viewInsets.bottom;
             final amount = double.tryParse(amountCtrl.text.trim()) ?? 0;
             final available = balanceFor(provider);
             final isCryptoAmount = amountUnit == 'crypto';
@@ -848,184 +828,170 @@ class _ChatScreenState extends State<ChatScreen> {
                 !isCryptoAmount ||
                 amount <= 0 ||
                 available >= amount;
-            return SafeArea(
-              top: false,
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(14, 0, 14, 14 + bottomInset),
-                child: GlassContainer(
-                  shape: LiquidRoundedSuperellipse(borderRadius: 28),
-                  allowElevation: true,
-                  glowIntensity: 0.06,
-                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+            return GlassBottomSheetFrame(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
                     children: [
-                      Row(
-                        children: [
-                          SegmentedButton<bool>(
-                            segments: const [
-                              ButtonSegment(
-                                value: true,
-                                label: Text('Pay'),
-                                icon: Icon(Icons.arrow_upward),
-                              ),
-                              ButtonSegment(
-                                value: false,
-                                label: Text('Request'),
-                                icon: Icon(Icons.arrow_downward),
-                              ),
-                            ],
-                            selected: {payMode},
-                            onSelectionChanged: (next) =>
-                                setSheet(() => payMode = next.first),
-                          ),
-                          const Spacer(),
-                          Text(
-                            '${available.toStringAsFixed(provider == 'btc' ? 8 : 12)} ${provider.toUpperCase()}',
-                            style: Theme.of(context).textTheme.labelMedium,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      DropdownButtonFormField<String>(
-                        initialValue: selectedUserID,
-                        items: [
-                          for (final member in members)
-                            DropdownMenuItem(
-                              value: member.userId,
-                              child: Text('@${member.user!.username}'),
-                            ),
-                        ],
-                        onChanged: (value) {
-                          if (value != null) {
-                            setSheet(() => selectedUserID = value);
-                          }
-                        },
-                        decoration: InputDecoration(
-                          labelText: payMode ? 'To' : 'From',
-                          border: const OutlineInputBorder(),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      SegmentedButton<String>(
-                        segments: [
-                          for (final p in providers)
-                            ButtonSegment(
-                              value: p,
-                              label: Text(p.toUpperCase()),
-                            ),
-                        ],
-                        selected: {provider},
-                        onSelectionChanged: (next) => setSheet(() {
-                          provider = next.first;
-                          if (payMode &&
-                              amountUnit == 'crypto' &&
-                              paymentSource == 'wallet' &&
-                              amount > balanceFor(provider)) {
-                            paymentSource = 'external';
-                          }
-                        }),
-                      ),
-                      const SizedBox(height: 12),
-                      if (payMode) ...[
-                        SegmentedButton<String>(
-                          segments: [
-                            ButtonSegment(
-                              value: 'wallet',
-                              label: const Text('App wallet'),
-                              icon: const Icon(Icons.account_balance_wallet),
-                              enabled: canUseWallet,
-                            ),
-                            const ButtonSegment(
-                              value: 'external',
-                              label: Text('External'),
-                              icon: Icon(Icons.qr_code_2),
-                            ),
-                          ],
-                          selected: {canUseWallet ? paymentSource : 'external'},
-                          onSelectionChanged: (next) =>
-                              setSheet(() => paymentSource = next.first),
-                        ),
-                        const SizedBox(height: 12),
-                      ],
-                      SegmentedButton<String>(
-                        showSelectedIcon: false,
-                        segments: [
+                      SegmentedButton<bool>(
+                        segments: const [
                           ButtonSegment(
-                            value: 'crypto',
-                            label: Text(provider.toUpperCase()),
+                            value: true,
+                            label: Text('Pay'),
+                            icon: Icon(Icons.arrow_upward),
                           ),
-                          const ButtonSegment(value: 'usd', label: Text('USD')),
-                          const ButtonSegment(value: 'eur', label: Text('EUR')),
+                          ButtonSegment(
+                            value: false,
+                            label: Text('Request'),
+                            icon: Icon(Icons.arrow_downward),
+                          ),
                         ],
-                        selected: {amountUnit},
-                        onSelectionChanged: (next) => setSheet(() {
-                          amountUnit = next.first;
-                          if (payMode &&
-                              amountUnit == 'crypto' &&
-                              paymentSource == 'wallet' &&
-                              amount > balanceFor(provider)) {
-                            paymentSource = 'external';
-                          }
-                        }),
+                        selected: {payMode},
+                        onSelectionChanged: (next) =>
+                            setSheet(() => payMode = next.first),
                       ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: amountCtrl,
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        onChanged: (_) {
-                          final nextAmount =
-                              double.tryParse(amountCtrl.text.trim()) ?? 0;
-                          setSheet(() {
-                            if (payMode &&
-                                amountUnit == 'crypto' &&
-                                paymentSource == 'wallet' &&
-                                nextAmount > balanceFor(provider)) {
-                              paymentSource = 'external';
-                            }
-                          });
-                        },
-                        decoration: InputDecoration(
-                          labelText: amountUnit == 'crypto'
-                              ? 'Amount ${provider.toUpperCase()}'
-                              : 'Amount ${amountUnit.toUpperCase()}',
-                          border: const OutlineInputBorder(),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: noteCtrl,
-                        maxLength: 160,
-                        decoration: const InputDecoration(
-                          labelText: 'Note',
-                          border: OutlineInputBorder(),
-                          counterText: '',
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      FilledButton.icon(
-                        onPressed: submitting ? null : submit,
-                        icon: submitting
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : Icon(
-                                payMode
-                                    ? Icons.send_outlined
-                                    : Icons.request_quote_outlined,
-                              ),
-                        label: Text(payMode ? 'Pay' : 'Request'),
+                      const Spacer(),
+                      Text(
+                        '${available.toStringAsFixed(provider == 'btc' ? 8 : 12)} ${provider.toUpperCase()}',
+                        style: Theme.of(context).textTheme.labelMedium,
                       ),
                     ],
                   ),
-                ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedUserID,
+                    items: [
+                      for (final member in members)
+                        DropdownMenuItem(
+                          value: member.userId,
+                          child: Text('@${member.user!.username}'),
+                        ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setSheet(() => selectedUserID = value);
+                      }
+                    },
+                    decoration: InputDecoration(
+                      labelText: payMode ? 'To' : 'From',
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SegmentedButton<String>(
+                    segments: [
+                      for (final p in providers)
+                        ButtonSegment(value: p, label: Text(p.toUpperCase())),
+                    ],
+                    selected: {provider},
+                    onSelectionChanged: (next) => setSheet(() {
+                      provider = next.first;
+                      if (payMode &&
+                          amountUnit == 'crypto' &&
+                          paymentSource == 'wallet' &&
+                          amount > balanceFor(provider)) {
+                        paymentSource = 'external';
+                      }
+                    }),
+                  ),
+                  const SizedBox(height: 12),
+                  if (payMode) ...[
+                    SegmentedButton<String>(
+                      segments: [
+                        ButtonSegment(
+                          value: 'wallet',
+                          label: const Text('App wallet'),
+                          icon: const Icon(Icons.account_balance_wallet),
+                          enabled: canUseWallet,
+                        ),
+                        const ButtonSegment(
+                          value: 'external',
+                          label: Text('External'),
+                          icon: Icon(Icons.qr_code_2),
+                        ),
+                      ],
+                      selected: {canUseWallet ? paymentSource : 'external'},
+                      onSelectionChanged: (next) =>
+                          setSheet(() => paymentSource = next.first),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  SegmentedButton<String>(
+                    showSelectedIcon: false,
+                    segments: [
+                      ButtonSegment(
+                        value: 'crypto',
+                        label: Text(provider.toUpperCase()),
+                      ),
+                      const ButtonSegment(value: 'usd', label: Text('USD')),
+                      const ButtonSegment(value: 'eur', label: Text('EUR')),
+                    ],
+                    selected: {amountUnit},
+                    onSelectionChanged: (next) => setSheet(() {
+                      amountUnit = next.first;
+                      if (payMode &&
+                          amountUnit == 'crypto' &&
+                          paymentSource == 'wallet' &&
+                          amount > balanceFor(provider)) {
+                        paymentSource = 'external';
+                      }
+                    }),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: amountCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    onChanged: (_) {
+                      final nextAmount =
+                          double.tryParse(amountCtrl.text.trim()) ?? 0;
+                      setSheet(() {
+                        if (payMode &&
+                            amountUnit == 'crypto' &&
+                            paymentSource == 'wallet' &&
+                            nextAmount > balanceFor(provider)) {
+                          paymentSource = 'external';
+                        }
+                      });
+                    },
+                    decoration: InputDecoration(
+                      labelText: amountUnit == 'crypto'
+                          ? 'Amount ${provider.toUpperCase()}'
+                          : 'Amount ${amountUnit.toUpperCase()}',
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: noteCtrl,
+                    maxLength: 160,
+                    decoration: const InputDecoration(
+                      labelText: 'Note',
+                      border: OutlineInputBorder(),
+                      counterText: '',
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  FilledButton.icon(
+                    onPressed: submitting ? null : submit,
+                    icon: submitting
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(
+                            payMode
+                                ? Icons.send_outlined
+                                : Icons.request_quote_outlined,
+                          ),
+                    label: Text(payMode ? 'Pay' : 'Request'),
+                  ),
+                ],
               ),
             );
           },
@@ -1697,114 +1663,101 @@ class _ChatScreenState extends State<ChatScreen> {
             setSheet(() {});
           }
 
-          final bottomInset = MediaQuery.of(sheetCtx).viewInsets.bottom;
-          return SafeArea(
-            top: false,
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(14, 0, 14, 14 + bottomInset),
-              child: GlassContainer(
-                shape: LiquidRoundedSuperellipse(borderRadius: 28),
-                allowElevation: true,
-                glowIntensity: 0.06,
-                padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
+          return GlassBottomSheetFrame(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      'Chat appearance',
+                      style: Theme.of(sheetCtx).textTheme.titleMedium,
+                    ),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () =>
+                          apply(const ChatStyle(), publishBubble: true),
+                      child: const Text('Reset'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (isDm) ...[
+                  const Text('Background color'),
+                  const SizedBox(height: 8),
+                  ColorChoices(
+                    selected: style.backgroundColor,
+                    onSelected: (c) => apply(
+                      c == null
+                          ? style.copyWith(clearBackgroundColor: true)
+                          : style.copyWith(
+                              backgroundColor: c,
+                              clearBackgroundImage: true,
+                            ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
                     children: [
-                      Row(
-                        children: [
-                          Text(
-                            'Chat appearance',
-                            style: Theme.of(sheetCtx).textTheme.titleMedium,
-                          ),
-                          const Spacer(),
-                          TextButton(
-                            onPressed: () =>
-                                apply(const ChatStyle(), publishBubble: true),
-                            child: const Text('Reset'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      if (isDm) ...[
-                        const Text('Background color'),
-                        const SizedBox(height: 8),
-                        ColorChoices(
-                          selected: style.backgroundColor,
-                          onSelected: (c) => apply(
-                            c == null
-                                ? style.copyWith(clearBackgroundColor: true)
-                                : style.copyWith(
-                                    backgroundColor: c,
-                                    clearBackgroundImage: true,
-                                  ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            OutlinedButton.icon(
-                              icon: const Icon(Icons.image_outlined, size: 18),
-                              label: const Text('Background image'),
-                              onPressed: () async {
-                                final picked = await ImagePicker().pickImage(
-                                  source: ImageSource.gallery,
-                                  imageQuality: 90,
-                                );
-                                if (picked != null) {
-                                  apply(
-                                    style.copyWith(
-                                      backgroundImagePath: picked.path,
-                                      clearBackgroundColor: true,
-                                    ),
-                                  );
-                                }
-                              },
-                            ),
-                            if (style.backgroundImagePath != null)
-                              TextButton(
-                                onPressed: () => apply(
-                                  style.copyWith(clearBackgroundImage: true),
-                                ),
-                                child: const Text('Remove'),
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.image_outlined, size: 18),
+                        label: const Text('Background image'),
+                        onPressed: () async {
+                          final picked = await ImagePicker().pickImage(
+                            source: ImageSource.gallery,
+                            imageQuality: 90,
+                          );
+                          if (picked != null) {
+                            apply(
+                              style.copyWith(
+                                backgroundImagePath: picked.path,
+                                clearBackgroundColor: true,
                               ),
-                          ],
-                        ),
-                        const Divider(height: 24),
-                      ],
-                      const Text('My bubble color'),
-                      const SizedBox(height: 8),
-                      ColorChoices(
-                        selected: style.myBubbleColor,
-                        onSelected: (c) => apply(
-                          c == null
-                              ? style.copyWith(clearMyBubbleColor: true)
-                              : style.copyWith(myBubbleColor: c),
-                          publishBubble: true,
-                        ),
+                            );
+                          }
+                        },
                       ),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          const Text('Bubble shape'),
-                          Expanded(
-                            child: Slider(
-                              value: style.bubbleRadius,
-                              min: 0,
-                              max: 28,
-                              divisions: 14,
-                              label: style.bubbleRadius.round().toString(),
-                              onChanged: (v) =>
-                                  apply(style.copyWith(bubbleRadius: v)),
-                            ),
-                          ),
-                        ],
-                      ),
+                      if (style.backgroundImagePath != null)
+                        TextButton(
+                          onPressed: () =>
+                              apply(style.copyWith(clearBackgroundImage: true)),
+                          child: const Text('Remove'),
+                        ),
                     ],
                   ),
+                  const Divider(height: 24),
+                ],
+                const Text('My bubble color'),
+                const SizedBox(height: 8),
+                ColorChoices(
+                  selected: style.myBubbleColor,
+                  onSelected: (c) => apply(
+                    c == null
+                        ? style.copyWith(clearMyBubbleColor: true)
+                        : style.copyWith(myBubbleColor: c),
+                    publishBubble: true,
+                  ),
                 ),
-              ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    const Text('Bubble shape'),
+                    Expanded(
+                      child: Slider(
+                        value: style.bubbleRadius,
+                        min: 0,
+                        max: 28,
+                        divisions: 14,
+                        label: style.bubbleRadius.round().toString(),
+                        onChanged: (v) =>
+                            apply(style.copyWith(bubbleRadius: v)),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           );
         },
@@ -1832,36 +1785,27 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final action = await showModalBottomSheet<String>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: GlassContainer(
-            shape: LiquidRoundedSuperellipse(borderRadius: 28),
-            allowElevation: true,
-            glowIntensity: 0.06,
-            padding: EdgeInsets.zero,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 8),
-                _MenuTile(
-                  icon: Icons.image_outlined,
-                  label: 'Choose background image',
-                  onTap: () => Navigator.pop(context, 'pick'),
-                ),
-                if (conv.backgroundUrl != null)
-                  _MenuTile(
-                    icon: Icons.delete_outline,
-                    label: 'Remove background',
-                    color: Colors.red,
-                    onTap: () => Navigator.pop(context, 'remove'),
-                  ),
-                const SizedBox(height: 8),
-              ],
+      builder: (_) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            _MenuTile(
+              icon: Icons.image_outlined,
+              label: 'Choose background image',
+              onTap: () => Navigator.pop(context, 'pick'),
             ),
-          ),
+            if (conv.backgroundUrl != null)
+              _MenuTile(
+                icon: Icons.delete_outline,
+                label: 'Remove background',
+                color: Colors.red,
+                onTap: () => Navigator.pop(context, 'remove'),
+              ),
+            const SizedBox(height: 8),
+          ],
         ),
       ),
     );
@@ -1999,117 +1943,108 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: GlassContainer(
-            shape: LiquidRoundedSuperellipse(borderRadius: 28),
-            allowElevation: true,
-            glowIntensity: 0.06,
-            padding: EdgeInsets.zero,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 8),
-                _MenuTile(
-                  icon: Icons.info_outline_rounded,
-                  label: 'Conversation info',
-                  onTap: () {
-                    Navigator.pop(context);
-                    _showConversationInfo(context, currentUserID);
-                  },
-                ),
-                if (conv.isDM || isAdmin)
-                  _MenuTile(
-                    icon: Icons.timer_outlined,
-                    label: 'Disappearing messages',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _setDisappearing(context);
-                    },
-                  ),
-                if (!conv.isDM && isAdmin)
-                  _MenuTile(
-                    icon: Icons.hourglass_empty_rounded,
-                    label: 'Slow mode',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _setSlowMode(context);
-                    },
-                  ),
-                if (!conv.isDM && isAdmin)
-                  _MenuTile(
-                    icon: Icons.lock_outline_rounded,
-                    label: conv.encryptionEnabled
-                        ? 'Turn encryption off'
-                        : 'Turn encryption on',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _setEncryption(context);
-                    },
-                  ),
-                if (conv.isGroup)
-                  _MenuTile(
-                    icon: Icons.edit_outlined,
-                    label: 'Edit group',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _editGroup(context, currentUserID);
-                    },
-                  ),
-                if (conv.isGroup)
-                  _MenuTile(
-                    icon: Icons.group_outlined,
-                    label: 'Members',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _showMembers(context, currentUserID);
-                    },
-                  ),
-                _MenuTile(
-                  icon: Icons.palette_outlined,
-                  label: 'Chat appearance',
-                  onTap: () {
-                    Navigator.pop(context);
-                    _showChatAppearance(context);
-                  },
-                ),
-                if (_canSetConversationBackground(currentUserID))
-                  _MenuTile(
-                    icon: Icons.wallpaper_rounded,
-                    label: 'Set chat background',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _setConversationBackground(context);
-                    },
-                  ),
-                if (conv.isGroup)
-                  _MenuTile(
-                    icon: Icons.delete_sweep_outlined,
-                    label: 'Delete messages',
-                    color: Colors.red,
-                    onTap: () {
-                      Navigator.pop(context);
-                      _deleteGroupMessages(context, currentUserID);
-                    },
-                  ),
-                _MenuTile(
-                  icon: conv.isDM
-                      ? Icons.delete_outline_rounded
-                      : Icons.exit_to_app_rounded,
-                  label: exitLabel,
-                  color: Colors.red,
-                  onTap: () {
-                    Navigator.pop(context);
-                    _deleteConversation(context);
-                  },
-                ),
-                const SizedBox(height: 8),
-              ],
+      builder: (_) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            _MenuTile(
+              icon: Icons.info_outline_rounded,
+              label: 'Conversation info',
+              onTap: () {
+                Navigator.pop(context);
+                _showConversationInfo(context, currentUserID);
+              },
             ),
-          ),
+            if (conv.isDM || isAdmin)
+              _MenuTile(
+                icon: Icons.timer_outlined,
+                label: 'Disappearing messages',
+                onTap: () {
+                  Navigator.pop(context);
+                  _setDisappearing(context);
+                },
+              ),
+            if (!conv.isDM && isAdmin)
+              _MenuTile(
+                icon: Icons.hourglass_empty_rounded,
+                label: 'Slow mode',
+                onTap: () {
+                  Navigator.pop(context);
+                  _setSlowMode(context);
+                },
+              ),
+            if (!conv.isDM && isAdmin)
+              _MenuTile(
+                icon: Icons.lock_outline_rounded,
+                label: conv.encryptionEnabled
+                    ? 'Turn encryption off'
+                    : 'Turn encryption on',
+                onTap: () {
+                  Navigator.pop(context);
+                  _setEncryption(context);
+                },
+              ),
+            if (conv.isGroup)
+              _MenuTile(
+                icon: Icons.edit_outlined,
+                label: 'Edit group',
+                onTap: () {
+                  Navigator.pop(context);
+                  _editGroup(context, currentUserID);
+                },
+              ),
+            if (conv.isGroup)
+              _MenuTile(
+                icon: Icons.group_outlined,
+                label: 'Members',
+                onTap: () {
+                  Navigator.pop(context);
+                  _showMembers(context, currentUserID);
+                },
+              ),
+            _MenuTile(
+              icon: Icons.palette_outlined,
+              label: 'Chat appearance',
+              onTap: () {
+                Navigator.pop(context);
+                _showChatAppearance(context);
+              },
+            ),
+            if (_canSetConversationBackground(currentUserID))
+              _MenuTile(
+                icon: Icons.wallpaper_rounded,
+                label: 'Set chat background',
+                onTap: () {
+                  Navigator.pop(context);
+                  _setConversationBackground(context);
+                },
+              ),
+            if (conv.isGroup)
+              _MenuTile(
+                icon: Icons.delete_sweep_outlined,
+                label: 'Delete messages',
+                color: Colors.red,
+                onTap: () {
+                  Navigator.pop(context);
+                  _deleteGroupMessages(context, currentUserID);
+                },
+              ),
+            _MenuTile(
+              icon: conv.isDM
+                  ? Icons.delete_outline_rounded
+                  : Icons.exit_to_app_rounded,
+              label: exitLabel,
+              color: Colors.red,
+              onTap: () {
+                Navigator.pop(context);
+                _deleteConversation(context);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
         ),
       ),
     );
@@ -2187,10 +2122,10 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ),
                   const SizedBox(width: 4),
-                  GlassButtonWidget(
+                  GlassCircleIconButton(
                     onPressed: _showAttachmentPicker,
-                    padding: const EdgeInsets.all(10),
-                    child: const Icon(Icons.attach_file_outlined, size: 22),
+                    tooltip: 'Attach file',
+                    icon: const Icon(Icons.attach_file_outlined, size: 22),
                   ),
                   const SizedBox(width: 4),
                   Tooltip(
@@ -2199,7 +2134,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       onTap: _sendMessage,
                       onLongPress: _showSendOptions,
                       child: GlassContainer(
-                        shape: const LiquidRoundedSuperellipse(borderRadius: 999),
+                        shape: const LiquidRoundedSuperellipse(
+                          borderRadius: 999,
+                        ),
                         allowElevation: true,
                         glowIntensity: 0.08,
                         padding: const EdgeInsets.all(12),
@@ -2766,144 +2703,126 @@ class _ChatScreenState extends State<ChatScreen> {
               children: [
                 Padding(
                   padding: const EdgeInsets.fromLTRB(20, 16, 8, 8),
-                child: Row(
-                  children: [
-                    Text(
-                      'Members',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const Spacer(),
-                    if (isAdmin)
-                      TextButton.icon(
-                        icon: const Icon(Icons.person_add_outlined, size: 18),
-                        label: const Text('Add'),
-                        onPressed: () {
-                          Navigator.pop(context);
-                          _showAddMember(context);
-                        },
+                  child: Row(
+                    children: [
+                      Text(
+                        'Members',
+                        style: Theme.of(context).textTheme.titleMedium,
                       ),
-                  ],
+                      const Spacer(),
+                      if (isAdmin)
+                        TextButton.icon(
+                          icon: const Icon(Icons.person_add_outlined, size: 18),
+                          label: const Text('Add'),
+                          onPressed: () {
+                            Navigator.pop(context);
+                            _showAddMember(context);
+                          },
+                        ),
+                    ],
+                  ),
                 ),
-              ),
-              Expanded(
-                child: ListView(
-                  controller: scrollCtrl,
-                  children: conv.members.map((m) {
-                    final username = m.user?.username ?? m.userId;
-                    final isSelf = m.userId == currentUserID;
-                    return ListTile(
-                      leading: CircleAvatar(
-                        backgroundImage: m.user?.avatarUrl != null
-                            ? CachedNetworkImageProvider(
-                                ApiConfig.resolveMedia(m.user!.avatarUrl!),
-                              )
-                            : null,
-                        child: m.user?.avatarUrl == null
-                            ? Text(username[0].toUpperCase())
-                            : null,
-                      ),
-                      title: Text(isSelf ? '$username (you)' : username),
-                      subtitle: m.isAdmin ? const Text('Admin') : null,
-                      trailing: isAdmin && !isSelf
-                          ? IconButton(
-                              icon: const Icon(Icons.more_vert),
-                              onPressed: () {
-                                showModalBottomSheet<void>(
-                                  context: context,
-                                  backgroundColor: Colors.transparent,
-                                  builder: (_) => SafeArea(
-                                    top: false,
-                                    child: Padding(
-                                      padding: const EdgeInsets.fromLTRB(
-                                        14,
-                                        0,
-                                        14,
-                                        14,
-                                      ),
-                                      child: GlassContainer(
-                                        shape: LiquidRoundedSuperellipse(
-                                          borderRadius: 28,
-                                        ),
-                                        allowElevation: true,
-                                        glowIntensity: 0.06,
-                                        padding: EdgeInsets.zero,
-                                        child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            const SizedBox(height: 8),
-                                            if (!m.isAdmin)
-                                              _MenuTile(
-                                                icon:
-                                                    Icons.star_outline_rounded,
-                                                label: 'Make admin',
-                                                onTap: () {
-                                                  Navigator.pop(context);
-                                                  _setGroupMemberRole(
-                                                    context,
-                                                    m.userId,
-                                                    username,
-                                                    MemberRole.admin,
-                                                  );
-                                                },
-                                              ),
-                                            if (m.isAdmin)
-                                              _MenuTile(
-                                                icon: Icons.star_border_rounded,
-                                                label: 'Remove admin',
-                                                onTap: () {
-                                                  Navigator.pop(context);
-                                                  _setGroupMemberRole(
-                                                    context,
-                                                    m.userId,
-                                                    username,
-                                                    MemberRole.member,
-                                                  );
-                                                },
-                                              ),
+                Expanded(
+                  child: ListView(
+                    controller: scrollCtrl,
+                    children: conv.members.map((m) {
+                      final username = m.user?.username ?? m.userId;
+                      final isSelf = m.userId == currentUserID;
+                      return ListTile(
+                        leading: CircleAvatar(
+                          backgroundImage: m.user?.avatarUrl != null
+                              ? CachedNetworkImageProvider(
+                                  ApiConfig.resolveMedia(m.user!.avatarUrl!),
+                                )
+                              : null,
+                          child: m.user?.avatarUrl == null
+                              ? Text(username[0].toUpperCase())
+                              : null,
+                        ),
+                        title: Text(isSelf ? '$username (you)' : username),
+                        subtitle: m.isAdmin ? const Text('Admin') : null,
+                        trailing: isAdmin && !isSelf
+                            ? IconButton(
+                                icon: const Icon(Icons.more_vert),
+                                onPressed: () {
+                                  showModalBottomSheet<void>(
+                                    context: context,
+                                    isScrollControlled: true,
+                                    backgroundColor: Colors.transparent,
+                                    builder: (_) => GlassBottomSheetFrame(
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const SizedBox(height: 8),
+                                          if (!m.isAdmin)
                                             _MenuTile(
-                                              icon:
-                                                  Icons.person_remove_outlined,
-                                              label: 'Remove member',
-                                              color: Colors.red,
+                                              icon: Icons.star_outline_rounded,
+                                              label: 'Make admin',
                                               onTap: () {
                                                 Navigator.pop(context);
-                                                _removeMember(
+                                                _setGroupMemberRole(
                                                   context,
                                                   m.userId,
                                                   username,
+                                                  MemberRole.admin,
                                                 );
                                               },
                                             ),
-                                            const SizedBox(height: 8),
-                                          ],
-                                        ),
+                                          if (m.isAdmin)
+                                            _MenuTile(
+                                              icon: Icons.star_border_rounded,
+                                              label: 'Remove admin',
+                                              onTap: () {
+                                                Navigator.pop(context);
+                                                _setGroupMemberRole(
+                                                  context,
+                                                  m.userId,
+                                                  username,
+                                                  MemberRole.member,
+                                                );
+                                              },
+                                            ),
+                                          _MenuTile(
+                                            icon: Icons.person_remove_outlined,
+                                            label: 'Remove member',
+                                            color: Colors.red,
+                                            onTap: () {
+                                              Navigator.pop(context);
+                                              _removeMember(
+                                                context,
+                                                m.userId,
+                                                username,
+                                              );
+                                            },
+                                          ),
+                                          const SizedBox(height: 8),
+                                        ],
                                       ),
                                     ),
+                                  );
+                                },
+                              )
+                            : null,
+                        onTap: m.user != null
+                            ? () {
+                                Navigator.pop(context);
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        UserProfileScreen(user: m.user!),
                                   ),
                                 );
-                              },
-                            )
-                          : null,
-                      onTap: m.user != null
-                          ? () {
-                              Navigator.pop(context);
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) =>
-                                      UserProfileScreen(user: m.user!),
-                                ),
-                              );
-                            }
-                          : null,
-                    );
-                  }).toList(),
+                              }
+                            : null,
+                      );
+                    }).toList(),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -3153,70 +3072,61 @@ class _ChatScreenState extends State<ChatScreen> {
     final navigator = Navigator.of(context);
     final action = await showModalBottomSheet<String>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: GlassContainer(
-            shape: LiquidRoundedSuperellipse(borderRadius: 28),
-            allowElevation: true,
-            glowIntensity: 0.06,
-            padding: EdgeInsets.zero,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 4),
-                  child: Text(
-                    'Delete messages',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-                  child: Text(
-                    isAdmin
-                        ? 'Choose which messages to remove from this group.'
-                        : 'Delete all messages you have sent in this group?',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.onSurface.withValues(alpha: 0.6),
-                        ),
-                  ),
-                ),
-                const Divider(height: 1),
-                const SizedBox(height: 4),
-                _MenuTile(
-                  icon: Icons.delete_outline,
-                  label: 'Delete mine',
-                  onTap: () => Navigator.pop(ctx, 'mine'),
-                ),
-                if (isAdmin)
-                  _MenuTile(
-                    icon: Icons.delete_sweep_outlined,
-                    label: 'Delete everyone\'s messages',
-                    color: Colors.red,
-                    onTap: () => Navigator.pop(ctx, 'all'),
-                  ),
-                if (isAdmin)
-                  _MenuTile(
-                    icon: Icons.group_remove_outlined,
-                    label: 'Delete group',
-                    color: Colors.red,
-                    onTap: () => Navigator.pop(ctx, 'group'),
-                  ),
-                _MenuTile(
-                  icon: Icons.close,
-                  label: 'Cancel',
-                  onTap: () => Navigator.pop(ctx),
-                ),
-                const SizedBox(height: 4),
-              ],
+      builder: (ctx) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 4),
+              child: Text(
+                'Delete messages',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
             ),
-          ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Text(
+                isAdmin
+                    ? 'Choose which messages to remove from this group.'
+                    : 'Delete all messages you have sent in this group?',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.onSurface.withValues(alpha: 0.6),
+                ),
+              ),
+            ),
+            const Divider(height: 1),
+            const SizedBox(height: 4),
+            _MenuTile(
+              icon: Icons.delete_outline,
+              label: 'Delete mine',
+              onTap: () => Navigator.pop(ctx, 'mine'),
+            ),
+            if (isAdmin)
+              _MenuTile(
+                icon: Icons.delete_sweep_outlined,
+                label: 'Delete everyone\'s messages',
+                color: Colors.red,
+                onTap: () => Navigator.pop(ctx, 'all'),
+              ),
+            if (isAdmin)
+              _MenuTile(
+                icon: Icons.group_remove_outlined,
+                label: 'Delete group',
+                color: Colors.red,
+                onTap: () => Navigator.pop(ctx, 'group'),
+              ),
+            _MenuTile(
+              icon: Icons.close,
+              label: 'Cancel',
+              onTap: () => Navigator.pop(ctx),
+            ),
+            const SizedBox(height: 4),
+          ],
         ),
       ),
     );
@@ -3389,10 +3299,7 @@ class _ReactionPopup extends StatelessWidget {
             GestureDetector(
               onTap: () => onSelected(emoji),
               child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 6,
-                  vertical: 6,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
                 child: Text(emoji, style: const TextStyle(fontSize: 26)),
               ),
             ),
@@ -3401,7 +3308,6 @@ class _ReactionPopup extends StatelessWidget {
     );
   }
 }
-
 
 double _asDouble(Object? value) {
   if (value is num) return value.toDouble();

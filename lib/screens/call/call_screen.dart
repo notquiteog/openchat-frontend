@@ -33,13 +33,10 @@ class _CallSurface extends StatelessWidget {
     this.tint,
   });
 
-  const _CallSurface.capsule({
-    required this.child,
-    this.blur = 0,
-    this.padding,
-  })  : borderRadius = const BorderRadius.all(Radius.circular(999)),
-        boxShadow = null,
-        tint = null;
+  const _CallSurface.capsule({required this.child, this.blur = 0, this.padding})
+    : borderRadius = const BorderRadius.all(Radius.circular(999)),
+      boxShadow = null,
+      tint = null;
 
   @override
   Widget build(BuildContext context) {
@@ -192,6 +189,7 @@ class _CallScreenState extends State<CallScreen> {
     }
     final selected = await showModalBottomSheet<String>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) => SafeArea(
         top: false,
@@ -201,26 +199,28 @@ class _CallScreenState extends State<CallScreen> {
             blur: 56,
             borderRadius: const BorderRadius.all(Radius.circular(28)),
             padding: const EdgeInsets.fromLTRB(0, 20, 0, 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'Audio Output',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 15,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Audio Output',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 15,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 12),
-                for (final output in outputs)
-                  _AudioOutputTile(
-                    label: output.label,
-                    selected: cp.selectedAudioOutputId == output.deviceId,
-                    onTap: () => Navigator.of(ctx).pop(output.deviceId),
-                  ),
-                const SizedBox(height: 4),
-              ],
+                  const SizedBox(height: 12),
+                  for (final output in outputs)
+                    _AudioOutputTile(
+                      label: output.label,
+                      selected: cp.selectedAudioOutputId == output.deviceId,
+                      onTap: () => Navigator.of(ctx).pop(output.deviceId),
+                    ),
+                  const SizedBox(height: 4),
+                ],
+              ),
             ),
           ),
         ),

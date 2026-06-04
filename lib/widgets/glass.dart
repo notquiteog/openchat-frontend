@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
@@ -82,7 +83,8 @@ class LiquidGlass extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isCapsule = borderRadius == const BorderRadius.all(Radius.circular(999));
+    final isCapsule =
+        borderRadius == const BorderRadius.all(Radius.circular(999));
     final cornerR = borderRadius.topLeft.x.clamp(0.0, 200.0);
 
     // Map our borderRadius to the package's LiquidShape:
@@ -95,7 +97,8 @@ class LiquidGlass extends StatelessWidget {
         ? const LiquidRoundedSuperellipse(borderRadius: 999)
         : LiquidRoundedSuperellipse(borderRadius: cornerR);
 
-    final shadow = boxShadow ??
+    final shadow =
+        boxShadow ??
         [
           BoxShadow(
             color: Colors.black.withValues(alpha: isDark ? 0.42 : 0.10),
@@ -180,7 +183,8 @@ class GlassSurface extends StatelessWidget {
       );
     }
 
-    final effectiveBorder = border ??
+    final effectiveBorder =
+        border ??
         Border.all(
           color: Colors.white.withValues(alpha: isDark ? 0.10 : 0.24),
           width: 0.5,
@@ -363,7 +367,8 @@ class GlassAlertDialog extends StatelessWidget {
               ),
             if (title != null)
               Padding(
-                padding: titlePadding ??
+                padding:
+                    titlePadding ??
                     EdgeInsets.fromLTRB(24, icon != null ? 12 : 24, 24, 0),
                 child: DefaultTextStyle(
                   style: textTheme.headlineSmall!.copyWith(
@@ -375,8 +380,8 @@ class GlassAlertDialog extends StatelessWidget {
               ),
             if (content != null)
               Padding(
-                padding: contentPadding ??
-                    const EdgeInsets.fromLTRB(24, 16, 24, 24),
+                padding:
+                    contentPadding ?? const EdgeInsets.fromLTRB(24, 16, 24, 24),
                 child: DefaultTextStyle(
                   style: textTheme.bodyMedium!.copyWith(
                     color: scheme.onSurface.withValues(alpha: 0.80),
@@ -391,7 +396,8 @@ class GlassAlertDialog extends StatelessWidget {
                 color: scheme.outlineVariant.withValues(alpha: 0.40),
               ),
               Padding(
-                padding: actionsPadding ??
+                padding:
+                    actionsPadding ??
                     const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                 child: Row(
                   mainAxisAlignment: actionsAlignment,
@@ -541,8 +547,9 @@ class LiquidMeshBackground extends StatelessWidget {
               shape: BoxShape.circle,
               gradient: RadialGradient(
                 colors: [
-                  const Color(0xFF00B4D8)
-                      .withValues(alpha: isDark ? 0.22 : 0.10),
+                  const Color(
+                    0xFF00B4D8,
+                  ).withValues(alpha: isDark ? 0.22 : 0.10),
                   Colors.transparent,
                 ],
               ),
@@ -559,8 +566,9 @@ class LiquidMeshBackground extends StatelessWidget {
               shape: BoxShape.circle,
               gradient: RadialGradient(
                 colors: [
-                  const Color(0xFF7B2FFF)
-                      .withValues(alpha: isDark ? 0.16 : 0.08),
+                  const Color(
+                    0xFF7B2FFF,
+                  ).withValues(alpha: isDark ? 0.16 : 0.08),
                   Colors.transparent,
                 ],
               ),
@@ -605,8 +613,10 @@ class GlassButtonWidget extends StatelessWidget {
     required Widget label,
     Color? color,
     Color? foregroundColor,
-    EdgeInsetsGeometry padding =
-        const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+    EdgeInsetsGeometry padding = const EdgeInsets.symmetric(
+      horizontal: 20,
+      vertical: 14,
+    ),
     double blur = 24,
   }) {
     return GlassButtonWidget(
@@ -628,11 +638,12 @@ class GlassButtonWidget extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     // Glass surface tracks the ambient theme — use white text in dark mode
     // and near-black text in light mode. If a tint color is given, honour it.
-    final fg = foregroundColor ??
+    final fg =
+        foregroundColor ??
         (color != null
             ? (ThemeData.estimateBrightnessForColor(color!) == Brightness.dark
-                ? Colors.white
-                : Colors.black87)
+                  ? Colors.white
+                  : Colors.black87)
             : (isDark ? Colors.white : Colors.black87));
 
     return GlassButton.custom(
@@ -651,6 +662,124 @@ class GlassButtonWidget extends StatelessWidget {
           child: IconTheme(
             data: IconThemeData(color: fg, size: 18),
             child: child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class GlassCircleIconButton extends StatelessWidget {
+  final VoidCallback? onPressed;
+  final Widget icon;
+  final String tooltip;
+  final double size;
+  final double glowIntensity;
+
+  const GlassCircleIconButton({
+    super.key,
+    required this.onPressed,
+    required this.icon,
+    required this.tooltip,
+    this.size = 42,
+    this.glowIntensity = 0.08,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final surface = Opacity(
+      opacity: onPressed == null ? 0.45 : 1,
+      child: SizedBox.square(
+        dimension: size,
+        child: GlassContainer(
+          shape: const LiquidRoundedSuperellipse(borderRadius: 999),
+          allowElevation: true,
+          glowIntensity: glowIntensity,
+          padding: EdgeInsets.zero,
+          child: Center(child: icon),
+        ),
+      ),
+    );
+
+    return Tooltip(
+      message: tooltip,
+      child: Semantics(
+        button: true,
+        enabled: onPressed != null,
+        label: tooltip,
+        child: MouseRegion(
+          cursor: onPressed == null
+              ? SystemMouseCursors.basic
+              : SystemMouseCursors.click,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onPressed,
+            child: surface,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class GlassBottomSheetFrame extends StatelessWidget {
+  final Widget child;
+  final EdgeInsets margin;
+  final EdgeInsetsGeometry padding;
+  final double borderRadius;
+  final double glowIntensity;
+  final bool allowElevation;
+  final bool includeKeyboardInset;
+  final bool scrollable;
+  final double maxHeightFactor;
+
+  const GlassBottomSheetFrame({
+    super.key,
+    required this.child,
+    this.margin = const EdgeInsets.fromLTRB(14, 0, 14, 14),
+    this.padding = EdgeInsets.zero,
+    this.borderRadius = 28,
+    this.glowIntensity = 0.06,
+    this.allowElevation = true,
+    this.includeKeyboardInset = true,
+    this.scrollable = true,
+    this.maxHeightFactor = 0.92,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final keyboardInset = includeKeyboardInset ? media.viewInsets.bottom : 0.0;
+    final reservedHeight =
+        media.padding.top +
+        media.padding.bottom +
+        keyboardInset +
+        margin.top +
+        margin.bottom +
+        8;
+    final maxHeight = math.max(
+      0.0,
+      (media.size.height - reservedHeight) * maxHeightFactor,
+    );
+    final content = scrollable ? SingleChildScrollView(child: child) : child;
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          margin.left,
+          margin.top,
+          margin.right,
+          margin.bottom + keyboardInset,
+        ),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          child: GlassContainer(
+            shape: LiquidRoundedSuperellipse(borderRadius: borderRadius),
+            allowElevation: allowElevation,
+            glowIntensity: glowIntensity,
+            padding: padding,
+            child: content,
           ),
         ),
       ),

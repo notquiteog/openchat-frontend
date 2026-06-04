@@ -49,8 +49,9 @@ class _ModerationScreenState extends State<ModerationScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to load: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to load: $e')));
     }
   }
 
@@ -62,8 +63,9 @@ class _ModerationScreenState extends State<ModerationScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _ownerOnly = !value);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed: $e')));
     }
   }
 
@@ -101,8 +103,9 @@ class _ModerationScreenState extends State<ModerationScreen> {
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to mute: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to mute: $e')));
     }
   }
 
@@ -113,8 +116,9 @@ class _ModerationScreenState extends State<ModerationScreen> {
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to unmute: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to unmute: $e')));
     }
   }
 
@@ -130,8 +134,9 @@ class _ModerationScreenState extends State<ModerationScreen> {
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Failed to set role: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to set role: $e')));
     }
   }
 
@@ -143,12 +148,14 @@ class _ModerationScreenState extends State<ModerationScreen> {
       builder: (ctx) => GlassAlertDialog(
         title: Text('Ban @${m.user?.username ?? "user"}?'),
         content: const Text(
-            'They will be removed from the channel and blocked from rejoining '
-            'until you unban them.'),
+          'They will be removed from the channel and blocked from rejoining '
+          'until you unban them.',
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -167,16 +174,17 @@ class _ModerationScreenState extends State<ModerationScreen> {
   }
 
   String _roleLabel(MemberRole role) => switch (role) {
-        MemberRole.admin => 'Admin',
-        MemberRole.moderator => 'Moderator',
-        MemberRole.member => 'Member',
-      };
+    MemberRole.admin => 'Admin',
+    MemberRole.moderator => 'Moderator',
+    MemberRole.member => 'Member',
+  };
 
   @override
   Widget build(BuildContext context) {
     final mutedIDs = _mutes.map((m) => m['user_id'] as String).toSet();
-    final mutableMembers =
-        _members.where((m) => !m.isAdmin && !mutedIDs.contains(m.userId)).toList();
+    final mutableMembers = _members
+        .where((m) => !m.isAdmin && !mutedIDs.contains(m.userId))
+        .toList();
     final currentUserId = context.read<AuthProvider>().currentUser?.id;
     // Role/ban management applies to channels only (the endpoints are channel-
     // scoped); exclude yourself from the actionable list.
@@ -194,22 +202,27 @@ class _ModerationScreenState extends State<ModerationScreen> {
                   secondary: const Icon(Icons.campaign_outlined),
                   title: const Text('Admins-only posting'),
                   subtitle: const Text(
-                      'When on, regular members can\'t send messages — '
-                      'only admins of this chat can.'),
+                    'When on, regular members can\'t send messages — '
+                    'only admins of this chat can.',
+                  ),
                   value: _ownerOnly,
                   onChanged: _toggleOwnerOnly,
                 ),
                 const Divider(),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                  child: Text('Muted members (${_mutes.length})',
-                      style: Theme.of(context).textTheme.titleSmall),
+                  child: Text(
+                    'Muted members (${_mutes.length})',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
                 ),
                 if (_mutes.isEmpty)
                   const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Text('No one is muted.',
-                        style: TextStyle(color: Colors.grey)),
+                    child: Text(
+                      'No one is muted.',
+                      style: TextStyle(color: Colors.grey),
+                    ),
                   ),
                 for (final mute in _mutes)
                   ListTile(
@@ -225,8 +238,10 @@ class _ModerationScreenState extends State<ModerationScreen> {
                 if (mutableMembers.isNotEmpty) ...[
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                    child: Text('Mute a member',
-                        style: Theme.of(context).textTheme.titleSmall),
+                    child: Text(
+                      'Mute a member',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
                   ),
                   for (final m in mutableMembers)
                     ListTile(
@@ -240,8 +255,10 @@ class _ModerationScreenState extends State<ModerationScreen> {
                   const Divider(),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                    child: Text('Members & roles',
-                        style: Theme.of(context).textTheme.titleSmall),
+                    child: Text(
+                      'Members & roles',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
                   ),
                   for (final m in manageableMembers)
                     ListTile(
@@ -262,60 +279,51 @@ class _ModerationScreenState extends State<ModerationScreen> {
   void _showMemberMenu(BuildContext context, ConversationMember m) {
     showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: GlassContainer(
-            shape: LiquidRoundedSuperellipse(borderRadius: 28),
-            allowElevation: true,
-            glowIntensity: 0.06,
-            padding: EdgeInsets.zero,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 8),
-                if (m.role != MemberRole.admin)
-                  _ModTile(
-                    icon: Icons.star_outline_rounded,
-                    label: 'Make admin',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _setRole(m, MemberRole.admin);
-                    },
-                  ),
-                if (m.role != MemberRole.moderator)
-                  _ModTile(
-                    icon: Icons.shield_outlined,
-                    label: 'Make moderator',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _setRole(m, MemberRole.moderator);
-                    },
-                  ),
-                if (m.role != MemberRole.member)
-                  _ModTile(
-                    icon: Icons.person_outline_rounded,
-                    label: 'Make member',
-                    onTap: () {
-                      Navigator.pop(context);
-                      _setRole(m, MemberRole.member);
-                    },
-                  ),
-                _ModTile(
-                  icon: Icons.block_rounded,
-                  label: 'Ban',
-                  color: Colors.red,
-                  onTap: () {
-                    Navigator.pop(context);
-                    _ban(m);
-                  },
-                ),
-                const SizedBox(height: 8),
-              ],
+      builder: (_) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            if (m.role != MemberRole.admin)
+              _ModTile(
+                icon: Icons.star_outline_rounded,
+                label: 'Make admin',
+                onTap: () {
+                  Navigator.pop(context);
+                  _setRole(m, MemberRole.admin);
+                },
+              ),
+            if (m.role != MemberRole.moderator)
+              _ModTile(
+                icon: Icons.shield_outlined,
+                label: 'Make moderator',
+                onTap: () {
+                  Navigator.pop(context);
+                  _setRole(m, MemberRole.moderator);
+                },
+              ),
+            if (m.role != MemberRole.member)
+              _ModTile(
+                icon: Icons.person_outline_rounded,
+                label: 'Make member',
+                onTap: () {
+                  Navigator.pop(context);
+                  _setRole(m, MemberRole.member);
+                },
+              ),
+            _ModTile(
+              icon: Icons.block_rounded,
+              label: 'Ban',
+              color: Colors.red,
+              onTap: () {
+                Navigator.pop(context);
+                _ban(m);
+              },
             ),
-          ),
+            const SizedBox(height: 8),
+          ],
         ),
       ),
     );
@@ -338,7 +346,11 @@ class _ModerationScreenState extends State<ModerationScreen> {
     final until = mute['muted_until'] as String?;
     final reason = mute['reason'] as String?;
     final parts = <String>[];
-    parts.add(until == null ? 'Indefinitely' : 'Until ${DateTime.parse(until).toLocal().toString().split(".").first}');
+    parts.add(
+      until == null
+          ? 'Indefinitely'
+          : 'Until ${DateTime.parse(until).toLocal().toString().split(".").first}',
+    );
     if (reason != null && reason.isNotEmpty) parts.add('· $reason');
     return parts.join(' ');
   }
