@@ -770,7 +770,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                     icon: Icons.visibility_outlined,
                     title: 'Strict privacy',
                     subtitle:
-                        'Disable typing, read receipts, link previews, and link opens',
+                        'Disable typing, read receipts, link previews, and link opens; when off, typing and read receipts use classic metadata',
                     value: settings.strictPrivacyMode,
                     onChanged: settings.setStrictPrivacyMode,
                   ),

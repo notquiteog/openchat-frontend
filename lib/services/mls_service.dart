@@ -67,7 +67,10 @@ class MlsService {
     try {
       final decoded = jsonDecode(plaintext);
       if (decoded is! Map<String, dynamic>) return plaintext;
-      if (decoded['openchat_message'] != 1) return plaintext;
+      if (decoded['openchat_message'] != 1 &&
+          decoded['openchat_call_signal'] != 1) {
+        return plaintext;
+      }
       final currentSize = utf8.encode(plaintext).length;
       const buckets = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536];
       final target = buckets.firstWhere(

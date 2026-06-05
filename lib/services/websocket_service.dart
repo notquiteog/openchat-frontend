@@ -256,6 +256,10 @@ class WebSocketService extends ChangeNotifier {
     });
   }
 
+  void sendCallOfferPayload(Map<String, dynamic> data) {
+    _send({'type': 'call_offer', 'data': data});
+  }
+
   void sendCallAnswer({
     required String targetUserId,
     required String callId,
@@ -265,6 +269,10 @@ class WebSocketService extends ChangeNotifier {
       'type': 'call_answer',
       'data': {'target_user_id': targetUserId, 'call_id': callId, 'sdp': sdp},
     });
+  }
+
+  void sendCallAnswerPayload(Map<String, dynamic> data) {
+    _send({'type': 'call_answer', 'data': data});
   }
 
   void sendIceCandidate({
@@ -280,6 +288,10 @@ class WebSocketService extends ChangeNotifier {
         'candidate': candidate,
       },
     });
+  }
+
+  void sendIceCandidatePayload(Map<String, dynamic> data) {
+    _send({'type': 'call_ice_candidate', 'data': data});
   }
 
   void sendCallHangup({required String targetUserId, required String callId}) {

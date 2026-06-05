@@ -228,7 +228,8 @@ class PgpService {
       final decoded = jsonDecode(plaintext);
       if (decoded is! Map<String, dynamic>) return plaintext;
       if (decoded['openchat_message'] != 1 &&
-          decoded['openchat_self_state'] != 1) {
+          decoded['openchat_self_state'] != 1 &&
+          decoded['openchat_call_signal'] != 1) {
         return plaintext;
       }
       final currentSize = utf8.encode(plaintext).length;

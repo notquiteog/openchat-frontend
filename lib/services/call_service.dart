@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:uuid/uuid.dart';
 import '../config/api_config.dart' show IceServer;
+import '../services/call_signal_codec.dart';
 import '../services/websocket_service.dart';
 
 enum CallState {
@@ -185,6 +186,7 @@ int _videoDeviceScore(MediaDeviceInfo device) {
 /// and forwards signaling through the WebSocket service.
 class CallService {
   final WebSocketService _ws;
+  final CallSignalCodec _signalCodec;
   final Future<List<IceServer>> Function()? _iceServerLoader;
   RTCPeerConnection? _pc;
   MediaStream? _localStream;
@@ -239,7 +241,8 @@ class CallService {
     IceServer(url: 'stun:stun1.l.google.com:19302'),
   ];
 
-  CallService(this._ws, {this._iceServerLoader}) {
+  CallService(this._ws, {CallSignalCodec? signalCodec, this._iceServerLoader})
+    : _signalCodec = signalCodec ?? const PlainCallSignalCodec() {
     _wsSub = _ws.events.listen(_handleWsEvent);
   }
 
@@ -282,20 +285,29 @@ class CallService {
 
     try {
       await refreshIceServers();
-      await _initPeerConnection(targetUserId, callId);
+      await _initPeerConnection(
+        targetUserId,
+        callId,
+        conversationId: conversationId,
+        isVideo: isVideo,
+      );
       await _captureLocalMedia(isVideo: isVideo);
       _sessionController.add(_session);
 
       final offer = await _pc!.createOffer();
       await _pc!.setLocalDescription(offer);
 
-      _ws.sendCallOffer(
-        targetUserId: targetUserId,
-        callId: callId,
-        sdp: offer.sdp!,
-        isVideo: isVideo,
-        conversationId: conversationId,
+      final offerData = await _signalCodec.encode(
+        CallSignalPayload(
+          kind: 'offer',
+          targetUserId: targetUserId,
+          callId: callId,
+          conversationId: conversationId,
+          isVideo: isVideo,
+          sdp: offer.sdp!,
+        ),
       );
+      _ws.sendCallOfferPayload(offerData);
 
       // Give up (as a missed/no-answer call) if the callee never picks up.
       _startRingTimer();
@@ -332,7 +344,13 @@ class CallService {
 
     try {
       await refreshIceServers();
-      await _initPeerConnection(session.remoteUserId, session.callId);
+      await _initPeerConnection(
+        session.remoteUserId,
+        session.callId,
+        conversationId: session.conversationId,
+        callerId: session.remoteUserId,
+        isVideo: session.isVideo,
+      );
       await _captureLocalMedia(isVideo: session.isVideo);
       _sessionController.add(_session);
 
@@ -355,11 +373,18 @@ class CallService {
     final answer = await _pc!.createAnswer();
     await _pc!.setLocalDescription(answer);
 
-    _ws.sendCallAnswer(
-      targetUserId: session.remoteUserId,
-      callId: session.callId,
-      sdp: answer.sdp!,
+    final answerData = await _signalCodec.encode(
+      CallSignalPayload(
+        kind: 'answer',
+        targetUserId: session.remoteUserId,
+        callId: session.callId,
+        conversationId: session.conversationId,
+        callerId: session.isIncoming ? session.remoteUserId : null,
+        isVideo: session.isVideo,
+        sdp: answer.sdp!,
+      ),
     );
+    _ws.sendCallAnswerPayload(answerData);
     _enterConnecting();
   }
 
@@ -601,33 +626,13 @@ class CallService {
   void _handleWsEvent(WsEvent event) {
     switch (event.type) {
       case WsEventType.callOffer:
-        handleIncomingCallPayload(event.data);
+        unawaited(_handleCallOffer(event.data));
 
       case WsEventType.callAnswer:
-        final sdp = event.data['sdp'] as String? ?? '';
-        _cancelRingTimer();
-        // Peer answered — enter connecting phase immediately so the 30-second
-        // timeout starts ticking. setRemoteDescription is async; errors are
-        // caught and trigger a clean hangup rather than leaving the call stuck.
-        _enterConnecting();
-        if (_pc != null && sdp.isNotEmpty) {
-          _pc!
-              .setRemoteDescription(RTCSessionDescription(sdp, 'answer'))
-              .then((_) => _flushPendingRemoteCandidates())
-              .catchError((_) => hangup());
-        }
+        unawaited(_handleCallAnswer(event.data));
 
       case WsEventType.callIceCandidate:
-        final callId = event.data['call_id'] as String? ?? '';
-        final candidateMap = event.data['candidate'] as Map<String, dynamic>?;
-        if (candidateMap != null) {
-          final candidate = RTCIceCandidate(
-            candidateMap['candidate'] as String?,
-            candidateMap['sdpMid'] as String?,
-            candidateMap['sdpMLineIndex'] as int?,
-          );
-          _addOrQueueRemoteCandidate(callId, candidate);
-        }
+        unawaited(_handleCallIceCandidate(event.data));
 
       case WsEventType.callHangup:
       case WsEventType.callReject:
@@ -659,6 +664,53 @@ class CallService {
 
   String? _pendingOfferSdp;
   String? get pendingOfferSdp => _pendingOfferSdp;
+
+  Future<void> _handleCallOffer(Map<String, dynamic> data) async {
+    final decoded = await _decodeCallSignal(data);
+    if (decoded != null) handleIncomingCallPayload(decoded);
+  }
+
+  Future<void> _handleCallAnswer(Map<String, dynamic> data) async {
+    final decoded = await _decodeCallSignal(data);
+    if (decoded == null) return;
+    final sdp = decoded['sdp'] as String? ?? '';
+    _cancelRingTimer();
+    // Peer answered — enter connecting phase immediately so the 30-second
+    // timeout starts ticking. setRemoteDescription is async; errors are
+    // caught and trigger a clean hangup rather than leaving the call stuck.
+    _enterConnecting();
+    if (_pc != null && sdp.isNotEmpty) {
+      _pc!
+          .setRemoteDescription(RTCSessionDescription(sdp, 'answer'))
+          .then((_) => _flushPendingRemoteCandidates())
+          .catchError((_) => hangup());
+    }
+  }
+
+  Future<void> _handleCallIceCandidate(Map<String, dynamic> data) async {
+    final decoded = await _decodeCallSignal(data);
+    if (decoded == null) return;
+    final callId = decoded['call_id'] as String? ?? '';
+    final candidateMap = decoded['candidate'] as Map<String, dynamic>?;
+    if (candidateMap != null) {
+      final candidate = RTCIceCandidate(
+        candidateMap['candidate'] as String?,
+        candidateMap['sdpMid'] as String?,
+        candidateMap['sdpMLineIndex'] as int?,
+      );
+      await _addOrQueueRemoteCandidate(callId, candidate);
+    }
+  }
+
+  Future<Map<String, dynamic>?> _decodeCallSignal(
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      return await _signalCodec.decode(data);
+    } catch (_) {
+      return null;
+    }
+  }
 
   bool handleIncomingCallPayload(Map<String, dynamic> data) {
     final callId = data['call_id'] as String? ?? '';
@@ -707,7 +759,13 @@ class CallService {
 
   // ---- Internals ----
 
-  Future<void> _initPeerConnection(String remoteUserId, String callId) async {
+  Future<void> _initPeerConnection(
+    String remoteUserId,
+    String callId, {
+    String? conversationId,
+    String? callerId,
+    required bool isVideo,
+  }) async {
     final config = {
       'iceServers': _iceServers.map((s) => s.toRtcMap()).toList(),
     };
@@ -716,14 +774,19 @@ class CallService {
 
     _pc!.onIceCandidate = (candidate) {
       if (candidate.candidate == null) return;
-      _ws.sendIceCandidate(
-        targetUserId: remoteUserId,
-        callId: callId,
-        candidate: {
-          'candidate': candidate.candidate,
-          'sdpMid': candidate.sdpMid,
-          'sdpMLineIndex': candidate.sdpMLineIndex,
-        },
+      unawaited(
+        _sendIceCandidate(
+          targetUserId: remoteUserId,
+          callId: callId,
+          conversationId: conversationId,
+          callerId: callerId,
+          isVideo: isVideo,
+          candidate: {
+            'candidate': candidate.candidate,
+            'sdpMid': candidate.sdpMid,
+            'sdpMLineIndex': candidate.sdpMLineIndex,
+          },
+        ),
       );
     };
 
@@ -767,6 +830,30 @@ class CallService {
           break;
       }
     };
+  }
+
+  Future<void> _sendIceCandidate({
+    required String targetUserId,
+    required String callId,
+    required String? conversationId,
+    required String? callerId,
+    required bool isVideo,
+    required Map<String, dynamic> candidate,
+  }) async {
+    try {
+      final data = await _signalCodec.encode(
+        CallSignalPayload(
+          kind: 'ice',
+          targetUserId: targetUserId,
+          callId: callId,
+          conversationId: conversationId,
+          callerId: callerId,
+          isVideo: isVideo,
+          candidate: candidate,
+        ),
+      );
+      _ws.sendIceCandidatePayload(data);
+    } catch (_) {}
   }
 
   Future<void> _addOrQueueRemoteCandidate(

@@ -1296,7 +1296,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   icon: Icons.visibility_outlined,
                   title: 'Strict Privacy',
                   subtitle:
-                      'Disable typing, read receipts, link previews, and link opens',
+                      'Disable typing, read receipts, link previews, and link opens; when off, typing and read receipts use classic metadata',
                   value: settings.strictPrivacyMode,
                   onChanged: settings.setStrictPrivacyMode,
                 ),

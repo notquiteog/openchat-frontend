@@ -246,13 +246,15 @@ class PushNotificationService {
   }) {
     final type = msg.data['type'] as String?;
     if (type == 'incoming_call') {
-      final isVideo = msg.data['is_video'] == 'true';
-      final kind = isVideo ? 'video' : 'voice';
+      final isVideo = msg.data['is_video'];
+      final body = isVideo == null
+          ? 'Incoming call'
+          : 'Incoming ${isVideo == 'true' ? 'video' : 'voice'} call';
       return NotificationIntent(
         kind: NotificationIntentKind.incomingCall,
         notificationId: 1,
         title: 'Incoming call',
-        body: 'Incoming $kind call',
+        body: body,
       );
     }
     if (type == 'new_message') {

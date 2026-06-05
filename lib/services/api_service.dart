@@ -1173,12 +1173,33 @@ class ApiService {
       'allows_revoting': allowsRevoting,
       if (silent) 'silent': true,
     });
-    return Message.fromJson(resp['data'] as Map<String, dynamic>);
+    final message = Message.fromJson(resp['data'] as Map<String, dynamic>);
+    await _saveSealedMessageControlFromMessage(convID, message);
+    return message;
   }
 
   Future<Poll> votePoll(String pollID, List<String> optionIDs) async {
     final resp = await _post('/api/v1/polls/$pollID/votes', {
       'option_ids': optionIDs,
+    });
+    return Poll.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<Poll> stopPoll(
+    String pollID, {
+    String? convID,
+    String? messageID,
+  }) async {
+    String? controlToken;
+    if (convID != null && messageID != null) {
+      controlToken = await _storage.getSealedMessageControlToken(
+        convID,
+        messageID,
+      );
+    }
+    final resp = await _post('/api/v1/polls/$pollID/stop', {
+      if (controlToken != null && controlToken.isNotEmpty)
+        'control_token': controlToken,
     });
     return Poll.fromJson(resp['data'] as Map<String, dynamic>);
   }

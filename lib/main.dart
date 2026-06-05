@@ -11,6 +11,7 @@ import 'providers/settings_provider.dart';
 import 'services/api_service.dart';
 import 'services/background_ws_service.dart';
 import 'services/call_service.dart';
+import 'services/call_signal_codec.dart';
 import 'services/desktop_startup_service.dart';
 import 'services/local_private_state_service.dart';
 import 'services/mls_service.dart';
@@ -28,9 +29,11 @@ import 'utils/local_conversation_preferences.dart';
 Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
   if (message.notification == null && message.data['type'] == 'incoming_call') {
     await NotificationService.init();
-    final isVideo = message.data['is_video'] == 'true';
-    final kind = isVideo ? 'video' : 'voice';
-    await NotificationService.showIncomingCall(body: 'Incoming $kind call');
+    final isVideo = message.data['is_video'];
+    final body = isVideo == null
+        ? 'Incoming call'
+        : 'Incoming ${isVideo == 'true' ? 'video' : 'voice'} call';
+    await NotificationService.showIncomingCall(body: body);
   } else if (message.notification == null &&
       message.data['type'] == 'new_message') {
     final conversationId = message.data['conversation_id'] as String? ?? 'push';
@@ -91,7 +94,11 @@ class _Providers extends StatelessWidget {
     final api = ApiService(storage);
     final ws = WebSocketService(storage);
     final mls = MlsService(storage);
-    final callService = CallService(ws, iceServerLoader: api.getIceServers);
+    final callService = CallService(
+      ws,
+      signalCodec: PrivacyCallSignalCodec(api, storage, mls),
+      iceServerLoader: api.getIceServers,
+    );
 
     return MultiProvider(
       providers: [
