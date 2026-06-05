@@ -6,6 +6,7 @@ class ScheduledMessage {
   final String id;
   final String conversationId;
   final String senderId;
+  final bool sealedSender;
   final MessageType type;
   final String encryptedPayload;
   final String signature;
@@ -17,7 +18,7 @@ class ScheduledMessage {
   final DateTime createdAt;
   final DateTime? sentAt;
   final DateTime? canceledAt;
-  final List<String> mentionedUserIds;
+  final String? controlToken;
   final String? decryptedContent;
   final bool decryptionFailed;
 
@@ -25,6 +26,7 @@ class ScheduledMessage {
     required this.id,
     required this.conversationId,
     required this.senderId,
+    this.sealedSender = false,
     required this.type,
     required this.encryptedPayload,
     required this.signature,
@@ -36,7 +38,7 @@ class ScheduledMessage {
     required this.createdAt,
     this.sentAt,
     this.canceledAt,
-    this.mentionedUserIds = const [],
+    this.controlToken,
     this.decryptedContent,
     this.decryptionFailed = false,
   });
@@ -45,7 +47,8 @@ class ScheduledMessage {
     return ScheduledMessage(
       id: json['id'] as String,
       conversationId: json['conversation_id'] as String,
-      senderId: json['sender_id'] as String,
+      senderId: json['sender_id'] as String? ?? '',
+      sealedSender: json['sealed_sender'] as bool? ?? false,
       type: _parseType(json['message_type'] as String? ?? 'text'),
       encryptedPayload: json['encrypted_payload'] as String? ?? '',
       signature: json['signature'] as String? ?? '',
@@ -57,14 +60,13 @@ class ScheduledMessage {
       createdAt: DateTime.parse(json['created_at'] as String),
       sentAt: _parseOptionalDate(json['sent_at']),
       canceledAt: _parseOptionalDate(json['canceled_at']),
-      mentionedUserIds: (json['mentioned_user_ids'] as List? ?? const [])
-          .map((value) => value.toString())
-          .toList(),
+      controlToken: json['control_token'] as String?,
     );
   }
 
   ScheduledMessage copyWith({
     DateTime? scheduledFor,
+    String? controlToken,
     String? decryptedContent,
     bool? decryptionFailed,
   }) {
@@ -72,6 +74,7 @@ class ScheduledMessage {
       id: id,
       conversationId: conversationId,
       senderId: senderId,
+      sealedSender: sealedSender,
       type: type,
       encryptedPayload: encryptedPayload,
       signature: signature,
@@ -83,7 +86,7 @@ class ScheduledMessage {
       createdAt: createdAt,
       sentAt: sentAt,
       canceledAt: canceledAt,
-      mentionedUserIds: mentionedUserIds,
+      controlToken: controlToken ?? this.controlToken,
       decryptedContent: decryptedContent ?? this.decryptedContent,
       decryptionFailed: decryptionFailed ?? this.decryptionFailed,
     );

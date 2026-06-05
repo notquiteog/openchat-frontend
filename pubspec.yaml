@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.4.29+69
+version: 0.4.30+70
 publish_to: 'none'
 
 environment:
@@ -22,6 +22,7 @@ dependencies:
       ref: v3.12.3
   pointycastle: ^4.0.0
   cryptography: ^2.9.0
+  crypto: ^3.0.7
 
   # Secure storage (Keychain / Keystore / Credential Manager)
   flutter_secure_storage: ^10.2.0
@@ -88,6 +89,7 @@ dependencies:
 
   # Open Stripe checkout URLs in the system browser
   url_launcher: ^6.3.0
+  html: ^0.15.6
   flutter_image_compress: ^2.4.0
   package_info_plus: ^10.1.0
   window_manager: ^0.5.1

@@ -169,7 +169,7 @@ void main() {
           mentioned,
           filter: SmartInboxFilter.mentions,
           currentUserId: 'me',
-          currentUsername: 'alice',
+          unreadMentionMessageIds: const {'mentioned': 'mentioned-message'},
         ),
         isTrue,
       );
@@ -178,7 +178,7 @@ void main() {
           mentioned,
           filter: SmartInboxFilter.mentions,
           currentUserId: 'me',
-          currentUsername: 'ali',
+          unreadMentionMessageIds: const {},
         ),
         isFalse,
       );

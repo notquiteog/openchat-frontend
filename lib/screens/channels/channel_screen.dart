@@ -403,7 +403,6 @@ class _PreparedChannelPostPayload {
   final String signature;
   final String cleartextPayload;
   final String serverMessageType;
-  final List<String> mentionedUserIds;
   final String senderId;
   final bool isEncrypted;
   final String? postToken;
@@ -413,7 +412,6 @@ class _PreparedChannelPostPayload {
     required this.signature,
     required this.cleartextPayload,
     required this.serverMessageType,
-    required this.mentionedUserIds,
     required this.senderId,
     required this.isEncrypted,
     this.postToken,
@@ -780,6 +778,14 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     return true;
   }
 
+  String _postErrorMessage(Object error) {
+    if (error is ApiException) {
+      return 'Could not post (${error.statusCode} ${error.code}): ${error.message}';
+    }
+    if (error is ChatSendException) return error.message;
+    return 'Could not post: $error';
+  }
+
   Future<void> _drainOutbox() async {
     if (_drainingOutbox) return;
     if (!_ws.isMonitoring) {
@@ -842,10 +848,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final plaintext = data['plaintext_payload'] as String? ?? '';
     final encryptedPayload = data['encrypted_payload'] as String? ?? '';
     final postToken = data['post_token'] as String?;
-    final isPgp = data['is_pgp'] as bool? ?? false;
+    final isEncrypted = data['is_encrypted'] as bool? ?? false;
     final Message confirmed;
     if (postToken != null && postToken.isNotEmpty) {
-      confirmed = await api.sendSealedPgpMessage(
+      confirmed = await api.sendSealedMessage(
         convID: item.conversationId,
         encryptedPayload: encryptedPayload,
         postToken: postToken,
@@ -853,9 +859,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         silent: data['silent'] as bool? ?? false,
       );
     } else {
-      if (isPgp) {
+      if (isEncrypted) {
         throw const ChatSendException(
-          'Queued PGP post is missing its sealed posting token.',
+          'Queued encrypted post is missing its sealed posting token.',
         );
       }
       confirmed = await api.postToChannel(
@@ -864,7 +870,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         signature: data['signature'] as String? ?? '',
         messageType: data['message_type'] as String? ?? 'text',
         attachmentId: data['attachment_id'] as String?,
-        mentionedUserIds: _stringList(data['mentioned_user_ids']),
         silent: data['silent'] as bool? ?? false,
       );
     }
@@ -928,8 +933,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       plaintextPayload: plaintextPayload,
       messageType: messageType,
     );
-    final confirmed = channel.usesPgp
-        ? await api.sendSealedPgpMessage(
+    final confirmed = channel.isEncrypted
+        ? await api.sendSealedMessage(
             convID: channel.id,
             encryptedPayload: prepared.encryptedPayload,
             postToken: prepared.postToken ?? '',
@@ -942,7 +947,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             signature: prepared.signature,
             messageType: prepared.serverMessageType,
             attachmentId: attachmentId,
-            mentionedUserIds: prepared.mentionedUserIds,
             silent: silent,
           );
     _replacePendingWithConfirmed(
@@ -977,11 +981,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         );
       });
     }
-  }
-
-  List<String> _stringList(Object? value) {
-    if (value is! List) return const [];
-    return value.map((item) => item.toString()).toList();
   }
 
   Future<void> _syncPinnedMessagesFromServer({
@@ -1054,7 +1053,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         encryptedPayload: msg.encryptedPayload,
       );
       if (raw != null && raw.isNotEmpty) {
-        msg.setDecryptedContent(raw);
+        final verifiedSenderId = await _verifiedPgpSenderId(raw);
+        if (msg.sealedSender && verifiedSenderId == null) {
+          msg.markDecryptionFailed();
+          return;
+        }
+        msg.setDecryptedContent(raw, verifiedSenderId: verifiedSenderId);
+        ChatProvider.hydrateMessageSenderFromConversation(msg, channel);
         if (notify && mounted) setState(() {});
       } else {
         msg.markDecryptionFailed();
@@ -2098,31 +2103,28 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       );
     }
 
-    final mentionedUserIds = mentionedMemberIdsInText(
-      MessageContent.parse(
-        plaintextPayload,
-        _messageTypeFromWire(messageType),
-      ).text,
-      channel.members,
-      currentUserId: userID,
-    );
-
     if (!channel.isEncrypted) {
       return _PreparedChannelPostPayload(
         encryptedPayload: plaintextPayload,
         signature: '',
         cleartextPayload: plaintextPayload,
         serverMessageType: messageType,
-        mentionedUserIds: mentionedUserIds,
         senderId: userID,
         isEncrypted: false,
       );
     }
 
     if (channel.usesMls) {
-      final cleartextPayload = _encryptedCleartextPayload(
+      if (privateKey.isEmpty) {
+        throw const ChatSendException(
+          'Your PGP key is locked or missing. Unlock or import it in Settings to post sealed MLS messages.',
+        );
+      }
+      final cleartextPayload = await _signedPgpCleartextPayload(
         plaintextPayload: plaintextPayload,
         messageType: messageType,
+        senderId: userID,
+        privateKey: privateKey,
       );
       final encrypted = await mls.encryptPayload(
         api: api,
@@ -2134,9 +2136,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         signature: '',
         cleartextPayload: cleartextPayload,
         serverMessageType: 'text',
-        mentionedUserIds: const [],
         senderId: userID,
         isEncrypted: true,
+        postToken: await _sealedPostToken(privateKey),
       );
     }
 
@@ -2216,13 +2218,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       recipients: recipients,
       signingPrivateKeyArmored: privateKey,
     ).timeout(const Duration(seconds: 30));
-    final postToken = await _pgpPostToken(privateKey);
+    final postToken = await _sealedPostToken(privateKey);
     return _PreparedChannelPostPayload(
       encryptedPayload: encrypted,
       signature: '',
       cleartextPayload: cleartextPayload,
       serverMessageType: 'text',
-      mentionedUserIds: const [],
       senderId: userID,
       isEncrypted: true,
       postToken: postToken,
@@ -2235,7 +2236,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     required String localMessageType,
     required String encryptedPayload,
     required String signature,
-    required List<String> mentionedUserIds,
     required String senderId,
     required bool isEncrypted,
     String? postToken,
@@ -2259,9 +2259,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           'post_token': ?postToken,
           'message_type': messageType,
           if (isEncrypted) 'local_message_type': localMessageType,
-          'mentioned_user_ids': mentionedUserIds,
           'is_encrypted': isEncrypted,
-          if (channel.usesPgp) 'is_pgp': true,
           'created_at': now.toUtc().toIso8601String(),
           'attachment_id': ?attachmentId,
           if (silent) 'silent': true,
@@ -2368,7 +2366,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text(e.toString())));
+        ).showSnackBar(SnackBar(content: Text(_postErrorMessage(e))));
       }
       return;
     }
@@ -2380,7 +2378,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         localMessageType: messageType,
         encryptedPayload: prepared.encryptedPayload,
         signature: prepared.signature,
-        mentionedUserIds: prepared.mentionedUserIds,
         senderId: prepared.senderId,
         isEncrypted: prepared.isEncrypted,
         postToken: prepared.postToken,
@@ -2393,27 +2390,38 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       return;
     }
 
-    late final Message msg;
+    Message? msg;
     try {
-      msg = channel.usesPgp && scheduledFor == null
-          ? await api.sendSealedPgpMessage(
-              convID: channel.id,
-              encryptedPayload: prepared.encryptedPayload,
-              postToken: prepared.postToken ?? '',
-              attachmentId: attachmentId,
-              silent: silent,
-            )
-          : await api.postToChannel(
-              chanID: channel.id,
-              encryptedPayload: prepared.encryptedPayload,
-              signature: prepared.signature,
-              postToken: prepared.postToken,
-              messageType: prepared.serverMessageType,
-              attachmentId: attachmentId,
-              mentionedUserIds: prepared.mentionedUserIds,
-              silent: silent,
-              scheduledFor: scheduledFor,
-            );
+      if (channel.isEncrypted) {
+        if (scheduledFor == null) {
+          msg = await api.sendSealedMessage(
+            convID: channel.id,
+            encryptedPayload: prepared.encryptedPayload,
+            postToken: prepared.postToken ?? '',
+            attachmentId: attachmentId,
+            silent: silent,
+          );
+        } else {
+          await api.scheduleSealedMessage(
+            convID: channel.id,
+            encryptedPayload: prepared.encryptedPayload,
+            postToken: prepared.postToken ?? '',
+            scheduledFor: scheduledFor,
+            attachmentId: attachmentId,
+            silent: silent,
+          );
+        }
+      } else {
+        msg = await api.postToChannel(
+          chanID: channel.id,
+          encryptedPayload: prepared.encryptedPayload,
+          signature: prepared.signature,
+          messageType: prepared.serverMessageType,
+          attachmentId: attachmentId,
+          silent: silent,
+          scheduledFor: scheduledFor,
+        );
+      }
     } catch (e) {
       if (scheduledFor == null && _shouldRetryOutboxError(e)) {
         await _queueChannelPost(
@@ -2422,7 +2430,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           localMessageType: messageType,
           encryptedPayload: prepared.encryptedPayload,
           signature: prepared.signature,
-          mentionedUserIds: prepared.mentionedUserIds,
           senderId: prepared.senderId,
           isEncrypted: prepared.isEncrypted,
           postToken: prepared.postToken,
@@ -2440,22 +2447,26 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Post failed: $e')));
+        ).showSnackBar(SnackBar(content: Text(_postErrorMessage(e))));
       }
       return;
     }
-    final proof = Message.senderProofFromRaw(prepared.cleartextPayload);
-    msg.setDecryptedContent(
-      prepared.cleartextPayload,
-      verifiedSenderId: proof?.senderId,
-    );
-    ChatProvider.hydrateMessageSenderFromConversation(msg, channel);
+    final confirmed = msg;
+    if (confirmed != null) {
+      final proof = Message.senderProofFromRaw(prepared.cleartextPayload);
+      confirmed.setDecryptedContent(
+        prepared.cleartextPayload,
+        verifiedSenderId: proof?.senderId,
+      );
+      ChatProvider.hydrateMessageSenderFromConversation(confirmed, channel);
+    }
     if (plaintextOverride == null) {
       unawaited(_settings.clearMessageDraft(channel.id));
     }
     if (scheduledFor == null) {
-      setState(() => _posts.add(msg));
-      chat.indexLoadedMessage(msg);
+      if (confirmed == null) return;
+      setState(() => _posts.add(confirmed));
+      chat.indexLoadedMessage(confirmed);
     } else if (mounted) {
       setState(() => _scheduledFor = null);
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2491,15 +2502,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     };
   }
 
-  String _encryptedCleartextPayload({
-    required String plaintextPayload,
-    required String messageType,
-  }) => jsonEncode({
-    'openchat_message': 1,
-    'type': messageType,
-    'payload': plaintextPayload,
-  });
-
   Future<String> _signedPgpCleartextPayload({
     required String plaintextPayload,
     required String messageType,
@@ -2528,10 +2530,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     });
   }
 
-  Future<String> _pgpPostToken(String privateKey) async {
+  Future<String> _sealedPostToken(String privateKey) async {
     final api = context.read<ApiService>();
     final storage = context.read<SecureStorageService>();
-    final encrypted = await api.getEncryptedPgpPostToken(channel.id);
+    final encrypted = await api.getEncryptedSealedPostToken(channel.id);
     final token = await PgpService.decrypt(
       encryptedArmor: encrypted,
       privateKeyArmored: privateKey,

@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openchat/models/conversation.dart';
-import 'package:openchat/models/message.dart';
 import 'package:openchat/models/user.dart';
 import 'package:openchat/utils/mention_utils.dart';
 
@@ -54,37 +53,13 @@ void main() {
         members: [
           _member(id: 'me', username: 'alex'),
           _member(id: 'u-1', username: 'paloma'),
-          _member(id: 'u-2', username: 'alice'),
+          _member(id: 'u-2', username: 'alice', publicDiscovery: false),
         ],
       );
 
       expect(suggestions.map((m) => m.user!.username), ['alice', 'paloma']);
     },
   );
-
-  test('unreadMentionMessageId returns latest unread mention target', () {
-    final conversation = _conversation(
-      unreadCount: 2,
-      lastMessage: _message(id: 'm-1', text: 'Ping @alice'),
-    );
-
-    expect(unreadMentionMessageId(conversation, 'alice'), 'm-1');
-    expect(unreadMentionMessageId(conversation, 'ali'), isNull);
-    expect(
-      unreadMentionMessageId(conversation.copyWith(unreadCount: 0), 'alice'),
-      isNull,
-    );
-  });
-
-  test('unreadMentionMessageId prefers server indexed target', () {
-    final conversation = _conversation(
-      unreadCount: 0,
-      lastMessage: _message(id: 'm-latest', text: 'Plain update'),
-      unreadMentionMessageId: 'm-mentioned',
-    );
-
-    expect(unreadMentionMessageId(conversation, 'alice'), 'm-mentioned');
-  });
 
   test('mentionedMemberIdsInText maps exact handles to member ids', () {
     final ids = mentionedMemberIdsInText('Hi @alice and @bob_123 and @Alice', [
@@ -98,39 +73,11 @@ void main() {
   });
 }
 
-Conversation _conversation({
-  required int unreadCount,
-  required Message lastMessage,
-  String? unreadMentionMessageId,
+ConversationMember _member({
+  required String id,
+  required String username,
+  bool publicDiscovery = true,
 }) {
-  return Conversation(
-    id: 'c-1',
-    type: ConversationType.group,
-    name: 'Group',
-    createdAt: DateTime(2024),
-    createdBy: 'u-1',
-    lastMessage: lastMessage,
-    unreadCount: unreadCount,
-    unreadMentionMessageId: unreadMentionMessageId,
-  );
-}
-
-Message _message({required String id, required String text}) {
-  final message = Message(
-    id: id,
-    conversationId: 'c-1',
-    senderId: 'u-2',
-    type: MessageType.text,
-    encryptedPayload: '',
-    signature: '',
-    isEncrypted: false,
-    createdAt: DateTime(2024),
-  );
-  message.setDecryptedContent(text);
-  return message;
-}
-
-ConversationMember _member({required String id, required String username}) {
   return ConversationMember(
     conversationId: 'c-1',
     userId: id,
@@ -141,6 +88,7 @@ ConversationMember _member({required String id, required String username}) {
       username: username,
       publicKey: '',
       keyFingerprint: '',
+      publicDiscovery: publicDiscovery,
       createdAt: DateTime(2024),
     ),
   );

@@ -5,13 +5,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config/api_config.dart';
 import '../utils/local_conversation_preferences.dart';
 import 'background_notification_intent.dart' as intent_mapper;
 import 'background_notification_intent.dart' show NotificationIntent;
+import 'local_private_state_service.dart';
 import 'notification_service.dart';
+import 'secure_storage_service.dart';
 
 export 'background_notification_intent.dart'
     show NotificationIntent, NotificationIntentKind;
@@ -40,13 +41,6 @@ export 'background_notification_intent.dart'
 /// and the main WebSocketService already handles notifications.
 /// ──────────────────────────────────────────────────────────────────────────
 class BackgroundWsService {
-  static const _kToken = 'bg_ws_access_token';
-  static const _kSensitive = 'bg_ws_sensitive_content';
-  static const _kMutedConversations = mutedConversationsPreferenceKey;
-  static const _kNotificationPreferences =
-      conversationNotificationPreferencesPreferenceKey;
-  static const _kNotificationCurrentUser = notificationCurrentUserPreferenceKey;
-
   static bool supportsPersistentBackgroundWebSocket({
     required bool isWeb,
     required bool isAndroid,
@@ -89,15 +83,14 @@ class BackgroundWsService {
     }
   }
 
-  /// Start the background service. Stores [accessToken] and [showSensitive] in
-  /// SharedPreferences so the isolated service can read them.
+  /// Start the background service. The isolated service reads tokens from
+  /// secure storage and notification rules from encrypted local state.
   static Future<bool> start({
     required String accessToken,
     required bool showSensitive,
     Map<String, ConversationNotificationPreference>
         conversationNotificationPreferences =
         const {},
-    String currentUserId = '',
   }) async {
     if (!kIsWeb && Platform.isIOS) {
       return false;
@@ -108,36 +101,29 @@ class BackgroundWsService {
     if (accessToken.isEmpty) return false;
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_kToken, accessToken);
-      await prefs.setBool(_kSensitive, showSensitive);
-      await prefs.setString(
-        _kNotificationPreferences,
-        encodeConversationNotificationPreferences(
-          conversationNotificationPreferences,
-        ),
-      );
-      await prefs.setString(_kNotificationCurrentUser, currentUserId);
-
       if (await _service.isRunning()) {
         await updateToken(accessToken);
         await updateSensitiveContent(showSensitive);
         await updateConversationNotificationPreferences(
           conversationNotificationPreferences,
-          currentUserId: currentUserId,
         );
         return true;
       }
-      return _service.startService();
+      final started = await _service.startService();
+      if (started) {
+        await updateSensitiveContent(showSensitive);
+        await updateConversationNotificationPreferences(
+          conversationNotificationPreferences,
+        );
+      }
+      return started;
     } catch (e) {
       debugPrint('Background WebSocket start failed: $e');
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_kToken);
       return false;
     }
   }
 
-  /// Stop the background service and clean up the stored token.
+  /// Stop the background service.
   static Future<void> stop() async {
     if (!_mobileOnly) return;
     try {
@@ -145,48 +131,27 @@ class BackgroundWsService {
     } catch (e) {
       debugPrint('Background WebSocket stop failed: $e');
     }
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_kToken);
   }
 
   /// Push a refreshed access token into the running service.
   static Future<void> updateToken(String accessToken) async {
     if (!_mobileOnly) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kToken, accessToken);
     _service.invoke('setToken', {'token': accessToken});
   }
 
   /// Sync the sensitive-content preference without restarting the service.
   static Future<void> updateSensitiveContent(bool showSensitive) async {
     if (!_mobileOnly) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kSensitive, showSensitive);
     _service.invoke('setSensitive', {'sensitive': showSensitive});
   }
 
-  static Future<void> updateMutedConversations(
-    Set<String> conversationIds,
-  ) async {
-    if (!_mobileOnly) return;
-    final sorted = conversationIds.toList()..sort();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_kMutedConversations, sorted);
-    _service.invoke('setMutedConversations', {'conversation_ids': sorted});
-  }
-
   static Future<void> updateConversationNotificationPreferences(
-    Map<String, ConversationNotificationPreference> preferences, {
-    String currentUserId = '',
-  }) async {
+    Map<String, ConversationNotificationPreference> preferences,
+  ) async {
     final encoded = encodeConversationNotificationPreferences(preferences);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kNotificationPreferences, encoded);
-    await prefs.setString(_kNotificationCurrentUser, currentUserId);
     if (!_mobileOnly) return;
     _service.invoke('setConversationNotificationPreferences', {
       'preferences': encoded,
-      'current_user_id': currentUserId,
     });
   }
 
@@ -213,17 +178,19 @@ class BackgroundWsService {
       ),
     );
 
-    final prefs = await SharedPreferences.getInstance();
-    String? token = prefs.getString(_kToken);
-    bool showSensitive = prefs.getBool(_kSensitive) ?? false;
-    Set<String> mutedConversationIds =
-        (prefs.getStringList(_kMutedConversations) ?? const []).toSet();
+    final localState = await _loadLocalPrivateState();
+    String? token = await SecureStorageService().getAccessToken();
+    bool showSensitive = decodePrivateNotificationSettings(
+      localState[privateStateNotificationSettingsKey],
+    ).sensitiveContent;
     Map<String, ConversationNotificationPreference>
     conversationNotificationPreferences =
-        decodeConversationNotificationPreferences(
-          prefs.getString(_kNotificationPreferences),
+        decodePrivateConversationNotificationPreferences(
+          localState[privateStateConversationNotificationPreferencesKey],
         );
-    String currentUserId = prefs.getString(_kNotificationCurrentUser) ?? '';
+    Set<String> mutedConversationIds = activeMutedConversationIds(
+      conversationNotificationPreferences,
+    );
 
     WebSocketChannel? channel;
     Timer? reconnectTimer;
@@ -251,7 +218,6 @@ class BackgroundWsService {
             showSensitive,
             mutedConversationIds,
             conversationNotificationPreferences,
-            currentUserId,
           ),
           onError: (_) {
             channel = null;
@@ -286,19 +252,14 @@ class BackgroundWsService {
       showSensitive = data?['sensitive'] as bool? ?? showSensitive;
     });
 
-    service.on('setMutedConversations').listen((data) {
-      final ids = data?['conversation_ids'];
-      if (ids is List) {
-        mutedConversationIds = ids.whereType<String>().toSet();
-      }
-    });
-
     service.on('setConversationNotificationPreferences').listen((data) {
       conversationNotificationPreferences =
           decodeConversationNotificationPreferences(
             data?['preferences'] as String?,
           );
-      currentUserId = data?['current_user_id'] as String? ?? currentUserId;
+      mutedConversationIds = activeMutedConversationIds(
+        conversationNotificationPreferences,
+      );
     });
 
     connect();
@@ -311,7 +272,6 @@ class BackgroundWsService {
     Set<String> mutedConversationIds,
     Map<String, ConversationNotificationPreference>
     conversationNotificationPreferences,
-    String currentUserId,
   ) {
     if (raw is! String) return;
     for (final line in raw.trim().split('\n')) {
@@ -322,7 +282,6 @@ class BackgroundWsService {
         mutedConversationIds: mutedConversationIds,
         conversationNotificationPreferences:
             conversationNotificationPreferences,
-        currentUserId: currentUserId,
       );
       if (intent == null) continue;
       _showIntent(notif, intent);
@@ -336,13 +295,11 @@ class BackgroundWsService {
     Map<String, ConversationNotificationPreference>
         conversationNotificationPreferences =
         const {},
-    String currentUserId = '',
   }) => intent_mapper.notificationIntentFromRawLine(
     rawLine,
     showSensitive: showSensitive,
     mutedConversationIds: mutedConversationIds,
     conversationNotificationPreferences: conversationNotificationPreferences,
-    currentUserId: currentUserId,
   );
 
   static NotificationIntent? notificationIntentFromEvent({
@@ -353,15 +310,21 @@ class BackgroundWsService {
     Map<String, ConversationNotificationPreference>
         conversationNotificationPreferences =
         const {},
-    String currentUserId = '',
   }) => intent_mapper.notificationIntentFromEvent(
     type: type,
     data: data,
     showSensitive: showSensitive,
     mutedConversationIds: mutedConversationIds,
     conversationNotificationPreferences: conversationNotificationPreferences,
-    currentUserId: currentUserId,
   );
+
+  static Future<Map<String, dynamic>> _loadLocalPrivateState() async {
+    try {
+      return await LocalPrivateStateService().readState();
+    } catch (_) {
+      return const {};
+    }
+  }
 
   static void _showIntent(
     FlutterLocalNotificationsPlugin notif,

@@ -5,6 +5,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 
+import '../models/key_trust_pin.dart';
+
 class SecureStorageStatus {
   final bool available;
   final String? warning;
@@ -17,8 +19,13 @@ class SecureStorageStatus {
 class MlsSignerStorage {
   final String signerBytes;
   final String publicKey;
+  final String signature;
 
-  const MlsSignerStorage({required this.signerBytes, required this.publicKey});
+  const MlsSignerStorage({
+    required this.signerBytes,
+    required this.publicKey,
+    this.signature = '',
+  });
 }
 
 /// Manages secure storage of cryptographic keys and session tokens.
@@ -48,11 +55,16 @@ class SecureStorageService {
   static const _keyAppLockEnabled = 'app_lock_enabled';
   static const _keySearchIndexKey = 'search_index_key_v1';
   static const _keyOutboxKey = 'offline_outbox_key_v1';
+  static const _keyLocalPrivateStateKey = 'local_private_state_key_v1';
+  static const _keyTrustPins = 'key_trust_pins_v1';
   static const _keyMlsEngineKeyPrefix = 'mls_engine_key_v1';
   static const _keyMlsSignerBytesPrefix = 'mls_signer_bytes_v1';
   static const _keyMlsSignerPublicKeyPrefix = 'mls_signer_public_key_v1';
+  static const _keyMlsSignerSignaturePrefix = 'mls_signer_signature_v1';
   static const _keyMlsCredentialIdentityPrefix = 'mls_credential_identity_v1';
   static const _keyPgpPostTokenPrefix = 'pgp_post_token_v1';
+  static const _keySealedScheduleControlsPrefix = 'sealed_schedule_controls_v1';
+  static const _keySelfStateLogSequence = 'self_state_log_sequence_v1';
   static const _keyStorageProbe = '_openchat_secure_storage_probe';
 
   static const linuxKeyringWarning =
@@ -144,6 +156,45 @@ class SecureStorageService {
     return _createRandomStorageKey(_keyOutboxKey);
   }
 
+  Future<String> getOrCreateLocalPrivateStateKey() async {
+    final existing = await _readOrNull(_keyLocalPrivateStateKey);
+    if (existing != null && existing.isNotEmpty) return existing;
+    return _createRandomStorageKey(_keyLocalPrivateStateKey);
+  }
+
+  Future<Map<String, KeyTrustPin>> getKeyTrustPins() async {
+    final raw = await _readOrNull(_keyTrustPins);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return {};
+      return decoded.map((key, value) {
+        return MapEntry(
+          key.toString(),
+          KeyTrustPin.fromJson(Map<String, dynamic>.from(value as Map)),
+        );
+      });
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<KeyTrustPin?> getKeyTrustPin(String userId) async {
+    final pins = await getKeyTrustPins();
+    return pins[userId];
+  }
+
+  Future<void> saveKeyTrustPin(KeyTrustPin pin) async {
+    final pins = await getKeyTrustPins();
+    pins[pin.userId] = pin;
+    await _storage.write(
+      key: _keyTrustPins,
+      value: jsonEncode(
+        pins.map((key, value) => MapEntry(key, value.toJson())),
+      ),
+    );
+  }
+
   Future<String> getOrCreateMlsEngineKey(String userID) async {
     final key = _scopedKey(_keyMlsEngineKeyPrefix, userID);
     final existing = await _readOrNull(key);
@@ -165,19 +216,27 @@ class SecureStorageService {
     final publicKey = await _readOrNull(
       _scopedKey(_keyMlsSignerPublicKeyPrefix, userID),
     );
+    final signature =
+        await _readOrNull(_scopedKey(_keyMlsSignerSignaturePrefix, userID)) ??
+        '';
     if (signer == null ||
         signer.isEmpty ||
         publicKey == null ||
         publicKey.isEmpty) {
       return null;
     }
-    return MlsSignerStorage(signerBytes: signer, publicKey: publicKey);
+    return MlsSignerStorage(
+      signerBytes: signer,
+      publicKey: publicKey,
+      signature: signature,
+    );
   }
 
   Future<void> saveMlsSigner({
     required String userID,
     required String signerBytes,
     required String publicKey,
+    String signature = '',
   }) async {
     await Future.wait([
       _storage.write(
@@ -187,6 +246,10 @@ class SecureStorageService {
       _storage.write(
         key: _scopedKey(_keyMlsSignerPublicKeyPrefix, userID),
         value: publicKey,
+      ),
+      _storage.write(
+        key: _scopedKey(_keyMlsSignerSignaturePrefix, userID),
+        value: signature,
       ),
     ]);
   }
@@ -205,6 +268,72 @@ class SecureStorageService {
   Future<void> deletePgpPostToken(String conversationID) {
     return _storage.delete(
       key: _scopedKey(_keyPgpPostTokenPrefix, conversationID),
+    );
+  }
+
+  Future<Map<String, String>> getSealedScheduleControlTokens(
+    String conversationID,
+  ) async {
+    final raw = await _readOrNull(
+      _scopedKey(_keySealedScheduleControlsPrefix, conversationID),
+    );
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return {};
+      return decoded.map(
+        (key, value) => MapEntry(key.toString(), value.toString()),
+      )..removeWhere((key, value) => key.isEmpty || value.isEmpty);
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<String?> getSealedScheduleControlToken(
+    String conversationID,
+    String scheduledID,
+  ) async {
+    final tokens = await getSealedScheduleControlTokens(conversationID);
+    return tokens[scheduledID];
+  }
+
+  Future<void> saveSealedScheduleControlToken(
+    String conversationID,
+    String scheduledID,
+    String token,
+  ) async {
+    if (conversationID.isEmpty || scheduledID.isEmpty || token.isEmpty) return;
+    final tokens = await getSealedScheduleControlTokens(conversationID);
+    tokens[scheduledID] = token;
+    await _storage.write(
+      key: _scopedKey(_keySealedScheduleControlsPrefix, conversationID),
+      value: jsonEncode(tokens),
+    );
+  }
+
+  Future<void> deleteSealedScheduleControlToken(
+    String conversationID,
+    String scheduledID,
+  ) async {
+    final tokens = await getSealedScheduleControlTokens(conversationID);
+    tokens.remove(scheduledID);
+    final key = _scopedKey(_keySealedScheduleControlsPrefix, conversationID);
+    if (tokens.isEmpty) {
+      await _storage.delete(key: key);
+    } else {
+      await _storage.write(key: key, value: jsonEncode(tokens));
+    }
+  }
+
+  Future<int> getSelfStateLogSequence() async {
+    final raw = await _readOrNull(_keySelfStateLogSequence);
+    return int.tryParse(raw ?? '') ?? 0;
+  }
+
+  Future<void> saveSelfStateLogSequence(int sequence) {
+    return _storage.write(
+      key: _keySelfStateLogSequence,
+      value: sequence.toString(),
     );
   }
 

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'package:flutter/gestures.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +11,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
+import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import '../config/api_config.dart';
 import '../models/link_preview.dart';
@@ -19,6 +21,7 @@ import '../providers/chat_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
+import '../services/link_preview_service.dart';
 import '../utils/link_preview_utils.dart';
 import '../utils/mention_utils.dart';
 import 'glass.dart';
@@ -38,6 +41,7 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback? onReplyTap;
   final bool isLiveLocationSharing;
   final VoidCallback? onCancelLiveLocation;
+  final bool readByOthers;
   // The current user's own bubble can be previewed locally while the published
   // sender bubble color remains authoritative for incoming messages.
   final Color? meBubbleColor;
@@ -57,6 +61,7 @@ class MessageBubble extends StatelessWidget {
     this.onReplyTap,
     this.isLiveLocationSharing = false,
     this.onCancelLiveLocation,
+    this.readByOthers = false,
     this.meBubbleColor,
     this.bubbleRadius = 18,
   });
@@ -144,6 +149,11 @@ class MessageBubble extends StatelessWidget {
                   onLongPress: onLongPress,
                   child: _buildBubble(context),
                 ),
+                if (isMe && readByOthers)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 3, right: 4),
+                    child: _ReadReceiptLabel(),
+                  ),
               ],
             ),
           ),
@@ -300,6 +310,30 @@ class MessageBubble extends StatelessWidget {
     return Text(
       timeago.format(message.createdAt, locale: 'en_short'),
       style: TextStyle(fontSize: 10, color: textColor.withValues(alpha: 0.6)),
+    );
+  }
+}
+
+class _ReadReceiptLabel extends StatelessWidget {
+  const _ReadReceiptLabel();
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.primary;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.done_all_rounded, size: 13, color: color),
+        const SizedBox(width: 3),
+        Text(
+          'Read',
+          style: TextStyle(
+            color: color,
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -600,15 +634,18 @@ class _TextBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     var linkPreviewsEnabled = true;
+    var strictPrivacyMode = false;
     try {
-      linkPreviewsEnabled = context
-          .watch<SettingsProvider>()
-          .linkPreviewsEnabled;
+      final settings = context.watch<SettingsProvider>();
+      linkPreviewsEnabled = settings.linkPreviewsEnabled;
+      strictPrivacyMode = settings.strictPrivacyMode;
     } on ProviderNotFoundException {
       linkPreviewsEnabled = true;
+      strictPrivacyMode = false;
     }
+    final embeddedPreview = message.content!.linkPreview;
     final previewUrl = linkPreviewsEnabled
-        ? firstLinkPreviewUrl(message.content!.text)
+        ? embeddedPreview?.url ?? firstLinkPreviewUrl(message.content!.text)
         : null;
 
     return _BubbleShell(
@@ -633,16 +670,23 @@ class _TextBubble extends StatelessWidget {
           Text.rich(
             TextSpan(
               children: _formatMessageContent(
+                context,
                 message.content!,
                 textColor,
                 isMe ? textColor : cs.primary,
+                strictPrivacyMode,
               ),
             ),
             style: TextStyle(color: textColor, fontSize: 15, height: 1.25),
           ),
           if (previewUrl != null) ...[
             const SizedBox(height: 8),
-            _LinkPreviewCard(url: previewUrl, isMe: isMe, textColor: textColor),
+            _LinkPreviewCard(
+              url: previewUrl,
+              initialPreview: embeddedPreview,
+              isMe: isMe,
+              textColor: textColor,
+            ),
           ],
           if (message.reactions.isNotEmpty) ...[
             const SizedBox(height: 6),
@@ -662,11 +706,13 @@ class _TextBubble extends StatelessWidget {
 
 class _LinkPreviewCard extends StatefulWidget {
   final String url;
+  final LinkPreview? initialPreview;
   final bool isMe;
   final Color textColor;
 
   const _LinkPreviewCard({
     required this.url,
+    this.initialPreview,
     required this.isMe,
     required this.textColor,
   });
@@ -677,24 +723,37 @@ class _LinkPreviewCard extends StatefulWidget {
 
 class _LinkPreviewCardState extends State<_LinkPreviewCard> {
   Future<LinkPreview?>? _future;
+  late final LinkPreviewService _service;
 
   @override
   void initState() {
     super.initState();
-    _future = _load();
+    _service = LinkPreviewService();
+    _future = widget.initialPreview != null
+        ? Future<LinkPreview?>.value(widget.initialPreview)
+        : _load();
   }
 
   @override
   void didUpdateWidget(covariant _LinkPreviewCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.url != widget.url) {
-      _future = _load();
+    if (oldWidget.url != widget.url ||
+        oldWidget.initialPreview != widget.initialPreview) {
+      _future = widget.initialPreview != null
+          ? Future<LinkPreview?>.value(widget.initialPreview)
+          : _load();
     }
+  }
+
+  @override
+  void dispose() {
+    _service.close();
+    super.dispose();
   }
 
   Future<LinkPreview?> _load() async {
     try {
-      return await context.read<ApiService>().fetchLinkPreview(widget.url);
+      return await _service.fetch(widget.url);
     } catch (_) {
       return null;
     }
@@ -956,12 +1015,20 @@ class _LocationBubble extends StatelessWidget {
 }
 
 List<InlineSpan> _formatMessageContent(
+  BuildContext context,
   MessageContent content,
   Color color,
   Color mentionColor,
+  bool strictPrivacyMode,
 ) {
   if (content.entities.isEmpty) {
-    return _formatMessageText(content.text, color, mentionColor);
+    return _formatMessageText(
+      context,
+      content.text,
+      color,
+      mentionColor,
+      strictPrivacyMode,
+    );
   }
   final spans = <InlineSpan>[];
   final entities = normalizeRenderableEntities(content);
@@ -970,9 +1037,11 @@ List<InlineSpan> _formatMessageContent(
     if (entity.offset > cursor) {
       spans.addAll(
         _formatMessageText(
+          context,
           content.text.substring(cursor, entity.offset),
           color,
           mentionColor,
+          strictPrivacyMode,
         ),
       );
     }
@@ -986,7 +1055,13 @@ List<InlineSpan> _formatMessageContent(
   }
   if (cursor < content.text.length) {
     spans.addAll(
-      _formatMessageText(content.text.substring(cursor), color, mentionColor),
+      _formatMessageText(
+        context,
+        content.text.substring(cursor),
+        color,
+        mentionColor,
+        strictPrivacyMode,
+      ),
     );
   }
   return spans;
@@ -1010,9 +1085,11 @@ List<CustomEmojiEntity> normalizeRenderableEntities(MessageContent content) {
 }
 
 List<InlineSpan> _formatMessageText(
+  BuildContext context,
   String text,
   Color color,
   Color mentionColor,
+  bool strictPrivacyMode,
 ) {
   final spans = <InlineSpan>[];
   var i = 0;
@@ -1024,13 +1101,25 @@ List<InlineSpan> _formatMessageText(
       '||': text.indexOf('||', i),
     }..removeWhere((_, value) => value < 0);
     if (markers.isEmpty) {
-      spans.addAll(_formatPlainTextMentions(text.substring(i), mentionColor));
+      spans.addAll(
+        _formatPlainTextDecorations(
+          context,
+          text.substring(i),
+          mentionColor,
+          strictPrivacyMode,
+        ),
+      );
       break;
     }
     final next = markers.entries.reduce((a, b) => a.value <= b.value ? a : b);
     if (next.value > i) {
       spans.addAll(
-        _formatPlainTextMentions(text.substring(i, next.value), mentionColor),
+        _formatPlainTextDecorations(
+          context,
+          text.substring(i, next.value),
+          mentionColor,
+          strictPrivacyMode,
+        ),
       );
     }
     final marker = next.key;
@@ -1038,7 +1127,12 @@ List<InlineSpan> _formatMessageText(
     final end = text.indexOf(marker, start);
     if (end < 0) {
       spans.addAll(
-        _formatPlainTextMentions(text.substring(next.value), mentionColor),
+        _formatPlainTextDecorations(
+          context,
+          text.substring(next.value),
+          mentionColor,
+          strictPrivacyMode,
+        ),
       );
       break;
     }
@@ -1082,6 +1176,50 @@ List<InlineSpan> _formatMessageText(
   return spans;
 }
 
+List<InlineSpan> _formatPlainTextDecorations(
+  BuildContext context,
+  String text,
+  Color mentionColor,
+  bool strictPrivacyMode,
+) {
+  final links = linkTextMatches(text);
+  if (links.isEmpty) return _formatPlainTextMentions(text, mentionColor);
+  final spans = <InlineSpan>[];
+  var cursor = 0;
+  for (final link in links) {
+    if (link.start > cursor) {
+      spans.addAll(
+        _formatPlainTextMentions(
+          text.substring(cursor, link.start),
+          mentionColor,
+        ),
+      );
+    }
+    final label = text.substring(link.start, link.end);
+    spans.add(
+      TextSpan(
+        text: label,
+        style: TextStyle(
+          color: mentionColor,
+          fontWeight: FontWeight.w700,
+          decoration: TextDecoration.underline,
+          decorationColor: mentionColor.withValues(alpha: 0.75),
+        ),
+        recognizer: TapGestureRecognizer()
+          ..onTap = () =>
+              _openMessageLink(context, link.url, strictPrivacyMode),
+      ),
+    );
+    cursor = link.end;
+  }
+  if (cursor < text.length) {
+    spans.addAll(
+      _formatPlainTextMentions(text.substring(cursor), mentionColor),
+    );
+  }
+  return spans;
+}
+
 List<InlineSpan> _formatPlainTextMentions(String text, Color mentionColor) {
   final ranges = findMentionRanges(text);
   if (ranges.isEmpty) return [TextSpan(text: text)];
@@ -1108,6 +1246,45 @@ List<InlineSpan> _formatPlainTextMentions(String text, Color mentionColor) {
     spans.add(TextSpan(text: text.substring(cursor)));
   }
   return spans;
+}
+
+Future<void> _openMessageLink(
+  BuildContext context,
+  String url,
+  bool strictPrivacyMode,
+) async {
+  final uri = Uri.tryParse(url);
+  if (uri == null) return;
+  if (strictPrivacyMode) {
+    final allowed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Open link?'),
+        content: Text(
+          'Opening this link can reveal your IP address, browser details, and that you viewed it.\n\n$url',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Open'),
+          ),
+        ],
+      ),
+    );
+    if (allowed != true) return;
+  }
+  if (!context.mounted) return;
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+  if (!opened) {
+    messenger?.showSnackBar(
+      const SnackBar(content: Text('Could not open link')),
+    );
+  }
 }
 
 class _InlineCustomEmoji extends StatefulWidget {

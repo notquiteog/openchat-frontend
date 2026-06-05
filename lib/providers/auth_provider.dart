@@ -1,6 +1,10 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../crypto/pgp_service.dart';
+import '../models/key_trust_pin.dart';
 import '../models/user.dart';
 import '../services/api_service.dart';
 import '../services/key_cache_service.dart';
@@ -71,7 +75,9 @@ class AuthProvider extends ChangeNotifier {
   /// Register: generates PGP key pair, registers with server, saves keys locally.
   Future<void> register({
     required String username,
+    String? displayName,
     required String password,
+    bool publicDiscovery = true,
     KeyType keyType = KeyType.defaultType,
     String? keyPassphrase,
   }) async {
@@ -91,8 +97,10 @@ class AuthProvider extends ChangeNotifier {
 
       final auth = await _api.register(
         username: username,
+        displayName: displayName,
         password: password,
         publicKey: keyPair.publicKeyArmored,
+        publicDiscovery: publicDiscovery,
       );
 
       await _storage.saveKeyPair(
@@ -107,6 +115,7 @@ class AuthProvider extends ChangeNotifier {
         accessToken: auth.accessToken,
         refreshToken: auth.refreshToken,
       );
+      await _pinUserKey(auth.user, keyPair.publicKeyArmored);
 
       _currentUser = auth.user;
       _state = AuthState.authenticated;
@@ -122,7 +131,7 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> login({
-    required String username,
+    required String identifier,
     required String password,
     String? twoFactorPassword,
   }) async {
@@ -146,7 +155,7 @@ class AuthProvider extends ChangeNotifier {
       }
 
       final auth = await _api.login(
-        username: username,
+        identifier: identifier,
         password: password,
         twoFactorPassword: twoFactorPassword,
       );
@@ -173,6 +182,12 @@ class AuthProvider extends ChangeNotifier {
             'Import the correct key in Settings → PGP Keys.';
         // Still authenticate — the user may intentionally be using an old device.
       }
+      final localPublicKey = await _storage.getPublicKey();
+      if (localPublicKey != null &&
+          localPublicKey.isNotEmpty &&
+          localFp.toUpperCase() == serverFp.toUpperCase()) {
+        await _pinUserKey(auth.user, localPublicKey);
+      }
 
       _currentUser = auth.user;
       _state = AuthState.authenticated;
@@ -192,6 +207,23 @@ class AuthProvider extends ChangeNotifier {
     } finally {
       _setLoading(false);
     }
+  }
+
+  Future<void> _pinUserKey(User user, String publicKey) async {
+    if (user.id.isEmpty || user.keyFingerprint.isEmpty || publicKey.isEmpty) {
+      return;
+    }
+    await _storage.saveKeyTrustPin(
+      KeyTrustPin(
+        userId: user.id,
+        fingerprint: user.keyFingerprint.toUpperCase(),
+        publicKeyHash: crypto.sha256
+            .convert(utf8.encode(publicKey.trim()))
+            .toString()
+            .toUpperCase(),
+        pinnedAt: DateTime.now(),
+      ),
+    );
   }
 
   /// Reload the current user's profile from the server (e.g. after editing bio/avatar).

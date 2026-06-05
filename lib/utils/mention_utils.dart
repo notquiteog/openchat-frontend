@@ -56,17 +56,6 @@ bool textMentionsUsername(String text, String username) {
   ).any((range) => range.handle.toLowerCase() == normalized);
 }
 
-String? unreadMentionMessageId(Conversation conversation, String username) {
-  final serverTarget = conversation.unreadMentionMessageId;
-  if (serverTarget != null && serverTarget.isNotEmpty) return serverTarget;
-  if (conversation.unreadCount <= 0 || username.trim().isEmpty) return null;
-  final message = conversation.lastMessage;
-  if (message == null) return null;
-  return textMentionsUsername(message.listPreview, username)
-      ? message.id
-      : null;
-}
-
 List<String> mentionedMemberIdsInText(
   String text,
   Iterable<ConversationMember> members, {

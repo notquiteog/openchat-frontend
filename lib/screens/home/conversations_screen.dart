@@ -13,7 +13,6 @@ import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/message_search_service.dart';
 import '../../config/api_config.dart';
-import '../../utils/mention_utils.dart';
 import '../../utils/local_conversation_preferences.dart';
 import '../../utils/smart_inbox_filter.dart';
 import '../../widgets/glass.dart';
@@ -50,10 +49,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final chat = context.watch<ChatProvider>();
     final settings = context.watch<SettingsProvider>();
     final currentUserID = auth.currentUser?.id ?? '';
-    final currentUsername = auth.currentUser?.username ?? '';
     final drafts = settings.messageDrafts;
     final pinnedConversationIds = settings.pinnedConversationIds;
     final archivedConversationIds = settings.archivedConversationIds;
+    final unreadMentionMessageIds = settings.unreadMentionMessageIds;
     final folders = chat.chatFolders;
     final selectedFolder = folders
         .where((folder) => folder.id == _selectedFolderId)
@@ -113,8 +112,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 conversation,
                 filter: filter,
                 currentUserId: currentUserID,
-                currentUsername: currentUsername,
                 archivedConversationIds: archivedConversationIds,
+                unreadMentionMessageIds: unreadMentionMessageIds,
               ),
             )
             .length,
@@ -126,8 +125,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                   conversation,
                   filter: selectedFilter,
                   currentUserId: currentUserID,
-                  currentUsername: currentUsername,
                   archivedConversationIds: archivedConversationIds,
+                  unreadMentionMessageIds: unreadMentionMessageIds,
                 ),
               )
               .toList()
@@ -229,10 +228,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                               .notificationPreferenceForConversation(
                                 conversations[index].id,
                               ),
-                          unreadMentionMessageId: unreadMentionMessageId(
-                            conversations[index],
-                            currentUsername,
-                          ),
+                          unreadMentionMessageId: settings
+                              .unreadMentionMessageIdFor(
+                                conversations[index].id,
+                              ),
                           currentUserID: currentUserID,
                           onTap: () =>
                               _openConversation(context, conversations[index]),

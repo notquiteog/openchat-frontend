@@ -43,7 +43,7 @@ class ChatFolder {
     id: json['id'] as String? ?? '',
     userId: json['user_id'] as String? ?? '',
     name: json['name'] as String? ?? '',
-    position: json['position'] as int? ?? 0,
+    position: (json['position'] as num?)?.toInt() ?? 0,
     includeArchived: json['include_archived'] as bool? ?? false,
     conversationIds: (json['conversation_ids'] as List? ?? const [])
         .map((id) => id.toString())
@@ -53,12 +53,15 @@ class ChatFolder {
     updatedAt: _parseDate(json['updated_at']),
   );
 
-  Map<String, dynamic> toUpsertJson() => {
+  Map<String, dynamic> toJson() => {
     if (id.isNotEmpty) 'id': id,
+    if (userId.isNotEmpty) 'user_id': userId,
     'name': name.trim(),
     'position': position,
     'include_archived': includeArchived,
     'conversation_ids': conversationIds,
+    if (createdAt != null) 'created_at': createdAt!.toUtc().toIso8601String(),
+    if (updatedAt != null) 'updated_at': updatedAt!.toUtc().toIso8601String(),
   };
 
   static DateTime? _parseDate(Object? raw) {

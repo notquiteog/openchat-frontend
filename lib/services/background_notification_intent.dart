@@ -25,7 +25,6 @@ NotificationIntent? notificationIntentFromRawLine(
   Map<String, ConversationNotificationPreference>
       conversationNotificationPreferences =
       const {},
-  String currentUserId = '',
 }) {
   try {
     final json = jsonDecode(rawLine) as Map<String, dynamic>;
@@ -38,7 +37,6 @@ NotificationIntent? notificationIntentFromRawLine(
       showSensitive: showSensitive,
       mutedConversationIds: mutedConversationIds,
       conversationNotificationPreferences: conversationNotificationPreferences,
-      currentUserId: currentUserId,
     );
   } catch (_) {
     return null;
@@ -53,7 +51,6 @@ NotificationIntent? notificationIntentFromEvent({
   Map<String, ConversationNotificationPreference>
       conversationNotificationPreferences =
       const {},
-  String currentUserId = '',
 }) {
   if (type == 'new_message') {
     final convId = data['conversation_id'] as String? ?? 'msg';
@@ -66,12 +63,6 @@ NotificationIntent? notificationIntentFromEvent({
     if (!shouldNotifyForConversation(
       conversationId: convId,
       preferences: preferences,
-      currentUserId: currentUserId,
-      mentionedUserIds: mentionedUserIdsFromNotificationData(data),
-      mentionedForCurrentUser: notificationDataMentionsCurrentUser(
-        data,
-        currentUserId,
-      ),
       notificationText: notificationRuleTextFromData(data),
     )) {
       return null;

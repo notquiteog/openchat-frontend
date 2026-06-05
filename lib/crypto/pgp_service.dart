@@ -227,7 +227,10 @@ class PgpService {
     try {
       final decoded = jsonDecode(plaintext);
       if (decoded is! Map<String, dynamic>) return plaintext;
-      if (decoded['openchat_message'] != 1) return plaintext;
+      if (decoded['openchat_message'] != 1 &&
+          decoded['openchat_self_state'] != 1) {
+        return plaintext;
+      }
       final currentSize = utf8.encode(plaintext).length;
       const buckets = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536];
       final target = buckets.firstWhere(
@@ -405,6 +408,14 @@ class PgpService {
   }) {
     final encodedPayload = base64Url.encode(utf8.encode(payload));
     return 'openchat-pgp-sender-v1:$conversationId:$messageType:$encodedPayload';
+  }
+
+  static String deviceKeySignatureData({
+    required String userId,
+    required String deviceKey,
+  }) {
+    final encodedKey = base64Url.encode(utf8.encode(deviceKey.trim()));
+    return 'openchat-device-key-v1:${userId.trim()}:$encodedKey';
   }
 
   /// Parse the fingerprint from an armored public key.

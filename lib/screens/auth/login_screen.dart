@@ -15,7 +15,7 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen>
     with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
-  final _usernameCtrl = TextEditingController();
+  final _identifierCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   final _twoFactorCtrl = TextEditingController();
   bool _obscurePassword = true;
@@ -40,7 +40,7 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   void dispose() {
     _entranceCtrl.dispose();
-    _usernameCtrl.dispose();
+    _identifierCtrl.dispose();
     _passwordCtrl.dispose();
     _twoFactorCtrl.dispose();
     super.dispose();
@@ -49,7 +49,7 @@ class _LoginScreenState extends State<LoginScreen>
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
     await context.read<AuthProvider>().login(
-      username: _usernameCtrl.text.trim().toLowerCase(),
+      identifier: _identifierCtrl.text.trim().toLowerCase(),
       password: _passwordCtrl.text,
       twoFactorPassword: _twoFactorCtrl.text.trim(),
     );
@@ -174,11 +174,11 @@ class _LoginScreenState extends State<LoginScreen>
                                   ),
                                   const SizedBox(height: 20),
                                   TextFormField(
-                                    controller: _usernameCtrl,
+                                    controller: _identifierCtrl,
                                     decoration: const InputDecoration(
-                                      labelText: 'Username',
+                                      labelText: 'Username or account ID',
                                       prefixIcon: Icon(
-                                        Icons.alternate_email_rounded,
+                                        Icons.badge_outlined,
                                       ),
                                     ),
                                     autocorrect: false,

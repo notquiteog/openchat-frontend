@@ -3,7 +3,6 @@ import 'dart:convert';
 const mutedConversationsPreferenceKey = 'muted_conversations';
 const conversationNotificationPreferencesPreferenceKey =
     'conversation_notification_preferences_v1';
-const notificationCurrentUserPreferenceKey = 'notification_current_user_id';
 
 enum ConversationNotificationMode { all, muted, mentionsOnly }
 
@@ -233,8 +232,6 @@ Set<String> activeMutedConversationIds(
 bool shouldNotifyForConversation({
   required String conversationId,
   required Map<String, ConversationNotificationPreference> preferences,
-  required String currentUserId,
-  Iterable<String> mentionedUserIds = const [],
   bool mentionedForCurrentUser = false,
   String notificationText = '',
   DateTime? now,
@@ -251,57 +248,7 @@ bool shouldNotifyForConversation({
     return true;
   }
   if (mentionedForCurrentUser) return true;
-  if (currentUserId.isEmpty) return false;
-  return mentionedUserIds.contains(currentUserId);
-}
-
-Set<String> mentionedUserIdsFromNotificationData(Map<String, dynamic> data) {
-  final out = <String>{};
-  void addString(String value) {
-    final trimmed = value.trim();
-    if (trimmed.isNotEmpty) out.add(trimmed);
-  }
-
-  final single = data['mentioned_user_id'];
-  if (single is String) addString(single);
-
-  final raw = data['mentioned_user_ids'];
-  if (raw is List) {
-    for (final value in raw) {
-      if (value is String) addString(value);
-    }
-  } else if (raw is String) {
-    final trimmed = raw.trim();
-    if (trimmed.startsWith('[')) {
-      try {
-        final decoded = jsonDecode(trimmed);
-        if (decoded is List) {
-          for (final value in decoded) {
-            if (value is String) addString(value);
-          }
-        }
-      } catch (_) {}
-    } else {
-      for (final value in trimmed.split(',')) {
-        addString(value);
-      }
-    }
-  }
-  return out;
-}
-
-bool notificationDataMentionsCurrentUser(
-  Map<String, dynamic> data,
-  String currentUserId,
-) {
-  final mentioned = data['mentioned'];
-  if (mentioned == true) return true;
-  if (mentioned is String &&
-      (mentioned == 'true' || mentioned == '1' || mentioned == currentUserId)) {
-    return true;
-  }
-  if (currentUserId.isEmpty) return false;
-  return mentionedUserIdsFromNotificationData(data).contains(currentUserId);
+  return false;
 }
 
 String notificationRuleTextFromData(Map<String, dynamic> data) {

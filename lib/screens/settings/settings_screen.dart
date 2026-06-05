@@ -24,6 +24,7 @@ import '../custom_emojis/custom_emoji_pack_screen.dart';
 import '../stickers/sticker_pack_screen.dart';
 import 'pgp_keys_screen.dart';
 import 'premium_screen.dart';
+import 'private_contacts_screen.dart';
 import 'trust_center_screen.dart';
 import 'wallet_screen.dart';
 
@@ -220,13 +221,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       final storage = context.read<SecureStorageService>();
       final token = await storage.getAccessToken() ?? '';
-      final currentUserId = await storage.getUserID() ?? '';
       final started = await BackgroundWsService.start(
         accessToken: token,
         showSensitive: settings.notificationSensitiveContent,
         conversationNotificationPreferences:
             settings.conversationNotificationPreferences,
-        currentUserId: currentUserId,
       );
       if (!mounted) return;
       if (!started) {
@@ -251,6 +250,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final auth = context.read<AuthProvider>();
     final messenger = ScaffoldMessenger.of(context);
 
+    final displayNameCtrl = TextEditingController(
+      text: user.profileDisplayName ?? '',
+    );
     final bioCtrl = TextEditingController(text: user.bio ?? '');
     String? pendingAvatarUrl = user.avatarUrl;
     bool uploading = false;
@@ -303,7 +305,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             : null,
                         child: pendingAvatarUrl == null
                             ? Text(
-                                user.username[0].toUpperCase(),
+                                user.avatarInitial,
                                 style: const TextStyle(fontSize: 28),
                               )
                             : null,
@@ -328,6 +330,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 const SizedBox(height: 16),
                 TextField(
+                  controller: displayNameCtrl,
+                  decoration: const InputDecoration(labelText: 'Display name'),
+                  maxLength: 96,
+                ),
+                const SizedBox(height: 8),
+                TextField(
                   controller: bioCtrl,
                   decoration: const InputDecoration(labelText: 'Bio'),
                   maxLines: 3,
@@ -348,6 +356,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         Navigator.pop(ctx);
                         try {
                           await api.updateProfile(
+                            displayName: displayNameCtrl.text.trim(),
                             bio: bio.isEmpty ? null : bio,
                             avatarUrl: pendingAvatarUrl,
                           );
@@ -1019,7 +1028,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 : null,
                             child: user.avatarUrl == null
                                 ? Text(
-                                    user.username[0].toUpperCase(),
+                                    user.avatarInitial,
                                     style: const TextStyle(
                                       fontSize: 26,
                                       fontWeight: FontWeight.w700,
@@ -1061,7 +1070,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           Row(
                             children: [
                               Text(
-                                '@${user.username}',
+                                user.displayName,
                                 style: const TextStyle(
                                   fontWeight: FontWeight.w800,
                                   fontSize: 17,
@@ -1088,6 +1097,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ],
                           ),
                           const SizedBox(height: 4),
+                          if (user.profileDisplayName?.trim().isNotEmpty ==
+                              true) ...[
+                            Text(
+                              user.handle,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: scheme.onSurface.withValues(alpha: 0.55),
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 3),
+                          ],
                           Text(
                             user.bio?.isNotEmpty == true
                                 ? user.bio!
@@ -1142,6 +1164,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(builder: (_) => const PgpKeysScreen()),
+                  ),
+                ),
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.contacts_outlined,
+                  title: 'Private Contacts',
+                  subtitle:
+                      'Username discovery, QR bundles, and one-time links',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const PrivateContactsScreen(),
+                    ),
                   ),
                 ),
                 _GlassDivider(),
@@ -1260,7 +1295,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _GlassSwitchTile(
                   icon: Icons.visibility_outlined,
                   title: 'Strict Privacy',
-                  subtitle: 'Hide typing indicators and notification previews',
+                  subtitle:
+                      'Disable typing, read receipts, link previews, and link opens',
                   value: settings.strictPrivacyMode,
                   onChanged: settings.setStrictPrivacyMode,
                 ),
@@ -1276,9 +1312,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _GlassSwitchTile(
                   icon: Icons.link_rounded,
                   title: 'Link Previews',
-                  subtitle: 'Fetch metadata through the OpenChat proxy',
+                  subtitle: settings.strictPrivacyMode
+                      ? 'Disabled while Strict Privacy is on'
+                      : 'Fetch metadata through the OpenChat proxy',
                   value: settings.linkPreviewsEnabled,
-                  onChanged: settings.setLinkPreviewsEnabled,
+                  onChanged: (value) {
+                    if (settings.strictPrivacyMode && value) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Turn off Strict Privacy before enabling link previews',
+                          ),
+                        ),
+                      );
+                      return;
+                    }
+                    settings.setLinkPreviewsEnabled(value);
+                  },
                   isLast: true,
                 ),
               ],

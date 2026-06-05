@@ -1,8 +1,12 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 import '../models/channel_pinned_message.dart';
+import '../models/chat_folder.dart';
+import '../models/contact_bundle.dart';
 import '../models/message.dart';
+import '../services/local_private_state_service.dart';
 import '../utils/local_conversation_preferences.dart';
 import '../utils/smart_inbox_filter.dart';
 
@@ -173,9 +177,15 @@ class SettingsProvider extends ChangeNotifier {
   static const _kMutedConversations = mutedConversationsPreferenceKey;
   static const _kConversationNotificationPreferences =
       conversationNotificationPreferencesPreferenceKey;
+  static const _kNotificationCurrentUser = 'notification_current_user_id';
 
   /// OpenChat brand blue — the historical default seed.
   static const int defaultSeed = 0xFF3D5AFE;
+
+  final LocalPrivateStateService _privateState;
+
+  SettingsProvider({LocalPrivateStateService? privateState})
+    : _privateState = privateState ?? LocalPrivateStateService();
 
   SharedPreferences? _prefs;
   Future<void>? _loadFuture;
@@ -195,6 +205,9 @@ class SettingsProvider extends ChangeNotifier {
   final Map<String, List<ChannelPinnedMessage>> _pinnedChannelMessages = {};
   final Set<String> _pinnedConversationIds = {};
   final Set<String> _archivedConversationIds = {};
+  final List<ChatFolder> _chatFolders = [];
+  final Map<String, ContactBundle> _privateContacts = {};
+  final Map<String, String> _unreadMentionMessageIds = {};
   final Map<String, ConversationNotificationPreference>
   _conversationNotificationPreferences = {};
 
@@ -217,6 +230,11 @@ class SettingsProvider extends ChangeNotifier {
       Set.unmodifiable(_pinnedConversationIds);
   Set<String> get archivedConversationIds =>
       Set.unmodifiable(_archivedConversationIds);
+  List<ChatFolder> get chatFolders => List.unmodifiable(_chatFolders);
+  Map<String, ContactBundle> get privateContacts =>
+      Map.unmodifiable(_privateContacts);
+  Map<String, String> get unreadMentionMessageIds =>
+      Map.unmodifiable(_unreadMentionMessageIds);
   Map<String, ConversationNotificationPreference>
   get conversationNotificationPreferences => Map.unmodifiable(
     _effectiveConversationNotificationPreferences(DateTime.now()),
@@ -236,14 +254,17 @@ class SettingsProvider extends ChangeNotifier {
   bool get wsBackgroundEnabled => _wsBgEnabled;
 
   /// Show sender name + message preview in notifications. Off = generic "New message" text.
-  bool get notificationSensitiveContent =>
-      _strictPrivacyMode ? false : _notifSensitive;
+  ///
+  /// This is the single notification-content control. Strict privacy handles
+  /// live metadata surfaces instead of silently rewriting this preference.
+  bool get notificationSensitiveContent => _notifSensitive;
 
-  /// Local strict privacy mode disables presence-style metadata and sensitive previews.
+  /// Local strict privacy mode disables presence-style metadata and link fetches.
   bool get strictPrivacyMode => _strictPrivacyMode;
 
   /// Fetch link previews through the OpenChat proxy after local decryption.
-  bool get linkPreviewsEnabled => _linkPreviewsEnabled;
+  bool get linkPreviewsEnabled =>
+      _strictPrivacyMode ? false : _linkPreviewsEnabled;
 
   Future<void> load() {
     _loadFuture ??= _load();
@@ -252,22 +273,22 @@ class SettingsProvider extends ChangeNotifier {
 
   Future<void> _load() async {
     _prefs = await SharedPreferences.getInstance();
+    final privateState = await _privateState.readState();
     _seedColor = _prefs!.getInt(_kSeed) ?? defaultSeed;
     _channelsOwnTab = _prefs!.getBool(_kChannelsTab) ?? false;
     _botsOwnTab = _prefs!.getBool(_kBotsTab) ?? false;
-    _pushEnabled = _prefs!.getBool(_kPushEnabled) ?? false;
-    _wsBgEnabled = _prefs!.getBool(_kWsBgEnabled) ?? false;
+    final notificationSettings = decodePrivateNotificationSettings(
+      privateState[privateStateNotificationSettingsKey],
+    );
+    _pushEnabled = notificationSettings.pushEnabled;
+    _wsBgEnabled = notificationSettings.wsBackgroundEnabled;
     if (_pushEnabled && _wsBgEnabled) {
       // Legacy state guard: never allow both channels to stay enabled.
       _wsBgEnabled = false;
-      await _prefs!.setBool(_kWsBgEnabled, false);
+      await _persistPrivateLocalState();
     }
-    _notifSensitive = _prefs!.getBool(_kNotifSensitive) ?? false;
+    _notifSensitive = notificationSettings.sensitiveContent;
     _strictPrivacyMode = _prefs!.getBool(_kStrictPrivacyMode) ?? false;
-    if (_strictPrivacyMode && _notifSensitive) {
-      _notifSensitive = false;
-      await _prefs!.setBool(_kNotifSensitive, false);
-    }
     _linkPreviewsEnabled = _prefs!.getBool(_kLinkPreviewsEnabled) ?? true;
     _reduceTransparency = _prefs!.getBool(_kReduceTransparency) ?? false;
     _smartInboxFilter = smartInboxFilterFromName(
@@ -275,56 +296,61 @@ class SettingsProvider extends ChangeNotifier {
     );
     _pinnedConversationIds
       ..clear()
-      ..addAll(_prefs!.getStringList(_kPinnedConversations) ?? const []);
+      ..addAll(
+        _stringListFromPrivateState(
+          privateState[privateStatePinnedConversationsKey],
+        ),
+      );
     _archivedConversationIds
       ..clear()
-      ..addAll(_prefs!.getStringList(_kArchivedConversations) ?? const []);
-    final legacyMutedConversationIds =
-        _prefs!.getStringList(_kMutedConversations) ?? const [];
+      ..addAll(
+        _stringListFromPrivateState(
+          privateState[privateStateArchivedConversationsKey],
+        ),
+      );
     _conversationNotificationPreferences
       ..clear()
       ..addAll(
-        decodeConversationNotificationPreferences(
-          _prefs!.getString(_kConversationNotificationPreferences),
+        decodePrivateConversationNotificationPreferences(
+          privateState[privateStateConversationNotificationPreferencesKey],
         ),
       );
-    for (final convID in legacyMutedConversationIds) {
-      _conversationNotificationPreferences.putIfAbsent(
-        convID,
-        () => const ConversationNotificationPreference.mutedForever(),
-      );
-    }
     _dropExpiredConversationNotificationPreferences(DateTime.now());
+    _chatFolders
+      ..clear()
+      ..addAll(
+        decodePrivateChatFolders(privateState[privateStateChatFoldersKey]),
+      );
+    _sortChatFolders(_chatFolders);
+    _privateContacts
+      ..clear()
+      ..addAll(
+        decodePrivateContacts(privateState[privateStatePrivateContactsKey]),
+      );
+    await _prefs!.remove(_kConversationNotificationPreferences);
+    await _prefs!.remove(_kMutedConversations);
+    await _prefs!.remove(_kNotificationCurrentUser);
+    await _prefs!.remove(_kPushEnabled);
+    await _prefs!.remove(_kWsBgEnabled);
+    await _prefs!.remove(_kNotifSensitive);
     _messageDrafts
       ..clear()
-      ..addEntries(
-        _prefs!.getKeys().where((key) => key.startsWith(_kDraftPrefix)).map((
-          key,
-        ) {
-          final conversationId = key.substring(_kDraftPrefix.length);
-          final draft = _parseDraft(_prefs!.getString(key));
-          return draft == null || draft.isEmpty
-              ? null
-              : MapEntry(conversationId, draft);
-        }).whereType<MapEntry<String, MessageDraft>>(),
-      );
+      ..addAll(_parsePrivateDrafts(privateState[privateStateMessageDraftsKey]));
     _pinnedChannelMessages
       ..clear()
-      ..addEntries(
-        _prefs!
-            .getKeys()
-            .where((key) => key.startsWith(_kPinnedChannelMessagesPrefix))
-            .map((key) {
-              final channelId = key.substring(
-                _kPinnedChannelMessagesPrefix.length,
-              );
-              final messages = _parsePinnedChannelMessages(
-                _prefs!.getString(key),
-              );
-              return messages.isEmpty ? null : MapEntry(channelId, messages);
-            })
-            .whereType<MapEntry<String, List<ChannelPinnedMessage>>>(),
+      ..addAll(
+        _parsePrivatePinnedChannelMessages(
+          privateState[privateStatePinnedChannelMessagesKey],
+        ),
       );
+    _unreadMentionMessageIds
+      ..clear()
+      ..addAll(
+        _parsePrivateStringMap(
+          privateState[privateStateUnreadMentionMessageIdsKey],
+        ),
+      );
+    await _removeLegacyLocalStatePlaintext();
     _loaded = true;
     notifyListeners();
   }
@@ -364,10 +390,8 @@ class SettingsProvider extends ChangeNotifier {
         : _pinnedConversationIds.remove(convID);
     if (!changed) return;
     notifyListeners();
-    await _prefs?.setStringList(
-      _kPinnedConversations,
-      _pinnedConversationIds.toList()..sort(),
-    );
+    await _persistPrivateLocalState();
+    await _prefs?.remove(_kPinnedConversations);
   }
 
   Future<void> toggleConversationPinned(String convID) {
@@ -383,14 +407,76 @@ class SettingsProvider extends ChangeNotifier {
         : _archivedConversationIds.remove(convID);
     if (!changed) return;
     notifyListeners();
-    await _prefs?.setStringList(
-      _kArchivedConversations,
-      _archivedConversationIds.toList()..sort(),
-    );
+    await _persistPrivateLocalState();
+    await _prefs?.remove(_kArchivedConversations);
   }
 
   Future<void> toggleConversationArchived(String convID) {
     return setConversationArchived(convID, !isConversationArchived(convID));
+  }
+
+  Future<List<ChatFolder>> loadChatFolders() async {
+    await load();
+    return chatFolders;
+  }
+
+  Future<ChatFolder> saveChatFolder(ChatFolder folder) async {
+    await load();
+    final now = DateTime.now();
+    final normalized = _normalizeChatFolder(folder, now);
+    final index = _chatFolders.indexWhere((item) => item.id == normalized.id);
+    if (index == -1) {
+      _chatFolders.add(normalized);
+    } else {
+      _chatFolders[index] = normalized;
+    }
+    _sortChatFolders(_chatFolders);
+    notifyListeners();
+    await _persistPrivateLocalState();
+    return normalized;
+  }
+
+  Future<void> removeChatFolder(String folderId) async {
+    await load();
+    final before = _chatFolders.length;
+    _chatFolders.removeWhere((folder) => folder.id == folderId);
+    if (_chatFolders.length == before) return;
+    notifyListeners();
+    await _persistPrivateLocalState();
+  }
+
+  String? unreadMentionMessageIdFor(String convID) {
+    final value = _unreadMentionMessageIds[convID];
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  Future<void> setUnreadMentionMessage(String convID, String messageID) async {
+    if (convID.isEmpty || messageID.isEmpty) return;
+    if (_unreadMentionMessageIds[convID] == messageID) return;
+    _unreadMentionMessageIds[convID] = messageID;
+    notifyListeners();
+    await _persistPrivateLocalState();
+  }
+
+  Future<void> clearUnreadMention(String convID, {String? messageID}) async {
+    final current = _unreadMentionMessageIds[convID];
+    if (current == null || (messageID != null && current != messageID)) return;
+    _unreadMentionMessageIds.remove(convID);
+    notifyListeners();
+    await _persistPrivateLocalState();
+  }
+
+  Future<void> upsertPrivateContact(ContactBundle contact) async {
+    if (!contact.isUsable) return;
+    _privateContacts[contact.userId] = contact;
+    notifyListeners();
+    await _persistPrivateLocalState();
+  }
+
+  Future<void> removePrivateContact(String userId) async {
+    if (_privateContacts.remove(userId) == null) return;
+    notifyListeners();
+    await _persistPrivateLocalState();
   }
 
   bool isConversationMuted(String convID) =>
@@ -552,16 +638,70 @@ class SettingsProvider extends ChangeNotifier {
 
   Future<void> _persistConversationNotificationPreferences() async {
     _dropExpiredConversationNotificationPreferences(DateTime.now());
-    await _prefs?.setString(
-      _kConversationNotificationPreferences,
-      encodeConversationNotificationPreferences(
-        _conversationNotificationPreferences,
+    await _persistPrivateLocalState();
+    await _prefs?.remove(_kConversationNotificationPreferences);
+    await _prefs?.remove(_kMutedConversations);
+    await _prefs?.remove(_kNotificationCurrentUser);
+    await _prefs?.remove(_kPushEnabled);
+    await _prefs?.remove(_kWsBgEnabled);
+    await _prefs?.remove(_kNotifSensitive);
+  }
+
+  Future<void> _persistPrivateLocalState() {
+    return _privateState.writeState({
+      privateStateNotificationSettingsKey: encodePrivateNotificationSettings(
+        pushEnabled: _pushEnabled,
+        wsBackgroundEnabled: _wsBgEnabled,
+        sensitiveContent: _notifSensitive,
       ),
+      privateStateConversationNotificationPreferencesKey:
+          encodePrivateConversationNotificationPreferences(
+            _conversationNotificationPreferences,
+          ),
+      privateStateChatFoldersKey: encodePrivateChatFolders(_chatFolders),
+      privateStateMessageDraftsKey: _encodePrivateDrafts(_messageDrafts),
+      privateStatePinnedChannelMessagesKey: _encodePrivatePinnedChannelMessages(
+        _pinnedChannelMessages,
+      ),
+      privateStatePinnedConversationsKey: _sortedStringList(
+        _pinnedConversationIds,
+      ),
+      privateStateArchivedConversationsKey: _sortedStringList(
+        _archivedConversationIds,
+      ),
+      privateStateUnreadMentionMessageIdsKey: _encodePrivateStringMap(
+        _unreadMentionMessageIds,
+      ),
+      privateStatePrivateContactsKey: encodePrivateContacts(
+        _privateContacts.values,
+      ),
+    });
+  }
+
+  ChatFolder _normalizeChatFolder(ChatFolder folder, DateTime now) {
+    final seenConversationIds = <String>{};
+    final conversationIds = <String>[];
+    for (final rawId in folder.conversationIds) {
+      final id = rawId.trim();
+      if (id.isEmpty || !seenConversationIds.add(id)) continue;
+      conversationIds.add(id);
+    }
+    return folder.copyWith(
+      id: folder.id.isEmpty ? 'local-${const Uuid().v4()}' : folder.id,
+      userId: '',
+      name: folder.name.trim(),
+      conversationIds: conversationIds,
+      createdAt: folder.createdAt ?? now,
+      updatedAt: now,
     );
-    await _prefs?.setStringList(
-      _kMutedConversations,
-      mutedConversationIds.toList()..sort(),
-    );
+  }
+
+  void _sortChatFolders(List<ChatFolder> folders) {
+    folders.sort((a, b) {
+      final position = a.position.compareTo(b.position);
+      if (position != 0) return position;
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
   }
 
   String _formatMuteUntil(DateTime mutedUntil) {
@@ -593,15 +733,14 @@ class SettingsProvider extends ChangeNotifier {
     );
     _messageDrafts[convID] = draft;
     notifyListeners();
-    await _prefs?.setString(
-      '$_kDraftPrefix$convID',
-      jsonEncode(draft.toJson()),
-    );
+    await _persistPrivateLocalState();
+    await _prefs?.remove('$_kDraftPrefix$convID');
   }
 
   Future<void> clearMessageDraft(String convID) async {
     final removed = _messageDrafts.remove(convID);
     if (removed != null) notifyListeners();
+    await _persistPrivateLocalState();
     await _prefs?.remove('$_kDraftPrefix$convID');
   }
 
@@ -643,11 +782,9 @@ class SettingsProvider extends ChangeNotifier {
     } else {
       current.sort((a, b) => b.pinnedAt.compareTo(a.pinnedAt));
       _pinnedChannelMessages[channelId] = current;
-      await _prefs?.setString(
-        '$_kPinnedChannelMessagesPrefix$channelId',
-        jsonEncode(current.map((message) => message.toJson()).toList()),
-      );
+      await _prefs?.remove('$_kPinnedChannelMessagesPrefix$channelId');
     }
+    await _persistPrivateLocalState();
     notifyListeners();
   }
 
@@ -668,11 +805,9 @@ class SettingsProvider extends ChangeNotifier {
       await _prefs?.remove('$_kPinnedChannelMessagesPrefix$channelId');
     } else {
       _pinnedChannelMessages[channelId] = normalized;
-      await _prefs?.setString(
-        '$_kPinnedChannelMessagesPrefix$channelId',
-        jsonEncode(normalized.map((message) => message.toJson()).toList()),
-      );
+      await _prefs?.remove('$_kPinnedChannelMessagesPrefix$channelId');
     }
+    await _persistPrivateLocalState();
     notifyListeners();
   }
 
@@ -695,10 +830,9 @@ class SettingsProvider extends ChangeNotifier {
       _wsBgEnabled = false;
     }
     notifyListeners();
-    await _prefs?.setBool(_kPushEnabled, value);
-    if (value) {
-      await _prefs?.setBool(_kWsBgEnabled, false);
-    }
+    await _persistPrivateLocalState();
+    await _prefs?.remove(_kPushEnabled);
+    await _prefs?.remove(_kWsBgEnabled);
   }
 
   Future<void> setWsBackgroundEnabled(bool value) async {
@@ -707,30 +841,20 @@ class SettingsProvider extends ChangeNotifier {
       _pushEnabled = false;
     }
     notifyListeners();
-    await _prefs?.setBool(_kWsBgEnabled, value);
-    if (value) {
-      await _prefs?.setBool(_kPushEnabled, false);
-    }
+    await _persistPrivateLocalState();
+    await _prefs?.remove(_kWsBgEnabled);
+    await _prefs?.remove(_kPushEnabled);
   }
 
   Future<void> setNotificationSensitiveContent(bool value) async {
-    if (_strictPrivacyMode && value) {
-      _notifSensitive = false;
-      notifyListeners();
-      await _prefs?.setBool(_kNotifSensitive, false);
-      return;
-    }
     _notifSensitive = value;
     notifyListeners();
-    await _prefs?.setBool(_kNotifSensitive, value);
+    await _persistPrivateLocalState();
+    await _prefs?.remove(_kNotifSensitive);
   }
 
   Future<void> setStrictPrivacyMode(bool value) async {
     _strictPrivacyMode = value;
-    if (value) {
-      _notifSensitive = false;
-      await _prefs?.setBool(_kNotifSensitive, false);
-    }
     notifyListeners();
     await _prefs?.setBool(_kStrictPrivacyMode, value);
   }
@@ -774,28 +898,125 @@ class SettingsProvider extends ChangeNotifier {
   Future<void> setDmStyle(String convID, DmChatStyle style) =>
       setChatStyle(convID, style);
 
-  static MessageDraft? _parseDraft(String? raw) {
-    if (raw == null || raw.isEmpty) return null;
-    try {
-      return MessageDraft.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-    } catch (_) {
-      return null;
+  static Map<String, MessageDraft> _parsePrivateDrafts(Object? raw) {
+    if (raw is! Map) return const {};
+    final drafts = <String, MessageDraft>{};
+    for (final entry in raw.entries) {
+      final conversationId = entry.key.toString();
+      if (conversationId.isEmpty || entry.value is! Map) continue;
+      try {
+        final draft = MessageDraft.fromJson(
+          Map<String, dynamic>.from(entry.value as Map),
+        );
+        if (!draft.isEmpty) drafts[conversationId] = draft;
+      } catch (_) {}
     }
+    return drafts;
   }
 
-  static List<ChannelPinnedMessage> _parsePinnedChannelMessages(String? raw) {
-    if (raw == null || raw.isEmpty) return const [];
-    try {
-      final decoded = jsonDecode(raw) as List;
-      return decoded
-          .map(
-            (entry) =>
-                ChannelPinnedMessage.fromJson(entry as Map<String, dynamic>),
-          )
-          .where((message) => message.messageId.isNotEmpty)
-          .toList();
-    } catch (_) {
-      return const [];
+  static Map<String, dynamic> _encodePrivateDrafts(
+    Map<String, MessageDraft> drafts,
+  ) => {
+    for (final entry in drafts.entries)
+      if (entry.key.isNotEmpty && !entry.value.isEmpty)
+        entry.key: entry.value.toJson(),
+  };
+
+  static Map<String, List<ChannelPinnedMessage>>
+  _parsePrivatePinnedChannelMessages(Object? raw) {
+    if (raw is! Map) return const {};
+    final pinned = <String, List<ChannelPinnedMessage>>{};
+    for (final entry in raw.entries) {
+      final channelId = entry.key.toString();
+      final rawMessages = entry.value;
+      if (channelId.isEmpty || rawMessages is! List) continue;
+      final messages =
+          rawMessages
+              .whereType<Map>()
+              .map(
+                (item) => ChannelPinnedMessage.fromJson(
+                  Map<String, dynamic>.from(item),
+                ),
+              )
+              .where((message) => message.messageId.isNotEmpty)
+              .toList()
+            ..sort((a, b) => b.pinnedAt.compareTo(a.pinnedAt));
+      if (messages.isNotEmpty) pinned[channelId] = messages;
+    }
+    return pinned;
+  }
+
+  static Map<String, dynamic> _encodePrivatePinnedChannelMessages(
+    Map<String, List<ChannelPinnedMessage>> pinned,
+  ) => {
+    for (final entry in pinned.entries)
+      if (entry.key.isNotEmpty && entry.value.isNotEmpty)
+        entry.key: entry.value.map((message) => message.toJson()).toList(),
+  };
+
+  static List<String> _stringListFromPrivateState(Object? raw) {
+    if (raw is! List) return const [];
+    return raw
+        .map((value) => value.toString().trim())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+  }
+
+  static List<String> _sortedStringList(Iterable<String> values) {
+    return values
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+  }
+
+  static Map<String, String> _parsePrivateStringMap(Object? raw) {
+    if (raw is! Map) return const {};
+    final out = <String, String>{};
+    for (final entry in raw.entries) {
+      final key = entry.key.toString().trim();
+      final value = entry.value.toString().trim();
+      if (key.isEmpty || value.isEmpty) continue;
+      out[key] = value;
+    }
+    return out;
+  }
+
+  static Map<String, String> _encodePrivateStringMap(
+    Map<String, String> values,
+  ) => {
+    for (final entry in values.entries)
+      if (entry.key.trim().isNotEmpty && entry.value.trim().isNotEmpty)
+        entry.key.trim(): entry.value.trim(),
+  };
+
+  Future<void> _removeLegacyLocalStatePlaintext() async {
+    final prefs = _prefs;
+    if (prefs == null) return;
+    await prefs.remove(_kConversationNotificationPreferences);
+    await prefs.remove(_kMutedConversations);
+    await prefs.remove(_kNotificationCurrentUser);
+    await prefs.remove(_kPushEnabled);
+    await prefs.remove(_kWsBgEnabled);
+    await prefs.remove(_kNotifSensitive);
+    await prefs.remove(_kPinnedConversations);
+    await prefs.remove(_kArchivedConversations);
+    await _removeKeysWithPrefix(_kDraftPrefix);
+    await _removeKeysWithPrefix(_kPinnedChannelMessagesPrefix);
+  }
+
+  Future<void> _removeKeysWithPrefix(String prefix) async {
+    final prefs = _prefs;
+    if (prefs == null) return;
+    final keys = prefs
+        .getKeys()
+        .where((key) => key.startsWith(prefix))
+        .toList();
+    for (final key in keys) {
+      await prefs.remove(key);
     }
   }
 }

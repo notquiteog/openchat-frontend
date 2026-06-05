@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'link_preview.dart';
 import 'user.dart';
 
 enum MessageType {
@@ -262,6 +263,7 @@ class MessageContent {
   final int? fileSize;
   final String? mimeType;
   final int? durationMs;
+  final LinkPreview? linkPreview;
   // AES-256-GCM key/nonce — included only inside the PGP-encrypted payload,
   // never stored on the server or exposed in plaintext.
   final String? fileKey;
@@ -275,6 +277,7 @@ class MessageContent {
     this.fileSize,
     this.mimeType,
     this.durationMs,
+    this.linkPreview,
     this.fileKey,
     this.fileNonce,
   });
@@ -294,6 +297,11 @@ class MessageContent {
     fileSize: json['file_size'] as int?,
     mimeType: json['mime_type'] as String?,
     durationMs: _parseInt(json['duration_ms']),
+    linkPreview: json['link_preview'] is Map
+        ? LinkPreview.fromJson(
+            Map<String, dynamic>.from(json['link_preview'] as Map),
+          )
+        : null,
     fileKey: json['file_key'] as String?,
     fileNonce: json['file_nonce'] as String?,
   );
@@ -325,6 +333,7 @@ class MessageContent {
     if (fileSize != null) 'file_size': fileSize,
     if (mimeType != null) 'mime_type': mimeType,
     if (durationMs != null) 'duration_ms': durationMs,
+    if (linkPreview != null) 'link_preview': linkPreview!.toJson(),
     if (fileKey != null) 'file_key': fileKey,
     if (fileNonce != null) 'file_nonce': fileNonce,
   };

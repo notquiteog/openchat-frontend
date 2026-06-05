@@ -1,6 +1,5 @@
 import '../models/conversation.dart';
 import '../providers/settings_provider.dart';
-import 'mention_utils.dart';
 
 enum SmartInboxFilter {
   all,
@@ -66,8 +65,8 @@ bool conversationMatchesSmartInboxFilter(
   Conversation conversation, {
   required SmartInboxFilter filter,
   required String currentUserId,
-  String currentUsername = '',
   Set<String> archivedConversationIds = const {},
+  Map<String, String> unreadMentionMessageIds = const {},
 }) {
   final archived = archivedConversationIds.contains(conversation.id);
   if (filter == SmartInboxFilter.archived) return archived;
@@ -76,8 +75,9 @@ bool conversationMatchesSmartInboxFilter(
   return switch (filter) {
     SmartInboxFilter.all => true,
     SmartInboxFilter.unread => conversation.unreadCount > 0,
-    SmartInboxFilter.mentions =>
-      unreadMentionMessageId(conversation, currentUsername) != null,
+    SmartInboxFilter.mentions => unreadMentionMessageIds.containsKey(
+      conversation.id,
+    ),
     SmartInboxFilter.dms =>
       conversation.isDM && !conversation.isBotDM(currentUserId),
     SmartInboxFilter.groups => conversation.isGroup,

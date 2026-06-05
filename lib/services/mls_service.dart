@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/conversation.dart';
 import '../models/mls.dart';
+import '../crypto/pgp_service.dart';
 import 'api_service.dart';
 import 'secure_storage_service.dart';
 
@@ -40,7 +41,7 @@ class MlsService {
       credentialIdentity: identity.credentialIdentity,
       signerPublicKey: identity.publicKey,
     );
-    return _exportBootstrap(engine, result.groupId, identity.signerBytes);
+    return _exportBootstrap(engine, result.groupId, identity);
   }
 
   Future<String> encryptPayload({
@@ -107,11 +108,7 @@ class MlsService {
         aad: Uint8List.fromList(utf8.encode(conversation.id)),
         skipLifetimeValidation: true,
       );
-      final nextState = await _exportBootstrap(
-        engine,
-        join.groupId,
-        identity.signerBytes,
-      );
+      final nextState = await _exportBootstrap(engine, join.groupId, identity);
       await api.postConversationMlsCommit(
         conversation.id,
         base64Encode(join.commit),
@@ -154,11 +151,11 @@ class MlsService {
   Future<MlsBootstrap> _exportBootstrap(
     MlsEngine engine,
     List<int> groupId,
-    List<int> signerBytes,
+    _MlsIdentity identity,
   ) async {
     final groupInfo = await engine.exportGroupInfo(
       groupIdBytes: groupId,
-      signerBytes: signerBytes,
+      signerBytes: identity.signerBytes,
     );
     final ratchetTree = await engine.exportRatchetTree(groupIdBytes: groupId);
     final epoch = await engine.groupEpoch(groupIdBytes: groupId);
@@ -167,6 +164,8 @@ class MlsService {
       groupInfo: base64Encode(groupInfo),
       ratchetTree: base64Encode(ratchetTree),
       epoch: epoch.toInt(),
+      signerPublicKey: base64Encode(identity.publicKey),
+      signerSignature: identity.publicKeySignature,
     );
   }
 
@@ -230,9 +229,21 @@ class MlsService {
     }
     final stored = await _storage.getMlsSigner(userID);
     if (stored != null) {
+      final publicKey = Uint8List.fromList(base64Decode(stored.publicKey));
+      var signature = stored.signature;
+      if (signature.isEmpty) {
+        signature = await _signMlsPublicKey(userID, publicKey);
+        await _storage.saveMlsSigner(
+          userID: userID,
+          signerBytes: stored.signerBytes,
+          publicKey: stored.publicKey,
+          signature: signature,
+        );
+      }
       return _MlsIdentity(
         signerBytes: Uint8List.fromList(base64Decode(stored.signerBytes)),
-        publicKey: Uint8List.fromList(base64Decode(stored.publicKey)),
+        publicKey: publicKey,
+        publicKeySignature: signature,
         credentialIdentity: Uint8List.fromList(
           base64Decode(await _storage.getOrCreateMlsCredentialIdentity(userID)),
         ),
@@ -248,17 +259,32 @@ class MlsService {
       privateKey: privateKey,
       publicKey: publicKey,
     );
+    final signature = await _signMlsPublicKey(userID, publicKey);
     await _storage.saveMlsSigner(
       userID: userID,
       signerBytes: base64Encode(signer),
       publicKey: base64Encode(publicKey),
+      signature: signature,
     );
     return _MlsIdentity(
       signerBytes: signer,
       publicKey: publicKey,
+      publicKeySignature: signature,
       credentialIdentity: Uint8List.fromList(
         base64Decode(await _storage.getOrCreateMlsCredentialIdentity(userID)),
       ),
+    );
+  }
+
+  Future<String> _signMlsPublicKey(String userID, Uint8List publicKey) async {
+    final privateKey = await _storage.getPrivateKey();
+    if (privateKey == null || privateKey.isEmpty) return '';
+    return PgpService.sign(
+      data: PgpService.deviceKeySignatureData(
+        userId: userID,
+        deviceKey: base64Encode(publicKey),
+      ),
+      privateKeyArmored: privateKey,
     );
   }
 
@@ -283,11 +309,13 @@ class MlsService {
 class _MlsIdentity {
   final Uint8List signerBytes;
   final Uint8List publicKey;
+  final String publicKeySignature;
   final Uint8List credentialIdentity;
 
   const _MlsIdentity({
     required this.signerBytes,
     required this.publicKey,
+    required this.publicKeySignature,
     required this.credentialIdentity,
   });
 }

@@ -22,6 +22,7 @@ class _RegisterScreenState extends State<RegisterScreen>
   KeyType _keyType = KeyType.defaultType;
   bool _obscurePassword = true;
   bool _showAdvanced = false;
+  bool _publicDiscovery = true;
 
   late final AnimationController _entranceCtrl = AnimationController(
     vsync: this,
@@ -54,9 +55,11 @@ class _RegisterScreenState extends State<RegisterScreen>
   Future<void> _register() async {
     if (!_formKey.currentState!.validate()) return;
     final auth = context.read<AuthProvider>();
+    final username = _usernameCtrl.text.trim().toLowerCase();
     await auth.register(
-      username: _usernameCtrl.text.trim().toLowerCase(),
+      username: username,
       password: _passwordCtrl.text,
+      publicDiscovery: _publicDiscovery,
       keyType: _keyType,
     );
     if (mounted && auth.isAuthenticated) {
@@ -203,21 +206,35 @@ class _RegisterScreenState extends State<RegisterScreen>
                                         Icons.alternate_email_rounded,
                                       ),
                                       helperText:
-                                          '3–32 lowercase letters, numbers or underscores',
+                                          'Search visibility can be changed later',
                                     ),
                                     autocorrect: false,
                                     textInputAction: TextInputAction.next,
                                     validator: (v) {
-                                      if (v == null || v.isEmpty) {
-                                        return 'Required';
+                                      final value =
+                                          v?.trim().toLowerCase() ?? '';
+                                      if (value.isEmpty) {
+                                        return 'Username required';
                                       }
                                       if (!RegExp(
                                         r'^[a-z0-9_]{3,32}$',
-                                      ).hasMatch(v.toLowerCase())) {
+                                      ).hasMatch(value)) {
                                         return '3–32 lowercase alphanumeric or underscores';
                                       }
                                       return null;
                                     },
+                                  ),
+                                  const SizedBox(height: 12),
+                                  SwitchListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    value: _publicDiscovery,
+                                    onChanged: (value) => setState(
+                                      () => _publicDiscovery = value,
+                                    ),
+                                    title: const Text('Public discovery'),
+                                    subtitle: const Text(
+                                      'Allow username search for this account',
+                                    ),
                                   ),
                                   const SizedBox(height: 12),
                                   TextFormField(

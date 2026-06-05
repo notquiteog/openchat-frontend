@@ -61,7 +61,6 @@ class Conversation {
   final List<ConversationMember> members;
   final Message? lastMessage;
   final int unreadCount;
-  final String? unreadMentionMessageId;
 
   const Conversation({
     required this.id,
@@ -89,7 +88,6 @@ class Conversation {
     this.members = const [],
     this.lastMessage,
     this.unreadCount = 0,
-    this.unreadMentionMessageId,
   });
 
   factory Conversation.fromJson(Map<String, dynamic> json) => Conversation(
@@ -128,7 +126,6 @@ class Conversation {
         ? Message.fromJson(json['last_message'] as Map<String, dynamic>)
         : null,
     unreadCount: json['unread_count'] as int? ?? 0,
-    unreadMentionMessageId: json['unread_mention_message_id'] as String?,
   );
 
   bool get isGroup => type == ConversationType.group;
@@ -167,7 +164,7 @@ class Conversation {
       (m) => m.userId != currentUserID,
       orElse: () => members.first,
     );
-    return other.user?.username ?? 'Unknown';
+    return other.user?.displayName ?? 'Unknown';
   }
 
   String? displayAvatar(String currentUserID) {
@@ -196,7 +193,6 @@ class Conversation {
   Conversation copyWith({
     Message? lastMessage,
     int? unreadCount,
-    String? unreadMentionMessageId,
     List<ConversationMember>? members,
     DateTime? archivedAt,
     bool? ownerOnlyPost,
@@ -237,8 +233,6 @@ class Conversation {
     members: members ?? this.members,
     lastMessage: lastMessage ?? this.lastMessage,
     unreadCount: unreadCount ?? this.unreadCount,
-    unreadMentionMessageId:
-        unreadMentionMessageId ?? this.unreadMentionMessageId,
   );
 }
 

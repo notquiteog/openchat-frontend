@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 
+import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../utils/identity_qr.dart';
 import '../../widgets/glass.dart';
@@ -48,6 +49,43 @@ class _IdentityQrScannerScreenState extends State<IdentityQrScannerScreen> {
         .whereType<String>()
         .firstWhere((value) => value.trim().isNotEmpty, orElse: () => '');
     if (raw.isEmpty) return;
+
+    final contact = contactBundleFromQrPayload(raw);
+    if (contact != null) {
+      _handling = true;
+      await _controller.stop();
+      if (!mounted) return;
+      await context.read<SettingsProvider>().upsertPrivateContact(contact);
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => GlassAlertDialog(
+          title: const Text('Contact saved'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(contact.title),
+              const SizedBox(height: 12),
+              Text(
+                formatIdentityFingerprint(contact.keyFingerprint),
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                Navigator.pop(context);
+              },
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
 
     final scanned = normalizeIdentityFingerprint(raw);
     if (!isValidIdentityFingerprint(scanned)) {

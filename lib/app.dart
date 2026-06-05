@@ -30,7 +30,7 @@ import 'services/secure_storage_service.dart';
 import 'services/websocket_service.dart';
 import 'theme/app_theme.dart';
 import 'utils/invite_links.dart';
-import 'utils/local_conversation_preferences.dart';
+import 'utils/identity_qr.dart';
 import 'widgets/glass.dart';
 
 class OpenChatApp extends StatelessWidget {
@@ -447,6 +447,10 @@ class _AppRootState extends State<_AppRoot> {
   String? _lastInviteToken;
   DateTime? _lastInviteHandledAt;
   bool _handlingInviteLink = false;
+  String? _pendingContactToken;
+  String? _lastContactToken;
+  DateTime? _lastContactHandledAt;
+  bool _handlingContactLink = false;
 
   @override
   void initState() {
@@ -493,7 +497,7 @@ class _AppRootState extends State<_AppRoot> {
   void _initInviteLinks() {
     try {
       _inviteLinkSub = AppLinks().uriLinkStream.listen(
-        _queueInviteLink,
+        _queueDeepLink,
         onError: (_) {},
       );
     } catch (_) {
@@ -501,11 +505,17 @@ class _AppRootState extends State<_AppRoot> {
     }
   }
 
-  void _queueInviteLink(Uri uri) {
-    final token = inviteTokenFromUri(uri);
-    if (token == null) return;
-    _pendingInviteToken = token;
-    _drainPendingInviteLink();
+  void _queueDeepLink(Uri uri) {
+    final inviteToken = inviteTokenFromUri(uri);
+    if (inviteToken != null) {
+      _pendingInviteToken = inviteToken;
+      _drainPendingInviteLink();
+      return;
+    }
+    final contactToken = contactLinkTokenFromUri(uri);
+    if (contactToken == null) return;
+    _pendingContactToken = contactToken;
+    _drainPendingContactLink();
   }
 
   void _drainPendingInviteLink() {
@@ -552,6 +562,53 @@ class _AppRootState extends State<_AppRoot> {
     });
   }
 
+  void _drainPendingContactLink() {
+    if (!mounted || _handlingContactLink) return;
+    final token = _pendingContactToken;
+    if (token == null) return;
+    if (_appLocked) return;
+    if (context.read<AuthProvider>().state != AuthState.authenticated) return;
+
+    final now = DateTime.now();
+    final handledRecently =
+        _lastContactToken == token &&
+        _lastContactHandledAt != null &&
+        now.difference(_lastContactHandledAt!) < const Duration(seconds: 2);
+    if (handledRecently) {
+      _pendingContactToken = null;
+      return;
+    }
+
+    _pendingContactToken = null;
+    _handlingContactLink = true;
+    _lastContactToken = token;
+    _lastContactHandledAt = now;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        _handlingContactLink = false;
+        return;
+      }
+      final api = context.read<ApiService>();
+      final settings = context.read<SettingsProvider>();
+      try {
+        final contact = await api.claimContactLink(token);
+        await settings.upsertPrivateContact(contact);
+        OpenChatApp.scaffoldMessengerKey.currentState?.showSnackBar(
+          SnackBar(content: Text('Contact saved: ${contact.title}')),
+        );
+      } catch (e) {
+        OpenChatApp.scaffoldMessengerKey.currentState?.showSnackBar(
+          SnackBar(content: Text('Contact link failed: $e')),
+        );
+      } finally {
+        if (mounted) _handlingContactLink = false;
+      }
+      if (!mounted) return;
+      _drainPendingContactLink();
+    });
+  }
+
   void _onBackground() {
     NotificationService.setAppFocused(false);
     context.read<CallProvider>().refreshActiveCallNotification();
@@ -583,8 +640,13 @@ class _AppRootState extends State<_AppRoot> {
       _appLockEnabled = enabled;
       if (!_appLockEnabled && _appLocked) {
         setState(() => _appLocked = false);
+        _drainPendingInviteLink();
+        _drainPendingContactLink();
       } else if (_appLocked) {
         _promptAppUnlock();
+      } else {
+        _drainPendingInviteLink();
+        _drainPendingContactLink();
       }
     });
   }
@@ -598,6 +660,7 @@ class _AppRootState extends State<_AppRoot> {
       if (ok && mounted) {
         setState(() => _appLocked = false);
         _drainPendingInviteLink();
+        _drainPendingContactLink();
       }
     } catch (_) {
       // If biometrics fail (e.g. no enrolled biometrics), stay locked but
@@ -627,7 +690,6 @@ class _AppRootState extends State<_AppRoot> {
             defaultTargetPlatform == TargetPlatform.macOS);
 
     final settings = context.read<SettingsProvider>();
-    final currentUserId = context.read<AuthProvider>().currentUser?.id ?? '';
     final intent = ForegroundWsNotificationRouter.intentForEvent(
       event,
       showSensitive: settings.notificationSensitiveContent,
@@ -635,7 +697,6 @@ class _AppRootState extends State<_AppRoot> {
       mutedConversationIds: settings.mutedConversationIds,
       conversationNotificationPreferences:
           settings.conversationNotificationPreferences,
-      currentUserId: currentUserId,
     );
     if (intent == null) return;
 
@@ -646,11 +707,6 @@ class _AppRootState extends State<_AppRoot> {
           title: intent.title,
           body: intent.body,
           showSensitive: true,
-          mentionedUserIds: mentionedUserIdsFromNotificationData(event.data),
-          mentionedForCurrentUser: notificationDataMentionsCurrentUser(
-            event.data,
-            currentUserId,
-          ),
         );
         break;
       case NotificationIntentKind.incomingCall:
@@ -697,6 +753,7 @@ class _AppRootState extends State<_AppRoot> {
       context.read<KeyProvider>().load();
       context.read<ChatProvider>().connectWebSocket();
       _drainPendingInviteLink();
+      _drainPendingContactLink();
       // Re-register the FCM/APNs push token on every login so the backend
       // always has a current token. Silently skipped when Firebase credentials
       // are placeholders or push notifications have not been enabled.
@@ -719,16 +776,11 @@ class _AppRootState extends State<_AppRoot> {
   }
 
   void _syncNotificationPreferences(SettingsProvider settings) {
-    final currentUserId = context.read<AuthProvider>().currentUser?.id ?? '';
     final preferences = settings.conversationNotificationPreferences;
-    NotificationService.setConversationNotificationPreferences(
-      preferences,
-      currentUserId: currentUserId,
-    );
+    NotificationService.setConversationNotificationPreferences(preferences);
     unawaited(
       BackgroundWsService.updateConversationNotificationPreferences(
         preferences,
-        currentUserId: currentUserId,
       ),
     );
     if (settings.wsBackgroundEnabled) {
@@ -775,9 +827,10 @@ class _AppRootState extends State<_AppRoot> {
 
     if (auth.state == AuthState.authenticated &&
         !_appLocked &&
-        _pendingInviteToken != null) {
+        (_pendingInviteToken != null || _pendingContactToken != null)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _drainPendingInviteLink();
+        _drainPendingContactLink();
       });
     }
 

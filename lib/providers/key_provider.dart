@@ -1,7 +1,12 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 import '../crypto/pgp_service.dart';
+import '../models/key_transparency_event.dart';
+import '../models/key_trust_pin.dart';
 import '../services/api_service.dart';
 import '../services/key_cache_service.dart';
 import '../services/secure_storage_service.dart';
@@ -88,8 +93,8 @@ class KeyProvider extends ChangeNotifier {
       // locally when it isn't provided.
       final pub =
           (publicKeyArmored != null && publicKeyArmored.trim().isNotEmpty)
-              ? publicKeyArmored.trim()
-              : await PgpService.publicKeyFromPrivate(privateKeyArmored);
+          ? publicKeyArmored.trim()
+          : await PgpService.publicKeyFromPrivate(privateKeyArmored);
       final fp = await PgpService.fingerprintFromPublicKey(pub);
       await _storage.saveKeyPair(
         privateKeyArmored: privateKeyArmored,
@@ -125,20 +130,61 @@ class KeyProvider extends ChangeNotifier {
   }) async {
     try {
       final username = await _storage.getUsername() ?? 'user';
+      final userId = await _storage.getUserID() ?? '';
+      final oldPrivateKey = await _storage.getPrivateKey();
+      final oldFingerprint = await _storage.getFingerprint() ?? '';
+      if (userId.isEmpty ||
+          oldPrivateKey == null ||
+          oldPrivateKey.isEmpty ||
+          oldFingerprint.isEmpty) {
+        return false;
+      }
       final newPair = await PgpService.generateKeyPairForType(
         username: username,
         keyType: keyType,
         passphrase: passphrase,
       );
+      final signature = await PgpService.sign(
+        data: keyRotationSignatureData(
+          userId: userId,
+          oldFingerprint: oldFingerprint,
+          newFingerprint: newPair.fingerprint,
+          newPublicKey: newPair.publicKeyArmored,
+        ),
+        privateKeyArmored: oldPrivateKey,
+      );
       await api.rotatePublicKey(
         publicKey: newPair.publicKeyArmored,
         fingerprint: newPair.fingerprint,
+        signature: signature,
       );
+      final events = await api
+          .getKeyTransparencyEvents(userId)
+          .catchError((_) => <KeyTransparencyEvent>[]);
+      String? eventHash;
+      for (final event in events) {
+        if (event.newKeyFingerprint.toUpperCase() ==
+            newPair.fingerprint.toUpperCase()) {
+          eventHash = event.eventHash;
+        }
+      }
       await KeyCacheService.clear();
       await _storage.saveKeyPair(
         privateKeyArmored: newPair.privateKeyArmored,
         publicKeyArmored: newPair.publicKeyArmored,
         fingerprint: newPair.fingerprint,
+      );
+      await _storage.saveKeyTrustPin(
+        KeyTrustPin(
+          userId: userId,
+          fingerprint: newPair.fingerprint.toUpperCase(),
+          publicKeyHash: crypto.sha256
+              .convert(utf8.encode(newPair.publicKeyArmored.trim()))
+              .toString()
+              .toUpperCase(),
+          eventHash: eventHash,
+          pinnedAt: DateTime.now(),
+        ),
       );
       _publicKey = newPair.publicKeyArmored;
       _fingerprint = newPair.fingerprint;

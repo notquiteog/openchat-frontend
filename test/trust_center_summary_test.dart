@@ -15,6 +15,7 @@ void main() {
       notificationSensitiveContent: false,
       pushNotificationsEnabled: true,
       unencryptedConversations: 0,
+      keyTransparencyWarnings: 0,
     );
 
     expect(summary.level, TrustCenterLevel.protected);
@@ -35,6 +36,7 @@ void main() {
       notificationSensitiveContent: false,
       pushNotificationsEnabled: false,
       unencryptedConversations: 2,
+      keyTransparencyWarnings: 0,
     );
 
     expect(summary.level, TrustCenterLevel.attention);
@@ -54,10 +56,31 @@ void main() {
       notificationSensitiveContent: true,
       pushNotificationsEnabled: true,
       unencryptedConversations: 0,
+      keyTransparencyWarnings: 0,
     );
 
     expect(summary.level, TrustCenterLevel.review);
     expect(summary.attentionCount, 0);
     expect(summary.reviewCount, 5);
+  });
+
+  test('treats key transparency warnings as attention items', () {
+    final summary = evaluateTrustCenter(
+      hasLocalKey: true,
+      accountKeyExpired: false,
+      fingerprintMatchesAccount: true,
+      twoFactorEnabled: true,
+      appLockEnabled: true,
+      biometricAvailable: false,
+      biometricKeyExportEnabled: false,
+      allowGroupAdd: false,
+      notificationSensitiveContent: false,
+      pushNotificationsEnabled: false,
+      unencryptedConversations: 0,
+      keyTransparencyWarnings: 2,
+    );
+
+    expect(summary.level, TrustCenterLevel.attention);
+    expect(summary.attentionCount, 2);
   });
 }

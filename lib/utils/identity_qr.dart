@@ -3,11 +3,55 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:pretty_qr_code/pretty_qr_code.dart';
 
+import '../models/contact_bundle.dart';
+
 const openChatFingerprintQrPrefix = 'openchat:fingerprint:';
+const openChatContactBundlePrefix = 'openchat:contact-bundle:';
+const openChatContactScheme = 'openchat';
+const openChatContactHost = 'contact';
 const _openChatLogoAsset = 'assets/images/logo.png';
 
 String identityFingerprintQrPayload(String fingerprint) =>
     '$openChatFingerprintQrPrefix${normalizeIdentityFingerprint(fingerprint)}';
+
+String contactBundleQrPayload(ContactBundle bundle) {
+  final encoded = base64UrlEncode(utf8.encode(jsonEncode(bundle.toJson())));
+  return '$openChatContactBundlePrefix$encoded';
+}
+
+ContactBundle? contactBundleFromQrPayload(String raw) {
+  final trimmed = raw.trim();
+  if (!trimmed.startsWith(openChatContactBundlePrefix)) return null;
+  final encoded = trimmed.substring(openChatContactBundlePrefix.length);
+  try {
+    final normalized = base64Url.normalize(encoded);
+    final decoded = jsonDecode(utf8.decode(base64Url.decode(normalized)));
+    if (decoded is! Map) return null;
+    final bundle = ContactBundle.fromJson(Map<String, dynamic>.from(decoded));
+    return bundle.isUsable ? bundle : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+String contactLinkDeepLink({required String token}) => Uri(
+  scheme: openChatContactScheme,
+  host: openChatContactHost,
+  pathSegments: [token],
+).toString();
+
+String? contactLinkTokenFromUri(Uri uri) {
+  if (uri.scheme.toLowerCase() != openChatContactScheme) return null;
+  if (uri.host.toLowerCase() != openChatContactHost) return null;
+  final token = uri.pathSegments.isNotEmpty
+      ? uri.pathSegments.first
+      : uri.queryParameters['token'];
+  final trimmed = token?.trim();
+  if (trimmed == null || trimmed.isEmpty || trimmed.length > 128) {
+    return null;
+  }
+  return trimmed;
+}
 
 String normalizeIdentityFingerprint(String value) {
   var raw = value.trim();

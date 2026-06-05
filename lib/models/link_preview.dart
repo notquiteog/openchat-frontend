@@ -27,6 +27,34 @@ class LinkPreview {
     fetchedAt: DateTime.parse(json['fetched_at'] as String),
   );
 
+  factory LinkPreview.local({
+    required String url,
+    String? resolvedUrl,
+    String siteName = '',
+    String title = '',
+    String description = '',
+    String imageUrl = '',
+    DateTime? fetchedAt,
+  }) => LinkPreview(
+    url: url,
+    resolvedUrl: resolvedUrl ?? url,
+    siteName: siteName,
+    title: title,
+    description: description,
+    imageUrl: imageUrl,
+    fetchedAt: fetchedAt ?? DateTime.now(),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'url': url,
+    'resolved_url': resolvedUrl,
+    if (siteName.isNotEmpty) 'site_name': siteName,
+    if (title.isNotEmpty) 'title': title,
+    if (description.isNotEmpty) 'description': description,
+    if (imageUrl.isNotEmpty) 'image_url': imageUrl,
+    'fetched_at': fetchedAt.toUtc().toIso8601String(),
+  };
+
   String get displayHost {
     final host = Uri.tryParse(resolvedUrl)?.host;
     if (host != null && host.isNotEmpty) return host;

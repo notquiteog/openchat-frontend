@@ -81,7 +81,6 @@ class NotificationService {
   static Set<String> _mutedConversationIds = const {};
   static Map<String, ConversationNotificationPreference>
   _conversationNotificationPreferences = const {};
-  static String _notificationCurrentUserId = '';
   static const int _activeCallNotificationId = 2;
   static const String _activeCallEndActionId = 'openchat_call_end';
   static const String _activeCallMuteActionId = 'openchat_call_mute';
@@ -202,21 +201,18 @@ class NotificationService {
   }
 
   static void setConversationNotificationPreferences(
-    Map<String, ConversationNotificationPreference> preferences, {
-    String currentUserId = '',
-  }) {
+    Map<String, ConversationNotificationPreference> preferences,
+  ) {
     _conversationNotificationPreferences = Map.unmodifiable(preferences);
     _mutedConversationIds = Set.unmodifiable(
       activeMutedConversationIds(_conversationNotificationPreferences),
     );
-    _notificationCurrentUserId = currentUserId;
   }
 
   static Set<String> get mutedConversationIds => _mutedConversationIds;
   static Map<String, ConversationNotificationPreference>
   get conversationNotificationPreferences =>
       _conversationNotificationPreferences;
-  static String get notificationCurrentUserId => _notificationCurrentUserId;
 
   @visibleForTesting
   static bool debugIsConversationMuted(String conversationId) =>
@@ -485,7 +481,6 @@ class NotificationService {
     required String title,
     required String body,
     bool showSensitive = false,
-    Iterable<String> mentionedUserIds = const [],
     bool mentionedForCurrentUser = false,
     String? notificationText,
   }) async {
@@ -493,8 +488,6 @@ class NotificationService {
     if (!shouldNotifyForConversation(
       conversationId: conversationId,
       preferences: _conversationNotificationPreferences,
-      currentUserId: _notificationCurrentUserId,
-      mentionedUserIds: mentionedUserIds,
       mentionedForCurrentUser: mentionedForCurrentUser,
       notificationText: notificationText ?? '$title $body',
     )) {

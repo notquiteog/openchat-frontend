@@ -22,7 +22,6 @@ void main() {
         'created_at': '2026-06-05T16:00:00Z',
         'sent_at': null,
         'canceled_at': null,
-        'mentioned_user_ids': ['user-2'],
       });
 
       expect(scheduled.id, 'scheduled-1');
@@ -35,7 +34,6 @@ void main() {
       expect(scheduled.silent, true);
       expect(scheduled.scheduledFor, DateTime.parse('2026-06-05T17:30:00Z'));
       expect(scheduled.createdAt, DateTime.parse('2026-06-05T16:00:00Z'));
-      expect(scheduled.mentionedUserIds, ['user-2']);
     });
 
     test('uses decrypted text and media filenames for previews', () {

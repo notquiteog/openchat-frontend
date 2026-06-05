@@ -1,17 +1,21 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:http/http.dart' as http;
 import '../config/api_config.dart' show ApiConfig, IceServer;
+import '../crypto/pgp_service.dart';
 import '../models/admin_audit_event.dart';
 import '../models/channel_analytics.dart';
-import '../models/chat_folder.dart';
 import '../models/channel_pinned_message.dart';
+import '../models/contact_bundle.dart';
+import '../models/key_transparency_event.dart';
+import '../models/key_trust_pin.dart';
 import '../models/user.dart';
 import '../models/message.dart';
 import '../models/conversation.dart';
 import '../models/conversation_invite.dart';
-import '../models/link_preview.dart';
 import '../models/moderation_report.dart';
 import '../models/mls.dart';
 import '../models/scheduled_message.dart';
@@ -93,6 +97,29 @@ class SharedContentPage {
   const SharedContentPage({required this.items, required this.nextCursor});
 }
 
+class SelfStateEvent {
+  final String id;
+  final int sequence;
+  final String encryptedPayload;
+  final DateTime createdAt;
+
+  const SelfStateEvent({
+    required this.id,
+    required this.sequence,
+    required this.encryptedPayload,
+    required this.createdAt,
+  });
+
+  factory SelfStateEvent.fromJson(Map<String, dynamic> json) {
+    return SelfStateEvent(
+      id: json['id'] as String,
+      sequence: (json['sequence'] as num).toInt(),
+      encryptedPayload: json['encrypted_payload'] as String? ?? '',
+      createdAt: DateTime.parse(json['created_at'] as String),
+    );
+  }
+}
+
 typedef UploadProgressCallback = void Function(int sentBytes, int totalBytes);
 
 class ApiService {
@@ -110,25 +137,30 @@ class ApiService {
 
   Future<AuthResponse> register({
     required String username,
+    String? displayName,
     required String password,
     required String publicKey,
+    bool publicDiscovery = true,
   }) async {
     final resp = await _post('/api/v1/auth/register', {
       'username': username,
+      if (displayName != null && displayName.trim().isNotEmpty)
+        'display_name': displayName.trim(),
       'password': password,
       'public_key': publicKey,
+      'public_discovery': publicDiscovery,
       'device_name': openChatDeviceName(),
     }, authenticated: false);
     return AuthResponse.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
   Future<AuthResponse> login({
-    required String username,
+    required String identifier,
     required String password,
     String? twoFactorPassword,
   }) async {
     final resp = await _post('/api/v1/auth/login', {
-      'username': username,
+      'identifier': identifier,
       'password': password,
       if (twoFactorPassword != null && twoFactorPassword.isNotEmpty)
         'two_factor_password': twoFactorPassword,
@@ -189,6 +221,15 @@ class ApiService {
     final expiresAt = data['public_key_expires_at'] != null
         ? DateTime.parse(data['public_key_expires_at'] as String)
         : null;
+    final events = await getKeyTransparencyEvents(
+      userID,
+    ).catchError((_) => <KeyTransparencyEvent>[]);
+    await _observeKeyTrust(
+      userID: userID,
+      publicKey: publicKey,
+      fingerprint: fingerprint,
+      events: events,
+    );
     await KeyCacheService.put(
       userID,
       publicKey,
@@ -220,6 +261,88 @@ class ApiService {
     return getUserPublicKeyEntry(userID);
   }
 
+  Future<List<KeyTransparencyEvent>> getKeyTransparencyEvents(
+    String userID,
+  ) async {
+    final encoded = Uri.encodeComponent(userID);
+    final resp = await _get('/api/v1/users/$encoded/key-transparency');
+    return (resp['data'] as List? ?? const [])
+        .map((e) => KeyTransparencyEvent.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> _observeKeyTrust({
+    required String userID,
+    required String publicKey,
+    required String fingerprint,
+    required List<KeyTransparencyEvent> events,
+  }) async {
+    final normalizedFingerprint = fingerprint.trim().toUpperCase();
+    if (userID.isEmpty || normalizedFingerprint.isEmpty) return;
+    final publicKeyHash = crypto.sha256
+        .convert(utf8.encode(publicKey.trim()))
+        .toString()
+        .toUpperCase();
+    final matchingEvents = events
+        .where(
+          (event) =>
+              event.newKeyFingerprint.toUpperCase() == normalizedFingerprint,
+        )
+        .toList();
+    final latestEventHash = matchingEvents.isEmpty
+        ? null
+        : matchingEvents.last.eventHash;
+    final pin = await _storage.getKeyTrustPin(userID);
+    if (pin == null || pin.fingerprint.trim().isEmpty) {
+      await _storage.saveKeyTrustPin(
+        KeyTrustPin(
+          userId: userID,
+          fingerprint: normalizedFingerprint,
+          publicKeyHash: publicKeyHash,
+          eventHash: latestEventHash,
+          pinnedAt: DateTime.now(),
+        ),
+      );
+      return;
+    }
+    if (pin.fingerprint.toUpperCase() == normalizedFingerprint) {
+      if (pin.publicKeyHash == publicKeyHash &&
+          pin.eventHash == latestEventHash) {
+        return;
+      }
+      await _storage.saveKeyTrustPin(
+        KeyTrustPin(
+          userId: userID,
+          fingerprint: normalizedFingerprint,
+          publicKeyHash: publicKeyHash,
+          eventHash: latestEventHash ?? pin.eventHash,
+          warning: pin.warning,
+          pinnedAt: pin.pinnedAt,
+        ),
+      );
+      return;
+    }
+
+    final explained = events.any(
+      (event) => event.explainsRotation(
+        oldFingerprint: pin.fingerprint,
+        newFingerprint: normalizedFingerprint,
+      ),
+    );
+    await _storage.saveKeyTrustPin(
+      KeyTrustPin(
+        userId: userID,
+        fingerprint: normalizedFingerprint,
+        publicKeyHash: publicKeyHash,
+        eventHash: latestEventHash,
+        warning: explained
+            ? null
+            : 'Unexplained key replacement: ${pin.fingerprint} -> $normalizedFingerprint',
+        pinnedAt: DateTime.now(),
+      ),
+    );
+  }
+
   /// Change the account login password. Verified against the current password
   /// server-side; does not affect the PGP key.
   Future<void> changePassword({
@@ -235,10 +358,12 @@ class ApiService {
   Future<void> rotatePublicKey({
     required String publicKey,
     required String fingerprint,
+    required String signature,
   }) async {
     await _put('/api/v1/users/me/public-key', {
       'public_key': publicKey,
       'key_fingerprint': fingerprint,
+      'signature': signature,
     });
   }
 
@@ -280,6 +405,26 @@ class ApiService {
     return (resp['data'] as List)
         .map((e) => User.fromJson(e as Map<String, dynamic>))
         .toList();
+  }
+
+  Future<ContactBundle> getMyContactBundle() async {
+    final resp = await _get('/api/v1/users/me/contact-bundle');
+    return ContactBundle.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<Map<String, dynamic>> createContactLink({
+    int expiresInSeconds = 24 * 60 * 60,
+  }) async {
+    final resp = await _post('/api/v1/users/me/contact-links', {
+      'expires_in_seconds': expiresInSeconds,
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<ContactBundle> claimContactLink(String token) async {
+    final encoded = Uri.encodeComponent(token);
+    final resp = await _post('/api/v1/users/contact-links/$encoded/claim', {});
+    return ContactBundle.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
   Future<List<Conversation>> getSharedConversations(
@@ -341,22 +486,6 @@ class ApiService {
 
   Future<void> removeMember(String convID, String userID) async {
     await _delete('/api/v1/conversations/$convID/members/$userID');
-  }
-
-  Future<List<ChatFolder>> listChatFolders() async {
-    final resp = await _get('/api/v1/me/folders');
-    return (resp['data'] as List? ?? const [])
-        .map((e) => ChatFolder.fromJson(e as Map<String, dynamic>))
-        .toList();
-  }
-
-  Future<ChatFolder> upsertChatFolder(ChatFolder folder) async {
-    final resp = await _put('/api/v1/me/folders', folder.toUpsertJson());
-    return ChatFolder.fromJson(resp['data'] as Map<String, dynamic>);
-  }
-
-  Future<void> deleteChatFolder(String folderId) async {
-    await _delete('/api/v1/me/folders/$folderId');
   }
 
   Future<void> setConversationMemberRole(
@@ -488,7 +617,6 @@ class ApiService {
     String? postToken,
     String messageType = 'text',
     String? attachmentId,
-    List<String> mentionedUserIds = const [],
     bool silent = false,
     DateTime? scheduledFor,
   }) async {
@@ -498,7 +626,6 @@ class ApiService {
       'post_token': ?postToken,
       'message_type': messageType,
       'attachment_id': ?attachmentId,
-      if (mentionedUserIds.isNotEmpty) 'mentioned_user_ids': mentionedUserIds,
       if (silent) 'silent': true,
       if (scheduledFor != null)
         'scheduled_for': scheduledFor.toUtc().toIso8601String(),
@@ -554,7 +681,6 @@ class ApiService {
     String? replyTo,
     String? attachmentId,
     String? topicId,
-    List<String> mentionedUserIds = const [],
     bool silent = false,
     DateTime? scheduledFor,
   }) async {
@@ -566,7 +692,6 @@ class ApiService {
       'reply_to': ?replyTo,
       'attachment_id': ?attachmentId,
       'topic_id': ?topicId,
-      if (mentionedUserIds.isNotEmpty) 'mentioned_user_ids': mentionedUserIds,
       if (silent) 'silent': true,
       if (scheduledFor != null)
         'scheduled_for': scheduledFor.toUtc().toIso8601String(),
@@ -574,7 +699,7 @@ class ApiService {
     return Message.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
-  Future<Message> sendSealedPgpMessage({
+  Future<Message> sendSealedMessage({
     required String convID,
     required String encryptedPayload,
     required String postToken,
@@ -594,23 +719,118 @@ class ApiService {
     return Message.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
-  Future<String> getEncryptedPgpPostToken(String convID) async {
-    final resp = await _get('/api/v1/conversations/$convID/pgp-post-token');
+  Future<ScheduledMessage> scheduleSealedMessage({
+    required String convID,
+    required String encryptedPayload,
+    required String postToken,
+    required DateTime scheduledFor,
+    String? replyTo,
+    String? attachmentId,
+    String? topicId,
+    bool silent = false,
+  }) async {
+    final resp = await _post('/api/v1/conversations/$convID/sealed-messages', {
+      'encrypted_payload': encryptedPayload,
+      'post_token': postToken,
+      'reply_to': ?replyTo,
+      'attachment_id': ?attachmentId,
+      'topic_id': ?topicId,
+      'scheduled_for': scheduledFor.toUtc().toIso8601String(),
+      if (silent) 'silent': true,
+    }, authenticated: false);
+    final scheduled = ScheduledMessage.fromJson(
+      resp['data'] as Map<String, dynamic>,
+    );
+    final controlToken = scheduled.controlToken;
+    if (controlToken != null && controlToken.isNotEmpty) {
+      await _storage.saveSealedScheduleControlToken(
+        convID,
+        scheduled.id,
+        controlToken,
+      );
+      await _appendSealedScheduleControlEvent(
+        operation: 'upsert',
+        conversationId: convID,
+        scheduledId: scheduled.id,
+        controlToken: controlToken,
+      );
+    }
+    return scheduled;
+  }
+
+  Future<Message> sendSealedPgpMessage({
+    required String convID,
+    required String encryptedPayload,
+    required String postToken,
+    String? replyTo,
+    String? attachmentId,
+    String? topicId,
+    bool silent = false,
+  }) {
+    return sendSealedMessage(
+      convID: convID,
+      encryptedPayload: encryptedPayload,
+      postToken: postToken,
+      replyTo: replyTo,
+      attachmentId: attachmentId,
+      topicId: topicId,
+      silent: silent,
+    );
+  }
+
+  Future<String> getEncryptedSealedPostToken(String convID) async {
+    final resp = await _get('/api/v1/conversations/$convID/sealed-post-token');
     final data = resp['data'] as Map<String, dynamic>;
     return data['encrypted_post_token'] as String;
   }
+
+  Future<String> getEncryptedPgpPostToken(String convID) =>
+      getEncryptedSealedPostToken(convID);
 
   Future<List<ScheduledMessage>> listScheduledMessages(
     String convID, {
     bool channel = false,
   }) async {
+    await syncSelfStateLog();
     final base = channel
         ? '/api/v1/channels/$convID/scheduled-posts'
         : '/api/v1/conversations/$convID/scheduled-messages';
     final resp = await _get(base);
-    return (resp['data'] as List? ?? const [])
+    final authenticatedItems = (resp['data'] as List? ?? const [])
         .map((e) => ScheduledMessage.fromJson(e as Map<String, dynamic>))
         .toList();
+    final controlTokens = await _storage.getSealedScheduleControlTokens(convID);
+    if (controlTokens.isEmpty) return authenticatedItems;
+
+    final sealedItems = <ScheduledMessage>[];
+    final tokenValues = controlTokens.values.toList();
+    for (var i = 0; i < tokenValues.length; i += 100) {
+      final batch = tokenValues.skip(i).take(100).toList();
+      final sealedResp = await _post(
+        '/api/v1/conversations/$convID/sealed-scheduled-messages/list',
+        {'control_tokens': batch},
+        authenticated: false,
+      );
+      sealedItems.addAll(
+        (sealedResp['data'] as List? ?? const [])
+            .map((e) => ScheduledMessage.fromJson(e as Map<String, dynamic>))
+            .map((item) {
+              final token = item.controlToken ?? controlTokens[item.id];
+              return token == null ? item : item.copyWith(controlToken: token);
+            }),
+      );
+    }
+    final returnedSealedIds = sealedItems.map((item) => item.id).toSet();
+    for (final scheduledID in controlTokens.keys) {
+      if (!returnedSealedIds.contains(scheduledID)) {
+        await _storage.deleteSealedScheduleControlToken(convID, scheduledID);
+      }
+    }
+    final merged = <String, ScheduledMessage>{
+      for (final item in authenticatedItems) item.id: item,
+      for (final item in sealedItems) item.id: item,
+    }.values.toList()..sort((a, b) => a.scheduledFor.compareTo(b.scheduledFor));
+    return merged;
   }
 
   Future<void> cancelScheduledMessage(
@@ -618,6 +838,24 @@ class ApiService {
     String scheduledID, {
     bool channel = false,
   }) async {
+    final controlToken = await _storage.getSealedScheduleControlToken(
+      convID,
+      scheduledID,
+    );
+    if (controlToken != null && controlToken.isNotEmpty) {
+      await _post(
+        '/api/v1/conversations/$convID/sealed-scheduled-messages/$scheduledID/cancel',
+        {'control_token': controlToken},
+        authenticated: false,
+      );
+      await _storage.deleteSealedScheduleControlToken(convID, scheduledID);
+      await _appendSealedScheduleControlEvent(
+        operation: 'delete',
+        conversationId: convID,
+        scheduledId: scheduledID,
+      );
+      return;
+    }
     final base = channel
         ? '/api/v1/channels/$convID/scheduled-posts'
         : '/api/v1/conversations/$convID/scheduled-messages';
@@ -630,6 +868,21 @@ class ApiService {
     required DateTime scheduledFor,
     bool channel = false,
   }) async {
+    final controlToken = await _storage.getSealedScheduleControlToken(
+      convID,
+      scheduledID,
+    );
+    if (controlToken != null && controlToken.isNotEmpty) {
+      await _put(
+        '/api/v1/conversations/$convID/sealed-scheduled-messages/$scheduledID',
+        {
+          'control_token': controlToken,
+          'scheduled_for': scheduledFor.toUtc().toIso8601String(),
+        },
+        authenticated: false,
+      );
+      return;
+    }
     final base = channel
         ? '/api/v1/channels/$convID/scheduled-posts'
         : '/api/v1/conversations/$convID/scheduled-messages';
@@ -643,11 +896,166 @@ class ApiService {
     String scheduledID, {
     bool channel = false,
   }) async {
+    final controlToken = await _storage.getSealedScheduleControlToken(
+      convID,
+      scheduledID,
+    );
+    if (controlToken != null && controlToken.isNotEmpty) {
+      final resp = await _post(
+        '/api/v1/conversations/$convID/sealed-scheduled-messages/$scheduledID/send-now',
+        {'control_token': controlToken},
+        authenticated: false,
+      );
+      await _storage.deleteSealedScheduleControlToken(convID, scheduledID);
+      await _appendSealedScheduleControlEvent(
+        operation: 'delete',
+        conversationId: convID,
+        scheduledId: scheduledID,
+      );
+      return Message.fromJson(resp['data'] as Map<String, dynamic>);
+    }
     final base = channel
         ? '/api/v1/channels/$convID/scheduled-posts'
         : '/api/v1/conversations/$convID/scheduled-messages';
     final resp = await _post('$base/$scheduledID/send-now', {});
     return Message.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<List<SelfStateEvent>> listSelfStateLog({
+    int after = 0,
+    int limit = 200,
+  }) async {
+    final resp = await _get(
+      '/api/v1/users/me/self-state-log?after=$after&limit=$limit',
+    );
+    return (resp['data'] as List? ?? const [])
+        .map((e) => SelfStateEvent.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<SelfStateEvent> appendSelfStateLog(String encryptedPayload) async {
+    final resp = await _post('/api/v1/users/me/self-state-log', {
+      'encrypted_payload': encryptedPayload,
+    });
+    return SelfStateEvent.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<void> syncSelfStateLog() async {
+    try {
+      final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
+      if (privateKey.isEmpty) return;
+
+      var after = await _storage.getSelfStateLogSequence();
+      var maxSequence = after;
+      while (true) {
+        final events = await listSelfStateLog(after: after, limit: 200);
+        if (events.isEmpty) break;
+
+        for (final event in events) {
+          if (event.sequence > maxSequence) maxSequence = event.sequence;
+          await _applySelfStateEvent(event, privateKey);
+        }
+        after = maxSequence;
+        if (events.length < 200) break;
+      }
+
+      if (maxSequence > await _storage.getSelfStateLogSequence()) {
+        await _storage.saveSelfStateLogSequence(maxSequence);
+      }
+    } catch (_) {
+      return;
+    }
+  }
+
+  Future<void> _applySelfStateEvent(
+    SelfStateEvent event,
+    String privateKey,
+  ) async {
+    try {
+      final raw = await PgpService.decrypt(
+        encryptedArmor: event.encryptedPayload,
+        privateKeyArmored: privateKey,
+      );
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      final payload = Map<String, dynamic>.from(decoded);
+      if (payload['openchat_self_state'] != 1) return;
+      if (payload['kind'] != 'sealed_schedule_control') return;
+
+      final conversationId = payload['conversation_id'] as String? ?? '';
+      final scheduledId = payload['scheduled_id'] as String? ?? '';
+      if (conversationId.isEmpty || scheduledId.isEmpty) return;
+
+      switch (payload['operation']) {
+        case 'upsert':
+          final controlToken = payload['control_token'] as String? ?? '';
+          if (controlToken.isNotEmpty) {
+            await _storage.saveSealedScheduleControlToken(
+              conversationId,
+              scheduledId,
+              controlToken,
+            );
+          }
+          break;
+        case 'delete':
+          await _storage.deleteSealedScheduleControlToken(
+            conversationId,
+            scheduledId,
+          );
+          break;
+      }
+    } catch (_) {
+      return;
+    }
+  }
+
+  Future<void> _appendSealedScheduleControlEvent({
+    required String operation,
+    required String conversationId,
+    required String scheduledId,
+    String? controlToken,
+  }) async {
+    final payload = <String, dynamic>{
+      'openchat_self_state': 1,
+      'kind': 'sealed_schedule_control',
+      'operation': operation,
+      'conversation_id': conversationId,
+      'scheduled_id': scheduledId,
+      'created_at': DateTime.now().toUtc().toIso8601String(),
+      if (controlToken != null && controlToken.isNotEmpty)
+        'control_token': controlToken,
+    };
+    final encrypted = await _encryptSelfStatePayload(payload);
+    if (encrypted == null) return;
+    try {
+      await appendSelfStateLog(encrypted);
+    } catch (_) {
+      return;
+    }
+  }
+
+  Future<String?> _encryptSelfStatePayload(Map<String, dynamic> payload) async {
+    final userId = await _storage.getUserID() ?? '';
+    final publicKey = await _storage.getPublicKey() ?? '';
+    final fingerprint = await _storage.getFingerprint() ?? '';
+    final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
+    if (userId.isEmpty ||
+        publicKey.trim().isEmpty ||
+        fingerprint.trim().isEmpty ||
+        privateKey.trim().isEmpty) {
+      return null;
+    }
+    return PgpService.encrypt(
+      plaintext: jsonEncode(payload),
+      recipients: [
+        PgpRecipient(
+          userId: userId,
+          publicKeyArmored: publicKey,
+          keyFingerprint: fingerprint,
+        ),
+      ],
+      signingPrivateKeyArmored: privateKey,
+    );
   }
 
   Future<Message> createPoll({
@@ -831,13 +1239,6 @@ class ApiService {
   Future<ChannelAnalytics> getChannelStats(String chanID) async {
     final resp = await _get('/api/v1/channels/$chanID/stats');
     return ChannelAnalytics.fromJson(resp['data'] as Map<String, dynamic>);
-  }
-
-  Future<LinkPreview> fetchLinkPreview(String url) async {
-    final resp = await _get(
-      '/api/v1/link-preview?url=${Uri.encodeComponent(url)}',
-    );
-    return LinkPreview.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
   Future<void> setEncryptionMode(
@@ -1103,12 +1504,18 @@ class ApiService {
   }
 
   Future<void> updateProfile({
+    String? username,
+    String? displayName,
+    bool? publicDiscovery,
     String? bio,
     String? avatarUrl,
     int? bubbleColor,
     bool clearBubbleColor = false,
   }) async {
     await _put('/api/v1/users/me', {
+      'username': ?username,
+      'display_name': ?displayName,
+      'public_discovery': ?publicDiscovery,
       'bio': ?bio,
       'avatar_url': ?avatarUrl,
       if (clearBubbleColor)
@@ -1862,16 +2269,17 @@ class ApiService {
 
   Future<Map<String, dynamic>> _put(
     String path,
-    Map<String, dynamic> body,
-  ) async {
+    Map<String, dynamic> body, {
+    bool authenticated = true,
+  }) async {
     final response = await _requestWithRetry(() async {
-      final token = await _storage.getAccessToken();
+      final token = authenticated ? await _storage.getAccessToken() : null;
       return _httpClient.put(
         Uri.parse('${ApiConfig.baseUrl}$path'),
         headers: _headers(token),
         body: jsonEncode(body),
       );
-    });
+    }, authenticated: authenticated);
     return _parse(response);
   }
 

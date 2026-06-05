@@ -174,7 +174,6 @@ class PushNotificationService {
         mutedConversationIds: NotificationService.mutedConversationIds,
         conversationNotificationPreferences:
             NotificationService.conversationNotificationPreferences,
-        currentUserId: NotificationService.notificationCurrentUserId,
       );
       if (intent == null) return;
       switch (intent.kind) {
@@ -185,11 +184,6 @@ class PushNotificationService {
             body: intent.body,
             showSensitive:
                 true, // title/body are already sanitised by the server
-            mentionedUserIds: mentionedUserIdsFromNotificationData(msg.data),
-            mentionedForCurrentUser: notificationDataMentionsCurrentUser(
-              msg.data,
-              NotificationService.notificationCurrentUserId,
-            ),
             notificationText: notificationRuleTextFromData(msg.data),
           );
           break;
@@ -249,7 +243,6 @@ class PushNotificationService {
     Map<String, ConversationNotificationPreference>
         conversationNotificationPreferences =
         const {},
-    String currentUserId = '',
   }) {
     final type = msg.data['type'] as String?;
     if (type == 'incoming_call') {
@@ -274,12 +267,6 @@ class PushNotificationService {
       if (!shouldNotifyForConversation(
         conversationId: conversationId,
         preferences: preferences,
-        currentUserId: currentUserId,
-        mentionedUserIds: mentionedUserIdsFromNotificationData(msg.data),
-        mentionedForCurrentUser: notificationDataMentionsCurrentUser(
-          msg.data,
-          currentUserId,
-        ),
       )) {
         return null;
       }
@@ -299,7 +286,6 @@ class PushNotificationService {
         mutedConversationIds: mutedConversationIds,
         conversationNotificationPreferences:
             conversationNotificationPreferences,
-        currentUserId: currentUserId,
       );
     }
     return null;

@@ -3,12 +3,16 @@ class MlsBootstrap {
   final String groupInfo;
   final String ratchetTree;
   final int epoch;
+  final String signerPublicKey;
+  final String signerSignature;
 
   const MlsBootstrap({
     required this.groupId,
     required this.groupInfo,
     required this.ratchetTree,
     required this.epoch,
+    this.signerPublicKey = '',
+    this.signerSignature = '',
   });
 
   Map<String, dynamic> toEncryptionJson() => {
@@ -16,12 +20,16 @@ class MlsBootstrap {
     'mls_group_info': groupInfo,
     'mls_ratchet_tree': ratchetTree,
     'mls_epoch': epoch,
+    if (signerPublicKey.isNotEmpty) 'mls_signer_public_key': signerPublicKey,
+    if (signerSignature.isNotEmpty) 'mls_signer_signature': signerSignature,
   };
 
   Map<String, dynamic> toCommitJson() => {
     'mls_group_info': groupInfo,
     'mls_ratchet_tree': ratchetTree,
     'mls_epoch': epoch,
+    if (signerPublicKey.isNotEmpty) 'mls_signer_public_key': signerPublicKey,
+    if (signerSignature.isNotEmpty) 'mls_signer_signature': signerSignature,
   };
 }
 
@@ -56,6 +64,8 @@ class ConversationMlsState {
   final String groupInfo;
   final String ratchetTree;
   final int epoch;
+  final String signerPublicKey;
+  final String signerSignature;
   final List<ConversationMlsCommit> commits;
 
   const ConversationMlsState({
@@ -64,6 +74,8 @@ class ConversationMlsState {
     required this.groupInfo,
     required this.ratchetTree,
     required this.epoch,
+    this.signerPublicKey = '',
+    this.signerSignature = '',
     this.commits = const [],
   });
 
@@ -74,6 +86,8 @@ class ConversationMlsState {
         groupInfo: json['group_info'] as String,
         ratchetTree: json['ratchet_tree'] as String,
         epoch: (json['epoch'] as num?)?.toInt() ?? 0,
+        signerPublicKey: json['signer_public_key'] as String? ?? '',
+        signerSignature: json['signer_signature'] as String? ?? '',
         commits: (json['commits'] as List? ?? const [])
             .map(
               (e) => ConversationMlsCommit.fromJson(e as Map<String, dynamic>),

@@ -28,6 +28,7 @@ TrustCenterSummary evaluateTrustCenter({
   required bool notificationSensitiveContent,
   required bool pushNotificationsEnabled,
   required int unencryptedConversations,
+  required int keyTransparencyWarnings,
 }) {
   var attention = 0;
   var review = 0;
@@ -36,6 +37,7 @@ TrustCenterSummary evaluateTrustCenter({
   if (accountKeyExpired) attention++;
   if (!fingerprintMatchesAccount) attention++;
   if (unencryptedConversations > 0) attention++;
+  attention += keyTransparencyWarnings;
 
   if (!twoFactorEnabled) review++;
   if (!appLockEnabled) review++;

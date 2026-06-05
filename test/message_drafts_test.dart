@@ -1,9 +1,8 @@
-import 'dart:convert';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openchat/models/channel_pinned_message.dart';
 import 'package:openchat/models/message.dart';
 import 'package:openchat/providers/settings_provider.dart';
+import 'package:openchat/services/local_private_state_service.dart';
 import 'package:openchat/utils/local_conversation_preferences.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -18,6 +17,12 @@ void main() {
     final draft = provider.messageDraftFor('conv-1');
     expect(draft?.text, '  see you soon  ');
     expect(draft?.preview, 'see you soon');
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('message_draft_conv-1'), isNull);
+    final encrypted = prefs.getString(localPrivateStatePreferenceKey);
+    expect(encrypted, isNotNull);
+    expect(encrypted, isNot(contains('see you soon')));
 
     final reloaded = SettingsProvider();
     await reloaded.load();
@@ -56,22 +61,19 @@ void main() {
     expect(draft?.customEmojiEntities.single.fileUrl, '/emoji.webp');
   });
 
-  test('legacy message draft json still loads', () async {
+  test('legacy plaintext message draft json is ignored and removed', () async {
     SharedPreferences.setMockInitialValues({
-      'message_draft_conv-1': jsonEncode({
-        'text': 'old draft',
-        'updated_at_ms': DateTime.utc(2026, 6, 5).millisecondsSinceEpoch,
-      }),
+      'message_draft_conv-1':
+          '{"text":"old draft","updated_at_ms":1780617600000}',
     });
     final provider = SettingsProvider();
     await provider.load();
 
     final draft = provider.messageDraftFor('conv-1');
 
-    expect(draft?.text, 'old draft');
-    expect(draft?.customEmojiEntities, isEmpty);
-    expect(draft?.sendSilent, isFalse);
-    expect(draft?.scheduledFor, isNull);
+    expect(draft, isNull);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('message_draft_conv-1'), isNull);
   });
 
   test('empty message draft clears stored draft', () async {
@@ -100,7 +102,11 @@ void main() {
     expect(provider.isConversationPinned('conv-2'), isTrue);
 
     final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getStringList('pinned_conversations'), ['conv-1', 'conv-2']);
+    expect(prefs.getStringList('pinned_conversations'), isNull);
+    final encrypted = prefs.getString(localPrivateStatePreferenceKey);
+    expect(encrypted, isNotNull);
+    expect(encrypted, isNot(contains('conv-1')));
+    expect(encrypted, isNot(contains('conv-2')));
 
     final reloaded = SettingsProvider();
     await reloaded.load();
@@ -109,6 +115,33 @@ void main() {
     await reloaded.setConversationPinned('conv-1', false);
     expect(reloaded.pinnedConversationIds, {'conv-2'});
   });
+
+  test(
+    'unread mention targets persist only in encrypted private state',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final provider = SettingsProvider();
+      await provider.load();
+
+      await provider.setUnreadMentionMessage('conv-1', 'msg-1');
+
+      expect(provider.unreadMentionMessageIdFor('conv-1'), 'msg-1');
+      final prefs = await SharedPreferences.getInstance();
+      final encrypted = prefs.getString(localPrivateStatePreferenceKey);
+      expect(encrypted, isNotNull);
+      expect(encrypted, isNot(contains('conv-1')));
+      expect(encrypted, isNot(contains('msg-1')));
+
+      final reloaded = SettingsProvider();
+      await reloaded.load();
+      expect(reloaded.unreadMentionMessageIdFor('conv-1'), 'msg-1');
+
+      await reloaded.clearUnreadMention('conv-1', messageID: 'other');
+      expect(reloaded.unreadMentionMessageIdFor('conv-1'), 'msg-1');
+      await reloaded.clearUnreadMention('conv-1', messageID: 'msg-1');
+      expect(reloaded.unreadMentionMessageIdFor('conv-1'), isNull);
+    },
+  );
 
   test('archived conversations persist in settings', () async {
     SharedPreferences.setMockInitialValues({});
@@ -122,7 +155,11 @@ void main() {
     expect(provider.isConversationArchived('conv-2'), isTrue);
 
     final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getStringList('archived_conversations'), ['conv-1', 'conv-2']);
+    expect(prefs.getStringList('archived_conversations'), isNull);
+    final encrypted = prefs.getString(localPrivateStatePreferenceKey);
+    expect(encrypted, isNotNull);
+    expect(encrypted, isNot(contains('conv-1')));
+    expect(encrypted, isNot(contains('conv-2')));
 
     final reloaded = SettingsProvider();
     await reloaded.load();
@@ -144,7 +181,11 @@ void main() {
     expect(provider.isConversationMuted('conv-2'), isTrue);
 
     final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getStringList('muted_conversations'), ['conv-1', 'conv-2']);
+    expect(prefs.getStringList('muted_conversations'), isNull);
+    final encrypted = prefs.getString(localPrivateStatePreferenceKey);
+    expect(encrypted, isNotNull);
+    expect(encrypted, isNot(contains('conv-1')));
+    expect(encrypted, isNot(contains('conv-2')));
 
     final reloaded = SettingsProvider();
     await reloaded.load();
@@ -168,11 +209,12 @@ void main() {
     expect(provider.mutedConversationIds, {'conv-muted'});
 
     final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getStringList('muted_conversations'), ['conv-muted']);
-    expect(
-      prefs.getString('conversation_notification_preferences_v1'),
-      contains('conv-mentions'),
-    );
+    expect(prefs.getStringList('muted_conversations'), isNull);
+    expect(prefs.getString('conversation_notification_preferences_v1'), isNull);
+    final encrypted = prefs.getString(localPrivateStatePreferenceKey);
+    expect(encrypted, isNotNull);
+    expect(encrypted, isNot(contains('conv-muted')));
+    expect(encrypted, isNot(contains('conv-mentions')));
 
     final reloaded = SettingsProvider();
     await reloaded.load();
@@ -223,10 +265,11 @@ void main() {
     );
 
     final prefs = await SharedPreferences.getInstance();
-    final stored =
-        jsonDecode(prefs.getString('pinned_channel_messages_channel-1') ?? '[]')
-            as List;
-    expect(stored.map((entry) => entry['message_id']), ['msg-2', 'msg-1']);
+    expect(prefs.getString('pinned_channel_messages_channel-1'), isNull);
+    final encrypted = prefs.getString(localPrivateStatePreferenceKey);
+    expect(encrypted, isNotNull);
+    expect(encrypted, isNot(contains('First announcement')));
+    expect(encrypted, isNot(contains('msg-1')));
 
     final reloaded = SettingsProvider();
     await reloaded.load();

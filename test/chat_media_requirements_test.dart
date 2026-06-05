@@ -8,10 +8,13 @@ import 'package:image/image.dart' as img;
 import 'package:openchat/models/conversation.dart';
 import 'package:openchat/models/message.dart';
 import 'package:openchat/models/user.dart';
+import 'package:openchat/providers/settings_provider.dart';
 import 'package:openchat/services/attachment_service.dart';
 import 'package:openchat/widgets/conversation_encryption_status.dart';
 import 'package:openchat/widgets/message_bubble.dart';
 import 'package:openchat/widgets/message_image_layout.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 Conversation _dmConversation({required EncryptionMode encryptionMode}) {
   return Conversation(
@@ -297,6 +300,49 @@ void main() {
     // layer rather than a translucent glass tint.
     expect(fillAlphas, isNotEmpty);
     expect(fillAlphas.reduce((a, b) => a > b ? a : b), 1.0);
+  });
+
+  testWidgets('outgoing bubbles show read receipts', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBubble(
+            message: _textMessage(),
+            isMe: true,
+            readByOthers: true,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Read'), findsOneWidget);
+  });
+
+  testWidgets('strict privacy warns before opening message links', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({'strict_privacy_mode': true});
+    final settings = SettingsProvider();
+    await settings.load();
+    final message = _textMessage();
+    message.setDecryptedContent('Read https://example.com/post');
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: settings,
+        child: MaterialApp(
+          home: Scaffold(body: MessageBubble(message: message, isMe: false)),
+        ),
+      ),
+    );
+
+    await tester.tap(
+      find.textContaining('https://example.com/post', findRichText: true),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Open link?'), findsOneWidget);
+    expect(find.textContaining('Opening this link can reveal'), findsOneWidget);
   });
 
   testWidgets('incoming sender bubble colors keep readable text', (

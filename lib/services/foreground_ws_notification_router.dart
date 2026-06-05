@@ -13,7 +13,6 @@ class ForegroundWsNotificationRouter {
     Map<String, ConversationNotificationPreference>
         conversationNotificationPreferences =
         const {},
-    String currentUserId = '',
   }) {
     if (!isDesktop) return null;
 
@@ -30,7 +29,6 @@ class ForegroundWsNotificationRouter {
       showSensitive: showSensitive,
       mutedConversationIds: mutedConversationIds,
       conversationNotificationPreferences: conversationNotificationPreferences,
-      currentUserId: currentUserId,
     );
   }
 }

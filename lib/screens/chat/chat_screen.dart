@@ -88,6 +88,7 @@ class _ChatScreenState extends State<ChatScreen> {
   DateTime? _scheduledFor;
   int _lastMessageCount = 0;
   String? _lastTailMessageId;
+  String? _lastReadReceiptSentMessageId;
   bool _wasNearBottom = true;
   bool _showNewMessagesPill = false;
   int _pendingNewMessageCount = 0;
@@ -198,6 +199,11 @@ class _ChatScreenState extends State<ChatScreen> {
           _pendingNewMessageCount = 0;
         }
       });
+      if (nearBottom) {
+        final auth = context.read<AuthProvider>();
+        final messages = context.read<ChatProvider>().messagesFor(conv.id);
+        _maybeSendReadReceipt(messages, auth.currentUser?.id ?? '');
+      }
     }
 
     if (_loadingMore || _historyExhausted) return;
@@ -375,6 +381,7 @@ class _ChatScreenState extends State<ChatScreen> {
       });
     }
 
+    _maybeSendReadReceipt(messages, currentUserID);
     _lastMessageCount = messages.length;
     _lastTailMessageId = nextTailMessageId;
   }
@@ -388,6 +395,16 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
     return messages.sublist(math.max(0, messages.length - addedCount));
+  }
+
+  void _maybeSendReadReceipt(List<Message> messages, String currentUserID) {
+    if (!_wasNearBottom || messages.isEmpty || currentUserID.isEmpty) return;
+    final tailMessageId = messages.last.id;
+    if (tailMessageId == _lastReadReceiptSentMessageId) return;
+    _lastReadReceiptSentMessageId = tailMessageId;
+    unawaited(
+      context.read<ChatProvider>().sendReadReceipt(conv.id, tailMessageId),
+    );
   }
 
   Future<void> _showSendOptions() async {
@@ -1796,6 +1813,13 @@ class _ChatScreenState extends State<ChatScreen> {
                                           message: msg,
                                           isMe: isMe,
                                           showAvatar: showAvatar,
+                                          readByOthers:
+                                              isMe &&
+                                              chat.messageReadByOthers(
+                                                conv.id,
+                                                msg,
+                                                currentUserID,
+                                              ),
                                           meBubbleColor: meBubbleColor,
                                           bubbleRadius: chatStyle.bubbleRadius,
                                           onTap: isLocationMessage

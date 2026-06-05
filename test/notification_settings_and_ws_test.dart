@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:openchat/providers/settings_provider.dart';
 import 'package:openchat/services/background_ws_service.dart';
 import 'package:openchat/services/foreground_ws_notification_router.dart';
+import 'package:openchat/services/local_private_state_service.dart';
 import 'package:openchat/services/notification_service.dart';
 import 'package:openchat/services/push_notification_service.dart';
 import 'package:openchat/services/secure_storage_service.dart';
@@ -17,13 +18,11 @@ void main() {
     test(
       'enabling push disables websocket notifications and persists it',
       () async {
-        SharedPreferences.setMockInitialValues({
-          'push_notifications_enabled': false,
-          'ws_background_enabled': true,
-        });
+        SharedPreferences.setMockInitialValues({});
 
         final provider = SettingsProvider();
         await provider.load();
+        await provider.setWsBackgroundEnabled(true);
 
         expect(provider.isLoaded, isTrue);
 
@@ -33,21 +32,22 @@ void main() {
         expect(provider.wsBackgroundEnabled, isFalse);
 
         final prefs = await SharedPreferences.getInstance();
-        expect(prefs.getBool('push_notifications_enabled'), isTrue);
-        expect(prefs.getBool('ws_background_enabled'), isFalse);
+        expect(prefs.getBool('push_notifications_enabled'), isNull);
+        expect(prefs.getBool('ws_background_enabled'), isNull);
+        final encrypted = prefs.getString(localPrivateStatePreferenceKey);
+        expect(encrypted, isNotNull);
+        expect(encrypted, isNot(contains('push_enabled')));
       },
     );
 
     test(
       'enabling websocket notifications disables push and persists it',
       () async {
-        SharedPreferences.setMockInitialValues({
-          'push_notifications_enabled': true,
-          'ws_background_enabled': false,
-        });
+        SharedPreferences.setMockInitialValues({});
 
         final provider = SettingsProvider();
         await provider.load();
+        await provider.setPushNotificationsEnabled(true);
 
         await provider.setWsBackgroundEnabled(true);
 
@@ -55,15 +55,16 @@ void main() {
         expect(provider.pushNotificationsEnabled, isFalse);
 
         final prefs = await SharedPreferences.getInstance();
-        expect(prefs.getBool('ws_background_enabled'), isTrue);
-        expect(prefs.getBool('push_notifications_enabled'), isFalse);
+        expect(prefs.getBool('ws_background_enabled'), isNull);
+        expect(prefs.getBool('push_notifications_enabled'), isNull);
+        final encrypted = prefs.getString(localPrivateStatePreferenceKey);
+        expect(encrypted, isNotNull);
+        expect(encrypted, isNot(contains('ws_background_enabled')));
       },
     );
 
     test('load is idempotent while startup waits on settings', () async {
-      SharedPreferences.setMockInitialValues({
-        'push_notifications_enabled': true,
-      });
+      SharedPreferences.setMockInitialValues({'channels_own_tab': true});
 
       final provider = SettingsProvider();
       final firstLoad = provider.load();
@@ -71,8 +72,36 @@ void main() {
       await Future.wait([firstLoad, secondLoad]);
 
       expect(provider.isLoaded, isTrue);
-      expect(provider.pushNotificationsEnabled, isTrue);
+      expect(provider.channelsOwnTab, isTrue);
     });
+
+    test(
+      'strict privacy leaves notification content as a solo toggle',
+      () async {
+        SharedPreferences.setMockInitialValues({
+          'strict_privacy_mode': true,
+          'link_previews_enabled': true,
+        });
+
+        final provider = SettingsProvider();
+        await provider.load();
+        await provider.setNotificationSensitiveContent(true);
+
+        expect(provider.strictPrivacyMode, isTrue);
+        expect(provider.notificationSensitiveContent, isTrue);
+        expect(provider.linkPreviewsEnabled, isFalse);
+
+        await provider.setStrictPrivacyMode(false);
+
+        expect(provider.notificationSensitiveContent, isTrue);
+        expect(provider.linkPreviewsEnabled, isTrue);
+
+        await provider.setNotificationSensitiveContent(false);
+
+        expect(provider.notificationSensitiveContent, isFalse);
+        expect(provider.strictPrivacyMode, isFalse);
+      },
+    );
   });
 
   group('Firebase push registration', () {
@@ -194,26 +223,24 @@ void main() {
       expect(intent, isNull);
     });
 
-    test('mentions-only websocket intents require a mention target', () {
+    test('mentions-only websocket intents ignore server mention metadata', () {
       final preferences = {
         'conv-1': const ConversationNotificationPreference.mentionsOnly(),
       };
 
-      final unmentioned = BackgroundWsService.notificationIntentFromRawLine(
+      final untrustedMetadata = BackgroundWsService.notificationIntentFromRawLine(
         '{"type":"new_message","data":{"conversation_id":"conv-1","sender_username":"alice","mentioned_user_ids":["u-2"]}}',
         showSensitive: true,
         conversationNotificationPreferences: preferences,
-        currentUserId: 'u-1',
       );
-      final mentioned = BackgroundWsService.notificationIntentFromRawLine(
+      final matchingMetadata = BackgroundWsService.notificationIntentFromRawLine(
         '{"type":"new_message","data":{"conversation_id":"conv-1","sender_username":"alice","mentioned_user_ids":["u-1"]}}',
         showSensitive: true,
         conversationNotificationPreferences: preferences,
-        currentUserId: 'u-1',
       );
 
-      expect(unmentioned, isNull);
-      expect(mentioned, isNotNull);
+      expect(untrustedMetadata, isNull);
+      expect(matchingMetadata, isNull);
     });
 
     test('keyword rules can notify in mentions-only conversations', () {
@@ -225,9 +252,19 @@ void main() {
             keywords: ['deploy'],
           ),
         },
-        currentUserId: 'u-1',
-        mentionedUserIds: const ['u-2'],
         notificationText: 'The deploy is ready',
+      );
+
+      expect(shouldNotify, isTrue);
+    });
+
+    test('local decrypted mention state can notify in mentions-only chats', () {
+      final shouldNotify = shouldNotifyForConversation(
+        conversationId: 'conv-1',
+        preferences: {
+          'conv-1': const ConversationNotificationPreference.mentionsOnly(),
+        },
+        mentionedForCurrentUser: true,
       );
 
       expect(shouldNotify, isTrue);
@@ -244,7 +281,6 @@ void main() {
         shouldNotifyForConversation(
           conversationId: 'conv-1',
           preferences: {'conv-1': quiet},
-          currentUserId: 'u-1',
           now: duringQuietHours,
         ),
         isFalse,
@@ -253,7 +289,6 @@ void main() {
         shouldNotifyForConversation(
           conversationId: 'conv-1',
           preferences: {'conv-1': quiet.copyWith(priority: true)},
-          currentUserId: 'u-1',
           now: duringQuietHours,
         ),
         isTrue,
@@ -292,7 +327,6 @@ void main() {
             mutedUntil: DateTime.now().subtract(const Duration(minutes: 1)),
           ),
         },
-        currentUserId: 'u-1',
       );
 
       expect(intent, isNotNull);
@@ -338,7 +372,7 @@ void main() {
       expect(intent, isNull);
     });
 
-    test('mentions-only foreground push allows mentioned recipient', () {
+    test('mentions-only foreground push ignores server mention flags', () {
       const msg = RemoteMessage(
         data: {
           'type': 'new_message',
@@ -353,10 +387,9 @@ void main() {
         conversationNotificationPreferences: {
           'conv-1': const ConversationNotificationPreference.mentionsOnly(),
         },
-        currentUserId: 'u-1',
       );
 
-      expect(intent, isNotNull);
+      expect(intent, isNull);
     });
 
     test('maps call_offer into an incoming-call notification intent', () {

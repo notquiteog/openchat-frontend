@@ -8,6 +8,8 @@ import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
 
 import '../../models/conversation.dart';
+import '../../models/key_transparency_event.dart';
+import '../../models/key_trust_pin.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/key_provider.dart';
@@ -37,6 +39,9 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
   bool _loading = true;
   Map<String, dynamic> _security = const {};
   List<Map<String, dynamic>> _sessions = const [];
+  Map<String, KeyTrustPin> _keyPins = const {};
+  List<KeyTransparencyEvent> _keyEvents = const [];
+  MlsSignerStorage? _mlsSigner;
   String? _error;
 
   @override
@@ -56,6 +61,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
       _error = null;
     });
     try {
+      final user = context.read<AuthProvider>().currentUser;
       final biometricAvailable =
           await _auth.canCheckBiometrics || await _auth.isDeviceSupported();
       final results = await Future.wait<Object>([
@@ -64,6 +70,17 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
         api.getSecuritySettings(),
         api.listSessions(),
       ]);
+      final keyPins = await storage.getKeyTrustPins();
+      var keyEvents = <KeyTransparencyEvent>[];
+      MlsSignerStorage? mlsSigner;
+      if (user != null) {
+        try {
+          keyEvents = await api.getKeyTransparencyEvents(user.id);
+        } catch (_) {
+          keyEvents = const [];
+        }
+        mlsSigner = await storage.getMlsSigner(user.id);
+      }
       if (!mounted) return;
       setState(() {
         _biometricAvailable = biometricAvailable;
@@ -71,6 +88,9 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
         _appLockEnabled = results[1] as bool;
         _security = results[2] as Map<String, dynamic>;
         _sessions = results[3] as List<Map<String, dynamic>>;
+        _keyPins = keyPins;
+        _keyEvents = keyEvents;
+        _mlsSigner = mlsSigner;
         _loading = false;
       });
     } catch (e) {
@@ -80,6 +100,23 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
         _error = e.toString();
       });
     }
+  }
+
+  Future<void> _showKeyWarnings(List<KeyTrustPin> warnings) async {
+    if (warnings.isEmpty) return;
+    await GlassDialog.show<void>(
+      context: context,
+      title: 'Key replacement warnings',
+      message: warnings
+          .map((pin) => pin.warning ?? 'Unexplained key replacement')
+          .join('\n\n'),
+      actions: [
+        GlassDialogAction(
+          label: 'Close',
+          onPressed: () => Navigator.pop(context),
+        ),
+      ],
+    );
   }
 
   Future<void> _setBiometric(bool value) async {
@@ -416,6 +453,13 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
         .where((conversation) => !conversation.isEncrypted)
         .toList();
     final twoFactorEnabled = _security['two_factor_enabled'] as bool? ?? false;
+    final keyWarnings = _keyPins.values
+        .where((pin) => pin.warning != null && pin.warning!.trim().isNotEmpty)
+        .toList();
+    final latestKeyEvent = _keyEvents.isEmpty ? null : _keyEvents.last;
+    final mlsSignerSigned =
+        (_mlsSigner?.publicKey.trim().isNotEmpty ?? false) &&
+        (_mlsSigner?.signature.trim().isNotEmpty ?? false);
     final summary = evaluateTrustCenter(
       hasLocalKey: keys.hasKey,
       accountKeyExpired: user?.isKeyExpired ?? false,
@@ -428,6 +472,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
       notificationSensitiveContent: settings.notificationSensitiveContent,
       pushNotificationsEnabled: settings.pushNotificationsEnabled,
       unencryptedConversations: unencrypted.length,
+      keyTransparencyWarnings: keyWarnings.length,
     );
 
     return Scaffold(
@@ -495,6 +540,52 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                       onQr: () => _showFingerprintQr(keys.fingerprint!),
                     ),
                   ],
+                  const _TrustDivider(),
+                  _TrustRow(
+                    icon: Icons.account_tree_outlined,
+                    iconColor: latestKeyEvent == null
+                        ? Colors.orange
+                        : Colors.green,
+                    title: 'Key transparency log',
+                    subtitle: latestKeyEvent == null
+                        ? 'No account key event seen yet'
+                        : '${_keyEvents.length} event${_keyEvents.length == 1 ? '' : 's'}; latest ${_shortHash(latestKeyEvent.eventHash)}',
+                    trailing: _StatusPill(
+                      label: latestKeyEvent == null ? 'No log' : 'Logged',
+                      color: latestKeyEvent == null
+                          ? Colors.orange
+                          : Colors.green,
+                    ),
+                  ),
+                  if (keyWarnings.isNotEmpty) ...[
+                    const _TrustDivider(),
+                    _TrustRow(
+                      icon: Icons.report_gmailerrorred_outlined,
+                      iconColor: scheme.error,
+                      title: 'Unexplained key replacement',
+                      subtitle: keyWarnings.length == 1
+                          ? keyWarnings.first.warning
+                          : '${keyWarnings.length} pinned keys changed without a signed log event',
+                      trailing: _StatusPill(
+                        label: '${keyWarnings.length}',
+                        color: scheme.error,
+                      ),
+                      onTap: () => _showKeyWarnings(keyWarnings),
+                    ),
+                  ],
+                  const _TrustDivider(),
+                  _TrustRow(
+                    icon: Icons.hub_outlined,
+                    iconColor: mlsSignerSigned ? Colors.green : Colors.orange,
+                    title: 'MLS device key',
+                    subtitle: mlsSignerSigned
+                        ? 'Signed by your PGP identity key'
+                        : 'Created and signed when MLS is first used',
+                    trailing: _StatusPill(
+                      label: mlsSignerSigned ? 'Signed' : 'Pending',
+                      color: mlsSignerSigned ? Colors.green : Colors.orange,
+                    ),
+                  ),
                   const _TrustDivider(),
                   _TrustRow(
                     icon: Icons.qr_code_scanner_rounded,
@@ -679,7 +770,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                     icon: Icons.visibility_outlined,
                     title: 'Strict privacy',
                     subtitle:
-                        'Disable typing indicators and notification previews',
+                        'Disable typing, read receipts, link previews, and link opens',
                     value: settings.strictPrivacyMode,
                     onChanged: settings.setStrictPrivacyMode,
                   ),
@@ -1076,4 +1167,10 @@ String? _relativeTime(Object? value) {
   final parsed = DateTime.tryParse(value);
   if (parsed == null) return value;
   return timeago.format(parsed.toLocal());
+}
+
+String _shortHash(String hash) {
+  final normalized = hash.trim();
+  if (normalized.length <= 12) return normalized;
+  return normalized.substring(0, 12);
 }
