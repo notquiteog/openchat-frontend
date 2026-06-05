@@ -413,7 +413,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
     final fingerprintMatches =
         localFp.isNotEmpty && (accountFp.isEmpty || localFp == accountFp);
     final unencrypted = conversations
-        .where((conversation) => !conversation.encryptionEnabled)
+        .where((conversation) => !conversation.isEncrypted)
         .toList();
     final twoFactorEnabled = _security['two_factor_enabled'] as bool? ?? false;
     final summary = evaluateTrustCenter(

@@ -5,7 +5,8 @@ Open-source, end-to-end encrypted messenger with OpenPGP. Flutter client for the
 ## Features
 
 - **E2E encryption** — all messages encrypted/decrypted on-device using OpenPGP. ML-KEM-1024 + X448 is the default; Curve25519, RSA-4096, and other post-quantum composite key types are available. Private key never leaves the device.
-- **Multi-recipient group messages** — OpenChat stores one signed+encrypted PGP ciphertext per recipient inside a compact envelope.
+- **Multi-recipient group messages** — OpenChat stores anonymous PGP envelope slots, with sender identity and message type kept inside the encrypted signed body.
+- **MLS for large encrypted rooms** — OpenMLS uses the X-Wing hybrid post-quantum ciphersuite by default.
 - **Channels** — Telegram-style public broadcast channels.
 - **Audio & video calls** — WebRTC P2P, signaled via the backend WebSocket relay.
 - **File & media attachments** — AES-256-GCM client-side encryption before upload.

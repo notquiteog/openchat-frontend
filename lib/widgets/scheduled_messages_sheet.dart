@@ -10,6 +10,7 @@ import '../models/conversation.dart';
 import '../models/message.dart';
 import '../models/scheduled_message.dart';
 import '../services/api_service.dart';
+import '../services/mls_service.dart';
 import '../services/secure_storage_service.dart';
 import 'glass.dart';
 
@@ -101,8 +102,19 @@ class _ScheduledMessagesSheetState extends State<ScheduledMessagesSheet> {
     ScheduledMessage item,
     String privateKey,
   ) async {
-    if (!widget.conversation.encryptionEnabled) {
+    if (!widget.conversation.isEncrypted) {
       return item.copyWith(decryptedContent: item.encryptedPayload);
+    }
+    if (widget.conversation.usesMls) {
+      final raw = await context.read<MlsService>().decryptPayload(
+        api: context.read<ApiService>(),
+        conversation: widget.conversation,
+        encryptedPayload: item.encryptedPayload,
+      );
+      if (raw == null || raw.isEmpty) {
+        return item.copyWith(decryptionFailed: true);
+      }
+      return item.copyWith(decryptedContent: raw, decryptionFailed: false);
     }
     if (privateKey.isEmpty || item.encryptedPayload.isEmpty) return item;
 

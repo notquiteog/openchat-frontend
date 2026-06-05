@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:openpgp/openpgp.dart';
 
@@ -8,16 +9,16 @@ import 'package:openpgp/openpgp.dart';
 /// Key design:
 /// - Private key is NEVER sent to the server or stored unencrypted.
 /// - All encryption/decryption happens on-device in this service.
-/// - Outbound messages are stored as an OpenChat envelope with one
-///   signed+encrypted PGP ciphertext per recipient. This keeps decryptability
-///   independent of platform-specific multi-key keyring parsing and lets the
-///   sender decrypt their own messages after an app restart.
+/// - Outbound messages are stored as anonymous OpenChat envelope slots with one
+///   signed+encrypted PGP ciphertext per recipient key. This keeps
+///   decryptability independent of platform-specific multi-key keyring parsing
+///   and lets the sender decrypt their own messages after an app restart.
 class PgpService {
-  static const _envelopeKey = 'openchat_encrypted_envelope';
-  static const _envelopeVersion = 2;
+  static const _envelopeKey = 'pgp_envelope_v1';
+  static const _envelopeVersion = 1;
   static const _cipherKey = 'cipher';
   static const _cipherName = 'openpgp';
-  static const _recipientsKey = 'recipients';
+  static const _slotsKey = 'slots';
 
   /// Generate a new ECC key pair (Curve25519 + Ed25519).
   static Future<PgpKeyPair> generateKeyPair({
@@ -137,13 +138,12 @@ class PgpService {
   /// Encrypt a plaintext message for multiple recipients.
   ///
   /// [recipients] should include every active non-expired conversation member
-  /// (sender included), keyed by user ID with the member's current fingerprint.
+  /// (sender included), with the member's current fingerprint.
   ///
-  /// Always stores a compact OpenChat envelope containing one signed+encrypted
-  /// PGP message per recipient. Using the same envelope path for DMs and groups
-  /// avoids platform OpenPGP bridge keyring parsing limits that can omit later
-  /// recipients or the sender's own key, which makes messages undecryptable
-  /// after a restart.
+  /// Always stores a compact OpenChat envelope containing anonymous
+  /// signed+encrypted PGP slots. Using the same envelope path for DMs and groups
+  /// avoids platform OpenPGP bridge keyring parsing limits and keeps sender,
+  /// message type, and recipient IDs out of the server-visible envelope.
   static Future<String> encrypt({
     required String plaintext,
     required List<PgpRecipient> recipients,
@@ -202,25 +202,49 @@ class PgpService {
     required String signingPrivateKeyArmored,
     required String signingKeyPassphrase,
   }) async {
-    final encryptedRecipients = <String, Map<String, String>>{};
+    final slots = <Map<String, String>>[];
+    final paddedPlaintext = _padStructuredPlaintext(plaintext);
     for (final recipient in recipients) {
       final signer = Entity()
         ..privateKey = signingPrivateKeyArmored
         ..passphrase = signingKeyPassphrase;
-      encryptedRecipients[recipient.userId] = {
-        'key_fingerprint': recipient.keyFingerprint,
+      slots.add({
         'ciphertext': await OpenPGP.encrypt(
-          plaintext,
+          paddedPlaintext,
           recipient.publicKeyArmored,
           signed: signer,
         ),
-      };
+      });
     }
     return jsonEncode({
       _envelopeKey: _envelopeVersion,
       _cipherKey: _cipherName,
-      _recipientsKey: encryptedRecipients,
+      _slotsKey: slots,
     });
+  }
+
+  static String _padStructuredPlaintext(String plaintext) {
+    try {
+      final decoded = jsonDecode(plaintext);
+      if (decoded is! Map<String, dynamic>) return plaintext;
+      if (decoded['openchat_message'] != 1) return plaintext;
+      final currentSize = utf8.encode(plaintext).length;
+      const buckets = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536];
+      final target = buckets.firstWhere(
+        (bucket) => bucket > currentSize + 48,
+        orElse: () => 0,
+      );
+      if (target == 0) return plaintext;
+      final random = Random.secure();
+      final paddingBytes = max(16, ((target - currentSize) * 3 / 4).floor());
+      final padding = base64Url.encode(
+        List<int>.generate(paddingBytes, (_) => random.nextInt(256)),
+      );
+      decoded['_padding'] = padding;
+      return jsonEncode(decoded);
+    } catch (_) {
+      return plaintext;
+    }
   }
 
   /// Encrypt binary data (files, images) for multiple recipients.
@@ -324,16 +348,13 @@ class PgpService {
       if (decoded is! Map<String, dynamic>) return null;
       if (decoded[_envelopeKey] != _envelopeVersion) return null;
       if (decoded[_cipherKey] != _cipherName) return null;
-      final values = decoded[_recipientsKey];
-      if (values is! Map) return const [];
+      final values = decoded[_slotsKey];
+      if (values is! List) return const [];
       final ciphertexts = <String>[];
-      final keys = values.keys.map((key) => key.toString()).toList()..sort();
-      for (final key in keys) {
-        final recipient = values[key];
-        if (recipient is Map) {
-          final ciphertext = recipient['ciphertext'];
-          if (ciphertext is String) ciphertexts.add(ciphertext);
-        }
+      for (final slot in values) {
+        if (slot is! Map) continue;
+        final ciphertext = slot['ciphertext'];
+        if (ciphertext is String) ciphertexts.add(ciphertext);
       }
       return ciphertexts;
     } catch (_) {
@@ -375,6 +396,15 @@ class PgpService {
     } catch (_) {
       return false;
     }
+  }
+
+  static String senderProofData({
+    required String conversationId,
+    required String messageType,
+    required String payload,
+  }) {
+    final encodedPayload = base64Url.encode(utf8.encode(payload));
+    return 'openchat-pgp-sender-v1:$conversationId:$messageType:$encodedPayload';
   }
 
   /// Parse the fingerprint from an armored public key.

@@ -12,6 +12,7 @@ import '../providers/settings_provider.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
 import '../services/message_search_service.dart';
+import '../services/mls_service.dart';
 import '../services/notification_service.dart';
 import '../services/offline_outbox_service.dart';
 import '../services/secure_storage_service.dart';
@@ -81,6 +82,7 @@ class _PreparedEncryptedPayload {
   final int autoDeleteSeconds;
   final DateTime? autoDeleteExpiresAt;
   final String senderId;
+  final String? postToken;
 
   const _PreparedEncryptedPayload({
     required this.encryptedPayload,
@@ -91,6 +93,7 @@ class _PreparedEncryptedPayload {
     required this.autoDeleteSeconds,
     required this.autoDeleteExpiresAt,
     required this.senderId,
+    this.postToken,
   });
 }
 
@@ -99,6 +102,7 @@ class ChatProvider extends ChangeNotifier {
   final SecureStorageService _storage;
   final WebSocketService _ws;
   final SettingsProvider _settings;
+  final MlsService _mls;
   final MessageSearchService _search;
   final OfflineOutboxService _outbox;
 
@@ -141,7 +145,8 @@ class ChatProvider extends ChangeNotifier {
     this._api,
     this._storage,
     this._ws,
-    this._settings, {
+    this._settings,
+    this._mls, {
     MessageSearchService? searchService,
     OfflineOutboxService? outboxService,
   }) : _search = searchService ?? MessageSearchService(_storage),
@@ -274,7 +279,7 @@ class ChatProvider extends ChangeNotifier {
             next[c.id] = hydrated;
             continue;
           }
-          await _tryDecrypt(last, privateKey);
+          await _tryDecrypt(last, privateKey, conversation: c);
         }
         next[c.id] = hydrated;
       }
@@ -361,7 +366,7 @@ class ChatProvider extends ChangeNotifier {
     conv.archivedAt?.toIso8601String(),
     conv.ownerOnlyPost,
     conv.messageTtlSeconds,
-    conv.encryptionEnabled,
+    conv.encryptionMode,
     conv.unreadCount,
     conv.members.length,
     conv.lastMessage?.id,
@@ -401,7 +406,11 @@ class ChatProvider extends ChangeNotifier {
           _indexMessage(merged);
         } else {
           _hydrateMessageSender(msg);
-          await _tryDecrypt(msg, privateKey);
+          await _tryDecrypt(
+            msg,
+            privateKey,
+            conversation: _conversations[convID],
+          );
           await _syncLiveLocationShareFromMessage(msg);
           result.add(msg);
         }
@@ -427,7 +436,15 @@ class ChatProvider extends ChangeNotifier {
         _hydrateMessageSender(msg);
       }
       final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
-      await Future.wait(older.map((msg) => _tryDecrypt(msg, privateKey)));
+      await Future.wait(
+        older.map(
+          (msg) => _tryDecrypt(
+            msg,
+            privateKey,
+            conversation: _conversations[convID],
+          ),
+        ),
+      );
       for (final msg in older) {
         await _syncLiveLocationShareFromMessage(msg);
       }
@@ -679,17 +696,28 @@ class ChatProvider extends ChangeNotifier {
   Future<void> _deliverQueuedMessage(OfflineOutboxItem item) async {
     final data = item.data;
     final plaintext = data['plaintext_payload'] as String? ?? '';
-    final confirmed = await _api.sendMessage(
-      convID: item.conversationId,
-      encryptedPayload: data['encrypted_payload'] as String? ?? '',
-      signature: data['signature'] as String? ?? '',
-      messageType: data['message_type'] as String? ?? 'text',
-      replyTo: data['reply_to'] as String?,
-      attachmentId: data['attachment_id'] as String?,
-      topicId: data['topic_id'] as String?,
-      mentionedUserIds: _stringList(data['mentioned_user_ids']),
-      silent: data['silent'] as bool? ?? false,
-    );
+    final postToken = data['post_token'] as String?;
+    final confirmed = postToken != null && postToken.isNotEmpty
+        ? await _api.sendSealedPgpMessage(
+            convID: item.conversationId,
+            encryptedPayload: data['encrypted_payload'] as String? ?? '',
+            postToken: postToken,
+            replyTo: data['reply_to'] as String?,
+            attachmentId: data['attachment_id'] as String?,
+            topicId: data['topic_id'] as String?,
+            silent: data['silent'] as bool? ?? false,
+          )
+        : await _api.sendMessage(
+            convID: item.conversationId,
+            encryptedPayload: data['encrypted_payload'] as String? ?? '',
+            signature: data['signature'] as String? ?? '',
+            messageType: data['message_type'] as String? ?? 'text',
+            replyTo: data['reply_to'] as String?,
+            attachmentId: data['attachment_id'] as String?,
+            topicId: data['topic_id'] as String?,
+            mentionedUserIds: _stringList(data['mentioned_user_ids']),
+            silent: data['silent'] as bool? ?? false,
+          );
     _replacePendingWithConfirmed(
       convID: item.conversationId,
       pendingID: data['pending_message_id'] as String?,
@@ -922,7 +950,7 @@ class ChatProvider extends ChangeNotifier {
       type: attachment.messageType,
       encryptedPayload: plaintext,
       signature: '',
-      isEncrypted: conv.encryptionEnabled,
+      isEncrypted: conv.isEncrypted,
       autoDeleteSeconds: conv.messageTtlSeconds,
       autoDeleteExpiresAt: conv.messageTtlSeconds > 0
           ? now.add(Duration(seconds: conv.messageTtlSeconds))
@@ -951,7 +979,7 @@ class ChatProvider extends ChangeNotifier {
           'attachment': attachment.toMetadataJson(),
           'ciphertext_path': ciphertextPath,
           'caption': caption,
-          'is_encrypted': conv.encryptionEnabled,
+          'is_encrypted': conv.isEncrypted,
           'auto_delete_seconds': conv.messageTtlSeconds,
           if (pending.autoDeleteExpiresAt != null)
             'auto_delete_expires_at': pending.autoDeleteExpiresAt!
@@ -1189,7 +1217,6 @@ class ChatProvider extends ChangeNotifier {
   }) async {
     final conv = _conversations[convID];
     if (conv == null) return;
-    final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
     final list = _messages[convID] ?? [];
     final idx = list.indexWhere((m) => m.id == msgID);
     Message? original = idx != -1 ? list[idx] : null;
@@ -1199,23 +1226,20 @@ class ChatProvider extends ChangeNotifier {
     final String encrypted;
     final String signature;
     final String cleartextPayload;
-    if (conv.encryptionEnabled) {
-      if (privateKey.isEmpty) return;
-      final recipients = await _freshRecipientKeys(convID, conv);
-      if (recipients.isEmpty) return;
+    if (conv.usesMls) {
       cleartextPayload = _encryptedCleartextPayload(
         plaintextPayload: newPlaintext,
         messageType: editMessageType,
       );
-
-      encrypted = await PgpService.encrypt(
-        plaintext: cleartextPayload,
-        recipients: recipients,
-        signingPrivateKeyArmored: privateKey,
+      encrypted = await _mls.encryptPayload(
+        api: _api,
+        conversation: conv,
+        plaintextPayload: cleartextPayload,
       );
-      signature = await PgpService.sign(
-        data: '$convID:$encrypted',
-        privateKeyArmored: privateKey,
+      signature = '';
+    } else if (conv.usesPgp) {
+      throw const ChatSendException(
+        'Sealed PGP messages cannot be edited yet.',
       );
     } else {
       encrypted = newPlaintext;
@@ -1334,14 +1358,37 @@ class ChatProvider extends ChangeNotifier {
 
     final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
     final userID = await _storage.getUserID() ?? '';
-    if (conv.encryptionEnabled && privateKey.isEmpty) {
-      throw const ChatSendException(
-        'Your PGP key is locked or missing. Unlock or import it in Settings.',
-      );
-    }
     if (userID.isEmpty) {
       throw const ChatSendException(
         'Your session is incomplete. Sign in again.',
+      );
+    }
+    if (conv.usesMls) {
+      final cleartextPayload = _encryptedCleartextPayload(
+        plaintextPayload: plaintextPayload,
+        messageType: messageType,
+      );
+      final encrypted = await _mls.encryptPayload(
+        api: _api,
+        conversation: conv,
+        plaintextPayload: cleartextPayload,
+      );
+      return _PreparedEncryptedPayload(
+        encryptedPayload: encrypted,
+        signature: '',
+        cleartextPayload: cleartextPayload,
+        mentionedUserIds: const [],
+        isEncrypted: true,
+        autoDeleteSeconds: conv.messageTtlSeconds,
+        autoDeleteExpiresAt: conv.messageTtlSeconds > 0
+            ? DateTime.now().add(Duration(seconds: conv.messageTtlSeconds))
+            : null,
+        senderId: userID,
+      );
+    }
+    if (conv.usesPgp && privateKey.isEmpty) {
+      throw const ChatSendException(
+        'Your PGP key is locked or missing. Unlock or import it in Settings.',
       );
     }
     final mentionedUserIds = _mentionedUserIdsForPayload(
@@ -1351,7 +1398,7 @@ class ChatProvider extends ChangeNotifier {
       userID,
     );
 
-    if (!conv.encryptionEnabled) {
+    if (!conv.isEncrypted) {
       return _PreparedEncryptedPayload(
         encryptedPayload: plaintextPayload,
         signature: '',
@@ -1372,9 +1419,12 @@ class ChatProvider extends ChangeNotifier {
         'Could not load recipient keys. Refresh the chat and try again.',
       );
     }
-    final cleartextPayload = _encryptedCleartextPayload(
+    final cleartextPayload = await _signedPgpCleartextPayload(
+      convID: convID,
       plaintextPayload: plaintextPayload,
       messageType: messageType,
+      senderId: userID,
+      privateKey: privateKey,
     );
 
     final String encrypted;
@@ -1392,24 +1442,11 @@ class ChatProvider extends ChangeNotifier {
       throw ChatSendException('Encryption failed: $e');
     }
 
-    final sigData = '$convID:$encrypted';
-    final String signature;
-    try {
-      signature = await PgpService.sign(
-        data: sigData,
-        privateKeyArmored: privateKey,
-      ).timeout(const Duration(seconds: 30));
-    } on TimeoutException {
-      throw const ChatSendException(
-        'Signing timed out. Your stored key may be corrupted — try rotating it in Settings → PGP Keys.',
-      );
-    } catch (e) {
-      throw ChatSendException('Signing failed: $e');
-    }
+    final postToken = await _pgpPostToken(convID, privateKey);
 
     return _PreparedEncryptedPayload(
       encryptedPayload: encrypted,
-      signature: signature,
+      signature: '',
       cleartextPayload: cleartextPayload,
       mentionedUserIds: const [],
       isEncrypted: true,
@@ -1418,6 +1455,7 @@ class ChatProvider extends ChangeNotifier {
           ? DateTime.now().add(Duration(seconds: conv.messageTtlSeconds))
           : null,
       senderId: userID,
+      postToken: postToken,
     );
   }
 
@@ -1451,6 +1489,7 @@ class ChatProvider extends ChangeNotifier {
         convID: convID,
         encryptedPayload: prepared.encryptedPayload,
         signature: prepared.signature,
+        postToken: prepared.postToken,
         messageType: serverMessageType,
         replyTo: replyTo,
         attachmentId: attachmentId,
@@ -1495,6 +1534,7 @@ class ChatProvider extends ChangeNotifier {
         localMessageType: messageType,
         encryptedPayload: prepared.encryptedPayload,
         signature: prepared.signature,
+        postToken: prepared.postToken,
         replyTo: replyTo,
         attachmentId: attachmentId,
         topicId: topicId,
@@ -1508,17 +1548,27 @@ class ChatProvider extends ChangeNotifier {
     }
 
     try {
-      final confirmed = await _api.sendMessage(
-        convID: convID,
-        encryptedPayload: prepared.encryptedPayload,
-        signature: prepared.signature,
-        messageType: serverMessageType,
-        replyTo: replyTo,
-        attachmentId: attachmentId,
-        topicId: topicId,
-        mentionedUserIds: prepared.mentionedUserIds,
-        silent: silent,
-      );
+      final confirmed = conv.usesPgp
+          ? await _api.sendSealedPgpMessage(
+              convID: convID,
+              encryptedPayload: prepared.encryptedPayload,
+              postToken: prepared.postToken ?? '',
+              replyTo: replyTo,
+              attachmentId: attachmentId,
+              topicId: topicId,
+              silent: silent,
+            )
+          : await _api.sendMessage(
+              convID: convID,
+              encryptedPayload: prepared.encryptedPayload,
+              signature: prepared.signature,
+              messageType: serverMessageType,
+              replyTo: replyTo,
+              attachmentId: attachmentId,
+              topicId: topicId,
+              mentionedUserIds: prepared.mentionedUserIds,
+              silent: silent,
+            );
       _replacePendingWithConfirmed(
         convID: convID,
         pendingID: pending.id,
@@ -1536,6 +1586,7 @@ class ChatProvider extends ChangeNotifier {
           localMessageType: messageType,
           encryptedPayload: prepared.encryptedPayload,
           signature: prepared.signature,
+          postToken: prepared.postToken,
           replyTo: replyTo,
           attachmentId: attachmentId,
           topicId: topicId,
@@ -1584,6 +1635,7 @@ class ChatProvider extends ChangeNotifier {
     required String localMessageType,
     required String encryptedPayload,
     required String signature,
+    String? postToken,
     required List<String> mentionedUserIds,
     required bool isEncrypted,
     required int autoDeleteSeconds,
@@ -1604,6 +1656,7 @@ class ChatProvider extends ChangeNotifier {
         'plaintext_payload': plaintextPayload,
         'encrypted_payload': encryptedPayload,
         'signature': signature,
+        'post_token': ?postToken,
         'message_type': messageType,
         'local_message_type': localMessageType,
         'mentioned_user_ids': mentionedUserIds,
@@ -1753,6 +1806,88 @@ class ChatProvider extends ChangeNotifier {
     'type': messageType,
     'payload': plaintextPayload,
   });
+
+  Future<String> _signedPgpCleartextPayload({
+    required String convID,
+    required String plaintextPayload,
+    required String messageType,
+    required String senderId,
+    required String privateKey,
+  }) async {
+    final fingerprint = await _storage.getFingerprint() ?? '';
+    final signature = await PgpService.sign(
+      data: PgpService.senderProofData(
+        conversationId: convID,
+        messageType: messageType,
+        payload: plaintextPayload,
+      ),
+      privateKeyArmored: privateKey,
+    ).timeout(const Duration(seconds: 30));
+    return jsonEncode({
+      'openchat_message': 1,
+      'type': messageType,
+      'payload': plaintextPayload,
+      'sender': {
+        'id': senderId,
+        'key_fingerprint': fingerprint,
+        'signature': signature,
+      },
+    });
+  }
+
+  Future<String> _pgpPostToken(String convID, String privateKey) async {
+    final encrypted = await _api.getEncryptedPgpPostToken(convID);
+    final token = await PgpService.decrypt(
+      encryptedArmor: encrypted,
+      privateKeyArmored: privateKey,
+    );
+    await _storage.savePgpPostToken(convID, token);
+    return token;
+  }
+
+  Future<String?> _verifiedPgpSenderId(
+    String raw,
+    String convID,
+    Conversation? conversation,
+  ) async {
+    final proof = Message.senderProofFromRaw(raw);
+    if (proof == null) return null;
+    var conv = conversation ?? _conversations[convID];
+    var members = conv?.members ?? const <ConversationMember>[];
+    if (members.isEmpty) {
+      try {
+        members = await _api.getConversationMembers(convID);
+        if (conv != null) {
+          _conversations[convID] = conv.copyWith(members: members);
+        }
+      } catch (_) {
+        return null;
+      }
+    }
+    ConversationMember? sender;
+    for (final member in members) {
+      if (member.userId == proof.senderId) {
+        sender = member;
+        break;
+      }
+    }
+    final user = sender?.user;
+    if (user == null) return null;
+    if (user.keyFingerprint.toUpperCase() !=
+        proof.keyFingerprint.toUpperCase()) {
+      return null;
+    }
+    final ok = await PgpService.verify(
+      data: PgpService.senderProofData(
+        conversationId: convID,
+        messageType: proof.type,
+        payload: proof.payload,
+      ),
+      signatureArmor: proof.signature,
+      signerPublicKeyArmored: user.publicKey,
+    );
+    return ok ? proof.senderId : null;
+  }
 
   Future<bool> _sendEncryptedPayload({
     required String convID,
@@ -1994,8 +2129,8 @@ class ChatProvider extends ChangeNotifier {
   }
 
   /// Builds the recipient keyring from the server's latest membership and
-  /// public-key rows, keyed by user ID so two members with different keys that
-  /// happen to share the same key string don't silently merge into one PKESK.
+  /// public-key rows. User IDs are used only locally for deterministic
+  /// de-duplication; they are not written into the PGP envelope slots.
   ///
   /// Sending is strict: every non-expired member must have a key available, so
   /// we never create a sender-only envelope that other members can't decrypt.
@@ -2734,7 +2869,11 @@ class ChatProvider extends ChangeNotifier {
         (current.keyFingerprint.isEmpty && candidate.keyFingerprint.isNotEmpty);
   }
 
-  Future<void> _tryDecrypt(Message msg, String privateKey) async {
+  Future<void> _tryDecrypt(
+    Message msg,
+    String privateKey, {
+    Conversation? conversation,
+  }) async {
     if (msg.type == MessageType.poll) {
       msg.setDecryptedContent(msg.encryptedPayload);
       _indexMessage(msg);
@@ -2745,6 +2884,21 @@ class ChatProvider extends ChangeNotifier {
       _indexMessage(msg);
       return;
     }
+    final conv = conversation ?? _conversations[msg.conversationId];
+    if (conv?.usesMls == true) {
+      final raw = await _mls.decryptPayload(
+        api: _api,
+        conversation: conv!,
+        encryptedPayload: msg.encryptedPayload,
+      );
+      if (raw != null && raw.isNotEmpty) {
+        msg.setDecryptedContent(raw);
+        _indexMessage(msg);
+      } else {
+        msg.markDecryptionFailed();
+      }
+      return;
+    }
     if (privateKey.isEmpty) return;
     try {
       final raw = await PgpService.decrypt(
@@ -2752,7 +2906,17 @@ class ChatProvider extends ChangeNotifier {
         privateKeyArmored: privateKey,
       );
       if (raw.isNotEmpty) {
-        msg.setDecryptedContent(raw);
+        final verifiedSenderId = await _verifiedPgpSenderId(
+          raw,
+          msg.conversationId,
+          conv,
+        );
+        if (msg.sealedSender && verifiedSenderId == null) {
+          msg.markDecryptionFailed();
+          return;
+        }
+        msg.setDecryptedContent(raw, verifiedSenderId: verifiedSenderId);
+        _hydrateMessageSender(msg);
         _indexMessage(msg);
       } else {
         msg.markDecryptionFailed();

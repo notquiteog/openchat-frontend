@@ -13,6 +13,7 @@ import 'services/api_service.dart';
 import 'services/background_ws_service.dart';
 import 'services/call_service.dart';
 import 'services/desktop_startup_service.dart';
+import 'services/mls_service.dart';
 import 'services/notification_service.dart';
 import 'services/push_notification_service.dart';
 import 'services/secure_storage_service.dart';
@@ -120,12 +121,14 @@ class _Providers extends StatelessWidget {
     final storage = SecureStorageService();
     final api = ApiService(storage);
     final ws = WebSocketService(storage);
+    final mls = MlsService(storage);
     final callService = CallService(ws, iceServerLoader: api.getIceServers);
 
     return MultiProvider(
       providers: [
         Provider<SecureStorageService>.value(value: storage),
         Provider<ApiService>.value(value: api),
+        Provider<MlsService>.value(value: mls),
         ChangeNotifierProvider<WebSocketService>.value(value: ws),
         Provider<CallService>.value(value: callService),
         ChangeNotifierProvider(create: (_) => SettingsProvider()..load()),
@@ -135,7 +138,7 @@ class _Providers extends StatelessWidget {
         // create callback can read it via ctx.read<SettingsProvider>().
         ChangeNotifierProvider(
           create: (ctx) =>
-              ChatProvider(api, storage, ws, ctx.read<SettingsProvider>()),
+              ChatProvider(api, storage, ws, ctx.read<SettingsProvider>(), mls),
         ),
         ChangeNotifierProvider(create: (_) => CallProvider(callService)),
       ],

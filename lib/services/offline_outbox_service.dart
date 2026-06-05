@@ -106,17 +106,29 @@ class OfflineOutboxService {
   List<int>? _keyBytes;
 
   OfflineOutboxService(
-    this._storage, {
+    SecureStorageService storage, {
     String? storePath,
     String? attachmentDirPath,
     String storeFileName = 'offline_outbox.json',
     String attachmentDirName = 'offline_outbox_attachments',
     Future<List<int>> Function()? keyLoader,
-  }) : _storePath = storePath,
-       _attachmentDirPath = attachmentDirPath,
-       _storeFileName = storeFileName,
-       _attachmentDirName = attachmentDirName,
-       _keyLoader = keyLoader;
+  }) : this._(
+         storage,
+         storePath: storePath,
+         attachmentDirPath: attachmentDirPath,
+         storeFileName: storeFileName,
+         attachmentDirName: attachmentDirName,
+         keyLoader: keyLoader,
+       );
+
+  OfflineOutboxService._(
+    this._storage, {
+    this._storePath,
+    this._attachmentDirPath,
+    this._storeFileName = 'offline_outbox.json',
+    this._attachmentDirName = 'offline_outbox_attachments',
+    this._keyLoader,
+  });
 
   Future<List<OfflineOutboxItem>> list() => _readItems();
 

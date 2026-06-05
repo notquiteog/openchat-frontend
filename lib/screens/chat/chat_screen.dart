@@ -18,6 +18,7 @@ import '../../providers/chat_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/call_service.dart';
+import '../../services/mls_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/attachment_service.dart';
 import '../../utils/custom_emoji_payload.dart';
@@ -2345,9 +2346,7 @@ class _ChatScreenState extends State<ChatScreen> {
             if (!conv.isDM && canManageEncryption)
               _MenuTile(
                 icon: Icons.lock_outline_rounded,
-                label: conv.encryptionEnabled
-                    ? 'Turn encryption off'
-                    : 'Turn encryption on',
+                label: 'Encryption mode',
                 onTap: () {
                   Navigator.pop(context);
                   _setEncryption(context);
@@ -2971,39 +2970,61 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _setEncryption(BuildContext context) async {
     final api = context.read<ApiService>();
     final chat = context.read<ChatProvider>();
+    final mls = context.read<MlsService>();
     final messenger = ScaffoldMessenger.of(context);
-    final nextEnabled = !conv.encryptionEnabled;
-    final confirmed = await showDialog<bool>(
+    final selected = await showDialog<EncryptionMode>(
       context: context,
       builder: (ctx) => GlassAlertDialog(
-        title: Text(
-          nextEnabled ? 'Turn encryption on?' : 'Turn encryption off?',
-        ),
-        content: const Text(
-          'Changing encryption wipes all current messages in this chat for everyone.',
+        title: const Text('Encryption mode'),
+        content: SizedBox(
+          width: 360,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Changing encryption mode wipes all current messages in this chat for everyone.',
+              ),
+              const SizedBox(height: 12),
+              for (final mode in EncryptionMode.values)
+                ListTile(
+                  leading: Icon(
+                    mode == conv.encryptionMode
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                  ),
+                  title: Text(mode.shortLabel),
+                  dense: true,
+                  enabled: mode != conv.encryptionMode,
+                  onTap: mode == conv.encryptionMode
+                      ? null
+                      : () => Navigator.pop(ctx, mode),
+                ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
+            onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Wipe and change'),
           ),
         ],
       ),
     );
-    if (confirmed != true) return;
+    if (selected == null || selected == conv.encryptionMode) return;
     try {
-      await api.setEncryptionEnabled(conv.id, nextEnabled);
+      final bootstrap = selected == EncryptionMode.mls
+          ? await mls.createBootstrapForConversation(conv)
+          : null;
+      await api.setEncryptionMode(
+        conv.id,
+        selected.apiValue,
+        mlsBootstrap: bootstrap,
+      );
       await chat.loadConversations();
       await chat.loadMessages(conv.id);
       messenger.showSnackBar(
         SnackBar(
-          content: Text(
-            nextEnabled ? 'Encryption turned on' : 'Encryption turned off',
-          ),
+          content: Text('Encryption mode set to ${selected.shortLabel}'),
         ),
       );
     } catch (e) {

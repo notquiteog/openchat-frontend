@@ -54,11 +54,12 @@ class MessageSearchService {
   List<int>? _keyBytes;
 
   MessageSearchService(
-    this._storage, {
+    SecureStorageService storage, {
     String? databasePath,
     Future<List<int>> Function()? keyLoader,
-  }) : _databasePath = databasePath,
-       _keyLoader = keyLoader;
+  }) : this._(storage, databasePath: databasePath, keyLoader: keyLoader);
+
+  MessageSearchService._(this._storage, {this._databasePath, this._keyLoader});
 
   Future<void> indexMessage(
     Message message, {

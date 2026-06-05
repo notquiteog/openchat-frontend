@@ -239,8 +239,7 @@ class CallService {
     IceServer(url: 'stun:stun1.l.google.com:19302'),
   ];
 
-  CallService(this._ws, {Future<List<IceServer>> Function()? iceServerLoader})
-    : _iceServerLoader = iceServerLoader {
+  CallService(this._ws, {this._iceServerLoader}) {
     _wsSub = _ws.events.listen(_handleWsEvent);
   }
 

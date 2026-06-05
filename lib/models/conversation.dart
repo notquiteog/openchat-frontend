@@ -3,6 +3,30 @@ import 'user.dart';
 
 enum ConversationType { dm, group, channel }
 
+enum EncryptionMode { plaintext, pgp, mls }
+
+EncryptionMode encryptionModeFromJson(Object? raw) => switch (raw) {
+  'plaintext' => EncryptionMode.plaintext,
+  'mls' => EncryptionMode.mls,
+  _ => EncryptionMode.pgp,
+};
+
+extension EncryptionModeApi on EncryptionMode {
+  String get apiValue => switch (this) {
+    EncryptionMode.plaintext => 'plaintext',
+    EncryptionMode.pgp => 'pgp',
+    EncryptionMode.mls => 'mls',
+  };
+
+  String get shortLabel => switch (this) {
+    EncryptionMode.plaintext => 'None',
+    EncryptionMode.pgp => 'PGP',
+    EncryptionMode.mls => 'MLS',
+  };
+
+  bool get isEncrypted => this != EncryptionMode.plaintext;
+}
+
 class Conversation {
   final String id;
   final ConversationType type;
@@ -27,7 +51,7 @@ class Conversation {
 
   /// Disappearing-messages timer in seconds (0 = off).
   final int messageTtlSeconds;
-  final bool encryptionEnabled;
+  final EncryptionMode encryptionMode;
   final int slowModeSeconds;
   final bool joinApprovalRequired;
   final bool topicsEnabled;
@@ -55,7 +79,7 @@ class Conversation {
     this.antiSpamBlockMedia = false,
     this.antiSpamMentionLimit = 0,
     this.messageTtlSeconds = 0,
-    this.encryptionEnabled = true,
+    this.encryptionMode = EncryptionMode.pgp,
     this.slowModeSeconds = 0,
     this.joinApprovalRequired = false,
     this.topicsEnabled = false,
@@ -90,7 +114,7 @@ class Conversation {
     antiSpamBlockMedia: json['anti_spam_block_media'] as bool? ?? false,
     antiSpamMentionLimit: json['anti_spam_mention_limit'] as int? ?? 0,
     messageTtlSeconds: json['message_ttl_seconds'] as int? ?? 0,
-    encryptionEnabled: json['encryption_enabled'] as bool? ?? true,
+    encryptionMode: encryptionModeFromJson(json['encryption_mode']),
     slowModeSeconds: json['slow_mode_seconds'] as int? ?? 0,
     joinApprovalRequired: json['join_approval_required'] as bool? ?? false,
     topicsEnabled: json['topics_enabled'] as bool? ?? false,
@@ -111,6 +135,9 @@ class Conversation {
   bool get isDM => type == ConversationType.dm;
   bool get isChannel => type == ConversationType.channel;
   bool get isArchived => archivedAt != null;
+  bool get isEncrypted => encryptionMode.isEncrypted;
+  bool get usesPgp => encryptionMode == EncryptionMode.pgp;
+  bool get usesMls => encryptionMode == EncryptionMode.mls;
 
   /// "@handle" if set, otherwise the display name.
   String get atHandle => handle != null ? '@$handle' : (name ?? 'Channel');
@@ -156,7 +183,7 @@ class Conversation {
   /// All current members' public keys, with expired-key members filtered out.
   /// Used to build the multi-recipient envelope when sending a message — a
   /// member whose key has expired can't decrypt anyway, so encrypting to
-  /// their key would just waste a PKESK slot (and the key may be unusable
+  /// their key would just waste an envelope slot (and the key may be unusable
   /// entirely if the encryption subkey is gone).
   List<String> get memberPublicKeys => members
       .where((m) => m.user != null && !m.user!.isKeyExpired)
@@ -177,7 +204,7 @@ class Conversation {
     bool? antiSpamBlockLinks,
     bool? antiSpamBlockMedia,
     int? antiSpamMentionLimit,
-    bool? encryptionEnabled,
+    EncryptionMode? encryptionMode,
     int? slowModeSeconds,
     bool? joinApprovalRequired,
     bool? topicsEnabled,
@@ -200,7 +227,7 @@ class Conversation {
     antiSpamBlockMedia: antiSpamBlockMedia ?? this.antiSpamBlockMedia,
     antiSpamMentionLimit: antiSpamMentionLimit ?? this.antiSpamMentionLimit,
     messageTtlSeconds: messageTtlSeconds,
-    encryptionEnabled: encryptionEnabled ?? this.encryptionEnabled,
+    encryptionMode: encryptionMode ?? this.encryptionMode,
     slowModeSeconds: slowModeSeconds ?? this.slowModeSeconds,
     joinApprovalRequired: joinApprovalRequired ?? this.joinApprovalRequired,
     topicsEnabled: topicsEnabled ?? this.topicsEnabled,

@@ -410,7 +410,8 @@ class CallEventInfo {
 class Message {
   final String id;
   final String conversationId;
-  final String senderId;
+  String senderId;
+  final bool sealedSender;
   MessageType type;
 
   /// PGP-armored ciphertext — decrypted client-side using the local private key.
@@ -441,6 +442,7 @@ class Message {
     required this.id,
     required this.conversationId,
     required this.senderId,
+    this.sealedSender = false,
     required this.type,
     required this.encryptedPayload,
     required this.signature,
@@ -462,7 +464,8 @@ class Message {
   factory Message.fromJson(Map<String, dynamic> json) => Message(
     id: json['id'] as String,
     conversationId: json['conversation_id'] as String,
-    senderId: json['sender_id'] as String,
+    senderId: json['sender_id'] as String? ?? '',
+    sealedSender: json['sealed_sender'] as bool? ?? false,
     type: _parseType(json['message_type'] as String? ?? 'text'),
     encryptedPayload: json['encrypted_payload'] as String,
     signature: json['signature'] as String? ?? '',
@@ -491,11 +494,14 @@ class Message {
         : null,
   );
 
-  void setDecryptedContent(String raw) {
+  void setDecryptedContent(String raw, {String? verifiedSenderId}) {
     final wrapped = _tryParseOpenChatMessage(raw);
     if (wrapped != null) {
       type = _parseType(wrapped.type);
       raw = wrapped.payload;
+      if (verifiedSenderId != null && verifiedSenderId.isNotEmpty) {
+        senderId = verifiedSenderId;
+      }
     }
     if (type == MessageType.location) {
       final location = MessageLocation.tryParse(raw);
@@ -591,10 +597,36 @@ class Message {
       final type = decoded['type'];
       final payload = decoded['payload'];
       if (type is! String || payload is! String) return null;
-      return _OpenChatMessagePayload(type: type, payload: payload);
+      final sender = decoded['sender'];
+      return _OpenChatMessagePayload(
+        type: type,
+        payload: payload,
+        senderId: sender is Map ? sender['id'] as String? : null,
+        senderFingerprint: sender is Map
+            ? sender['key_fingerprint'] as String?
+            : null,
+        senderSignature: sender is Map ? sender['signature'] as String? : null,
+      );
     } catch (_) {
       return null;
     }
+  }
+
+  static OpenChatSenderProof? senderProofFromRaw(String raw) {
+    final wrapped = _tryParseOpenChatMessage(raw);
+    if (wrapped == null ||
+        wrapped.senderId == null ||
+        wrapped.senderFingerprint == null ||
+        wrapped.senderSignature == null) {
+      return null;
+    }
+    return OpenChatSenderProof(
+      type: wrapped.type,
+      payload: wrapped.payload,
+      senderId: wrapped.senderId!,
+      keyFingerprint: wrapped.senderFingerprint!,
+      signature: wrapped.senderSignature!,
+    );
   }
 
   Message copyWith({
@@ -611,6 +643,7 @@ class Message {
       id: id,
       conversationId: conversationId,
       senderId: senderId,
+      sealedSender: sealedSender,
       type: type,
       encryptedPayload: encryptedPayload ?? this.encryptedPayload,
       signature: signature ?? this.signature,
@@ -644,8 +677,33 @@ class Message {
 class _OpenChatMessagePayload {
   final String type;
   final String payload;
+  final String? senderId;
+  final String? senderFingerprint;
+  final String? senderSignature;
 
-  const _OpenChatMessagePayload({required this.type, required this.payload});
+  const _OpenChatMessagePayload({
+    required this.type,
+    required this.payload,
+    this.senderId,
+    this.senderFingerprint,
+    this.senderSignature,
+  });
+}
+
+class OpenChatSenderProof {
+  final String type;
+  final String payload;
+  final String senderId;
+  final String keyFingerprint;
+  final String signature;
+
+  const OpenChatSenderProof({
+    required this.type,
+    required this.payload,
+    required this.senderId,
+    required this.keyFingerprint,
+    required this.signature,
+  });
 }
 
 class Poll {

@@ -19,6 +19,7 @@ import '../../providers/chat_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/attachment_service.dart';
+import '../../services/mls_service.dart';
 import '../../services/offline_outbox_service.dart';
 import '../../services/secure_storage_service.dart';
 import '../../services/websocket_service.dart';
@@ -405,6 +406,7 @@ class _PreparedChannelPostPayload {
   final List<String> mentionedUserIds;
   final String senderId;
   final bool isEncrypted;
+  final String? postToken;
 
   const _PreparedChannelPostPayload({
     required this.encryptedPayload,
@@ -414,6 +416,7 @@ class _PreparedChannelPostPayload {
     required this.mentionedUserIds,
     required this.senderId,
     required this.isEncrypted,
+    this.postToken,
   });
 }
 
@@ -693,7 +696,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           data['plaintext_payload'] as String? ??
           '',
       signature: data['signature'] as String? ?? '',
-      isEncrypted: data['is_encrypted'] as bool? ?? channel.encryptionEnabled,
+      isEncrypted: data['is_encrypted'] as bool? ?? channel.isEncrypted,
       attachmentId: data['attachment_id'] as String?,
       silent: data['silent'] as bool? ?? false,
       createdAt: createdAt,
@@ -834,17 +837,37 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }
 
   Future<void> _deliverQueuedChannelPost(OfflineOutboxItem item) async {
+    final api = context.read<ApiService>();
     final data = item.data;
     final plaintext = data['plaintext_payload'] as String? ?? '';
-    final confirmed = await context.read<ApiService>().postToChannel(
-      chanID: item.conversationId,
-      encryptedPayload: data['encrypted_payload'] as String? ?? '',
-      signature: data['signature'] as String? ?? '',
-      messageType: data['message_type'] as String? ?? 'text',
-      attachmentId: data['attachment_id'] as String?,
-      mentionedUserIds: _stringList(data['mentioned_user_ids']),
-      silent: data['silent'] as bool? ?? false,
-    );
+    final encryptedPayload = data['encrypted_payload'] as String? ?? '';
+    final postToken = data['post_token'] as String?;
+    final isPgp = data['is_pgp'] as bool? ?? false;
+    final Message confirmed;
+    if (postToken != null && postToken.isNotEmpty) {
+      confirmed = await api.sendSealedPgpMessage(
+        convID: item.conversationId,
+        encryptedPayload: encryptedPayload,
+        postToken: postToken,
+        attachmentId: data['attachment_id'] as String?,
+        silent: data['silent'] as bool? ?? false,
+      );
+    } else {
+      if (isPgp) {
+        throw const ChatSendException(
+          'Queued PGP post is missing its sealed posting token.',
+        );
+      }
+      confirmed = await api.postToChannel(
+        chanID: item.conversationId,
+        encryptedPayload: encryptedPayload,
+        signature: data['signature'] as String? ?? '',
+        messageType: data['message_type'] as String? ?? 'text',
+        attachmentId: data['attachment_id'] as String?,
+        mentionedUserIds: _stringList(data['mentioned_user_ids']),
+        silent: data['silent'] as bool? ?? false,
+      );
+    }
     _replacePendingWithConfirmed(
       pendingID: data['pending_message_id'] as String?,
       confirmed: confirmed,
@@ -905,15 +928,23 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       plaintextPayload: plaintextPayload,
       messageType: messageType,
     );
-    final confirmed = await api.postToChannel(
-      chanID: channel.id,
-      encryptedPayload: prepared.encryptedPayload,
-      signature: prepared.signature,
-      messageType: prepared.serverMessageType,
-      attachmentId: attachmentId,
-      mentionedUserIds: prepared.mentionedUserIds,
-      silent: silent,
-    );
+    final confirmed = channel.usesPgp
+        ? await api.sendSealedPgpMessage(
+            convID: channel.id,
+            encryptedPayload: prepared.encryptedPayload,
+            postToken: prepared.postToken ?? '',
+            attachmentId: attachmentId,
+            silent: silent,
+          )
+        : await api.postToChannel(
+            chanID: channel.id,
+            encryptedPayload: prepared.encryptedPayload,
+            signature: prepared.signature,
+            messageType: prepared.serverMessageType,
+            attachmentId: attachmentId,
+            mentionedUserIds: prepared.mentionedUserIds,
+            silent: silent,
+          );
     _replacePendingWithConfirmed(
       pendingID: pendingID,
       confirmed: confirmed,
@@ -926,7 +957,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     required Message confirmed,
     required String plaintextPayload,
   }) {
-    confirmed.setDecryptedContent(plaintextPayload);
+    final proof = Message.senderProofFromRaw(plaintextPayload);
+    confirmed.setDecryptedContent(
+      plaintextPayload,
+      verifiedSenderId: proof?.senderId,
+    );
     ChatProvider.hydrateMessageSenderFromConversation(confirmed, channel);
     if (mounted) {
       context.read<ChatProvider>().indexLoadedMessage(confirmed);
@@ -1012,16 +1047,80 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       if (notify && mounted) setState(() {});
       return;
     }
+    if (channel.usesMls) {
+      final raw = await context.read<MlsService>().decryptPayload(
+        api: context.read<ApiService>(),
+        conversation: channel,
+        encryptedPayload: msg.encryptedPayload,
+      );
+      if (raw != null && raw.isNotEmpty) {
+        msg.setDecryptedContent(raw);
+        if (notify && mounted) setState(() {});
+      } else {
+        msg.markDecryptionFailed();
+      }
+      return;
+    }
+    if (privateKey.isEmpty) return;
     try {
       final raw = await PgpService.decrypt(
         encryptedArmor: msg.encryptedPayload,
         privateKeyArmored: privateKey,
       );
-      msg.setDecryptedContent(raw);
+      final verifiedSenderId = await _verifiedPgpSenderId(raw);
+      if (msg.sealedSender && verifiedSenderId == null) {
+        msg.markDecryptionFailed();
+        return;
+      }
+      msg.setDecryptedContent(raw, verifiedSenderId: verifiedSenderId);
+      ChatProvider.hydrateMessageSenderFromConversation(msg, channel);
       if (notify && mounted) setState(() {});
     } catch (_) {
       msg.markDecryptionFailed();
     }
+  }
+
+  Future<String?> _verifiedPgpSenderId(String raw) async {
+    final proof = Message.senderProofFromRaw(raw);
+    if (proof == null) return null;
+    var members = channel.members;
+    if (members.isEmpty) {
+      try {
+        members = await context.read<ApiService>().getConversationMembers(
+          channel.id,
+        );
+        if (mounted) {
+          setState(() => _channel = channel.copyWith(members: members));
+        } else {
+          _channel = channel.copyWith(members: members);
+        }
+      } catch (_) {
+        return null;
+      }
+    }
+    ConversationMember? sender;
+    for (final member in members) {
+      if (member.userId == proof.senderId) {
+        sender = member;
+        break;
+      }
+    }
+    final user = sender?.user;
+    if (user == null) return null;
+    if (user.keyFingerprint.toUpperCase() !=
+        proof.keyFingerprint.toUpperCase()) {
+      return null;
+    }
+    final ok = await PgpService.verify(
+      data: PgpService.senderProofData(
+        conversationId: channel.id,
+        messageType: proof.type,
+        payload: proof.payload,
+      ),
+      signatureArmor: proof.signature,
+      signerPublicKeyArmored: user.publicKey,
+    );
+    return ok ? proof.senderId : null;
   }
 
   Future<void> _subscribe() async {
@@ -1651,32 +1750,56 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   Future<void> _setEncryption() async {
     final api = context.read<ApiService>();
     final chat = context.read<ChatProvider>();
+    final mls = context.read<MlsService>();
     final messenger = ScaffoldMessenger.of(context);
-    final nextEnabled = !channel.encryptionEnabled;
-    final confirmed = await showDialog<bool>(
+    final selected = await showDialog<EncryptionMode>(
       context: context,
       builder: (ctx) => GlassAlertDialog(
-        title: Text(
-          nextEnabled ? 'Turn encryption on?' : 'Turn encryption off?',
-        ),
-        content: const Text(
-          'Changing encryption wipes all current posts in this channel for everyone.',
+        title: const Text('Encryption mode'),
+        content: SizedBox(
+          width: 360,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Changing encryption mode wipes all current posts in this channel for everyone.',
+              ),
+              const SizedBox(height: 12),
+              for (final mode in EncryptionMode.values)
+                ListTile(
+                  leading: Icon(
+                    mode == channel.encryptionMode
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                  ),
+                  title: Text(mode.shortLabel),
+                  dense: true,
+                  enabled: mode != channel.encryptionMode,
+                  onTap: mode == channel.encryptionMode
+                      ? null
+                      : () => Navigator.pop(ctx, mode),
+                ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
+            onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Wipe and change'),
           ),
         ],
       ),
     );
-    if (confirmed != true) return;
+    if (selected == null || selected == channel.encryptionMode) return;
     try {
-      await api.setEncryptionEnabled(channel.id, nextEnabled);
+      final bootstrap = selected == EncryptionMode.mls
+          ? await mls.createBootstrapForConversation(channel)
+          : null;
+      await api.setEncryptionMode(
+        channel.id,
+        selected.apiValue,
+        mlsBootstrap: bootstrap,
+      );
       final updated = await api.getChannel(channel.id);
       if (mounted) {
         setState(() {
@@ -1687,9 +1810,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       await chat.loadConversations();
       messenger.showSnackBar(
         SnackBar(
-          content: Text(
-            nextEnabled ? 'Encryption turned on' : 'Encryption turned off',
-          ),
+          content: Text('Encryption mode set to ${selected.shortLabel}'),
         ),
       );
     } catch (e) {
@@ -1872,7 +1993,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   ChannelSettingsAction.background => Icons.wallpaper_outlined,
                   ChannelSettingsAction.autoDelete => Icons.timer_outlined,
                   ChannelSettingsAction.encryption =>
-                    channel.encryptionEnabled
+                    channel.isEncrypted
                         ? Icons.lock_outline_rounded
                         : Icons.lock_open_outlined,
                   ChannelSettingsAction.deleteOwnMessages =>
@@ -1888,10 +2009,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   ChannelSettingsAction.background =>
                     'Set chat background (Premium)',
                   ChannelSettingsAction.autoDelete => 'Disappearing messages',
-                  ChannelSettingsAction.encryption =>
-                    channel.encryptionEnabled
-                        ? 'Turn encryption off'
-                        : 'Turn encryption on',
+                  ChannelSettingsAction.encryption => 'Encryption mode',
                   ChannelSettingsAction.deleteOwnMessages =>
                     'Delete my messages',
                 },
@@ -1971,6 +2089,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final api = context.read<ApiService>();
     final storage = context.read<SecureStorageService>();
     final auth = context.read<AuthProvider>();
+    final mls = context.read<MlsService>();
     final privateKey = await storage.getPrivateKey() ?? '';
     final userID = auth.currentUser?.id ?? await storage.getUserID() ?? '';
     if (userID.isEmpty) {
@@ -1988,7 +2107,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       currentUserId: userID,
     );
 
-    if (!channel.encryptionEnabled) {
+    if (!channel.isEncrypted) {
       return _PreparedChannelPostPayload(
         encryptedPayload: plaintextPayload,
         signature: '',
@@ -1997,6 +2116,27 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         mentionedUserIds: mentionedUserIds,
         senderId: userID,
         isEncrypted: false,
+      );
+    }
+
+    if (channel.usesMls) {
+      final cleartextPayload = _encryptedCleartextPayload(
+        plaintextPayload: plaintextPayload,
+        messageType: messageType,
+      );
+      final encrypted = await mls.encryptPayload(
+        api: api,
+        conversation: channel,
+        plaintextPayload: cleartextPayload,
+      );
+      return _PreparedChannelPostPayload(
+        encryptedPayload: encrypted,
+        signature: '',
+        cleartextPayload: cleartextPayload,
+        serverMessageType: 'text',
+        mentionedUserIds: const [],
+        senderId: userID,
+        isEncrypted: true,
       );
     }
 
@@ -2064,9 +2204,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         'Could not load recipient keys. Refresh the channel and try again.',
       );
     }
-    final cleartextPayload = _encryptedCleartextPayload(
+    final cleartextPayload = await _signedPgpCleartextPayload(
       plaintextPayload: plaintextPayload,
       messageType: messageType,
+      senderId: userID,
+      privateKey: privateKey,
     );
 
     final encrypted = await PgpService.encrypt(
@@ -2074,18 +2216,16 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       recipients: recipients,
       signingPrivateKeyArmored: privateKey,
     ).timeout(const Duration(seconds: 30));
-    final signature = await PgpService.sign(
-      data: '${channel.id}:$encrypted',
-      privateKeyArmored: privateKey,
-    ).timeout(const Duration(seconds: 30));
+    final postToken = await _pgpPostToken(privateKey);
     return _PreparedChannelPostPayload(
       encryptedPayload: encrypted,
-      signature: signature,
+      signature: '',
       cleartextPayload: cleartextPayload,
       serverMessageType: 'text',
       mentionedUserIds: const [],
       senderId: userID,
       isEncrypted: true,
+      postToken: postToken,
     );
   }
 
@@ -2098,6 +2238,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     required List<String> mentionedUserIds,
     required String senderId,
     required bool isEncrypted,
+    String? postToken,
     String? attachmentId,
     bool silent = false,
   }) async {
@@ -2115,10 +2256,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           'plaintext_payload': plaintextPayload,
           'encrypted_payload': encryptedPayload,
           'signature': signature,
+          'post_token': ?postToken,
           'message_type': messageType,
           if (isEncrypted) 'local_message_type': localMessageType,
           'mentioned_user_ids': mentionedUserIds,
           'is_encrypted': isEncrypted,
+          if (channel.usesPgp) 'is_pgp': true,
           'created_at': now.toUtc().toIso8601String(),
           'attachment_id': ?attachmentId,
           if (silent) 'silent': true,
@@ -2169,7 +2312,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           'attachment': attachment.toMetadataJson(),
           'ciphertext_path': ciphertextPath,
           'caption': caption,
-          'is_encrypted': channel.encryptionEnabled,
+          'is_encrypted': channel.isEncrypted,
           'created_at': now.toUtc().toIso8601String(),
           if (silent) 'silent': true,
         },
@@ -2240,6 +2383,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         mentionedUserIds: prepared.mentionedUserIds,
         senderId: prepared.senderId,
         isEncrypted: prepared.isEncrypted,
+        postToken: prepared.postToken,
         attachmentId: attachmentId,
         silent: silent,
       );
@@ -2251,16 +2395,25 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
 
     late final Message msg;
     try {
-      msg = await api.postToChannel(
-        chanID: channel.id,
-        encryptedPayload: prepared.encryptedPayload,
-        signature: prepared.signature,
-        messageType: prepared.serverMessageType,
-        attachmentId: attachmentId,
-        mentionedUserIds: prepared.mentionedUserIds,
-        silent: silent,
-        scheduledFor: scheduledFor,
-      );
+      msg = channel.usesPgp && scheduledFor == null
+          ? await api.sendSealedPgpMessage(
+              convID: channel.id,
+              encryptedPayload: prepared.encryptedPayload,
+              postToken: prepared.postToken ?? '',
+              attachmentId: attachmentId,
+              silent: silent,
+            )
+          : await api.postToChannel(
+              chanID: channel.id,
+              encryptedPayload: prepared.encryptedPayload,
+              signature: prepared.signature,
+              postToken: prepared.postToken,
+              messageType: prepared.serverMessageType,
+              attachmentId: attachmentId,
+              mentionedUserIds: prepared.mentionedUserIds,
+              silent: silent,
+              scheduledFor: scheduledFor,
+            );
     } catch (e) {
       if (scheduledFor == null && _shouldRetryOutboxError(e)) {
         await _queueChannelPost(
@@ -2272,6 +2425,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           mentionedUserIds: prepared.mentionedUserIds,
           senderId: prepared.senderId,
           isEncrypted: prepared.isEncrypted,
+          postToken: prepared.postToken,
           attachmentId: attachmentId,
           silent: silent,
         );
@@ -2290,7 +2444,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       }
       return;
     }
-    msg.setDecryptedContent(prepared.cleartextPayload);
+    final proof = Message.senderProofFromRaw(prepared.cleartextPayload);
+    msg.setDecryptedContent(
+      prepared.cleartextPayload,
+      verifiedSenderId: proof?.senderId,
+    );
+    ChatProvider.hydrateMessageSenderFromConversation(msg, channel);
     if (plaintextOverride == null) {
       unawaited(_settings.clearMessageDraft(channel.id));
     }
@@ -2340,6 +2499,46 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     'type': messageType,
     'payload': plaintextPayload,
   });
+
+  Future<String> _signedPgpCleartextPayload({
+    required String plaintextPayload,
+    required String messageType,
+    required String senderId,
+    required String privateKey,
+  }) async {
+    final fingerprint =
+        await context.read<SecureStorageService>().getFingerprint() ?? '';
+    final signature = await PgpService.sign(
+      data: PgpService.senderProofData(
+        conversationId: channel.id,
+        messageType: messageType,
+        payload: plaintextPayload,
+      ),
+      privateKeyArmored: privateKey,
+    ).timeout(const Duration(seconds: 30));
+    return jsonEncode({
+      'openchat_message': 1,
+      'type': messageType,
+      'payload': plaintextPayload,
+      'sender': {
+        'id': senderId,
+        'key_fingerprint': fingerprint,
+        'signature': signature,
+      },
+    });
+  }
+
+  Future<String> _pgpPostToken(String privateKey) async {
+    final api = context.read<ApiService>();
+    final storage = context.read<SecureStorageService>();
+    final encrypted = await api.getEncryptedPgpPostToken(channel.id);
+    final token = await PgpService.decrypt(
+      encryptedArmor: encrypted,
+      privateKeyArmored: privateKey,
+    );
+    await storage.savePgpPostToken(channel.id, token);
+    return token;
+  }
 
   String _formatSchedule(DateTime? when) {
     if (when == null) return '';

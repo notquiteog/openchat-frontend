@@ -13,6 +13,7 @@ import '../models/conversation.dart';
 import '../models/conversation_invite.dart';
 import '../models/link_preview.dart';
 import '../models/moderation_report.dart';
+import '../models/mls.dart';
 import '../models/scheduled_message.dart';
 import '../models/story.dart';
 import '../services/secure_storage_service.dart';
@@ -484,6 +485,7 @@ class ApiService {
     required String chanID,
     required String encryptedPayload,
     required String signature,
+    String? postToken,
     String messageType = 'text',
     String? attachmentId,
     List<String> mentionedUserIds = const [],
@@ -493,6 +495,7 @@ class ApiService {
     final resp = await _post('/api/v1/channels/$chanID/posts', {
       'encrypted_payload': encryptedPayload,
       'signature': signature,
+      'post_token': ?postToken,
       'message_type': messageType,
       'attachment_id': ?attachmentId,
       if (mentionedUserIds.isNotEmpty) 'mentioned_user_ids': mentionedUserIds,
@@ -546,6 +549,7 @@ class ApiService {
     required String convID,
     required String encryptedPayload,
     required String signature,
+    String? postToken,
     String messageType = 'text',
     String? replyTo,
     String? attachmentId,
@@ -557,6 +561,7 @@ class ApiService {
     final resp = await _post('/api/v1/conversations/$convID/messages', {
       'encrypted_payload': encryptedPayload,
       'signature': signature,
+      'post_token': ?postToken,
       'message_type': messageType,
       'reply_to': ?replyTo,
       'attachment_id': ?attachmentId,
@@ -567,6 +572,32 @@ class ApiService {
         'scheduled_for': scheduledFor.toUtc().toIso8601String(),
     });
     return Message.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<Message> sendSealedPgpMessage({
+    required String convID,
+    required String encryptedPayload,
+    required String postToken,
+    String? replyTo,
+    String? attachmentId,
+    String? topicId,
+    bool silent = false,
+  }) async {
+    final resp = await _post('/api/v1/conversations/$convID/sealed-messages', {
+      'encrypted_payload': encryptedPayload,
+      'post_token': postToken,
+      'reply_to': ?replyTo,
+      'attachment_id': ?attachmentId,
+      'topic_id': ?topicId,
+      if (silent) 'silent': true,
+    }, authenticated: false);
+    return Message.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<String> getEncryptedPgpPostToken(String convID) async {
+    final resp = await _get('/api/v1/conversations/$convID/pgp-post-token');
+    final data = resp['data'] as Map<String, dynamic>;
+    return data['encrypted_post_token'] as String;
   }
 
   Future<List<ScheduledMessage>> listScheduledMessages(
@@ -809,10 +840,32 @@ class ApiService {
     return LinkPreview.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
-  Future<void> setEncryptionEnabled(String convID, bool enabled) async {
+  Future<void> setEncryptionMode(
+    String convID,
+    String mode, {
+    MlsBootstrap? mlsBootstrap,
+  }) async {
     await _put('/api/v1/conversations/$convID/encryption', {
-      'enabled': enabled,
+      'mode': mode,
+      ...?mlsBootstrap?.toEncryptionJson(),
     });
+  }
+
+  Future<ConversationMlsState> getConversationMlsState(String convID) async {
+    final resp = await _get('/api/v1/conversations/$convID/mls');
+    return ConversationMlsState.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<ConversationMlsCommit> postConversationMlsCommit(
+    String convID,
+    String commitPayload, {
+    MlsBootstrap? nextState,
+  }) async {
+    final resp = await _post('/api/v1/conversations/$convID/mls/commits', {
+      'commit_payload': commitPayload,
+      ...?nextState?.toCommitJson(),
+    });
+    return ConversationMlsCommit.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
   Future<Message> editMessage({

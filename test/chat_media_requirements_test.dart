@@ -13,11 +13,11 @@ import 'package:openchat/widgets/conversation_encryption_status.dart';
 import 'package:openchat/widgets/message_bubble.dart';
 import 'package:openchat/widgets/message_image_layout.dart';
 
-Conversation _dmConversation({required bool encryptionEnabled}) {
+Conversation _dmConversation({required EncryptionMode encryptionMode}) {
   return Conversation(
     id: 'conv-1',
     type: ConversationType.dm,
-    encryptionEnabled: encryptionEnabled,
+    encryptionMode: encryptionMode,
     createdAt: DateTime.utc(2026, 1, 1),
     createdBy: 'user-a',
   );
@@ -75,28 +75,41 @@ Message _voiceMessage() {
 }
 
 void main() {
-  testWidgets('DM header shows encrypted/off status labels', (tester) async {
+  testWidgets('DM header shows encryption mode labels', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: ConversationEncryptionStatus(
-            conversation: _dmConversation(encryptionEnabled: true),
+            conversation: _dmConversation(encryptionMode: EncryptionMode.pgp),
           ),
         ),
       ),
     );
-    expect(find.text('Encrypted'), findsOneWidget);
+    expect(find.text('PGP'), findsOneWidget);
 
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: ConversationEncryptionStatus(
-            conversation: _dmConversation(encryptionEnabled: false),
+            conversation: _dmConversation(encryptionMode: EncryptionMode.mls),
           ),
         ),
       ),
     );
-    expect(find.text('Encryption off'), findsOneWidget);
+    expect(find.text('MLS'), findsOneWidget);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ConversationEncryptionStatus(
+            conversation: _dmConversation(
+              encryptionMode: EncryptionMode.plaintext,
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(find.text('None'), findsOneWidget);
   });
 
   test('desktop image layout is capped and advertises expand affordance', () {

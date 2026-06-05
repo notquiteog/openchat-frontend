@@ -1,10 +1,12 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openmls/openmls.dart';
 import 'package:openpgp/openpgp.dart';
 import 'package:openchat/crypto/pgp_service.dart';
 import 'package:openchat/models/message.dart';
 import 'package:openchat/models/user.dart';
+import 'package:openchat/services/mls_service.dart';
 import 'package:openchat/widgets/location_map_preview.dart';
 
 void main() {
@@ -25,6 +27,15 @@ void main() {
     });
   });
 
+  group('MLS options', () {
+    test('defaults to the strongest hybrid post-quantum ciphersuite', () {
+      expect(
+        MlsService.defaultCiphersuite,
+        MlsCiphersuite.mls256XwingChacha20Poly1305Sha256Ed25519,
+      );
+    });
+  });
+
   group('PgpService OpenChat envelope', () {
     test('uses envelope policy for DMs and groups', () {
       expect(PgpService.usesOpenChatEnvelopeForRecipientCount(0), isFalse);
@@ -39,12 +50,12 @@ void main() {
       const second =
           '-----BEGIN PGP MESSAGE-----\nsecond\n-----END PGP MESSAGE-----';
       final payload = jsonEncode({
-        'openchat_encrypted_envelope': 2,
+        'pgp_envelope_v1': 1,
         'cipher': 'openpgp',
-        'recipients': {
-          'user-b': {'key_fingerprint': 'BBB', 'ciphertext': second},
-          'user-a': {'key_fingerprint': 'AAA', 'ciphertext': first},
-        },
+        'slots': [
+          {'ciphertext': first},
+          {'ciphertext': second},
+        ],
       });
 
       expect(PgpService.isOpenChatEnvelope(payload), isTrue);

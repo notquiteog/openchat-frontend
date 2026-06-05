@@ -13,11 +13,12 @@ class ConversationEncryptionStatus extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final label =
-        conversation.encryptionEnabled ? 'Encrypted' : 'Encryption off';
-    final icon = conversation.encryptionEnabled
-        ? Icons.lock_outline
-        : Icons.lock_open_outlined;
+    final label = conversation.encryptionMode.shortLabel;
+    final icon = switch (conversation.encryptionMode) {
+      EncryptionMode.mls => Icons.enhanced_encryption_outlined,
+      EncryptionMode.pgp => Icons.lock_outline,
+      EncryptionMode.plaintext => Icons.lock_open_outlined,
+    };
     final resolvedColor = color ?? Colors.grey[400];
 
     return Row(
@@ -25,10 +26,7 @@ class ConversationEncryptionStatus extends StatelessWidget {
       children: [
         Icon(icon, size: 12, color: resolvedColor),
         const SizedBox(width: 3),
-        Text(
-          label,
-          style: TextStyle(fontSize: 11, color: resolvedColor),
-        ),
+        Text(label, style: TextStyle(fontSize: 11, color: resolvedColor)),
       ],
     );
   }

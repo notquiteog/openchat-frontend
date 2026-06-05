@@ -14,6 +14,13 @@ class SecureStorageStatus {
   const SecureStorageStatus.unavailable(this.warning) : available = false;
 }
 
+class MlsSignerStorage {
+  final String signerBytes;
+  final String publicKey;
+
+  const MlsSignerStorage({required this.signerBytes, required this.publicKey});
+}
+
 /// Manages secure storage of cryptographic keys and session tokens.
 ///
 /// Platform backing:
@@ -41,6 +48,11 @@ class SecureStorageService {
   static const _keyAppLockEnabled = 'app_lock_enabled';
   static const _keySearchIndexKey = 'search_index_key_v1';
   static const _keyOutboxKey = 'offline_outbox_key_v1';
+  static const _keyMlsEngineKeyPrefix = 'mls_engine_key_v1';
+  static const _keyMlsSignerBytesPrefix = 'mls_signer_bytes_v1';
+  static const _keyMlsSignerPublicKeyPrefix = 'mls_signer_public_key_v1';
+  static const _keyMlsCredentialIdentityPrefix = 'mls_credential_identity_v1';
+  static const _keyPgpPostTokenPrefix = 'pgp_post_token_v1';
   static const _keyStorageProbe = '_openchat_secure_storage_probe';
 
   static const linuxKeyringWarning =
@@ -131,6 +143,72 @@ class SecureStorageService {
     if (existing != null && existing.isNotEmpty) return existing;
     return _createRandomStorageKey(_keyOutboxKey);
   }
+
+  Future<String> getOrCreateMlsEngineKey(String userID) async {
+    final key = _scopedKey(_keyMlsEngineKeyPrefix, userID);
+    final existing = await _readOrNull(key);
+    if (existing != null && existing.isNotEmpty) return existing;
+    return _createRandomStorageKey(key);
+  }
+
+  Future<String> getOrCreateMlsCredentialIdentity(String userID) async {
+    final key = _scopedKey(_keyMlsCredentialIdentityPrefix, userID);
+    final existing = await _readOrNull(key);
+    if (existing != null && existing.isNotEmpty) return existing;
+    return _createRandomStorageKey(key);
+  }
+
+  Future<MlsSignerStorage?> getMlsSigner(String userID) async {
+    final signer = await _readOrNull(
+      _scopedKey(_keyMlsSignerBytesPrefix, userID),
+    );
+    final publicKey = await _readOrNull(
+      _scopedKey(_keyMlsSignerPublicKeyPrefix, userID),
+    );
+    if (signer == null ||
+        signer.isEmpty ||
+        publicKey == null ||
+        publicKey.isEmpty) {
+      return null;
+    }
+    return MlsSignerStorage(signerBytes: signer, publicKey: publicKey);
+  }
+
+  Future<void> saveMlsSigner({
+    required String userID,
+    required String signerBytes,
+    required String publicKey,
+  }) async {
+    await Future.wait([
+      _storage.write(
+        key: _scopedKey(_keyMlsSignerBytesPrefix, userID),
+        value: signerBytes,
+      ),
+      _storage.write(
+        key: _scopedKey(_keyMlsSignerPublicKeyPrefix, userID),
+        value: publicKey,
+      ),
+    ]);
+  }
+
+  Future<String?> getPgpPostToken(String conversationID) {
+    return _readOrNull(_scopedKey(_keyPgpPostTokenPrefix, conversationID));
+  }
+
+  Future<void> savePgpPostToken(String conversationID, String token) {
+    return _storage.write(
+      key: _scopedKey(_keyPgpPostTokenPrefix, conversationID),
+      value: token,
+    );
+  }
+
+  Future<void> deletePgpPostToken(String conversationID) {
+    return _storage.delete(
+      key: _scopedKey(_keyPgpPostTokenPrefix, conversationID),
+    );
+  }
+
+  String _scopedKey(String prefix, String userID) => '$prefix:$userID';
 
   Future<String> _createRandomStorageKey(String key) async {
     final random = Random.secure();
