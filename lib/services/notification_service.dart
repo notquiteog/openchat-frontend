@@ -518,7 +518,7 @@ class NotificationService {
       windows: WindowsNotificationDetails(),
     );
     final displayTitle = showSensitive ? title : 'OpenChat';
-    final displayBody = showSensitive ? body : 'You have a new message';
+    final displayBody = showSensitive ? body : 'New message';
     // One notification slot per conversation — updates in place rather than stacking.
     await _plugin.show(
       id: conversationId.hashCode,

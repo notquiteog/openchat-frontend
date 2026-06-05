@@ -677,6 +677,15 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                   const _TrustDivider(),
                   _TrustSwitchRow(
                     icon: Icons.visibility_outlined,
+                    title: 'Strict privacy',
+                    subtitle:
+                        'Disable typing indicators and notification previews',
+                    value: settings.strictPrivacyMode,
+                    onChanged: settings.setStrictPrivacyMode,
+                  ),
+                  const _TrustDivider(),
+                  _TrustSwitchRow(
+                    icon: Icons.visibility_outlined,
                     title: 'Sensitive notification content',
                     subtitle: 'Show sender and previews in notifications',
                     value: settings.notificationSensitiveContent,

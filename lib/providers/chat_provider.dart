@@ -2137,7 +2137,10 @@ class ChatProvider extends ChangeNotifier {
     return conv;
   }
 
-  void sendTyping(String convID) => _ws.sendTyping(convID);
+  void sendTyping(String convID) {
+    if (_settings.strictPrivacyMode) return;
+    _ws.sendTyping(convID);
+  }
 
   void setLocalReaction({
     required String convID,

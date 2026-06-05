@@ -164,6 +164,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kPushEnabled = 'push_notifications_enabled';
   static const _kWsBgEnabled = 'ws_background_enabled';
   static const _kNotifSensitive = 'notification_sensitive_content';
+  static const _kStrictPrivacyMode = 'strict_privacy_mode';
   static const _kLinkPreviewsEnabled = 'link_previews_enabled';
   static const _kReduceTransparency = 'reduce_transparency';
   static const _kSmartInboxFilter = 'smart_inbox_filter';
@@ -186,6 +187,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _pushEnabled = false;
   bool _wsBgEnabled = false;
   bool _notifSensitive = false;
+  bool _strictPrivacyMode = false;
   bool _linkPreviewsEnabled = true;
   bool _reduceTransparency = false;
   SmartInboxFilter _smartInboxFilter = SmartInboxFilter.all;
@@ -234,7 +236,11 @@ class SettingsProvider extends ChangeNotifier {
   bool get wsBackgroundEnabled => _wsBgEnabled;
 
   /// Show sender name + message preview in notifications. Off = generic "New message" text.
-  bool get notificationSensitiveContent => _notifSensitive;
+  bool get notificationSensitiveContent =>
+      _strictPrivacyMode ? false : _notifSensitive;
+
+  /// Local strict privacy mode disables presence-style metadata and sensitive previews.
+  bool get strictPrivacyMode => _strictPrivacyMode;
 
   /// Fetch link previews through the OpenChat proxy after local decryption.
   bool get linkPreviewsEnabled => _linkPreviewsEnabled;
@@ -257,6 +263,11 @@ class SettingsProvider extends ChangeNotifier {
       await _prefs!.setBool(_kWsBgEnabled, false);
     }
     _notifSensitive = _prefs!.getBool(_kNotifSensitive) ?? false;
+    _strictPrivacyMode = _prefs!.getBool(_kStrictPrivacyMode) ?? false;
+    if (_strictPrivacyMode && _notifSensitive) {
+      _notifSensitive = false;
+      await _prefs!.setBool(_kNotifSensitive, false);
+    }
     _linkPreviewsEnabled = _prefs!.getBool(_kLinkPreviewsEnabled) ?? true;
     _reduceTransparency = _prefs!.getBool(_kReduceTransparency) ?? false;
     _smartInboxFilter = smartInboxFilterFromName(
@@ -703,9 +714,25 @@ class SettingsProvider extends ChangeNotifier {
   }
 
   Future<void> setNotificationSensitiveContent(bool value) async {
+    if (_strictPrivacyMode && value) {
+      _notifSensitive = false;
+      notifyListeners();
+      await _prefs?.setBool(_kNotifSensitive, false);
+      return;
+    }
     _notifSensitive = value;
     notifyListeners();
     await _prefs?.setBool(_kNotifSensitive, value);
+  }
+
+  Future<void> setStrictPrivacyMode(bool value) async {
+    _strictPrivacyMode = value;
+    if (value) {
+      _notifSensitive = false;
+      await _prefs?.setBool(_kNotifSensitive, false);
+    }
+    notifyListeners();
+    await _prefs?.setBool(_kStrictPrivacyMode, value);
   }
 
   Future<void> setLinkPreviewsEnabled(bool value) async {

@@ -1259,6 +1259,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _GlassDivider(),
                 _GlassSwitchTile(
                   icon: Icons.visibility_outlined,
+                  title: 'Strict Privacy',
+                  subtitle: 'Hide typing indicators and notification previews',
+                  value: settings.strictPrivacyMode,
+                  onChanged: settings.setStrictPrivacyMode,
+                ),
+                _GlassDivider(),
+                _GlassSwitchTile(
+                  icon: Icons.visibility_outlined,
                   title: 'Show Sensitive Content',
                   subtitle: 'Show sender and preview in notifications',
                   value: settings.notificationSensitiveContent,

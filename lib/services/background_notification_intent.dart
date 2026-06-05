@@ -81,7 +81,7 @@ NotificationIntent? notificationIntentFromEvent({
       kind: NotificationIntentKind.message,
       notificationId: convId.hashCode,
       title: showSensitive && sender != null ? '@$sender' : 'OpenChat',
-      body: showSensitive ? 'New message' : 'You have a new message',
+      body: 'New message',
     );
   }
 
