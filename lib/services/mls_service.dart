@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -50,15 +51,39 @@ class MlsService {
     required String plaintextPayload,
   }) async {
     final joined = await _ensureJoined(api, conversation);
+    final paddedPlaintext = _padStructuredPlaintext(plaintextPayload);
     final encrypted = await joined.engine.createMessage(
       groupIdBytes: joined.groupId,
       signerBytes: joined.identity.signerBytes,
-      message: Uint8List.fromList(utf8.encode(plaintextPayload)),
+      message: Uint8List.fromList(utf8.encode(paddedPlaintext)),
     );
     return jsonEncode({
       'openchat_mls': 1,
       'ciphertext': base64Encode(encrypted.ciphertext),
     });
+  }
+
+  String _padStructuredPlaintext(String plaintext) {
+    try {
+      final decoded = jsonDecode(plaintext);
+      if (decoded is! Map<String, dynamic>) return plaintext;
+      if (decoded['openchat_message'] != 1) return plaintext;
+      final currentSize = utf8.encode(plaintext).length;
+      const buckets = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536];
+      final target = buckets.firstWhere(
+        (bucket) => bucket > currentSize + 48,
+        orElse: () => 0,
+      );
+      if (target == 0) return plaintext;
+      final random = Random.secure();
+      final paddingBytes = max(16, ((target - currentSize) * 3 / 4).floor());
+      decoded['_padding'] = base64Url.encode(
+        List<int>.generate(paddingBytes, (_) => random.nextInt(256)),
+      );
+      return jsonEncode(decoded);
+    } catch (_) {
+      return plaintext;
+    }
   }
 
   Future<String?> decryptPayload({

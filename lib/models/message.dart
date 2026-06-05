@@ -374,8 +374,13 @@ class ChatArtifact {
 
   final String kind;
   final Object? payload;
+  final Map<String, dynamic> metadata;
 
-  const ChatArtifact({required this.kind, required this.payload});
+  const ChatArtifact({
+    required this.kind,
+    required this.payload,
+    this.metadata = const {},
+  });
 
   String get legacyPayload {
     final value = payload;
@@ -397,6 +402,7 @@ class ChatArtifact {
     marker: version,
     'kind': kind,
     'payload': payload,
+    if (metadata.isNotEmpty) 'metadata': metadata,
   };
 
   String encode() => jsonEncode(toJson());
@@ -404,8 +410,13 @@ class ChatArtifact {
   static String encodePayload({
     required String kind,
     required Object? payload,
+    Map<String, dynamic> metadata = const {},
   }) {
-    return ChatArtifact(kind: kind, payload: payload).encode();
+    return ChatArtifact(
+      kind: kind,
+      payload: payload,
+      metadata: metadata,
+    ).encode();
   }
 
   static ChatArtifact? tryParse(String raw) {
@@ -415,7 +426,14 @@ class ChatArtifact {
       if (decoded[marker] != version) return null;
       final kind = decoded['kind'];
       if (kind is! String || kind.isEmpty) return null;
-      return ChatArtifact(kind: kind, payload: decoded['payload']);
+      final metadata = decoded['metadata'];
+      return ChatArtifact(
+        kind: kind,
+        payload: decoded['payload'],
+        metadata: metadata is Map
+            ? metadata.map((key, value) => MapEntry(key.toString(), value))
+            : const {},
+      );
     } catch (_) {
       return null;
     }
@@ -491,6 +509,7 @@ class Message {
   final String? topicId;
   final String? mediaGroupId;
   final bool silent;
+  final String? controlToken;
   final List<MessageReactionSummary> reactions;
   Poll? poll;
   final DateTime createdAt;
@@ -522,6 +541,7 @@ class Message {
     this.topicId,
     this.mediaGroupId,
     this.silent = false,
+    this.controlToken,
     this.reactions = const [],
     this.poll,
     required this.createdAt,
@@ -547,6 +567,7 @@ class Message {
     topicId: json['topic_id'] as String?,
     mediaGroupId: json['media_group_id'] as String?,
     silent: json['silent'] as bool? ?? false,
+    controlToken: json['control_token'] as String?,
     reactions: (json['reactions'] as List? ?? [])
         .map((e) => MessageReactionSummary.fromJson(e as Map<String, dynamic>))
         .toList(),
@@ -601,9 +622,19 @@ class Message {
   MessageContent? get content => _content;
   ChatArtifact? get artifact => _artifact;
   String? get decryptedPayload => _decryptedPayload;
+  String? get effectiveReplyTo => replyTo ?? _metadataString('reply_to');
+  String? get effectiveTopicId => topicId ?? _metadataString('topic_id');
+  String? get effectiveMediaGroupId =>
+      mediaGroupId ?? _metadataString('media_group_id');
   bool get isDecrypted => _content != null;
   bool get decryptionFailed => _decryptionFailed;
   bool get isEdited => editedAt != null;
+
+  String? _metadataString(String key) {
+    final value = _artifact?.metadata[key];
+    return value is String && value.isNotEmpty ? value : null;
+  }
+
   bool get hasAutoDelete =>
       autoDeleteSeconds > 0 && autoDeleteExpiresAt != null;
 
@@ -715,6 +746,7 @@ class Message {
     Poll? poll,
     DateTime? editedAt,
     User? sender,
+    String? controlToken,
   }) {
     final payloadChanged =
         encryptedPayload != null && encryptedPayload != this.encryptedPayload;
@@ -734,6 +766,7 @@ class Message {
       topicId: topicId,
       mediaGroupId: mediaGroupId,
       silent: silent,
+      controlToken: controlToken ?? this.controlToken,
       reactions: reactions ?? this.reactions,
       poll: poll ?? this.poll,
       createdAt: createdAt,

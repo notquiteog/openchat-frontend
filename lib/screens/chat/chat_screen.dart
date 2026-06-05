@@ -794,13 +794,13 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Message? _replyPreviewFor(Message msg, List<Message> messages) {
-    final replyTo = msg.replyTo;
+    final replyTo = msg.effectiveReplyTo;
     if (replyTo == null) return null;
     return messages.where((message) => message.id == replyTo).firstOrNull;
   }
 
   Future<void> _jumpToReply(Message msg) async {
-    final replyTo = msg.replyTo;
+    final replyTo = msg.effectiveReplyTo;
     if (replyTo == null) return;
     final chat = context.read<ChatProvider>();
     final found = await chat.ensureMessageLoaded(conv.id, replyTo);
@@ -1874,7 +1874,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                           onReactionTap: (emoji) =>
                                               _toggleReaction(msg, emoji),
                                           replyPreview: replyPreview,
-                                          onReplyTap: msg.replyTo == null
+                                          onReplyTap:
+                                              msg.effectiveReplyTo == null
                                               ? null
                                               : () => _jumpToReply(msg),
                                           isLiveLocationSharing:
@@ -2756,7 +2757,7 @@ class _ChatScreenState extends State<ChatScreen> {
             icon: Icons.reply_rounded,
             label: 'Reply',
           ),
-        if (msg.replyTo != null)
+        if (msg.effectiveReplyTo != null)
           const MessageActionSheetItem(
             value: 'jump_reply',
             icon: Icons.subdirectory_arrow_left_rounded,

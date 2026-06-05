@@ -716,7 +716,9 @@ class ApiService {
       'topic_id': ?topicId,
       if (silent) 'silent': true,
     }, authenticated: false);
-    return Message.fromJson(resp['data'] as Map<String, dynamic>);
+    final message = Message.fromJson(resp['data'] as Map<String, dynamic>);
+    await _saveSealedMessageControlFromMessage(convID, message);
+    return message;
   }
 
   Future<ScheduledMessage> scheduleSealedMessage({
@@ -912,7 +914,9 @@ class ApiService {
         conversationId: convID,
         scheduledId: scheduledID,
       );
-      return Message.fromJson(resp['data'] as Map<String, dynamic>);
+      final message = Message.fromJson(resp['data'] as Map<String, dynamic>);
+      await _saveSealedMessageControlFromMessage(convID, message);
+      return message;
     }
     final base = channel
         ? '/api/v1/channels/$convID/scheduled-posts'
@@ -980,29 +984,53 @@ class ApiService {
       if (decoded is! Map) return;
       final payload = Map<String, dynamic>.from(decoded);
       if (payload['openchat_self_state'] != 1) return;
-      if (payload['kind'] != 'sealed_schedule_control') return;
+      final kind = payload['kind'];
 
       final conversationId = payload['conversation_id'] as String? ?? '';
-      final scheduledId = payload['scheduled_id'] as String? ?? '';
-      if (conversationId.isEmpty || scheduledId.isEmpty) return;
+      if (conversationId.isEmpty) return;
 
-      switch (payload['operation']) {
-        case 'upsert':
-          final controlToken = payload['control_token'] as String? ?? '';
-          if (controlToken.isNotEmpty) {
-            await _storage.saveSealedScheduleControlToken(
+      if (kind == 'sealed_schedule_control') {
+        final scheduledId = payload['scheduled_id'] as String? ?? '';
+        if (scheduledId.isEmpty) return;
+        switch (payload['operation']) {
+          case 'upsert':
+            final controlToken = payload['control_token'] as String? ?? '';
+            if (controlToken.isNotEmpty) {
+              await _storage.saveSealedScheduleControlToken(
+                conversationId,
+                scheduledId,
+                controlToken,
+              );
+            }
+            break;
+          case 'delete':
+            await _storage.deleteSealedScheduleControlToken(
               conversationId,
               scheduledId,
-              controlToken,
             );
-          }
-          break;
-        case 'delete':
-          await _storage.deleteSealedScheduleControlToken(
-            conversationId,
-            scheduledId,
-          );
-          break;
+            break;
+        }
+      } else if (kind == 'sealed_message_control') {
+        final messageId = payload['message_id'] as String? ?? '';
+        if (messageId.isEmpty) return;
+        switch (payload['operation']) {
+          case 'upsert':
+            final controlToken = payload['control_token'] as String? ?? '';
+            if (controlToken.isNotEmpty) {
+              await _storage.saveSealedMessageControlToken(
+                conversationId,
+                messageId,
+                controlToken,
+              );
+            }
+            break;
+          case 'delete':
+            await _storage.deleteSealedMessageControlToken(
+              conversationId,
+              messageId,
+            );
+            break;
+        }
       }
     } catch (_) {
       return;
@@ -1021,6 +1049,50 @@ class ApiService {
       'operation': operation,
       'conversation_id': conversationId,
       'scheduled_id': scheduledId,
+      'created_at': DateTime.now().toUtc().toIso8601String(),
+      if (controlToken != null && controlToken.isNotEmpty)
+        'control_token': controlToken,
+    };
+    final encrypted = await _encryptSelfStatePayload(payload);
+    if (encrypted == null) return;
+    try {
+      await appendSelfStateLog(encrypted);
+    } catch (_) {
+      return;
+    }
+  }
+
+  Future<void> _saveSealedMessageControlFromMessage(
+    String conversationId,
+    Message message,
+  ) async {
+    final controlToken = message.controlToken;
+    if (controlToken == null || controlToken.isEmpty) return;
+    await _storage.saveSealedMessageControlToken(
+      conversationId,
+      message.id,
+      controlToken,
+    );
+    await _appendSealedMessageControlEvent(
+      operation: 'upsert',
+      conversationId: conversationId,
+      messageId: message.id,
+      controlToken: controlToken,
+    );
+  }
+
+  Future<void> _appendSealedMessageControlEvent({
+    required String operation,
+    required String conversationId,
+    required String messageId,
+    String? controlToken,
+  }) async {
+    final payload = <String, dynamic>{
+      'openchat_self_state': 1,
+      'kind': 'sealed_message_control',
+      'operation': operation,
+      'conversation_id': conversationId,
+      'message_id': messageId,
       'created_at': DateTime.now().toUtc().toIso8601String(),
       if (controlToken != null && controlToken.isNotEmpty)
         'control_token': controlToken,
@@ -1075,7 +1147,9 @@ class ApiService {
       'allows_revoting': allowsRevoting,
       if (silent) 'silent': true,
     });
-    return Message.fromJson(resp['data'] as Map<String, dynamic>);
+    final message = Message.fromJson(resp['data'] as Map<String, dynamic>);
+    await _saveSealedMessageControlFromMessage(convID, message);
+    return message;
   }
 
   Future<Message> createEncryptedPoll({
@@ -1299,9 +1373,19 @@ class ApiService {
     required String encryptedPayload,
     required String signature,
   }) async {
+    var controlToken = await _storage.getSealedMessageControlToken(
+      convID,
+      msgID,
+    );
+    controlToken ??= await _storage.getSealedScheduleControlToken(
+      convID,
+      msgID,
+    );
     final resp = await _put('/api/v1/conversations/$convID/messages/$msgID', {
       'encrypted_payload': encryptedPayload,
       'signature': signature,
+      if (controlToken != null && controlToken.isNotEmpty)
+        'control_token': controlToken,
     });
     return Message.fromJson(resp['data'] as Map<String, dynamic>);
   }

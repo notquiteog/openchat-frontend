@@ -64,6 +64,7 @@ class SecureStorageService {
   static const _keyMlsCredentialIdentityPrefix = 'mls_credential_identity_v1';
   static const _keyPgpPostTokenPrefix = 'pgp_post_token_v1';
   static const _keySealedScheduleControlsPrefix = 'sealed_schedule_controls_v1';
+  static const _keySealedMessageControlsPrefix = 'sealed_message_controls_v1';
   static const _keySelfStateLogSequence = 'self_state_log_sequence_v1';
   static const _keyStorageProbe = '_openchat_secure_storage_probe';
 
@@ -318,6 +319,60 @@ class SecureStorageService {
     final tokens = await getSealedScheduleControlTokens(conversationID);
     tokens.remove(scheduledID);
     final key = _scopedKey(_keySealedScheduleControlsPrefix, conversationID);
+    if (tokens.isEmpty) {
+      await _storage.delete(key: key);
+    } else {
+      await _storage.write(key: key, value: jsonEncode(tokens));
+    }
+  }
+
+  Future<Map<String, String>> getSealedMessageControlTokens(
+    String conversationID,
+  ) async {
+    final raw = await _readOrNull(
+      _scopedKey(_keySealedMessageControlsPrefix, conversationID),
+    );
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return {};
+      return decoded.map(
+        (key, value) => MapEntry(key.toString(), value.toString()),
+      )..removeWhere((key, value) => key.isEmpty || value.isEmpty);
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<String?> getSealedMessageControlToken(
+    String conversationID,
+    String messageID,
+  ) async {
+    final tokens = await getSealedMessageControlTokens(conversationID);
+    return tokens[messageID];
+  }
+
+  Future<void> saveSealedMessageControlToken(
+    String conversationID,
+    String messageID,
+    String token,
+  ) async {
+    if (conversationID.isEmpty || messageID.isEmpty || token.isEmpty) return;
+    final tokens = await getSealedMessageControlTokens(conversationID);
+    tokens[messageID] = token;
+    await _storage.write(
+      key: _scopedKey(_keySealedMessageControlsPrefix, conversationID),
+      value: jsonEncode(tokens),
+    );
+  }
+
+  Future<void> deleteSealedMessageControlToken(
+    String conversationID,
+    String messageID,
+  ) async {
+    final tokens = await getSealedMessageControlTokens(conversationID);
+    tokens.remove(messageID);
+    final key = _scopedKey(_keySealedMessageControlsPrefix, conversationID);
     if (tokens.isEmpty) {
       await _storage.delete(key: key);
     } else {

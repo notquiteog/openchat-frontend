@@ -731,9 +731,9 @@ class ChatProvider extends ChangeNotifier {
         convID: item.conversationId,
         encryptedPayload: data['encrypted_payload'] as String? ?? '',
         postToken: postToken,
-        replyTo: data['reply_to'] as String?,
+        replyTo: null,
         attachmentId: data['attachment_id'] as String?,
-        topicId: data['topic_id'] as String?,
+        topicId: null,
         silent: data['silent'] as bool? ?? false,
       );
     } else {
@@ -833,6 +833,8 @@ class ChatProvider extends ChangeNotifier {
       convID: convID,
       plaintextPayload: plaintextPayload,
       messageType: messageType,
+      replyTo: replyTo,
+      topicId: topicId,
     );
     final confirmed = await _api.sendMessage(
       convID: convID,
@@ -1421,21 +1423,19 @@ class ChatProvider extends ChangeNotifier {
     final String encrypted;
     final String signature;
     final String cleartextPayload;
-    if (conv.usesMls) {
-      cleartextPayload = _encryptedCleartextPayload(
-        plaintextPayload: _chatArtifactPayload(editMessageType, newPlaintext),
+    if (conv.isEncrypted) {
+      final prepared = await _prepareEncryptedPayload(
+        convID: convID,
+        plaintextPayload: newPlaintext,
         messageType: editMessageType,
+        replyTo: original?.effectiveReplyTo,
+        topicId: original?.effectiveTopicId,
+        mediaGroupId: original?.effectiveMediaGroupId,
+        includePostToken: false,
       );
-      encrypted = await _mls.encryptPayload(
-        api: _api,
-        conversation: conv,
-        plaintextPayload: cleartextPayload,
-      );
-      signature = '';
-    } else if (conv.usesPgp) {
-      throw const ChatSendException(
-        'Sealed PGP messages cannot be edited yet.',
-      );
+      encrypted = prepared.encryptedPayload;
+      signature = prepared.signature;
+      cleartextPayload = prepared.cleartextPayload;
     } else {
       encrypted = newPlaintext;
       signature = '';
@@ -1543,6 +1543,10 @@ class ChatProvider extends ChangeNotifier {
     required String convID,
     required String plaintextPayload,
     required String messageType,
+    String? replyTo,
+    String? topicId,
+    String? mediaGroupId,
+    bool includePostToken = true,
   }) async {
     final conv = _conversations[convID];
     if (conv == null) {
@@ -1567,6 +1571,9 @@ class ChatProvider extends ChangeNotifier {
       final artifactPayload = _chatArtifactPayload(
         messageType,
         plaintextPayload,
+        replyTo: replyTo,
+        topicId: topicId,
+        mediaGroupId: mediaGroupId,
       );
       final cleartextPayload = await _signedPgpCleartextPayload(
         convID: convID,
@@ -1590,7 +1597,9 @@ class ChatProvider extends ChangeNotifier {
             ? DateTime.now().add(Duration(seconds: conv.messageTtlSeconds))
             : null,
         senderId: userID,
-        postToken: await _sealedPostToken(convID, privateKey),
+        postToken: includePostToken
+            ? await _sealedPostToken(convID, privateKey)
+            : null,
       );
     }
     if (conv.usesPgp && privateKey.isEmpty) {
@@ -1618,7 +1627,13 @@ class ChatProvider extends ChangeNotifier {
         'Could not load recipient keys. Refresh the chat and try again.',
       );
     }
-    final artifactPayload = _chatArtifactPayload(messageType, plaintextPayload);
+    final artifactPayload = _chatArtifactPayload(
+      messageType,
+      plaintextPayload,
+      replyTo: replyTo,
+      topicId: topicId,
+      mediaGroupId: mediaGroupId,
+    );
     final cleartextPayload = await _signedPgpCleartextPayload(
       convID: convID,
       plaintextPayload: artifactPayload,
@@ -1642,7 +1657,9 @@ class ChatProvider extends ChangeNotifier {
       throw ChatSendException('Encryption failed: $e');
     }
 
-    final postToken = await _sealedPostToken(convID, privateKey);
+    final postToken = includePostToken
+        ? await _sealedPostToken(convID, privateKey)
+        : null;
 
     return _PreparedEncryptedPayload(
       encryptedPayload: encrypted,
@@ -1680,6 +1697,8 @@ class ChatProvider extends ChangeNotifier {
       convID: convID,
       plaintextPayload: plaintextPayload,
       messageType: messageType,
+      replyTo: replyTo,
+      topicId: topicId,
     );
     final serverMessageType = prepared.isEncrypted ? 'text' : messageType;
 
@@ -1690,9 +1709,9 @@ class ChatProvider extends ChangeNotifier {
           encryptedPayload: prepared.encryptedPayload,
           postToken: prepared.postToken ?? '',
           scheduledFor: scheduledFor,
-          replyTo: replyTo,
+          replyTo: null,
           attachmentId: attachmentId,
-          topicId: topicId,
+          topicId: null,
           silent: silent,
         );
       } else {
@@ -1762,9 +1781,9 @@ class ChatProvider extends ChangeNotifier {
               convID: convID,
               encryptedPayload: prepared.encryptedPayload,
               postToken: prepared.postToken ?? '',
-              replyTo: replyTo,
+              replyTo: null,
               attachmentId: attachmentId,
-              topicId: topicId,
+              topicId: null,
               silent: silent,
             )
           : await _api.sendMessage(
@@ -1989,16 +2008,13 @@ class ChatProvider extends ChangeNotifier {
     };
   }
 
-  String _encryptedCleartextPayload({
-    required String plaintextPayload,
-    required String messageType,
-  }) => jsonEncode({
-    'openchat_message': 1,
-    'type': messageType,
-    'payload': plaintextPayload,
-  });
-
-  String _chatArtifactPayload(String kind, String plaintextPayload) {
+  String _chatArtifactPayload(
+    String kind,
+    String plaintextPayload, {
+    String? replyTo,
+    String? topicId,
+    String? mediaGroupId,
+  }) {
     if (ChatArtifact.tryParse(plaintextPayload) != null) {
       return plaintextPayload;
     }
@@ -2007,7 +2023,17 @@ class ChatProvider extends ChangeNotifier {
       final decoded = jsonDecode(plaintextPayload);
       if (decoded is Map || decoded is List) payload = decoded;
     } catch (_) {}
-    return ChatArtifact.encodePayload(kind: kind, payload: payload);
+    final metadata = <String, dynamic>{
+      if (replyTo != null && replyTo.isNotEmpty) 'reply_to': replyTo,
+      if (topicId != null && topicId.isNotEmpty) 'topic_id': topicId,
+      if (mediaGroupId != null && mediaGroupId.isNotEmpty)
+        'media_group_id': mediaGroupId,
+    };
+    return ChatArtifact.encodePayload(
+      kind: kind,
+      payload: payload,
+      metadata: metadata,
+    );
   }
 
   Future<String> _signedPgpCleartextPayload({

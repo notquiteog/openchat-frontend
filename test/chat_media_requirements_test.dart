@@ -306,6 +306,32 @@ void main() {
     expect(msg.encryptedPayload, isNot(contains('Dinner')));
   });
 
+  test('chat artifact metadata carries encrypted reply pointers', () {
+    final msg = Message(
+      id: 'reply-msg-1',
+      conversationId: 'conv-1',
+      senderId: '',
+      sealedSender: true,
+      type: MessageType.text,
+      encryptedPayload: 'cipher',
+      signature: '',
+      createdAt: DateTime.utc(2026, 1, 1),
+    );
+    final artifact = ChatArtifact.encodePayload(
+      kind: 'text',
+      payload: 'hello',
+      metadata: {'reply_to': 'parent-msg-1', 'topic_id': 'topic-1'},
+    );
+
+    msg.setDecryptedContent(
+      jsonEncode({'openchat_message': 1, 'type': 'text', 'payload': artifact}),
+    );
+
+    expect(msg.replyTo, isNull);
+    expect(msg.effectiveReplyTo, 'parent-msg-1');
+    expect(msg.effectiveTopicId, 'topic-1');
+  });
+
   test(
     'encrypted attachment uploads register opaque server metadata',
     () async {

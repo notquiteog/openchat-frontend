@@ -137,7 +137,7 @@ class MessageBubble extends StatelessWidget {
                   : CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (message.replyTo != null)
+                if (message.effectiveReplyTo != null)
                   _ReplyContextPreview(
                     message: replyPreview,
                     isMe: isMe,

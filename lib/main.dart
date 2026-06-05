@@ -28,12 +28,9 @@ import 'utils/local_conversation_preferences.dart';
 Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
   if (message.notification == null && message.data['type'] == 'incoming_call') {
     await NotificationService.init();
-    final caller = message.data['caller_username'] as String? ?? 'Unknown';
     final isVideo = message.data['is_video'] == 'true';
     final kind = isVideo ? 'video' : 'voice';
-    await NotificationService.showIncomingCall(
-      body: 'Incoming $kind call from @$caller',
-    );
+    await NotificationService.showIncomingCall(body: 'Incoming $kind call');
   } else if (message.notification == null &&
       message.data['type'] == 'new_message') {
     final conversationId = message.data['conversation_id'] as String? ?? 'push';

@@ -623,11 +623,28 @@ class _SharedContentSheetState extends State<_SharedContentSheet>
       ..error = null;
   }
 
+  void _seedLocalSection(SharedContentSection section) {
+    final state = _stateFor(section);
+    state
+      ..messages = List<Message>.of(widget.initialMessages)
+      ..nextCursor = null
+      ..initialized = true
+      ..loading = false
+      ..loadingMore = false
+      ..error = null;
+  }
+
   Future<void> _ensureLoaded(
     SharedContentSection section, {
     bool refresh = false,
   }) async {
     final state = _stateFor(section);
+    if (widget.conversation.isEncrypted) {
+      if (!state.initialized || refresh) {
+        setState(() => _seedLocalSection(section));
+      }
+      return;
+    }
     if (section == SharedContentSection.links) {
       if (!state.initialized || refresh) {
         setState(_seedLocalLinks);
@@ -684,6 +701,7 @@ class _SharedContentSheetState extends State<_SharedContentSheet>
   }
 
   Future<void> _loadMore(SharedContentSection section) async {
+    if (widget.conversation.isEncrypted) return;
     if (section == SharedContentSection.links) return;
     final state = _stateFor(section);
     final cursor = state.nextCursor;
