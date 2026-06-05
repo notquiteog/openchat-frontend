@@ -151,6 +151,34 @@ void main() {
     },
   );
 
+  test(
+    'gallery image conversion falls back when platform WebP is unavailable',
+    () async {
+      final dir = await Directory.systemTemp.createTemp('chat-media-test');
+      addTearDown(() async {
+        await dir.delete(recursive: true);
+      });
+
+      final fixture = File('${dir.path}/desktop-photo.jpg');
+      final raw = img.Image(width: 4, height: 4);
+      raw.setPixelRgba(0, 0, 0, 128, 255, 255);
+      await fixture.writeAsBytes(img.encodeJpg(raw));
+
+      final prepared = await AttachmentService.prepareGalleryPhotoForUpload(
+        fixture,
+        webpEncoder: (_, _) async => null,
+      );
+
+      expect(prepared.fileName, 'desktop-photo.webp');
+      expect(prepared.mimeType, 'image/webp');
+      expect(String.fromCharCodes(prepared.bytes.take(4).toList()), 'RIFF');
+      expect(
+        String.fromCharCodes(prepared.bytes.skip(8).take(4).toList()),
+        'WEBP',
+      );
+    },
+  );
+
   test('file upload path preserves original name and mime type', () async {
     final dir = await Directory.systemTemp.createTemp('chat-file-test');
     addTearDown(() async {

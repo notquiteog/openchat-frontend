@@ -5,6 +5,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:file_selector/file_selector.dart' as fs;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
+import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:mime/mime.dart';
 import 'package:path/path.dart' as p;
@@ -382,16 +383,18 @@ class AttachmentService {
     Future<Uint8List?> Function(File file, Uint8List bytes)? webpEncoder,
   }) async {
     final originalBytes = await file.readAsBytes();
-    final compressed = await (webpEncoder ?? _compressToWebp)(
-      file,
-      originalBytes,
-    );
-    if (compressed == null) {
-      throw StateError('Could not encode gallery photo as WebP');
+    final encoded = await (webpEncoder ?? _compressToWebp)(file, originalBytes);
+    final webpBytes = _isWebP(encoded)
+        ? encoded
+        : _encodeWebpWithDartImage(originalBytes);
+    if (!_isWebP(webpBytes)) {
+      throw StateError(
+        'Could not encode gallery photo as WebP. Try sending it as a file.',
+      );
     }
     final fileName = _webpFileName(file.path);
     return PreparedAttachmentInput(
-      bytes: compressed,
+      bytes: webpBytes!,
       fileName: fileName,
       mimeType: 'image/webp',
       messageType: MessageType.image,
@@ -551,11 +554,32 @@ class AttachmentService {
           keepExif: false,
         );
       }
-      if (out == null) return null;
-      return Uint8List.fromList(out);
+      final webp = out == null ? null : Uint8List.fromList(out);
+      if (_isWebP(webp)) return webp;
     } catch (_) {
-      return null;
+      // Desktop platform compressors can lack WebP support. Fall through to
+      // the pure-Dart pixel re-encode path so gallery photos still upload.
     }
+    return _encodeWebpWithDartImage(bytes);
+  }
+
+  static Uint8List? _encodeWebpWithDartImage(Uint8List bytes) {
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) return null;
+    final webp = img.encodeWebP(decoded);
+    return _isWebP(webp) ? webp : null;
+  }
+
+  static bool _isWebP(Uint8List? bytes) {
+    if (bytes == null || bytes.length < 12) return false;
+    return bytes[0] == 0x52 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x46 &&
+        bytes[8] == 0x57 &&
+        bytes[9] == 0x45 &&
+        bytes[10] == 0x42 &&
+        bytes[11] == 0x50;
   }
 
   static String _webpFileName(String originalPath) {
