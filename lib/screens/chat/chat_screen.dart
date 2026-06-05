@@ -297,8 +297,16 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       if (!mounted) return;
       _restoreComposedMessage(rawText, replyingTo, draftEntities);
-      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+      messenger.showSnackBar(SnackBar(content: Text(_sendErrorMessage(e))));
     }
+  }
+
+  String _sendErrorMessage(Object error) {
+    if (error is ApiException) {
+      return 'Could not send message (${error.statusCode} ${error.code}): ${error.message}';
+    }
+    if (error is ChatSendException) return error.message;
+    return 'Could not send message: $error';
   }
 
   String _scheduleLabel() {
@@ -507,7 +515,7 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     } catch (e) {
       if (mounted) {
-        messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+        messenger.showSnackBar(SnackBar(content: Text(_sendErrorMessage(e))));
       }
     }
   }

@@ -588,12 +588,19 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
     if (!context.mounted || selection == null) return;
     if (selection is _UserSearchSelection) {
-      final conv = await chat.openDM(selection.userID);
-      if (!context.mounted) return;
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => ChatScreen(conversation: conv)),
-      );
+      try {
+        final conv = await chat.openDM(selection.userID);
+        if (!context.mounted) return;
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => ChatScreen(conversation: conv)),
+        );
+      } catch (error) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_openDmErrorMessage(error))));
+      }
       return;
     }
     if (selection is _ChannelSearchSelection) {
@@ -1413,6 +1420,13 @@ String _smartInboxEmptyTitle(SmartInboxFilter filter) {
     SmartInboxFilter.mentions => 'No unread mentions',
     _ => 'No ${smartInboxFilterLabel(filter)} chats',
   };
+}
+
+String _openDmErrorMessage(Object error) {
+  if (error is ApiException) {
+    return 'Could not open DM (${error.statusCode} ${error.code}): ${error.message}';
+  }
+  return 'Could not open DM: $error';
 }
 
 // ── Animated conversation tile ────────────────────────────────────────────────

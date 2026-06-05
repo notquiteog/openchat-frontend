@@ -1629,9 +1629,25 @@ class ChatProvider extends ChangeNotifier {
     required Message confirmed,
     required String plaintextPayload,
   }) {
-    confirmed.setDecryptedContent(plaintextPayload);
-    _hydrateMessageSender(confirmed);
-    _indexMessage(confirmed);
+    try {
+      confirmed.setDecryptedContent(plaintextPayload);
+    } catch (error, stackTrace) {
+      confirmed.markDecryptionFailed();
+      debugPrint('Failed to hydrate confirmed message plaintext: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    }
+    try {
+      _hydrateMessageSender(confirmed);
+    } catch (error, stackTrace) {
+      debugPrint('Failed to hydrate confirmed message sender: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    }
+    try {
+      _indexMessage(confirmed);
+    } catch (error, stackTrace) {
+      debugPrint('Failed to index confirmed message: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    }
 
     final list = _messages[convID] ?? [];
     _messages[convID] = [
@@ -1760,8 +1776,9 @@ class ChatProvider extends ChangeNotifier {
         scheduledFor: scheduledFor,
       );
       return true;
-    } catch (_) {
-      return false;
+    } catch (error) {
+      if (error is ChatSendException || error is ApiException) rethrow;
+      throw ChatSendException('Message send failed: $error');
     }
   }
 
