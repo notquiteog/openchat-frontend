@@ -8,14 +8,17 @@ enum ChannelTopBarAction {
   archive,
   autoDelete,
   encryption,
-  delete
+  delete,
 }
 
 enum ChannelModerationAction { openModeration, archive, unarchive, delete }
 
 enum ChannelSettingsAction {
   appearance,
+  sharedContent,
+  scheduledPosts,
   edit,
+  inviteLinks,
   background,
   autoDelete,
   encryption,
@@ -43,15 +46,27 @@ class ChannelActionPolicy {
     required bool isPremium,
     required bool canManageLifecycle,
     required bool isSubscribed,
+    bool? canOpenModeration,
+    bool? canManageInfo,
+    bool? canManageInvites,
+    bool? canManageSettings,
+    bool? canManageEncryption,
   }) {
     final isArchived = channel.isArchived;
+    final opensModeration = canOpenModeration ?? isAdmin;
+    final managesInfo = canManageInfo ?? isAdmin;
+    final managesInvites = canManageInvites ?? isAdmin;
+    final managesSettings = canManageSettings ?? isAdmin;
+    final managesEncryption = canManageEncryption ?? isAdmin;
     final topBar = <ChannelTopBarAction>[];
     final moderation = <ChannelModerationAction>[];
     final settings = <ChannelSettingsAction>[];
 
-    if (isAdmin || canManageLifecycle) {
+    if (opensModeration || canManageLifecycle) {
       topBar.add(ChannelTopBarAction.moderation);
-      if (isAdmin) moderation.add(ChannelModerationAction.openModeration);
+      if (opensModeration) {
+        moderation.add(ChannelModerationAction.openModeration);
+      }
       if (canManageLifecycle && !isArchived) {
         moderation.add(ChannelModerationAction.archive);
       }
@@ -63,19 +78,30 @@ class ChannelActionPolicy {
       }
     }
 
-    if (isSubscribed || isAdmin) {
+    final hasAdminSettings =
+        managesInfo || managesInvites || managesSettings || managesEncryption;
+    if (isSubscribed || hasAdminSettings) {
       topBar.add(ChannelTopBarAction.settings);
       settings.add(ChannelSettingsAction.appearance);
+      settings.add(ChannelSettingsAction.sharedContent);
+      settings.add(ChannelSettingsAction.scheduledPosts);
       settings.add(ChannelSettingsAction.deleteOwnMessages);
     }
 
-    if (isAdmin) {
+    if (managesInfo) {
       settings.add(ChannelSettingsAction.edit);
+    }
+    if (managesInvites) {
+      settings.add(ChannelSettingsAction.inviteLinks);
+    }
+    if (managesInfo) {
       if (isPremium) settings.add(ChannelSettingsAction.background);
-      settings.addAll([
-        ChannelSettingsAction.autoDelete,
-        ChannelSettingsAction.encryption,
-      ]);
+    }
+    if (managesSettings) {
+      settings.add(ChannelSettingsAction.autoDelete);
+    }
+    if (managesEncryption) {
+      settings.add(ChannelSettingsAction.encryption);
     }
 
     if (!canManageLifecycle) {

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openchat/models/conversation.dart';
+import 'package:openchat/models/user.dart';
 import 'package:openchat/screens/channels/channel_screen.dart';
 
 void main() {
@@ -16,6 +18,7 @@ void main() {
               onToggleCustomEmojis: () {},
               onToggleStickers: () {},
               onAttach: () {},
+              onMentionSelected: (_) {},
               onPost: () {},
             ),
           ),
@@ -28,4 +31,42 @@ void main() {
       expect(find.byIcon(Icons.send), findsOneWidget);
     },
   );
+
+  testWidgets('channel post bar renders mention suggestions', (tester) async {
+    final user = User(
+      id: 'u-1',
+      username: 'alice',
+      publicKey: '',
+      keyFingerprint: '',
+      createdAt: DateTime(2024),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChannelPostBar(
+            controller: TextEditingController(text: '@a'),
+            showStickers: false,
+            showCustomEmojis: false,
+            mentionSuggestions: [
+              ConversationMember(
+                conversationId: 'c-1',
+                userId: user.id,
+                role: MemberRole.member,
+                joinedAt: DateTime(2024),
+                user: user,
+              ),
+            ],
+            onToggleCustomEmojis: () {},
+            onToggleStickers: () {},
+            onAttach: () {},
+            onMentionSelected: (_) {},
+            onPost: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('@alice'), findsOneWidget);
+  });
 }

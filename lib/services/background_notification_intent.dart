@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import '../utils/local_conversation_preferences.dart';
+
 enum NotificationIntentKind { message, incomingCall }
 
 class NotificationIntent {
@@ -19,6 +21,11 @@ class NotificationIntent {
 NotificationIntent? notificationIntentFromRawLine(
   String rawLine, {
   required bool showSensitive,
+  Set<String> mutedConversationIds = const {},
+  Map<String, ConversationNotificationPreference>
+      conversationNotificationPreferences =
+      const {},
+  String currentUserId = '',
 }) {
   try {
     final json = jsonDecode(rawLine) as Map<String, dynamic>;
@@ -29,6 +36,9 @@ NotificationIntent? notificationIntentFromRawLine(
       type: type,
       data: data,
       showSensitive: showSensitive,
+      mutedConversationIds: mutedConversationIds,
+      conversationNotificationPreferences: conversationNotificationPreferences,
+      currentUserId: currentUserId,
     );
   } catch (_) {
     return null;
@@ -39,9 +49,32 @@ NotificationIntent? notificationIntentFromEvent({
   required String type,
   required Map<String, dynamic> data,
   required bool showSensitive,
+  Set<String> mutedConversationIds = const {},
+  Map<String, ConversationNotificationPreference>
+      conversationNotificationPreferences =
+      const {},
+  String currentUserId = '',
 }) {
   if (type == 'new_message') {
     final convId = data['conversation_id'] as String? ?? 'msg';
+    final preferences = <String, ConversationNotificationPreference>{
+      ...conversationNotificationPreferences,
+      for (final id in mutedConversationIds)
+        if (!conversationNotificationPreferences.containsKey(id))
+          id: const ConversationNotificationPreference.mutedForever(),
+    };
+    if (!shouldNotifyForConversation(
+      conversationId: convId,
+      preferences: preferences,
+      currentUserId: currentUserId,
+      mentionedUserIds: mentionedUserIdsFromNotificationData(data),
+      mentionedForCurrentUser: notificationDataMentionsCurrentUser(
+        data,
+        currentUserId,
+      ),
+    )) {
+      return null;
+    }
     final sender = data['sender_username'] as String?;
     return NotificationIntent(
       kind: NotificationIntentKind.message,

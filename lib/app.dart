@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:app_links/app_links.dart';
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
@@ -16,6 +17,7 @@ import 'screens/call/call_screen.dart';
 import 'screens/channels/channel_screen.dart';
 import 'screens/chat/chat_screen.dart';
 import 'screens/home/conversations_screen.dart';
+import 'screens/invites/invite_preview_screen.dart';
 import 'screens/settings/pgp_keys_screen.dart';
 import 'services/api_service.dart';
 import 'services/app_access_gate.dart';
@@ -27,6 +29,8 @@ import 'services/push_notification_service.dart';
 import 'services/secure_storage_service.dart';
 import 'services/websocket_service.dart';
 import 'theme/app_theme.dart';
+import 'utils/invite_links.dart';
+import 'utils/local_conversation_preferences.dart';
 import 'widgets/glass.dart';
 
 class OpenChatApp extends StatelessWidget {
@@ -52,7 +56,10 @@ class OpenChatApp extends StatelessWidget {
       scaffoldMessengerKey: scaffoldMessengerKey,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(seed: seed, reduceTransparency: reduceTransparency),
-      darkTheme: AppTheme.dark(seed: seed, reduceTransparency: reduceTransparency),
+      darkTheme: AppTheme.dark(
+        seed: seed,
+        reduceTransparency: reduceTransparency,
+      ),
       themeMode: ThemeMode.system,
       home: const _AppRoot(),
       // Float call + live-location bars above every route so they persist while
@@ -71,20 +78,20 @@ class OpenChatApp extends StatelessWidget {
         final reduceTransparency = context.select<SettingsProvider, bool>(
           (s) => s.reduceTransparency,
         );
-        final callExtra = context
-            .select<CallProvider, double>((cp) => cp.minimizedContentTopInset);
+        final callExtra = context.select<CallProvider, double>(
+          (cp) => cp.minimizedContentTopInset,
+        );
         // Suppress the location bar inset during a full-screen video call.
         // The bar itself is hidden in that state (see _LocationBarOverlay) to
         // prevent its GlassContainer's BackdropFilter from rendering above the
         // RTCVideoView platform texture, which causes white tiles on desktop.
         final isFullScreenVideoCall = context.select<CallProvider, bool>(
           (cp) =>
-              cp.isInCall &&
-              cp.session?.isVideo == true &&
-              !cp.isCallMinimized,
+              cp.isInCall && cp.session?.isVideo == true && !cp.isCallMinimized,
         );
-        final rawLocExtra = context
-            .select<ChatProvider, double>((chat) => chat.liveLocationTopInset);
+        final rawLocExtra = context.select<ChatProvider, double>(
+          (chat) => chat.liveLocationTopInset,
+        );
         final locExtra = isFullScreenVideoCall ? 0.0 : rawLocExtra;
         final mq = MediaQuery.of(context);
 
@@ -97,58 +104,55 @@ class OpenChatApp extends StatelessWidget {
         return GlassAccessibilityScope(
           reduceTransparency: reduceTransparency,
           child: Stack(
-          children: [
-            // Screens — pushed down past both bars.
-            MediaQuery(
-              data: withTop(callExtra + locExtra),
-              child: child!,
-            ),
-            // Call bar — sees location offset so SafeArea places it below the
-            // location bar when both are active.
-            //
-            // Why DefaultTextStyle.merge instead of Material(transparency):
-            //
-            // MaterialApp.builder runs inside AnimatedTheme but OUTSIDE any
-            // Material widget, so DefaultTextStyle.of() returns Flutter's debug
-            // fallback (monospace font, yellow underline) — wrapping in something
-            // that sets a real DefaultTextStyle is required for correct text style.
-            //
-            // We CANNOT use Material(type: MaterialType.transparency) because it
-            // adds _InkFeatures / PhysicalShape render objects. Those render objects
-            // alter the compositing chain around LightweightLiquidGlass's
-            // BackdropFilterLayer, causing it to read from an isolated or empty
-            // layer and paint the glass surface solid white over the entire app.
-            // Additionally, _LiveConnectionBanner.build() returns a Positioned
-            // widget that MUST be a direct RenderStack child; inserting any widget
-            // with its own RenderObject (Material has several) between the Stack
-            // and the Positioned breaks applyParentData and the banner inherits
-            // full-screen constraints, compounding the white-layer corruption.
-            //
-            // DefaultTextStyle.merge is safe: it composes Builder + InheritedWidget,
-            // neither of which introduce RenderObjects. In the render tree every
-            // overlay widget remains a direct child of RenderStack, so Positioned
-            // and BackdropFilterLayer both work exactly as if the wrapper
-            // weren't there.
-            MediaQuery(
-              data: withTop(locExtra),
-              child: DefaultTextStyle.merge(
-                style: const TextStyle(decoration: TextDecoration.none),
-                child: const CallOverlay(),
+            children: [
+              // Screens — pushed down past both bars.
+              MediaQuery(data: withTop(callExtra + locExtra), child: child!),
+              // Call bar — sees location offset so SafeArea places it below the
+              // location bar when both are active.
+              //
+              // Why DefaultTextStyle.merge instead of Material(transparency):
+              //
+              // MaterialApp.builder runs inside AnimatedTheme but OUTSIDE any
+              // Material widget, so DefaultTextStyle.of() returns Flutter's debug
+              // fallback (monospace font, yellow underline) — wrapping in something
+              // that sets a real DefaultTextStyle is required for correct text style.
+              //
+              // We CANNOT use Material(type: MaterialType.transparency) because it
+              // adds _InkFeatures / PhysicalShape render objects. Those render objects
+              // alter the compositing chain around LightweightLiquidGlass's
+              // BackdropFilterLayer, causing it to read from an isolated or empty
+              // layer and paint the glass surface solid white over the entire app.
+              // Additionally, _LiveConnectionBanner.build() returns a Positioned
+              // widget that MUST be a direct RenderStack child; inserting any widget
+              // with its own RenderObject (Material has several) between the Stack
+              // and the Positioned breaks applyParentData and the banner inherits
+              // full-screen constraints, compounding the white-layer corruption.
+              //
+              // DefaultTextStyle.merge is safe: it composes Builder + InheritedWidget,
+              // neither of which introduce RenderObjects. In the render tree every
+              // overlay widget remains a direct child of RenderStack, so Positioned
+              // and BackdropFilterLayer both work exactly as if the wrapper
+              // weren't there.
+              MediaQuery(
+                data: withTop(locExtra),
+                child: DefaultTextStyle.merge(
+                  style: const TextStyle(decoration: TextDecoration.none),
+                  child: const CallOverlay(),
+                ),
               ),
-            ),
-            // Location bar — sees no extra offset → anchors at the very top.
-            DefaultTextStyle.merge(
-              style: const TextStyle(decoration: TextDecoration.none),
-              child: const _LocationBarOverlay(),
-            ),
-            // Connection banner — build() returns Positioned, which needs to be
-            // an effective direct RenderStack child. DefaultTextStyle.merge
-            // satisfies that requirement (no render objects in the path).
-            DefaultTextStyle.merge(
-              style: const TextStyle(decoration: TextDecoration.none),
-              child: const _LiveConnectionBanner(),
-            ),
-          ],
+              // Location bar — sees no extra offset → anchors at the very top.
+              DefaultTextStyle.merge(
+                style: const TextStyle(decoration: TextDecoration.none),
+                child: const _LocationBarOverlay(),
+              ),
+              // Connection banner — build() returns Positioned, which needs to be
+              // an effective direct RenderStack child. DefaultTextStyle.merge
+              // satisfies that requirement (no render objects in the path).
+              DefaultTextStyle.merge(
+                style: const TextStyle(decoration: TextDecoration.none),
+                child: const _LiveConnectionBanner(),
+              ),
+            ],
           ),
         );
       },
@@ -185,9 +189,10 @@ class _LocationBarOverlayState extends State<_LocationBarOverlay> {
     try {
       final chat = context.read<ChatProvider>();
       final conv = chat.conversations.firstWhere((c) => c.id == conversationId);
-      Navigator.of(context, rootNavigator: true).push(
-        MaterialPageRoute(builder: (_) => ChatScreen(conversation: conv)),
-      );
+      Navigator.of(
+        context,
+        rootNavigator: true,
+      ).push(MaterialPageRoute(builder: (_) => ChatScreen(conversation: conv)));
     } catch (_) {
       // Conversation may not be loaded yet; ignore.
     }
@@ -214,12 +219,12 @@ class _LocationBarOverlayState extends State<_LocationBarOverlay> {
     final label = remaining.inSeconds <= 0
         ? 'ending'
         : remaining.inHours >= 1
-            ? (remaining.inMinutes % 60 == 0
-                ? '${remaining.inHours}h left'
-                : '${remaining.inHours}h ${remaining.inMinutes % 60}m left')
-            : remaining.inMinutes >= 1
-                ? '${remaining.inMinutes}m left'
-                : '${remaining.inSeconds}s left';
+        ? (remaining.inMinutes % 60 == 0
+              ? '${remaining.inHours}h left'
+              : '${remaining.inHours}h ${remaining.inMinutes % 60}m left')
+        : remaining.inMinutes >= 1
+        ? '${remaining.inMinutes}m left'
+        : '${remaining.inSeconds}s left';
 
     return Align(
       alignment: Alignment.topCenter,
@@ -309,11 +314,14 @@ class _LocationBarOverlayState extends State<_LocationBarOverlay> {
                         height: 32,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: const Color(0xFFFF3B30).withValues(alpha: 0.88),
+                          color: const Color(
+                            0xFFFF3B30,
+                          ).withValues(alpha: 0.88),
                           boxShadow: [
                             BoxShadow(
-                              color: const Color(0xFFFF3B30)
-                                  .withValues(alpha: 0.38),
+                              color: const Color(
+                                0xFFFF3B30,
+                              ).withValues(alpha: 0.38),
                               blurRadius: 10,
                               spreadRadius: -3,
                               offset: const Offset(0, 4),
@@ -433,12 +441,27 @@ class _AppRootState extends State<_AppRoot> {
   bool _promptingAppUnlock = false;
   AppLifecycleListener? _lifecycleListener;
   StreamSubscription<WsEvent>? _wsForegroundSub;
+  StreamSubscription<Uri>? _inviteLinkSub;
+  SettingsProvider? _settings;
+  String? _pendingInviteToken;
+  String? _lastInviteToken;
+  DateTime? _lastInviteHandledAt;
+  bool _handlingInviteLink = false;
 
   @override
   void initState() {
     super.initState();
+    _initInviteLinks();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final auth = context.read<AuthProvider>();
+      final settings = context.read<SettingsProvider>();
+      _settings = settings;
+      settings.addListener(_onSettingsChanged);
+      unawaited(
+        settings.load().then((_) {
+          if (mounted) _syncNotificationPreferences(settings);
+        }),
+      );
       context.read<ApiService>().onAuthFailed = auth.logout;
       auth.addListener(_onAuthChanged);
       auth.initialize();
@@ -464,6 +487,68 @@ class _AppRootState extends State<_AppRoot> {
         onResume: _onForeground,
       );
       NotificationService.setAppFocused(true);
+    });
+  }
+
+  void _initInviteLinks() {
+    try {
+      _inviteLinkSub = AppLinks().uriLinkStream.listen(
+        _queueInviteLink,
+        onError: (_) {},
+      );
+    } catch (_) {
+      // Deep links are best-effort on unsupported test/desktop runners.
+    }
+  }
+
+  void _queueInviteLink(Uri uri) {
+    final token = inviteTokenFromUri(uri);
+    if (token == null) return;
+    _pendingInviteToken = token;
+    _drainPendingInviteLink();
+  }
+
+  void _drainPendingInviteLink() {
+    if (!mounted || _handlingInviteLink) return;
+    final token = _pendingInviteToken;
+    if (token == null) return;
+    if (_appLocked) return;
+    if (context.read<AuthProvider>().state != AuthState.authenticated) return;
+
+    final navigator = OpenChatApp.navigatorKey.currentState;
+    if (navigator == null) return;
+
+    final now = DateTime.now();
+    final handledRecently =
+        _lastInviteToken == token &&
+        _lastInviteHandledAt != null &&
+        now.difference(_lastInviteHandledAt!) < const Duration(seconds: 2);
+    if (handledRecently) {
+      _pendingInviteToken = null;
+      return;
+    }
+
+    _pendingInviteToken = null;
+    _handlingInviteLink = true;
+    _lastInviteToken = token;
+    _lastInviteHandledAt = now;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        _handlingInviteLink = false;
+        return;
+      }
+      try {
+        await navigator.push(
+          MaterialPageRoute<void>(
+            builder: (_) => InvitePreviewScreen(token: token),
+          ),
+        );
+      } finally {
+        if (mounted) _handlingInviteLink = false;
+      }
+      if (!mounted) return;
+      _drainPendingInviteLink();
     });
   }
 
@@ -510,7 +595,10 @@ class _AppRootState extends State<_AppRoot> {
     final auth = LocalAuthentication();
     try {
       final ok = await auth.authenticate(localizedReason: 'Unlock OpenChat');
-      if (ok && mounted) setState(() => _appLocked = false);
+      if (ok && mounted) {
+        setState(() => _appLocked = false);
+        _drainPendingInviteLink();
+      }
     } catch (_) {
       // If biometrics fail (e.g. no enrolled biometrics), stay locked but
       // allow the user to try again via the lock-screen button.
@@ -523,7 +611,9 @@ class _AppRootState extends State<_AppRoot> {
   void dispose() {
     _lifecycleListener?.dispose();
     _wsForegroundSub?.cancel();
+    _inviteLinkSub?.cancel();
     PushNotificationService.setForegroundIncomingCallHandler(null);
+    _settings?.removeListener(_onSettingsChanged);
     context.read<AuthProvider>().removeListener(_onAuthChanged);
     context.read<CallProvider>().removeListener(_onCallChanged);
     super.dispose();
@@ -536,13 +626,16 @@ class _AppRootState extends State<_AppRoot> {
             defaultTargetPlatform == TargetPlatform.linux ||
             defaultTargetPlatform == TargetPlatform.macOS);
 
-    final showSensitive = context
-        .read<SettingsProvider>()
-        .notificationSensitiveContent;
+    final settings = context.read<SettingsProvider>();
+    final currentUserId = context.read<AuthProvider>().currentUser?.id ?? '';
     final intent = ForegroundWsNotificationRouter.intentForEvent(
       event,
-      showSensitive: showSensitive,
+      showSensitive: settings.notificationSensitiveContent,
       isDesktop: isDesktop,
+      mutedConversationIds: settings.mutedConversationIds,
+      conversationNotificationPreferences:
+          settings.conversationNotificationPreferences,
+      currentUserId: currentUserId,
     );
     if (intent == null) return;
 
@@ -553,6 +646,11 @@ class _AppRootState extends State<_AppRoot> {
           title: intent.title,
           body: intent.body,
           showSensitive: true,
+          mentionedUserIds: mentionedUserIdsFromNotificationData(event.data),
+          mentionedForCurrentUser: notificationDataMentionsCurrentUser(
+            event.data,
+            currentUserId,
+          ),
         );
         break;
       case NotificationIntentKind.incomingCall:
@@ -591,9 +689,14 @@ class _AppRootState extends State<_AppRoot> {
     final auth = context.read<AuthProvider>();
     if (auth.state == AuthState.authenticated &&
         _lastAuthState != AuthState.authenticated) {
+      final settings = _settings;
+      if (settings != null && settings.isLoaded) {
+        _syncNotificationPreferences(settings);
+      }
       _fetchIceServers();
       context.read<KeyProvider>().load();
       context.read<ChatProvider>().connectWebSocket();
+      _drainPendingInviteLink();
       // Re-register the FCM/APNs push token on every login so the backend
       // always has a current token. Silently skipped when Firebase credentials
       // are placeholders or push notifications have not been enabled.
@@ -607,6 +710,34 @@ class _AppRootState extends State<_AppRoot> {
       OpenChatApp.navigatorKey.currentState?.popUntil((route) => route.isFirst);
     }
     _lastAuthState = auth.state;
+  }
+
+  void _onSettingsChanged() {
+    final settings = _settings;
+    if (settings == null || !settings.isLoaded) return;
+    _syncNotificationPreferences(settings);
+  }
+
+  void _syncNotificationPreferences(SettingsProvider settings) {
+    final currentUserId = context.read<AuthProvider>().currentUser?.id ?? '';
+    final preferences = settings.conversationNotificationPreferences;
+    NotificationService.setConversationNotificationPreferences(
+      preferences,
+      currentUserId: currentUserId,
+    );
+    unawaited(
+      BackgroundWsService.updateConversationNotificationPreferences(
+        preferences,
+        currentUserId: currentUserId,
+      ),
+    );
+    if (settings.wsBackgroundEnabled) {
+      unawaited(
+        BackgroundWsService.updateSensitiveContent(
+          settings.notificationSensitiveContent,
+        ),
+      );
+    }
   }
 
   Future<void> _initPushFromSettingsIfEnabled() async {
@@ -640,6 +771,14 @@ class _AppRootState extends State<_AppRoot> {
 
     if (gate == AppAccessGateDecision.showAppLock) {
       return _AppLockScreen(onUnlock: _promptAppUnlock);
+    }
+
+    if (auth.state == AuthState.authenticated &&
+        !_appLocked &&
+        _pendingInviteToken != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _drainPendingInviteLink();
+      });
     }
 
     return switch (auth.state) {
@@ -712,21 +851,25 @@ class _HomeShellState extends State<_HomeShell> {
 
     if (settings.channelsOwnTab) {
       screens.add(const ChannelListScreen());
-      tabs.add(GlassBottomBarTab(
-        icon: const Icon(Icons.campaign_outlined),
-        activeIcon: const Icon(Icons.campaign),
-        label: 'Channels',
-        glowColor: scheme.tertiary,
-      ));
+      tabs.add(
+        GlassBottomBarTab(
+          icon: const Icon(Icons.campaign_outlined),
+          activeIcon: const Icon(Icons.campaign),
+          label: 'Channels',
+          glowColor: scheme.tertiary,
+        ),
+      );
     }
     if (settings.botsOwnTab) {
       screens.add(const BotChatsScreen());
-      tabs.add(GlassBottomBarTab(
-        icon: const Icon(Icons.smart_toy_outlined),
-        activeIcon: const Icon(Icons.smart_toy),
-        label: 'Bots',
-        glowColor: scheme.secondary,
-      ));
+      tabs.add(
+        GlassBottomBarTab(
+          icon: const Icon(Icons.smart_toy_outlined),
+          activeIcon: const Icon(Icons.smart_toy),
+          label: 'Bots',
+          glowColor: scheme.secondary,
+        ),
+      );
     }
 
     // Clamp in case a tab was just turned off while it was selected.
@@ -821,9 +964,8 @@ class _AppLockScreen extends StatelessWidget {
                     const SizedBox(height: 24),
                     Text(
                       'OpenChat is Locked',
-                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
+                      style: Theme.of(context).textTheme.headlineSmall
+                          ?.copyWith(fontWeight: FontWeight.w800),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 8),
@@ -948,4 +1090,3 @@ class _ExpiredKeyBanner extends StatelessWidget {
     );
   }
 }
-

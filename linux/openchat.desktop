@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=OpenChat
+Comment=Encrypted messenger
+Exec=openchat %u
+Icon=openchat
+Terminal=false
+Type=Application
+Categories=Network;Chat;
+MimeType=x-scheme-handler/openchat;

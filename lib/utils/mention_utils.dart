@@ -1,0 +1,149 @@
+import '../models/conversation.dart';
+
+class MentionRange {
+  final int start;
+  final int end;
+  final String handle;
+
+  const MentionRange({
+    required this.start,
+    required this.end,
+    required this.handle,
+  });
+}
+
+class ActiveMentionQuery {
+  final int start;
+  final int end;
+  final String query;
+
+  const ActiveMentionQuery({
+    required this.start,
+    required this.end,
+    required this.query,
+  });
+}
+
+final _mentionPattern = RegExp(r'@[A-Za-z0-9_]{3,32}');
+final _wordCharPattern = RegExp(r'[A-Za-z0-9_]');
+
+List<MentionRange> findMentionRanges(String text) {
+  final ranges = <MentionRange>[];
+  for (final match in _mentionPattern.allMatches(text)) {
+    final start = match.start;
+    final end = match.end;
+    final hasLeftBoundary =
+        start == 0 || !_wordCharPattern.hasMatch(text[start - 1]);
+    final hasRightBoundary =
+        end == text.length || !_wordCharPattern.hasMatch(text[end]);
+    if (!hasLeftBoundary || !hasRightBoundary) continue;
+    ranges.add(
+      MentionRange(
+        start: start,
+        end: end,
+        handle: text.substring(start + 1, end),
+      ),
+    );
+  }
+  return ranges;
+}
+
+bool textMentionsUsername(String text, String username) {
+  final normalized = username.trim().toLowerCase();
+  if (normalized.isEmpty) return false;
+  return findMentionRanges(
+    text,
+  ).any((range) => range.handle.toLowerCase() == normalized);
+}
+
+String? unreadMentionMessageId(Conversation conversation, String username) {
+  final serverTarget = conversation.unreadMentionMessageId;
+  if (serverTarget != null && serverTarget.isNotEmpty) return serverTarget;
+  if (conversation.unreadCount <= 0 || username.trim().isEmpty) return null;
+  final message = conversation.lastMessage;
+  if (message == null) return null;
+  return textMentionsUsername(message.listPreview, username)
+      ? message.id
+      : null;
+}
+
+List<String> mentionedMemberIdsInText(
+  String text,
+  Iterable<ConversationMember> members, {
+  String currentUserId = '',
+}) {
+  final handles = findMentionRanges(
+    text,
+  ).map((range) => range.handle.toLowerCase()).toSet();
+  if (handles.isEmpty) return const [];
+
+  final ids = <String>[];
+  final seen = <String>{};
+  for (final member in members) {
+    if (member.userId == currentUserId) continue;
+    final username = member.user?.username.trim().toLowerCase();
+    if (username == null || username.isEmpty || !handles.contains(username)) {
+      continue;
+    }
+    if (seen.add(member.userId)) ids.add(member.userId);
+  }
+  return ids;
+}
+
+ActiveMentionQuery? findActiveMentionQuery(String text, int cursorOffset) {
+  if (cursorOffset < 0 || cursorOffset > text.length) return null;
+
+  var trigger = cursorOffset - 1;
+  while (trigger >= 0 && _wordCharPattern.hasMatch(text[trigger])) {
+    trigger--;
+  }
+
+  if (trigger < 0 || text[trigger] != '@') return null;
+  final hasLeftBoundary =
+      trigger == 0 || !_wordCharPattern.hasMatch(text[trigger - 1]);
+  if (!hasLeftBoundary) return null;
+
+  var end = cursorOffset;
+  while (end < text.length && _wordCharPattern.hasMatch(text[end])) {
+    end++;
+  }
+
+  final query = text.substring(trigger + 1, cursorOffset);
+  if (query.length > 32 || end - trigger > 33) return null;
+  return ActiveMentionQuery(start: trigger, end: end, query: query);
+}
+
+List<ConversationMember> mentionSuggestionsForMembers({
+  required Iterable<ConversationMember> members,
+  required ActiveMentionQuery? active,
+  required String currentUserId,
+  int limit = 6,
+}) {
+  if (active == null) return const [];
+
+  final allMembers = members
+      .where((m) => m.user != null && m.user!.username.trim().isNotEmpty)
+      .toList();
+  if (allMembers.isEmpty) return const [];
+
+  var candidates = allMembers.where((m) => m.userId != currentUserId).toList();
+  if (candidates.isEmpty) candidates = allMembers;
+
+  final query = active.query.toLowerCase();
+  if (query.isNotEmpty) {
+    candidates = candidates
+        .where((m) => m.user!.username.toLowerCase().contains(query))
+        .toList();
+  }
+
+  candidates.sort((a, b) {
+    final left = a.user!.username.toLowerCase();
+    final right = b.user!.username.toLowerCase();
+    final leftScore = query.isNotEmpty && left.startsWith(query) ? 0 : 1;
+    final rightScore = query.isNotEmpty && right.startsWith(query) ? 0 : 1;
+    if (leftScore != rightScore) return leftScore.compareTo(rightScore);
+    return left.compareTo(right);
+  });
+
+  return candidates.take(limit).toList();
+}

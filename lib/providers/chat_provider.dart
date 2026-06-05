@@ -3,15 +3,18 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import '../crypto/pgp_service.dart';
+import '../models/chat_folder.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
 import '../models/user.dart';
 import '../providers/settings_provider.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
+import '../services/message_search_service.dart';
 import '../services/notification_service.dart';
 import '../services/secure_storage_service.dart';
 import '../services/websocket_service.dart';
+import '../utils/mention_utils.dart';
 
 class ChatSendException implements Exception {
   final String message;
@@ -72,9 +75,11 @@ class ChatProvider extends ChangeNotifier {
   final SecureStorageService _storage;
   final WebSocketService _ws;
   final SettingsProvider _settings;
+  final MessageSearchService _search;
 
   final Map<String, List<Message>> _messages = {};
   final Map<String, Conversation> _conversations = {};
+  final List<ChatFolder> _chatFolders = [];
   final Map<String, Set<String>> _typingUsers = {};
   final Map<String, _ActiveLiveLocationShare> _liveLocationShares = {};
   String? _selfId;
@@ -85,6 +90,8 @@ class ChatProvider extends ChangeNotifier {
         final bTime = b.lastMessage?.createdAt ?? b.createdAt;
         return bTime.compareTo(aTime);
       });
+
+  List<ChatFolder> get chatFolders => List.unmodifiable(_chatFolders);
 
   List<Message> messagesFor(String convID) =>
       List.unmodifiable(_messages[convID] ?? []);
@@ -99,7 +106,13 @@ class ChatProvider extends ChangeNotifier {
   Future<void>? _conversationRefreshInFlight;
   bool _wasWsMonitoring = false;
 
-  ChatProvider(this._api, this._storage, this._ws, this._settings) {
+  ChatProvider(
+    this._api,
+    this._storage,
+    this._ws,
+    this._settings, {
+    MessageSearchService? searchService,
+  }) : _search = searchService ?? MessageSearchService(_storage) {
     _wsSub = _ws.events.listen(_handleWsEvent);
     _ws.addListener(_onWsConnectionChanged);
     NotificationService.setLiveLocationHandlers(
@@ -109,13 +122,31 @@ class ChatProvider extends ChangeNotifier {
     _storage.getUserID().then((id) => _selfId = id);
   }
 
+  Future<List<MessageSearchResult>> searchMessages(
+    String query, {
+    String? conversationId,
+    Set<MessageSearchCategory>? categories,
+    int limit = 40,
+  }) {
+    return _search.search(
+      query,
+      conversationId: conversationId,
+      categories: categories,
+      limit: limit,
+    );
+  }
+
+  void indexLoadedMessage(Message message) => _indexMessage(message);
+
   Future<void> connectWebSocket() => _ws.connect();
 
   void clearState() {
     _messages.clear();
     _conversations.clear();
+    _chatFolders.clear();
     _typingUsers.clear();
     _wasWsMonitoring = false;
+    unawaited(_search.clearAll());
     unawaited(_stopAllLiveLocationShares());
     _ws.disconnect();
     notifyListeners();
@@ -206,6 +237,42 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> loadChatFolders() async {
+    final folders = await _api.listChatFolders();
+    folders.sort((a, b) {
+      final position = a.position.compareTo(b.position);
+      if (position != 0) return position;
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+    _chatFolders
+      ..clear()
+      ..addAll(folders);
+    notifyListeners();
+  }
+
+  Future<ChatFolder> saveChatFolder(ChatFolder folder) async {
+    final saved = await _api.upsertChatFolder(folder);
+    final index = _chatFolders.indexWhere((item) => item.id == saved.id);
+    if (index == -1) {
+      _chatFolders.add(saved);
+    } else {
+      _chatFolders[index] = saved;
+    }
+    _chatFolders.sort((a, b) {
+      final position = a.position.compareTo(b.position);
+      if (position != 0) return position;
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+    notifyListeners();
+    return saved;
+  }
+
+  Future<void> removeChatFolder(String folderId) async {
+    await _api.deleteChatFolder(folderId);
+    _chatFolders.removeWhere((folder) => folder.id == folderId);
+    notifyListeners();
+  }
+
   @visibleForTesting
   static bool hasConversationListChanges({
     required Map<String, Conversation> current,
@@ -271,6 +338,7 @@ class ChatProvider extends ChangeNotifier {
           _hydrateMessageSender(merged, fresh: msg);
           result.add(merged);
           await _syncLiveLocationShareFromMessage(merged);
+          _indexMessage(merged);
         } else {
           _hydrateMessageSender(msg);
           await _tryDecrypt(msg, privateKey);
@@ -308,6 +376,21 @@ class ChatProvider extends ChangeNotifier {
       return older.length;
     } catch (_) {}
     return null;
+  }
+
+  Future<bool> ensureMessageLoaded(
+    String convID,
+    String msgID, {
+    int maxPages = 12,
+  }) async {
+    await loadMessages(convID);
+    for (var page = 0; page <= maxPages; page++) {
+      final messages = _messages[convID] ?? const <Message>[];
+      if (messages.any((message) => message.id == msgID)) return true;
+      final added = await loadMoreMessages(convID);
+      if (added == null || added == 0) break;
+    }
+    return false;
   }
 
   /// Send a plain text message, encrypted for all conversation members.
@@ -432,9 +515,8 @@ class ChatProvider extends ChangeNotifier {
 
   /// Extra pixels that every screen must reserve at the top when the
   /// live-location bar is visible (mirrors [CallProvider.minimizedContentTopInset]).
-  double get liveLocationTopInset => anyActiveLiveLocationShare != null
-      ? liveLocationBarHeight + 8.0
-      : 0.0;
+  double get liveLocationTopInset =>
+      anyActiveLiveLocationShare != null ? liveLocationBarHeight + 8.0 : 0.0;
 
   LiveLocationShareStatus? activeLiveLocationShareForConversation(
     String conversationId,
@@ -521,6 +603,7 @@ class ChatProvider extends ChangeNotifier {
     if (existingConv != null) {
       _conversations[convID] = existingConv.copyWith(lastMessage: msg);
     }
+    _indexMessage(msg);
     notifyListeners();
     return true;
   }
@@ -602,6 +685,7 @@ class ChatProvider extends ChangeNotifier {
     // We can't always re-decrypt our own message from the server, so set the
     // plaintext we already know directly.
     updated.setDecryptedContent(newPlaintext);
+    _indexMessage(updated);
 
     final list = _messages[convID] ?? [];
     final idx = list.indexWhere((m) => m.id == msgID);
@@ -667,6 +751,12 @@ class ChatProvider extends ChangeNotifier {
         'Your session is incomplete. Sign in again.',
       );
     }
+    final mentionedUserIds = _mentionedUserIdsForPayload(
+      plaintextPayload,
+      messageType,
+      conv,
+      userID,
+    );
 
     final String encrypted;
     final String signature;
@@ -719,6 +809,7 @@ class ChatProvider extends ChangeNotifier {
         replyTo: replyTo,
         attachmentId: attachmentId,
         topicId: topicId,
+        mentionedUserIds: mentionedUserIds,
         silent: silent,
         scheduledFor: scheduledFor,
       );
@@ -760,9 +851,11 @@ class ChatProvider extends ChangeNotifier {
         replyTo: replyTo,
         attachmentId: attachmentId,
         topicId: topicId,
+        mentionedUserIds: mentionedUserIds,
         silent: silent,
       );
       confirmed.setDecryptedContent(plaintextPayload);
+      _indexMessage(confirmed);
 
       // Remove the pending placeholder and any WS-delivered copy of the same
       // real message ID. The WS new_message event can race the API response:
@@ -794,6 +887,46 @@ class ChatProvider extends ChangeNotifier {
       }
       rethrow;
     }
+  }
+
+  List<String> _mentionedUserIdsForPayload(
+    String plaintextPayload,
+    String messageType,
+    Conversation conv,
+    String currentUserId,
+  ) {
+    final type = _messageTypeFromWire(messageType);
+    final text = MessageContent.parse(plaintextPayload, type).text;
+    return mentionedMemberIdsInText(
+      text,
+      conv.members,
+      currentUserId: currentUserId,
+    );
+  }
+
+  MessageType _messageTypeFromWire(String value) {
+    return switch (value) {
+      'sticker' => MessageType.sticker,
+      'file' => MessageType.file,
+      'image' => MessageType.image,
+      'video' => MessageType.video,
+      'voice' => MessageType.voice,
+      'audio' => MessageType.audio,
+      'animation' => MessageType.animation,
+      'video_note' => MessageType.videoNote,
+      'live_photo' => MessageType.livePhoto,
+      'poll' => MessageType.poll,
+      'location' => MessageType.location,
+      'venue' => MessageType.venue,
+      'contact' => MessageType.contact,
+      'dice' => MessageType.dice,
+      'checklist' => MessageType.checklist,
+      'invoice' => MessageType.invoice,
+      'payment_request' => MessageType.paymentRequest,
+      'payment_transfer' => MessageType.paymentTransfer,
+      'system' => MessageType.system,
+      _ => MessageType.text,
+    };
   }
 
   Future<bool> _sendEncryptedPayload({
@@ -1126,18 +1259,21 @@ class ChatProvider extends ChangeNotifier {
     _conversations.remove(convID);
     _messages.remove(convID);
     _typingUsers.remove(convID);
+    _deleteSearchConversation(convID);
     notifyListeners();
   }
 
   Future<void> deleteOwnMessages(String convID) async {
     await _api.deleteOwnMessages(convID);
     _messages.remove(convID);
+    _deleteSearchConversation(convID);
     notifyListeners();
   }
 
   Future<void> deleteAllConversationMessages(String convID) async {
     await _api.deleteAllConversationMessages(convID);
     _messages.remove(convID);
+    _deleteSearchConversation(convID);
     notifyListeners();
   }
 
@@ -1149,6 +1285,7 @@ class ChatProvider extends ChangeNotifier {
     _conversations.remove(convID);
     _messages.remove(convID);
     _typingUsers.remove(convID);
+    _deleteSearchConversation(convID);
     notifyListeners();
   }
 
@@ -1219,6 +1356,7 @@ class ChatProvider extends ChangeNotifier {
         final msgID = event.data['message_id'] as String?;
         if (convID != null && msgID != null) {
           unawaited(_stopLiveLocationShare(msgID, shouldNotify: false));
+          _deleteSearchMessage(msgID);
           final list = _messages[convID];
           if (list != null) {
             _messages[convID] = list.where((m) => m.id != msgID).toList();
@@ -1232,6 +1370,7 @@ class ChatProvider extends ChangeNotifier {
           _conversations.remove(convID);
           _messages.remove(convID);
           _typingUsers.remove(convID);
+          _deleteSearchConversation(convID);
           notifyListeners();
         }
 
@@ -1414,6 +1553,7 @@ class ChatProvider extends ChangeNotifier {
     }
 
     notifyListeners();
+    _indexMessage(updatedMessage);
     return true;
   }
 
@@ -1453,6 +1593,8 @@ class ChatProvider extends ChangeNotifier {
       // Message from a conversation we haven't seen yet (new DM or group).
       unawaited(refreshConversationsSilently());
     }
+
+    _indexMessage(displayMsg);
 
     if (_selfId != null &&
         msg.senderId != _selfId &&
@@ -1558,7 +1700,12 @@ class ChatProvider extends ChangeNotifier {
         updated.add(next ?? msg);
         changed = changed || next != null;
       }
-      if (changed) _messages[convID] = updated;
+      if (changed) {
+        _messages[convID] = updated;
+        for (final message in updated) {
+          _indexMessage(message);
+        }
+      }
     }
 
     final conv = _conversations[convID];
@@ -1631,6 +1778,21 @@ class ChatProvider extends ChangeNotifier {
     hydrateMessageSenderFromConversation(msg, conv);
   }
 
+  void _indexMessage(Message msg) {
+    if (!msg.isDecrypted && msg.poll == null) return;
+    final conv = _conversations[msg.conversationId];
+    final conversationTitle = conv?.displayName(_selfId ?? '');
+    unawaited(_search.indexMessage(msg, conversationTitle: conversationTitle));
+  }
+
+  void _deleteSearchMessage(String messageId) {
+    unawaited(_search.deleteMessage(messageId));
+  }
+
+  void _deleteSearchConversation(String conversationId) {
+    unawaited(_search.deleteConversation(conversationId));
+  }
+
   static void hydrateMessageSenderFromConversation(
     Message msg,
     Conversation conv,
@@ -1658,10 +1820,12 @@ class ChatProvider extends ChangeNotifier {
   Future<void> _tryDecrypt(Message msg, String privateKey) async {
     if (msg.type == MessageType.poll) {
       msg.setDecryptedContent(msg.encryptedPayload);
+      _indexMessage(msg);
       return;
     }
     if (!msg.isEncrypted) {
       msg.setDecryptedContent(msg.encryptedPayload);
+      _indexMessage(msg);
       return;
     }
     if (privateKey.isEmpty) return;
@@ -1672,6 +1836,7 @@ class ChatProvider extends ChangeNotifier {
       );
       if (raw.isNotEmpty) {
         msg.setDecryptedContent(raw);
+        _indexMessage(msg);
       } else {
         msg.markDecryptionFailed();
       }
@@ -1686,6 +1851,7 @@ class ChatProvider extends ChangeNotifier {
       await _api.deleteMessage(convID, msgID);
       final list = _messages[convID] ?? [];
       _messages[convID] = list.where((m) => m.id != msgID).toList();
+      _deleteSearchMessage(msgID);
       notifyListeners();
     } catch (_) {}
   }

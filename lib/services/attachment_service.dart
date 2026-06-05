@@ -47,6 +47,34 @@ class PendingAttachment {
   };
 }
 
+enum AttachmentUploadStage {
+  preparing,
+  encrypting,
+  uploading,
+  confirming,
+  sending,
+}
+
+class AttachmentUploadProgress {
+  final AttachmentUploadStage stage;
+  final int sentBytes;
+  final int totalBytes;
+
+  const AttachmentUploadProgress({
+    required this.stage,
+    this.sentBytes = 0,
+    this.totalBytes = 0,
+  });
+
+  double? get fraction {
+    if (totalBytes <= 0) return null;
+    return (sentBytes / totalBytes).clamp(0.0, 1.0).toDouble();
+  }
+}
+
+typedef AttachmentUploadProgressCallback =
+    void Function(AttachmentUploadProgress progress);
+
 /// Bytes + metadata prepared for encryption/upload.
 class PreparedAttachmentInput {
   final Uint8List bytes;
@@ -80,7 +108,10 @@ class AttachmentService {
 
   // ---- Pickers ----
 
-  Future<PendingAttachment?> pickImage({bool fromCamera = false}) async {
+  Future<PendingAttachment?> pickImage({
+    bool fromCamera = false,
+    AttachmentUploadProgressCallback? onProgress,
+  }) async {
     final XFile? file = fromCamera
         ? await _imagePicker.pickImage(
             source: ImageSource.camera,
@@ -91,27 +122,43 @@ class AttachmentService {
             imageQuality: 85,
           );
     if (file == null) return null;
+    onProgress?.call(
+      const AttachmentUploadProgress(stage: AttachmentUploadStage.preparing),
+    );
     final prepared = await prepareGalleryPhotoForUpload(File(file.path));
-    return _processPrepared(prepared);
+    return _processPrepared(prepared, onProgress: onProgress);
   }
 
-  Future<PendingAttachment?> pickVideo({bool fromCamera = false}) async {
+  Future<PendingAttachment?> pickVideo({
+    bool fromCamera = false,
+    AttachmentUploadProgressCallback? onProgress,
+  }) async {
     final XFile? file = fromCamera
         ? await _imagePicker.pickVideo(source: ImageSource.camera)
         : await _imagePicker.pickVideo(source: ImageSource.gallery);
     if (file == null) return null;
+    onProgress?.call(
+      const AttachmentUploadProgress(stage: AttachmentUploadStage.preparing),
+    );
     final prepared = await prepareFileForUpload(File(file.path));
-    return _processPrepared(prepared);
+    return _processPrepared(prepared, onProgress: onProgress);
   }
 
-  Future<PendingAttachment?> pickFile() async {
+  Future<PendingAttachment?> pickFile({
+    AttachmentUploadProgressCallback? onProgress,
+  }) async {
     final file = await fs.openFile();
     if (file == null) return null;
+    onProgress?.call(
+      const AttachmentUploadProgress(stage: AttachmentUploadStage.preparing),
+    );
     final prepared = await prepareSelectedFileForUpload(file);
-    return _processPrepared(prepared);
+    return _processPrepared(prepared, onProgress: onProgress);
   }
 
-  Future<PendingAttachment?> pickVoice() async {
+  Future<PendingAttachment?> pickVoice({
+    AttachmentUploadProgressCallback? onProgress,
+  }) async {
     final file = await fs.openFile(
       acceptedTypeGroups: const [
         fs.XTypeGroup(
@@ -133,6 +180,9 @@ class AttachmentService {
       ],
     );
     if (file == null) return null;
+    onProgress?.call(
+      const AttachmentUploadProgress(stage: AttachmentUploadStage.preparing),
+    );
     final prepared = await prepareSelectedFileForUpload(file);
     return _processPrepared(
       PreparedAttachmentInput(
@@ -142,13 +192,18 @@ class AttachmentService {
         messageType: MessageType.voice,
         originalFileSize: prepared.originalFileSize,
       ),
+      onProgress: onProgress,
     );
   }
 
   Future<PendingAttachment> uploadVoiceNote(
     File file, {
     Duration? duration,
+    AttachmentUploadProgressCallback? onProgress,
   }) async {
+    onProgress?.call(
+      const AttachmentUploadProgress(stage: AttachmentUploadStage.preparing),
+    );
     final prepared = await prepareFileForUpload(file);
     return _processPrepared(
       PreparedAttachmentInput(
@@ -161,6 +216,7 @@ class AttachmentService {
         originalFileSize: prepared.originalFileSize,
       ),
       durationMs: duration?.inMilliseconds,
+      onProgress: onProgress,
     );
   }
 
@@ -225,6 +281,7 @@ class AttachmentService {
   Future<PendingAttachment> _processPrepared(
     PreparedAttachmentInput prepared, {
     int? durationMs,
+    AttachmentUploadProgressCallback? onProgress,
   }) async {
     final bytes = prepared.bytes;
     final fileName = prepared.fileName;
@@ -232,6 +289,9 @@ class AttachmentService {
     final msgType = prepared.messageType;
 
     // 1. Generate a random AES-256-GCM key + 12-byte nonce.
+    onProgress?.call(
+      const AttachmentUploadProgress(stage: AttachmentUploadStage.encrypting),
+    );
     final secretKey = await _cipher.newSecretKey();
     final nonce = _cipher.newNonce();
 
@@ -256,9 +316,33 @@ class AttachmentService {
     );
 
     // 5. Upload the ciphertext directly to object storage.
-    await _api.uploadBytes(uploadReq.uploadUrl, ciphertext, mimeType);
+    onProgress?.call(
+      AttachmentUploadProgress(
+        stage: AttachmentUploadStage.uploading,
+        totalBytes: ciphertext.length,
+      ),
+    );
+    await _api.uploadBytes(
+      uploadReq.uploadUrl,
+      ciphertext,
+      mimeType,
+      onProgress: (sent, total) => onProgress?.call(
+        AttachmentUploadProgress(
+          stage: AttachmentUploadStage.uploading,
+          sentBytes: sent,
+          totalBytes: total,
+        ),
+      ),
+    );
 
     // 6. Confirm the upload.
+    onProgress?.call(
+      AttachmentUploadProgress(
+        stage: AttachmentUploadStage.confirming,
+        sentBytes: ciphertext.length,
+        totalBytes: ciphertext.length,
+      ),
+    );
     await _api.confirmUpload(uploadReq.attachmentId);
 
     return PendingAttachment(

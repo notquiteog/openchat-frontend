@@ -2,6 +2,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'app.dart';
 import 'providers/auth_provider.dart';
 import 'providers/call_provider.dart';
@@ -16,6 +17,7 @@ import 'services/notification_service.dart';
 import 'services/push_notification_service.dart';
 import 'services/secure_storage_service.dart';
 import 'services/websocket_service.dart';
+import 'utils/local_conversation_preferences.dart';
 
 /// Background FCM handler — runs in a separate isolate when the app is
 /// terminated. Release pushes include a notification payload so the OS can show
@@ -33,13 +35,56 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
     );
   } else if (message.notification == null &&
       message.data['type'] == 'new_message') {
+    final conversationId = message.data['conversation_id'] as String? ?? 'push';
+    if (!await _shouldShowMessageNotification(conversationId, message.data)) {
+      return;
+    }
     await NotificationService.init();
     await NotificationService.showMessage(
-      conversationId: message.data['conversation_id'] as String? ?? 'push',
+      conversationId: conversationId,
       title: 'OpenChat',
       body: 'You have a new message',
+      mentionedUserIds: mentionedUserIdsFromNotificationData(message.data),
+      mentionedForCurrentUser: notificationDataMentionsCurrentUser(
+        message.data,
+        await _notificationCurrentUserId(),
+      ),
     );
   }
+}
+
+Future<String> _notificationCurrentUserId() async {
+  final prefs = await SharedPreferences.getInstance();
+  return prefs.getString(notificationCurrentUserPreferenceKey) ?? '';
+}
+
+Future<bool> _shouldShowMessageNotification(
+  String conversationId,
+  Map<String, dynamic> data,
+) async {
+  final prefs = await SharedPreferences.getInstance();
+  final currentUserId =
+      prefs.getString(notificationCurrentUserPreferenceKey) ?? '';
+  final preferences = decodeConversationNotificationPreferences(
+    prefs.getString(conversationNotificationPreferencesPreferenceKey),
+  );
+  for (final id
+      in prefs.getStringList(mutedConversationsPreferenceKey) ?? const []) {
+    preferences.putIfAbsent(
+      id,
+      () => const ConversationNotificationPreference.mutedForever(),
+    );
+  }
+  return shouldNotifyForConversation(
+    conversationId: conversationId,
+    preferences: preferences,
+    currentUserId: currentUserId,
+    mentionedUserIds: mentionedUserIdsFromNotificationData(data),
+    mentionedForCurrentUser: notificationDataMentionsCurrentUser(
+      data,
+      currentUserId,
+    ),
+  );
 }
 
 void main() async {

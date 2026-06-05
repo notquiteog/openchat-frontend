@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:math';
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
@@ -6,9 +9,7 @@ class SecureStorageStatus {
   final bool available;
   final String? warning;
 
-  const SecureStorageStatus.available()
-      : available = true,
-        warning = null;
+  const SecureStorageStatus.available() : available = true, warning = null;
 
   const SecureStorageStatus.unavailable(this.warning) : available = false;
 }
@@ -38,6 +39,7 @@ class SecureStorageService {
   static const _keyRefreshToken = 'refresh_token';
   static const _keyBiometricEnabled = 'biometric_enabled';
   static const _keyAppLockEnabled = 'app_lock_enabled';
+  static const _keySearchIndexKey = 'search_index_key_v1';
   static const _keyStorageProbe = '_openchat_secure_storage_probe';
 
   static const linuxKeyringWarning =
@@ -117,6 +119,16 @@ class SecureStorageService {
   Future<String?> getUserID() => _readOrNull(_keyUserID);
   Future<String?> getUsername() => _readOrNull(_keyUsername);
 
+  Future<String> getOrCreateSearchIndexKey() async {
+    final existing = await _readOrNull(_keySearchIndexKey);
+    if (existing != null && existing.isNotEmpty) return existing;
+    final random = Random.secure();
+    final bytes = List<int>.generate(32, (_) => random.nextInt(256));
+    final encoded = base64Encode(bytes);
+    await _storage.write(key: _keySearchIndexKey, value: encoded);
+    return encoded;
+  }
+
   Future<bool> isLoggedIn() async {
     final token = await getAccessToken();
     return token != null && token.isNotEmpty;
@@ -147,7 +159,9 @@ class SecureStorageService {
   }
 
   Future<void> setBiometricEnabled(bool enabled) => _storage.write(
-      key: _keyBiometricEnabled, value: enabled ? 'true' : 'false');
+    key: _keyBiometricEnabled,
+    value: enabled ? 'true' : 'false',
+  );
 
   Future<bool> shouldRequireBiometricKeyUnlock() async {
     if (!await getBiometricEnabled()) return false;
@@ -167,7 +181,9 @@ class SecureStorageService {
   }
 
   Future<void> setAppLockEnabled(bool enabled) => _storage.write(
-      key: _keyAppLockEnabled, value: enabled ? 'true' : 'false');
+    key: _keyAppLockEnabled,
+    value: enabled ? 'true' : 'false',
+  );
 
   /// Message encryption/decryption needs the private key during normal app use.
   /// Biometric key unlock only protects explicit private-key export.

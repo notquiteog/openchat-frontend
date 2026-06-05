@@ -1,16 +1,22 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
     show GlassButton, GlassModalSheet, SheetState;
+import '../../models/chat_folder.dart';
 import '../../models/conversation.dart';
 import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
+import '../../services/message_search_service.dart';
 import '../../config/api_config.dart';
+import '../../utils/mention_utils.dart';
+import '../../utils/local_conversation_preferences.dart';
+import '../../utils/smart_inbox_filter.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/stories_strip.dart';
 import '../channels/channel_screen.dart';
@@ -26,12 +32,15 @@ class ConversationsScreen extends StatefulWidget {
 
 class _ConversationsScreenState extends State<ConversationsScreen> {
   int _storiesRefreshKey = 0;
+  String? _selectedFolderId;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<ChatProvider>().loadConversations();
+      final chat = context.read<ChatProvider>();
+      chat.loadConversations();
+      chat.loadChatFolders();
     });
   }
 
@@ -41,11 +50,92 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final chat = context.watch<ChatProvider>();
     final settings = context.watch<SettingsProvider>();
     final currentUserID = auth.currentUser?.id ?? '';
-    final conversations = chat.conversations.where((c) {
-      if (c.isChannel) return !settings.channelsOwnTab;
-      if (c.isBotDM(currentUserID)) return !settings.botsOwnTab;
-      return true;
-    }).toList();
+    final currentUsername = auth.currentUser?.username ?? '';
+    final drafts = settings.messageDrafts;
+    final pinnedConversationIds = settings.pinnedConversationIds;
+    final archivedConversationIds = settings.archivedConversationIds;
+    final folders = chat.chatFolders;
+    final selectedFolder = folders
+        .where((folder) => folder.id == _selectedFolderId)
+        .firstOrNull;
+    final availableFilters = availableSmartInboxFilters(
+      channelsOwnTab: settings.channelsOwnTab,
+      botsOwnTab: settings.botsOwnTab,
+      hasArchived: archivedConversationIds.isNotEmpty,
+    );
+    final selectedFilter = effectiveSmartInboxFilter(
+      settings.smartInboxFilter,
+      channelsOwnTab: settings.channelsOwnTab,
+      botsOwnTab: settings.botsOwnTab,
+      hasArchived: archivedConversationIds.isNotEmpty,
+    );
+    final folderSourceConversations = chat.conversations
+      ..sort(
+        (a, b) => compareConversationsForInbox(
+          a,
+          b,
+          drafts: drafts,
+          pinnedConversationIds: pinnedConversationIds,
+        ),
+      );
+    final baseConversations =
+        chat.conversations
+            .where(
+              (conversation) => conversationBelongsInChatsTab(
+                conversation,
+                currentUserId: currentUserID,
+                channelsOwnTab: settings.channelsOwnTab,
+                botsOwnTab: settings.botsOwnTab,
+              ),
+            )
+            .toList()
+          ..sort(
+            (a, b) => compareConversationsForInbox(
+              a,
+              b,
+              drafts: drafts,
+              pinnedConversationIds: pinnedConversationIds,
+            ),
+          );
+    final folderCounts = {
+      for (final folder in folders)
+        folder.id: _folderConversationCount(
+          folder,
+          folderSourceConversations,
+          archivedConversationIds,
+        ),
+    };
+    final filterCounts = {
+      for (final filter in availableFilters)
+        filter: baseConversations
+            .where(
+              (conversation) => conversationMatchesSmartInboxFilter(
+                conversation,
+                filter: filter,
+                currentUserId: currentUserID,
+                currentUsername: currentUsername,
+                archivedConversationIds: archivedConversationIds,
+              ),
+            )
+            .length,
+    };
+    final conversations = selectedFolder == null
+        ? baseConversations
+              .where(
+                (conversation) => conversationMatchesSmartInboxFilter(
+                  conversation,
+                  filter: selectedFilter,
+                  currentUserId: currentUserID,
+                  currentUsername: currentUsername,
+                  archivedConversationIds: archivedConversationIds,
+                ),
+              )
+              .toList()
+        : _folderConversations(
+            selectedFolder,
+            folderSourceConversations,
+            archivedConversationIds,
+          );
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -68,6 +158,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
             onPressed: () => _showSearch(context),
           ),
           IconButton(
+            icon: const Icon(Icons.create_new_folder_outlined),
+            onPressed: () => _showFolderManager(context),
+          ),
+          IconButton(
             icon: const Icon(Icons.settings_outlined),
             onPressed: () => Navigator.push(
               context,
@@ -81,6 +175,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           : RefreshIndicator(
               onRefresh: () async {
                 await chat.loadConversations();
+                await chat.loadChatFolders();
                 if (mounted) setState(() => _storiesRefreshKey += 1);
               },
               displacement: MediaQuery.paddingOf(context).top + kToolbarHeight,
@@ -92,9 +187,33 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 ),
                 children: [
                   StoriesStrip(key: ValueKey(_storiesRefreshKey)),
-                  const SizedBox(height: 4),
+                  _ChatFolderBar(
+                    folders: folders,
+                    selectedFolderId: selectedFolder?.id,
+                    counts: folderCounts,
+                    onAllSelected: () =>
+                        setState(() => _selectedFolderId = null),
+                    onFolderSelected: (folder) =>
+                        setState(() => _selectedFolderId = folder.id),
+                    onManage: () => _showFolderManager(context),
+                  ),
+                  if (selectedFolder == null)
+                    _SmartInboxBar(
+                      filters: availableFilters,
+                      selected: selectedFilter,
+                      counts: filterCounts,
+                      onSelected: settings.setSmartInboxFilter,
+                    ),
+                  const SizedBox(height: 8),
                   if (conversations.isEmpty)
-                    SizedBox(height: 360, child: _buildEmpty(context))
+                    SizedBox(
+                      height: 360,
+                      child: selectedFolder != null
+                          ? _buildFolderEmpty(context, selectedFolder)
+                          : baseConversations.isEmpty
+                          ? _buildEmpty(context)
+                          : _buildFilterEmpty(context, selectedFilter),
+                    )
                   else
                     for (var index = 0; index < conversations.length; index++)
                       _AnimatedConversationTile(
@@ -102,11 +221,30 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                         index: index,
                         child: _ConversationTile(
                           conversation: conversations[index],
+                          draft: drafts[conversations[index].id],
+                          isPinned: pinnedConversationIds.contains(
+                            conversations[index].id,
+                          ),
+                          notificationPreference: settings
+                              .notificationPreferenceForConversation(
+                                conversations[index].id,
+                              ),
+                          unreadMentionMessageId: unreadMentionMessageId(
+                            conversations[index],
+                            currentUsername,
+                          ),
                           currentUserID: currentUserID,
                           onTap: () =>
                               _openConversation(context, conversations[index]),
-                          onLongPress: () =>
-                              _confirmDelete(context, conversations[index]),
+                          onUnreadMentionTap: (messageId) => _openConversation(
+                            context,
+                            conversations[index],
+                            initialMessageId: messageId,
+                          ),
+                          onLongPress: () => _showConversationActions(
+                            context,
+                            conversations[index],
+                          ),
                         ),
                       ),
                 ],
@@ -128,6 +266,223 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _showConversationActions(
+    BuildContext context,
+    Conversation conv,
+  ) async {
+    final settings = context.read<SettingsProvider>();
+    final isPinned = settings.isConversationPinned(conv.id);
+    final isArchived = settings.isConversationArchived(conv.id);
+    final notificationPreference = settings
+        .notificationPreferenceForConversation(conv.id);
+    final notificationLabel = settings.notificationLabelForConversation(
+      conv.id,
+    );
+    final selected = await GlassModalSheet.show<String>(
+      context: context,
+      initialState: SheetState.half,
+      halfSize: 0.42,
+      enableInteractionGlow: true,
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            _SheetTile(
+              icon: isPinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
+              label: isPinned ? 'Unpin Chat' : 'Pin Chat',
+              onTap: () => Navigator.pop(ctx, 'pin'),
+            ),
+            _SheetTile(
+              icon: _notificationPreferenceIcon(notificationPreference),
+              label: 'Notifications: $notificationLabel',
+              onTap: () => Navigator.pop(ctx, 'notifications'),
+            ),
+            _SheetTile(
+              icon: isArchived
+                  ? Icons.unarchive_outlined
+                  : Icons.archive_outlined,
+              label: isArchived ? 'Unarchive Chat' : 'Archive Chat',
+              onTap: () => Navigator.pop(ctx, 'archive'),
+            ),
+            _SheetTile(
+              icon: Icons.delete_outline_rounded,
+              label: _deleteActionLabel(context, conv),
+              onTap: () => Navigator.pop(ctx, 'delete'),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+    if (selected == 'pin') {
+      await settings.toggleConversationPinned(conv.id);
+    } else if (selected == 'notifications' && context.mounted) {
+      await _showConversationNotificationControls(context, conv);
+    } else if (selected == 'archive') {
+      await settings.toggleConversationArchived(conv.id);
+    } else if (selected == 'delete' && context.mounted) {
+      await _confirmDelete(context, conv);
+    }
+  }
+
+  Future<void> _showConversationNotificationControls(
+    BuildContext context,
+    Conversation conv,
+  ) async {
+    final settings = context.read<SettingsProvider>();
+    final selected = await GlassModalSheet.show<String>(
+      context: context,
+      initialState: SheetState.half,
+      halfSize: 0.58,
+      enableInteractionGlow: true,
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            _SheetTile(
+              icon: Icons.notifications_active_outlined,
+              label: 'All messages',
+              onTap: () => Navigator.pop(ctx, 'all'),
+            ),
+            _SheetTile(
+              icon: Icons.notification_important_outlined,
+              label: 'Mentions only',
+              onTap: () => Navigator.pop(ctx, 'mentions'),
+            ),
+            _SheetTile(
+              icon: Icons.notifications_paused_outlined,
+              label: 'Mute 1 hour',
+              onTap: () => Navigator.pop(ctx, 'mute_1h'),
+            ),
+            _SheetTile(
+              icon: Icons.notifications_paused_outlined,
+              label: 'Mute 8 hours',
+              onTap: () => Navigator.pop(ctx, 'mute_8h'),
+            ),
+            _SheetTile(
+              icon: Icons.schedule_outlined,
+              label: 'Mute until...',
+              onTap: () => Navigator.pop(ctx, 'mute_until'),
+            ),
+            _SheetTile(
+              icon: Icons.notifications_off_outlined,
+              label: 'Mute forever',
+              onTap: () => Navigator.pop(ctx, 'mute_forever'),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+    if (selected == null) return;
+
+    switch (selected) {
+      case 'all':
+        await settings.setConversationNotificationPreference(
+          conv.id,
+          const ConversationNotificationPreference.all(),
+        );
+      case 'mentions':
+        await settings.setConversationMentionsOnly(conv.id);
+      case 'mute_1h':
+        await settings.muteConversationUntil(
+          conv.id,
+          DateTime.now().add(const Duration(hours: 1)),
+        );
+      case 'mute_8h':
+        await settings.muteConversationUntil(
+          conv.id,
+          DateTime.now().add(const Duration(hours: 8)),
+        );
+      case 'mute_forever':
+        await settings.setConversationMuted(conv.id, true);
+      case 'mute_until':
+        if (!context.mounted) return;
+        final mutedUntil = await _pickMuteUntil(context);
+        if (mutedUntil != null) {
+          await settings.muteConversationUntil(conv.id, mutedUntil);
+        }
+    }
+  }
+
+  Future<DateTime?> _pickMuteUntil(BuildContext context) async {
+    final now = DateTime.now();
+    var selected = now.add(const Duration(hours: 1));
+    return showModalBottomSheet<DateTime>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => GlassBottomSheetFrame(
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 216,
+                  child: CupertinoDatePicker(
+                    mode: CupertinoDatePickerMode.dateAndTime,
+                    minimumDate: now.add(const Duration(minutes: 1)),
+                    initialDateTime: selected,
+                    onDateTimeChanged: (value) =>
+                        setSheetState(() => selected = value),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () => Navigator.pop(ctx, selected),
+                          child: const Text('Done'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  IconData _notificationPreferenceIcon(
+    ConversationNotificationPreference preference,
+  ) {
+    if (preference.isMutedAt(DateTime.now())) {
+      return Icons.notifications_off_outlined;
+    }
+    return switch (preference.mode) {
+      ConversationNotificationMode.mentionsOnly =>
+        Icons.notification_important_outlined,
+      _ => Icons.notifications_active_outlined,
+    };
+  }
+
+  String _deleteActionLabel(BuildContext context, Conversation conv) {
+    final currentUserId = context.read<AuthProvider>().currentUser?.id;
+    if (conv.isDM) return 'Delete Conversation';
+    final isOwner = conv.createdBy == currentUserId;
+    if (!isOwner) return conv.isChannel ? 'Leave Channel' : 'Leave Group';
+    return conv.isChannel ? 'Delete Channel' : 'Delete Group';
   }
 
   Future<void> _confirmDelete(BuildContext context, Conversation conv) async {
@@ -227,13 +582,20 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     }
   }
 
-  void _openConversation(BuildContext context, Conversation conv) {
+  void _openConversation(
+    BuildContext context,
+    Conversation conv, {
+    String? initialMessageId,
+  }) {
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => conv.isChannel
-            ? ChannelFeedScreen(channel: conv)
-            : ChatScreen(conversation: conv),
+            ? ChannelFeedScreen(channel: conv, initialPostId: initialMessageId)
+            : ChatScreen(
+                conversation: conv,
+                initialMessageId: initialMessageId,
+              ),
       ),
     );
   }
@@ -290,14 +652,66 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     );
   }
 
+  Widget _buildFilterEmpty(
+    BuildContext context,
+    SmartInboxFilter selectedFilter,
+  ) {
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: GlassCard(
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: scheme.primary.withValues(alpha: 0.10),
+                ),
+                child: Icon(
+                  _smartInboxFilterIcon(selectedFilter),
+                  size: 30,
+                  color: scheme.primary.withValues(alpha: 0.65),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                _smartInboxEmptyTitle(selectedFilter),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _smartInboxEmptyMessage(selectedFilter),
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: scheme.onSurface.withValues(alpha: 0.50),
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _showSearch(BuildContext context) async {
     final api = context.read<ApiService>();
     final chat = context.read<ChatProvider>();
+    final currentUserId = context.read<AuthProvider>().currentUser?.id ?? '';
 
     await showSearch(
       context: context,
       delegate: _ChatSearchDelegate(
         api: api,
+        chat: chat,
+        currentUserId: currentUserId,
         onUserSelected: (userID) async {
           final conv = await chat.openDM(userID);
           if (context.mounted) {
@@ -314,6 +728,21 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
               builder: (_) => ChannelFeedScreen(channel: channel),
             ),
           );
+        },
+        onMessageSelected: (result) async {
+          var conv = chat.conversations
+              .where((conversation) => conversation.id == result.conversationId)
+              .firstOrNull;
+          if (conv == null) {
+            await chat.loadConversations();
+            conv = chat.conversations
+                .where(
+                  (conversation) => conversation.id == result.conversationId,
+                )
+                .firstOrNull;
+          }
+          if (!context.mounted || conv == null) return;
+          _openConversation(context, conv, initialMessageId: result.messageId);
         },
       ),
     );
@@ -432,6 +861,676 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
     }
   }
+
+  int _folderConversationCount(
+    ChatFolder folder,
+    List<Conversation> conversations,
+    Set<String> archivedConversationIds,
+  ) {
+    return _folderConversations(
+      folder,
+      conversations,
+      archivedConversationIds,
+    ).length;
+  }
+
+  List<Conversation> _folderConversations(
+    ChatFolder folder,
+    List<Conversation> conversations,
+    Set<String> archivedConversationIds,
+  ) {
+    final ids = folder.conversationIds.toSet();
+    return conversations
+        .where(
+          (conversation) =>
+              ids.contains(conversation.id) &&
+              (folder.includeArchived ||
+                  !archivedConversationIds.contains(conversation.id)),
+        )
+        .toList();
+  }
+
+  Widget _buildFolderEmpty(BuildContext context, ChatFolder folder) {
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: GlassCard(
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: scheme.primary.withValues(alpha: 0.10),
+                ),
+                child: Icon(
+                  Icons.folder_open_outlined,
+                  size: 30,
+                  color: scheme.primary.withValues(alpha: 0.65),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                folder.name,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'No chats in this folder',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: scheme.onSurface.withValues(alpha: 0.50),
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 18),
+              GlassButtonWidget.icon(
+                onPressed: () => _showFolderEditor(context, existing: folder),
+                icon: const Icon(Icons.edit_outlined, size: 18),
+                label: const Text('Edit folder'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showFolderManager(BuildContext context) async {
+    await GlassModalSheet.show<void>(
+      context: context,
+      initialState: SheetState.half,
+      halfSize: 0.50,
+      enableInteractionGlow: true,
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: Consumer<ChatProvider>(
+          builder: (context, chat, _) {
+            final folders = chat.chatFolders;
+            return SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 10, 10, 6),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.folder_copy_outlined, size: 20),
+                        const SizedBox(width: 10),
+                        Text(
+                          'Chat folders',
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w800),
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          tooltip: 'New folder',
+                          icon: const Icon(Icons.create_new_folder_outlined),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            _showFolderEditor(context);
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (folders.isEmpty)
+                    _SheetTile(
+                      icon: Icons.create_new_folder_outlined,
+                      label: 'New Folder',
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _showFolderEditor(context);
+                      },
+                    )
+                  else
+                    for (final folder in folders)
+                      _FolderManagerTile(
+                        folder: folder,
+                        count: _folderConversationCount(
+                          folder,
+                          chat.conversations,
+                          context
+                              .read<SettingsProvider>()
+                              .archivedConversationIds,
+                        ),
+                        onEdit: () {
+                          Navigator.pop(ctx);
+                          _showFolderEditor(context, existing: folder);
+                        },
+                        onDelete: () {
+                          Navigator.pop(ctx);
+                          _confirmDeleteFolder(context, folder);
+                        },
+                      ),
+                  const SizedBox(height: 12),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showFolderEditor(
+    BuildContext context, {
+    ChatFolder? existing,
+  }) async {
+    final chat = context.read<ChatProvider>();
+    final settings = context.read<SettingsProvider>();
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final conversations = chat.conversations
+      ..sort(
+        (a, b) => compareConversationsForInbox(
+          a,
+          b,
+          drafts: settings.messageDrafts,
+          pinnedConversationIds: settings.pinnedConversationIds,
+        ),
+      );
+    final selectedIds = {...?existing?.conversationIds};
+    var includeArchived = existing?.includeArchived ?? false;
+    String? errorText;
+
+    final draft = await showDialog<_FolderDraft>(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) => GlassAlertDialog(
+          icon: Icon(
+            existing == null
+                ? Icons.create_new_folder_outlined
+                : Icons.folder_outlined,
+          ),
+          title: Text(existing == null ? 'New folder' : 'Edit folder'),
+          contentPadding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  autofocus: true,
+                  maxLength: 64,
+                  decoration: InputDecoration(
+                    labelText: 'Folder name',
+                    errorText: errorText,
+                    counterText: '',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                CheckboxListTile(
+                  value: includeArchived,
+                  onChanged: (value) =>
+                      setDialogState(() => includeArchived = value ?? false),
+                  controlAffinity: ListTileControlAffinity.leading,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Include archived chats'),
+                ),
+                const SizedBox(height: 8),
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.sizeOf(dialogCtx).height * 0.42,
+                  ),
+                  child: conversations.isEmpty
+                      ? const Center(child: Text('No conversations yet'))
+                      : ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: conversations.length,
+                          itemBuilder: (context, index) {
+                            final conversation = conversations[index];
+                            final userId =
+                                context.read<AuthProvider>().currentUser?.id ??
+                                '';
+                            final name = conversation.displayName(userId);
+                            final selected = selectedIds.contains(
+                              conversation.id,
+                            );
+                            return CheckboxListTile(
+                              value: selected,
+                              onChanged: (value) {
+                                setDialogState(() {
+                                  if (value == true) {
+                                    selectedIds.add(conversation.id);
+                                  } else {
+                                    selectedIds.remove(conversation.id);
+                                  }
+                                });
+                              },
+                              controlAffinity: ListTileControlAffinity.leading,
+                              contentPadding: EdgeInsets.zero,
+                              secondary: Icon(
+                                conversation.isChannel
+                                    ? Icons.campaign_outlined
+                                    : conversation.isGroup
+                                    ? Icons.group_outlined
+                                    : conversation.isBotDM(userId)
+                                    ? Icons.smart_toy_outlined
+                                    : Icons.person_outline_rounded,
+                              ),
+                              title: Text(
+                                name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final name = nameCtrl.text.trim();
+                if (name.isEmpty) {
+                  setDialogState(() => errorText = 'Required');
+                  return;
+                }
+                Navigator.pop(
+                  dialogCtx,
+                  _FolderDraft(
+                    name: name,
+                    includeArchived: includeArchived,
+                    conversationIds: selectedIds.toList(),
+                  ),
+                );
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    nameCtrl.dispose();
+    if (draft == null || !context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final saved = await chat.saveChatFolder(
+        ChatFolder(
+          id: existing?.id ?? '',
+          userId: existing?.userId ?? '',
+          name: draft.name,
+          position: existing?.position ?? chat.chatFolders.length,
+          includeArchived: draft.includeArchived,
+          conversationIds: draft.conversationIds,
+          createdAt: existing?.createdAt,
+          updatedAt: existing?.updatedAt,
+        ),
+      );
+      if (mounted) setState(() => _selectedFolderId = saved.id);
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Folder failed: $e')));
+    }
+  }
+
+  Future<void> _confirmDeleteFolder(
+    BuildContext context,
+    ChatFolder folder,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => GlassAlertDialog(
+        icon: const Icon(Icons.folder_delete_outlined),
+        title: const Text('Delete folder?'),
+        content: Text(folder.name),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await context.read<ChatProvider>().removeChatFolder(folder.id);
+      if (mounted && _selectedFolderId == folder.id) {
+        setState(() => _selectedFolderId = null);
+      }
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+    }
+  }
+}
+
+class _FolderDraft {
+  final String name;
+  final bool includeArchived;
+  final List<String> conversationIds;
+
+  const _FolderDraft({
+    required this.name,
+    required this.includeArchived,
+    required this.conversationIds,
+  });
+}
+
+class _ChatFolderBar extends StatelessWidget {
+  final List<ChatFolder> folders;
+  final String? selectedFolderId;
+  final Map<String, int> counts;
+  final VoidCallback onAllSelected;
+  final ValueChanged<ChatFolder> onFolderSelected;
+  final VoidCallback onManage;
+
+  const _ChatFolderBar({
+    required this.folders,
+    required this.selectedFolderId,
+    required this.counts,
+    required this.onAllSelected,
+    required this.onFolderSelected,
+    required this.onManage,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: 48,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+        itemCount: folders.length + 2,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            return _FolderChoiceChip(
+              icon: Icons.all_inbox_outlined,
+              label: 'All',
+              selected: selectedFolderId == null,
+              onSelected: onAllSelected,
+            );
+          }
+          if (index == folders.length + 1) {
+            return IconButton.filledTonal(
+              tooltip: 'Folders',
+              style: IconButton.styleFrom(
+                backgroundColor: scheme.surfaceContainerHighest.withValues(
+                  alpha: 0.42,
+                ),
+                foregroundColor: scheme.primary,
+                minimumSize: const Size(40, 36),
+              ),
+              icon: const Icon(Icons.create_new_folder_outlined, size: 18),
+              onPressed: onManage,
+            );
+          }
+          final folder = folders[index - 1];
+          return _FolderChoiceChip(
+            icon: Icons.folder_outlined,
+            label: folder.name,
+            count: counts[folder.id] ?? 0,
+            selected: selectedFolderId == folder.id,
+            onSelected: () => onFolderSelected(folder),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _FolderChoiceChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final int? count;
+  final bool selected;
+  final VoidCallback onSelected;
+
+  const _FolderChoiceChip({
+    required this.icon,
+    required this.label,
+    this.count,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ChoiceChip(
+      selected: selected,
+      onSelected: (_) => onSelected(),
+      showCheckmark: false,
+      visualDensity: VisualDensity.compact,
+      backgroundColor: scheme.surfaceContainerHighest.withValues(alpha: 0.42),
+      selectedColor: scheme.primary.withValues(alpha: 0.17),
+      side: BorderSide(
+        color: selected
+            ? scheme.primary.withValues(alpha: 0.55)
+            : scheme.outlineVariant.withValues(alpha: 0.28),
+      ),
+      label: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 24, maxWidth: 160),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 15,
+              color: selected
+                  ? scheme.primary
+                  : scheme.onSurface.withValues(alpha: 0.62),
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                  color: selected ? scheme.primary : null,
+                ),
+              ),
+            ),
+            if (count != null && count! > 0) ...[
+              const SizedBox(width: 6),
+              _InboxCountBadge(count: count!, active: selected),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FolderManagerTile extends StatelessWidget {
+  final ChatFolder folder;
+  final int count;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  const _FolderManagerTile({
+    required this.folder,
+    required this.count,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ListTile(
+      leading: CircleAvatar(
+        radius: 18,
+        backgroundColor: scheme.primary.withValues(alpha: 0.12),
+        child: Icon(Icons.folder_outlined, size: 18, color: scheme.primary),
+      ),
+      title: Text(
+        folder.name,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontWeight: FontWeight.w700),
+      ),
+      subtitle: Text(
+        count == 1 ? '1 chat' : '$count chats',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: IconButton(
+        tooltip: 'Delete folder',
+        icon: const Icon(Icons.delete_outline_rounded),
+        color: scheme.error,
+        onPressed: onDelete,
+      ),
+      onTap: onEdit,
+    );
+  }
+}
+
+class _SmartInboxBar extends StatelessWidget {
+  final List<SmartInboxFilter> filters;
+  final SmartInboxFilter selected;
+  final Map<SmartInboxFilter, int> counts;
+  final ValueChanged<SmartInboxFilter> onSelected;
+
+  const _SmartInboxBar({
+    required this.filters,
+    required this.selected,
+    required this.counts,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: 48,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+        itemCount: filters.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final filter = filters[index];
+          final active = filter == selected;
+          final count = counts[filter] ?? 0;
+          return ChoiceChip(
+            selected: active,
+            onSelected: (_) => onSelected(filter),
+            showCheckmark: false,
+            visualDensity: VisualDensity.compact,
+            backgroundColor: scheme.surfaceContainerHighest.withValues(
+              alpha: 0.42,
+            ),
+            selectedColor: scheme.primary.withValues(alpha: 0.17),
+            side: BorderSide(
+              color: active
+                  ? scheme.primary.withValues(alpha: 0.55)
+                  : scheme.outlineVariant.withValues(alpha: 0.28),
+            ),
+            label: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 24),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _smartInboxFilterIcon(filter),
+                    size: 15,
+                    color: active
+                        ? scheme.primary
+                        : scheme.onSurface.withValues(alpha: 0.62),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    smartInboxFilterLabel(filter),
+                    style: TextStyle(
+                      fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+                      color: active ? scheme.primary : null,
+                    ),
+                  ),
+                  if (count > 0) ...[
+                    const SizedBox(width: 6),
+                    _InboxCountBadge(count: count, active: active),
+                  ],
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _InboxCountBadge extends StatelessWidget {
+  final int count;
+  final bool active;
+
+  const _InboxCountBadge({required this.count, required this.active});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = active ? scheme.primary : scheme.onSurfaceVariant;
+    return Container(
+      constraints: const BoxConstraints(minWidth: 20),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: active ? 0.16 : 0.10),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        count > 99 ? '99+' : '$count',
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+IconData _smartInboxFilterIcon(SmartInboxFilter filter) {
+  return switch (filter) {
+    SmartInboxFilter.all => Icons.all_inbox_outlined,
+    SmartInboxFilter.unread => Icons.mark_chat_unread_outlined,
+    SmartInboxFilter.mentions => Icons.alternate_email_rounded,
+    SmartInboxFilter.dms => Icons.person_outline_rounded,
+    SmartInboxFilter.groups => Icons.group_outlined,
+    SmartInboxFilter.channels => Icons.campaign_outlined,
+    SmartInboxFilter.bots => Icons.smart_toy_outlined,
+    SmartInboxFilter.archived => Icons.archive_outlined,
+  };
+}
+
+String _smartInboxEmptyMessage(SmartInboxFilter filter) {
+  return switch (filter) {
+    SmartInboxFilter.unread => 'Everything here is caught up',
+    SmartInboxFilter.mentions => 'No unread mentions need your attention',
+    _ => 'This inbox is clear',
+  };
+}
+
+String _smartInboxEmptyTitle(SmartInboxFilter filter) {
+  return switch (filter) {
+    SmartInboxFilter.mentions => 'No unread mentions',
+    _ => 'No ${smartInboxFilterLabel(filter)} chats',
+  };
 }
 
 // ── Animated conversation tile ────────────────────────────────────────────────
@@ -496,14 +1595,25 @@ class _AnimatedConversationTileState extends State<_AnimatedConversationTile>
 
 class _ConversationTile extends StatelessWidget {
   final Conversation conversation;
+  final MessageDraft? draft;
+  final bool isPinned;
+  final ConversationNotificationPreference notificationPreference;
+  final String? unreadMentionMessageId;
   final String currentUserID;
   final VoidCallback onTap;
+  final ValueChanged<String>? onUnreadMentionTap;
   final VoidCallback? onLongPress;
 
   const _ConversationTile({
     required this.conversation,
+    this.draft,
+    this.isPinned = false,
+    this.notificationPreference =
+        const ConversationNotificationPreference.all(),
+    this.unreadMentionMessageId,
     required this.currentUserID,
     required this.onTap,
+    this.onUnreadMentionTap,
     this.onLongPress,
   });
 
@@ -513,8 +1623,15 @@ class _ConversationTile extends StatelessWidget {
     final name = conversation.displayName(currentUserID);
     final avatar = conversation.displayAvatar(currentUserID);
     final last = conversation.lastMessage;
+    final draftPreview = draft?.preview;
     final isBot = conversation.isBotDM(currentUserID);
     final hasUnread = conversation.unreadCount > 0;
+    final hasUnreadMention = unreadMentionMessageId != null;
+    final hasDraft = draftPreview != null && draftPreview.isNotEmpty;
+    final isMuted = notificationPreference.isMutedAt(DateTime.now());
+    final isMentionsOnly =
+        notificationPreference.mode ==
+        ConversationNotificationMode.mentionsOnly;
 
     return Material(
       color: Colors.transparent,
@@ -567,6 +1684,62 @@ class _ConversationTile extends StatelessWidget {
                               color: scheme.onSurface.withValues(alpha: 0.44),
                             ),
                           ),
+                        if (isPinned)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Icon(
+                              Icons.push_pin_rounded,
+                              size: 13,
+                              color: scheme.primary.withValues(alpha: 0.72),
+                            ),
+                          ),
+                        if (isMuted)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Icon(
+                              Icons.notifications_off_outlined,
+                              size: 13,
+                              color: scheme.onSurface.withValues(alpha: 0.38),
+                            ),
+                          ),
+                        if (isMentionsOnly)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Icon(
+                              Icons.notification_important_outlined,
+                              size: 13,
+                              color: scheme.primary.withValues(alpha: 0.70),
+                            ),
+                          ),
+                        if (hasUnreadMention)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Tooltip(
+                              message: 'Jump to mention',
+                              child: Semantics(
+                                button: true,
+                                label: 'Jump to unread mention',
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: onUnreadMentionTap == null
+                                      ? null
+                                      : () => onUnreadMentionTap!(
+                                          unreadMentionMessageId!,
+                                        ),
+                                  child: SizedBox.square(
+                                    dimension: 22,
+                                    child: Center(
+                                      child: Icon(
+                                        Icons.alternate_email_rounded,
+                                        size: 14,
+                                        color: scheme.primary,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
                         Flexible(
                           child: Text(
                             name,
@@ -582,18 +1755,36 @@ class _ConversationTile extends StatelessWidget {
                         ),
                       ],
                     ),
-                    if (last != null) ...[
+                    if (hasDraft || last != null) ...[
                       const SizedBox(height: 2),
-                      Text(
-                        last.listPreview,
+                      Text.rich(
+                        TextSpan(
+                          children: [
+                            if (hasDraft)
+                              TextSpan(
+                                text: 'Draft: ',
+                                style: TextStyle(
+                                  color: scheme.error.withValues(alpha: 0.82),
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            TextSpan(
+                              text: hasDraft
+                                  ? draftPreview
+                                  : last?.listPreview ?? '',
+                            ),
+                          ],
+                        ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          color: hasUnread
+                          color: hasDraft
+                              ? scheme.onSurface.withValues(alpha: 0.65)
+                              : hasUnread
                               ? scheme.onSurface.withValues(alpha: 0.75)
                               : scheme.onSurface.withValues(alpha: 0.45),
                           fontSize: 13,
-                          fontWeight: hasUnread
+                          fontWeight: hasUnread && !hasDraft
                               ? FontWeight.w500
                               : FontWeight.w400,
                         ),
@@ -608,12 +1799,19 @@ class _ConversationTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (last != null)
+                  if (hasDraft || last != null)
                     Text(
-                      timeago.format(last.createdAt, locale: 'en_short'),
+                      timeago.format(
+                        hasDraft ? draft!.updatedAt : last!.createdAt,
+                        locale: 'en_short',
+                      ),
                       style: TextStyle(
                         fontSize: 11.5,
-                        color: hasUnread
+                        color: hasDraft
+                            ? scheme.error.withValues(alpha: 0.74)
+                            : isMuted
+                            ? scheme.onSurface.withValues(alpha: 0.36)
+                            : hasUnread
                             ? scheme.primary
                             : scheme.onSurface.withValues(alpha: 0.38),
                         fontWeight: hasUnread
@@ -629,11 +1827,14 @@ class _ConversationTile extends StatelessWidget {
                         vertical: 3,
                       ),
                       decoration: BoxDecoration(
-                        color: scheme.primary,
+                        color: isMuted
+                            ? scheme.onSurface.withValues(alpha: 0.24)
+                            : scheme.primary,
                         borderRadius: BorderRadius.circular(12),
                         boxShadow: [
                           BoxShadow(
-                            color: scheme.primary.withValues(alpha: 0.40),
+                            color: (isMuted ? scheme.onSurface : scheme.primary)
+                                .withValues(alpha: isMuted ? 0.12 : 0.40),
                             blurRadius: 8,
                             offset: const Offset(0, 3),
                           ),
@@ -722,13 +1923,20 @@ class _ConvAvatar extends StatelessWidget {
 
 class _ChatSearchDelegate extends SearchDelegate<String?> {
   final ApiService api;
+  final ChatProvider chat;
+  final String currentUserId;
   final Future<void> Function(String userID) onUserSelected;
   final void Function(Conversation channel) onChannelSelected;
+  final Future<void> Function(MessageSearchResult result) onMessageSelected;
+  MessageSearchCategory? _messageCategory;
 
   _ChatSearchDelegate({
     required this.api,
+    required this.chat,
+    required this.currentUserId,
     required this.onUserSelected,
     required this.onChannelSelected,
+    required this.onMessageSelected,
   });
 
   @override
@@ -743,15 +1951,17 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
   );
 
   @override
-  Widget buildResults(BuildContext context) => _buildSuggestions();
+  Widget buildResults(BuildContext context) => _buildSuggestions(context);
 
   @override
-  Widget buildSuggestions(BuildContext context) => _buildSuggestions();
+  Widget buildSuggestions(BuildContext context) => _buildSuggestions(context);
 
-  Widget _buildSuggestions() {
+  Widget _buildSuggestions(BuildContext context) {
     final q = query.trim();
     if (q.length < 2) {
-      return const Center(child: Text('Search users, bots and channels'));
+      return const Center(
+        child: Text('Search users, channels, and local messages'),
+      );
     }
     final term = q.startsWith('@') ? q.substring(1) : q;
     return FutureBuilder<_SearchResults>(
@@ -762,11 +1972,53 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
         }
         final results = snapshot.data;
         if (results == null ||
-            (results.users.isEmpty && results.channels.isEmpty)) {
+            (results.users.isEmpty &&
+                results.channels.isEmpty &&
+                results.messages.isEmpty)) {
           return const Center(child: Text('No results'));
         }
         return ListView(
           children: [
+            _MessageSearchFilters(
+              selected: _messageCategory,
+              onSelected: (category) {
+                _messageCategory = category;
+                showSuggestions(context);
+              },
+            ),
+            if (results.messages.isNotEmpty) ...[
+              _SearchSectionHeader(
+                label: _messageCategory == null
+                    ? 'Messages on this device'
+                    : '${_messageCategoryLabel(_messageCategory!)} on this device',
+              ),
+              for (final message in results.messages)
+                ListTile(
+                  leading: CircleAvatar(
+                    child: Icon(_messageCategoryIcon(message.category)),
+                  ),
+                  title: Text(
+                    message.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(
+                    _messageSubtitle(message),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: Text(
+                    timeago.format(message.createdAt),
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+                  onTap: () {
+                    close(context, null);
+                    onMessageSelected(message);
+                  },
+                ),
+            ],
+            if (results.users.isNotEmpty)
+              const _SearchSectionHeader(label: 'People and bots'),
             for (final u in results.users)
               ListTile(
                 leading: CircleAvatar(
@@ -809,6 +2061,8 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
                   onUserSelected(u.id);
                 },
               ),
+            if (results.channels.isNotEmpty)
+              const _SearchSectionHeader(label: 'Channels'),
             for (final ch in results.channels)
               ListTile(
                 leading: CircleAvatar(
@@ -840,21 +2094,131 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
   }
 
   Future<_SearchResults> _search(String term) async {
+    final categories = _messageCategory == null
+        ? null
+        : <MessageSearchCategory>{_messageCategory!};
     final results = await Future.wait([
       api.searchUsers(term).catchError((_) => <User>[]),
       api.searchChannels(term).catchError((_) => <Conversation>[]),
+      chat
+          .searchMessages(term, categories: categories, limit: 30)
+          .catchError((_) => <MessageSearchResult>[]),
     ]);
     return _SearchResults(
       users: results[0] as List<User>,
       channels: results[1] as List<Conversation>,
+      messages: results[2] as List<MessageSearchResult>,
     );
+  }
+
+  String _messageSubtitle(MessageSearchResult message) {
+    final conv = chat.conversations
+        .where((conversation) => conversation.id == message.conversationId)
+        .firstOrNull;
+    final convName = conv?.displayName(currentUserId) ?? 'Conversation';
+    if (message.snippet.isEmpty) return convName;
+    return '$convName - ${message.snippet}';
   }
 }
 
 class _SearchResults {
   final List<User> users;
   final List<Conversation> channels;
-  _SearchResults({required this.users, required this.channels});
+  final List<MessageSearchResult> messages;
+  _SearchResults({
+    required this.users,
+    required this.channels,
+    required this.messages,
+  });
+}
+
+class _SearchSectionHeader extends StatelessWidget {
+  final String label;
+
+  const _SearchSectionHeader({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 6),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+          color: Theme.of(
+            context,
+          ).colorScheme.onSurface.withValues(alpha: 0.58),
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+class _MessageSearchFilters extends StatelessWidget {
+  final MessageSearchCategory? selected;
+  final ValueChanged<MessageSearchCategory?> onSelected;
+
+  const _MessageSearchFilters({
+    required this.selected,
+    required this.onSelected,
+  });
+
+  static const _options = <(String, MessageSearchCategory?)>[
+    ('All', null),
+    ('Chats', MessageSearchCategory.messages),
+    ('Media', MessageSearchCategory.media),
+    ('Files', MessageSearchCategory.files),
+    ('Links', MessageSearchCategory.links),
+    ('Voice', MessageSearchCategory.voice),
+    ('Polls', MessageSearchCategory.polls),
+    ('Payments', MessageSearchCategory.payments),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
+      child: Row(
+        children: [
+          for (final (label, category) in _options) ...[
+            ChoiceChip(
+              label: Text(label),
+              selected: selected == category,
+              onSelected: (_) => onSelected(category),
+            ),
+            const SizedBox(width: 8),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+IconData _messageCategoryIcon(MessageSearchCategory category) {
+  return switch (category) {
+    MessageSearchCategory.media => Icons.photo_library_outlined,
+    MessageSearchCategory.files => Icons.insert_drive_file_outlined,
+    MessageSearchCategory.links => Icons.link_rounded,
+    MessageSearchCategory.voice => Icons.graphic_eq_rounded,
+    MessageSearchCategory.polls => Icons.poll_outlined,
+    MessageSearchCategory.payments => Icons.payments_outlined,
+    MessageSearchCategory.checklists => Icons.checklist_rounded,
+    MessageSearchCategory.messages => Icons.chat_bubble_outline_rounded,
+  };
+}
+
+String _messageCategoryLabel(MessageSearchCategory category) {
+  return switch (category) {
+    MessageSearchCategory.media => 'Media',
+    MessageSearchCategory.files => 'Files',
+    MessageSearchCategory.links => 'Links',
+    MessageSearchCategory.voice => 'Voice',
+    MessageSearchCategory.polls => 'Polls',
+    MessageSearchCategory.payments => 'Payments',
+    MessageSearchCategory.checklists => 'Lists',
+    MessageSearchCategory.messages => 'Messages',
+  };
 }
 
 class _SheetTile extends StatelessWidget {

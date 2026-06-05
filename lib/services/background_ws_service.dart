@@ -8,6 +8,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config/api_config.dart';
+import '../utils/local_conversation_preferences.dart';
 import 'background_notification_intent.dart' as intent_mapper;
 import 'background_notification_intent.dart' show NotificationIntent;
 import 'notification_service.dart';
@@ -41,6 +42,10 @@ export 'background_notification_intent.dart'
 class BackgroundWsService {
   static const _kToken = 'bg_ws_access_token';
   static const _kSensitive = 'bg_ws_sensitive_content';
+  static const _kMutedConversations = mutedConversationsPreferenceKey;
+  static const _kNotificationPreferences =
+      conversationNotificationPreferencesPreferenceKey;
+  static const _kNotificationCurrentUser = notificationCurrentUserPreferenceKey;
 
   static bool supportsPersistentBackgroundWebSocket({
     required bool isWeb,
@@ -89,6 +94,10 @@ class BackgroundWsService {
   static Future<bool> start({
     required String accessToken,
     required bool showSensitive,
+    Map<String, ConversationNotificationPreference>
+        conversationNotificationPreferences =
+        const {},
+    String currentUserId = '',
   }) async {
     if (!kIsWeb && Platform.isIOS) {
       return false;
@@ -102,10 +111,21 @@ class BackgroundWsService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_kToken, accessToken);
       await prefs.setBool(_kSensitive, showSensitive);
+      await prefs.setString(
+        _kNotificationPreferences,
+        encodeConversationNotificationPreferences(
+          conversationNotificationPreferences,
+        ),
+      );
+      await prefs.setString(_kNotificationCurrentUser, currentUserId);
 
       if (await _service.isRunning()) {
         await updateToken(accessToken);
         await updateSensitiveContent(showSensitive);
+        await updateConversationNotificationPreferences(
+          conversationNotificationPreferences,
+          currentUserId: currentUserId,
+        );
         return true;
       }
       return _service.startService();
@@ -145,6 +165,31 @@ class BackgroundWsService {
     _service.invoke('setSensitive', {'sensitive': showSensitive});
   }
 
+  static Future<void> updateMutedConversations(
+    Set<String> conversationIds,
+  ) async {
+    if (!_mobileOnly) return;
+    final sorted = conversationIds.toList()..sort();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_kMutedConversations, sorted);
+    _service.invoke('setMutedConversations', {'conversation_ids': sorted});
+  }
+
+  static Future<void> updateConversationNotificationPreferences(
+    Map<String, ConversationNotificationPreference> preferences, {
+    String currentUserId = '',
+  }) async {
+    final encoded = encodeConversationNotificationPreferences(preferences);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kNotificationPreferences, encoded);
+    await prefs.setString(_kNotificationCurrentUser, currentUserId);
+    if (!_mobileOnly) return;
+    _service.invoke('setConversationNotificationPreferences', {
+      'preferences': encoded,
+      'current_user_id': currentUserId,
+    });
+  }
+
   // ── iOS background handler ─────────────────────────────────────────────────
 
   @pragma('vm:entry-point')
@@ -171,6 +216,14 @@ class BackgroundWsService {
     final prefs = await SharedPreferences.getInstance();
     String? token = prefs.getString(_kToken);
     bool showSensitive = prefs.getBool(_kSensitive) ?? false;
+    Set<String> mutedConversationIds =
+        (prefs.getStringList(_kMutedConversations) ?? const []).toSet();
+    Map<String, ConversationNotificationPreference>
+    conversationNotificationPreferences =
+        decodeConversationNotificationPreferences(
+          prefs.getString(_kNotificationPreferences),
+        );
+    String currentUserId = prefs.getString(_kNotificationCurrentUser) ?? '';
 
     WebSocketChannel? channel;
     Timer? reconnectTimer;
@@ -192,7 +245,14 @@ class BackgroundWsService {
           Uri.parse('${ApiConfig.wsUrl}?token=$token'),
         );
         channel!.stream.listen(
-          (raw) => _handleRaw(raw, notif, showSensitive),
+          (raw) => _handleRaw(
+            raw,
+            notif,
+            showSensitive,
+            mutedConversationIds,
+            conversationNotificationPreferences,
+            currentUserId,
+          ),
           onError: (_) {
             channel = null;
             reconnect();
@@ -226,6 +286,21 @@ class BackgroundWsService {
       showSensitive = data?['sensitive'] as bool? ?? showSensitive;
     });
 
+    service.on('setMutedConversations').listen((data) {
+      final ids = data?['conversation_ids'];
+      if (ids is List) {
+        mutedConversationIds = ids.whereType<String>().toSet();
+      }
+    });
+
+    service.on('setConversationNotificationPreferences').listen((data) {
+      conversationNotificationPreferences =
+          decodeConversationNotificationPreferences(
+            data?['preferences'] as String?,
+          );
+      currentUserId = data?['current_user_id'] as String? ?? currentUserId;
+    });
+
     connect();
   }
 
@@ -233,6 +308,10 @@ class BackgroundWsService {
     dynamic raw,
     FlutterLocalNotificationsPlugin notif,
     bool showSensitive,
+    Set<String> mutedConversationIds,
+    Map<String, ConversationNotificationPreference>
+    conversationNotificationPreferences,
+    String currentUserId,
   ) {
     if (raw is! String) return;
     for (final line in raw.trim().split('\n')) {
@@ -240,6 +319,10 @@ class BackgroundWsService {
       final intent = notificationIntentFromRawLine(
         line,
         showSensitive: showSensitive,
+        mutedConversationIds: mutedConversationIds,
+        conversationNotificationPreferences:
+            conversationNotificationPreferences,
+        currentUserId: currentUserId,
       );
       if (intent == null) continue;
       _showIntent(notif, intent);
@@ -249,19 +332,35 @@ class BackgroundWsService {
   static NotificationIntent? notificationIntentFromRawLine(
     String rawLine, {
     required bool showSensitive,
+    Set<String> mutedConversationIds = const {},
+    Map<String, ConversationNotificationPreference>
+        conversationNotificationPreferences =
+        const {},
+    String currentUserId = '',
   }) => intent_mapper.notificationIntentFromRawLine(
     rawLine,
     showSensitive: showSensitive,
+    mutedConversationIds: mutedConversationIds,
+    conversationNotificationPreferences: conversationNotificationPreferences,
+    currentUserId: currentUserId,
   );
 
   static NotificationIntent? notificationIntentFromEvent({
     required String type,
     required Map<String, dynamic> data,
     required bool showSensitive,
+    Set<String> mutedConversationIds = const {},
+    Map<String, ConversationNotificationPreference>
+        conversationNotificationPreferences =
+        const {},
+    String currentUserId = '',
   }) => intent_mapper.notificationIntentFromEvent(
     type: type,
     data: data,
     showSensitive: showSensitive,
+    mutedConversationIds: mutedConversationIds,
+    conversationNotificationPreferences: conversationNotificationPreferences,
+    currentUserId: currentUserId,
   );
 
   static void _showIntent(

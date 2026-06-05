@@ -32,6 +32,7 @@ class Conversation {
   final List<ConversationMember> members;
   final Message? lastMessage;
   final int unreadCount;
+  final String? unreadMentionMessageId;
 
   const Conversation({
     required this.id,
@@ -55,6 +56,7 @@ class Conversation {
     this.members = const [],
     this.lastMessage,
     this.unreadCount = 0,
+    this.unreadMentionMessageId,
   });
 
   factory Conversation.fromJson(Map<String, dynamic> json) => Conversation(
@@ -89,6 +91,7 @@ class Conversation {
         ? Message.fromJson(json['last_message'] as Map<String, dynamic>)
         : null,
     unreadCount: json['unread_count'] as int? ?? 0,
+    unreadMentionMessageId: json['unread_mention_message_id'] as String?,
   );
 
   bool get isGroup => type == ConversationType.group;
@@ -153,6 +156,7 @@ class Conversation {
   Conversation copyWith({
     Message? lastMessage,
     int? unreadCount,
+    String? unreadMentionMessageId,
     List<ConversationMember>? members,
     DateTime? archivedAt,
     bool? ownerOnlyPost,
@@ -184,15 +188,71 @@ class Conversation {
     members: members ?? this.members,
     lastMessage: lastMessage ?? this.lastMessage,
     unreadCount: unreadCount ?? this.unreadCount,
+    unreadMentionMessageId:
+        unreadMentionMessageId ?? this.unreadMentionMessageId,
   );
 }
 
 enum MemberRole { admin, moderator, member }
 
+extension MemberRoleApi on MemberRole {
+  String get apiValue => switch (this) {
+    MemberRole.admin => 'admin',
+    MemberRole.moderator => 'moderator',
+    MemberRole.member => 'member',
+  };
+}
+
+abstract final class AdminPermission {
+  static const manageInfo = 'manage_info';
+  static const manageSettings = 'manage_settings';
+  static const manageEncryption = 'manage_encryption';
+  static const manageTopics = 'manage_topics';
+  static const manageMembers = 'manage_members';
+  static const manageRoles = 'manage_roles';
+  static const manageInvites = 'manage_invites';
+  static const approveJoinRequests = 'approve_join_requests';
+  static const managePins = 'manage_pins';
+  static const deleteMessages = 'delete_messages';
+  static const manageModeration = 'manage_moderation';
+  static const postMessages = 'post_messages';
+
+  static const values = [
+    manageInfo,
+    manageSettings,
+    manageEncryption,
+    manageTopics,
+    manageMembers,
+    manageRoles,
+    manageInvites,
+    approveJoinRequests,
+    managePins,
+    deleteMessages,
+    manageModeration,
+    postMessages,
+  ];
+
+  static Map<String, bool> defaultsForRole(MemberRole role) {
+    final defaults = {for (final permission in values) permission: false};
+    switch (role) {
+      case MemberRole.admin:
+        return {for (final permission in values) permission: true};
+      case MemberRole.moderator:
+        defaults[managePins] = true;
+        defaults[deleteMessages] = true;
+        defaults[manageModeration] = true;
+        return defaults;
+      case MemberRole.member:
+        return defaults;
+    }
+  }
+}
+
 class ConversationMember {
   final String conversationId;
   final String userId;
   final MemberRole role;
+  final Map<String, bool>? adminPermissions;
   final bool isAnonymous;
   final DateTime joinedAt;
   final User? user;
@@ -201,6 +261,7 @@ class ConversationMember {
     required this.conversationId,
     required this.userId,
     required this.role,
+    this.adminPermissions,
     this.isAnonymous = false,
     required this.joinedAt,
     this.user,
@@ -215,6 +276,7 @@ class ConversationMember {
           'moderator' => MemberRole.moderator,
           _ => MemberRole.member,
         },
+        adminPermissions: _parseAdminPermissions(json['admin_permissions']),
         isAnonymous: json['is_anonymous'] as bool? ?? false,
         joinedAt: DateTime.parse(json['joined_at'] as String),
         user: json['user'] != null
@@ -224,4 +286,27 @@ class ConversationMember {
 
   bool get isAdmin => role == MemberRole.admin;
   bool get isModerator => role == MemberRole.moderator;
+
+  Map<String, bool> get effectiveAdminPermissions {
+    final defaults = AdminPermission.defaultsForRole(role);
+    final explicit = adminPermissions;
+    if (explicit == null) return defaults;
+    return {
+      for (final permission in AdminPermission.values)
+        permission: explicit[permission] ?? defaults[permission] ?? false,
+    };
+  }
+
+  bool hasPermission(String permission) =>
+      effectiveAdminPermissions[permission] ?? false;
+}
+
+Map<String, bool>? _parseAdminPermissions(Object? raw) {
+  if (raw is! Map || raw.isEmpty) return null;
+  final parsed = <String, bool>{};
+  for (final permission in AdminPermission.values) {
+    final value = raw[permission];
+    if (value is bool) parsed[permission] = value;
+  }
+  return parsed.isEmpty ? null : parsed;
 }

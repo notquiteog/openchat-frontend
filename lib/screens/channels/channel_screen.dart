@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
@@ -9,6 +10,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import '../../config/api_config.dart';
+import '../../models/channel_pinned_message.dart';
 import '../../models/conversation.dart';
 import '../../models/message.dart';
 import '../../providers/auth_provider.dart';
@@ -20,13 +22,21 @@ import '../../services/secure_storage_service.dart';
 import '../../crypto/pgp_service.dart';
 import '../../utils/custom_emoji_payload.dart';
 import '../../utils/disappearing_message_duration.dart';
+import '../../utils/message_actions.dart';
+import '../../utils/mention_utils.dart';
+import '../../widgets/attachment_upload_progress.dart';
 import '../../widgets/conversation_encryption_status.dart';
+import '../../widgets/conversation_info_panel.dart';
+import '../../widgets/conversation_invite_links_sheet.dart';
 import '../../widgets/color_choices.dart';
 import '../../widgets/custom_emoji_picker.dart';
 import '../../widgets/custom_emoji_text_controller.dart';
 import '../../widgets/disappearing_messages_picker.dart';
 import '../../widgets/glass.dart';
+import '../../widgets/message_action_sheet.dart';
+import '../../widgets/mention_autocomplete_panel.dart';
 import '../../widgets/message_bubble.dart';
+import '../../widgets/scheduled_messages_sheet.dart';
 import '../../widgets/sticker_picker.dart';
 import '../../widgets/voice_note_recorder.dart';
 import '../profile/user_profile_screen.dart';
@@ -371,7 +381,13 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
 /// Shows the posts feed for a channel and allows admins to post.
 class ChannelFeedScreen extends StatefulWidget {
   final Conversation channel;
-  const ChannelFeedScreen({super.key, required this.channel});
+  final String? initialPostId;
+
+  const ChannelFeedScreen({
+    super.key,
+    required this.channel,
+    this.initialPostId,
+  });
 
   @override
   State<ChannelFeedScreen> createState() => _ChannelFeedScreenState();
@@ -380,19 +396,32 @@ class ChannelFeedScreen extends StatefulWidget {
 class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   final _inputCtrl = CustomEmojiTextEditingController();
   final _scrollCtrl = ScrollController();
+  final Map<String, GlobalKey> _postKeys = {};
   List<Message> _posts = [];
   bool _isSubscribed = false;
   bool _isAdmin = false;
-  bool _isModerator = false;
+  ConversationMember? _currentMember;
   bool _loading = true;
   bool _archived = false;
   bool _showStickers = false;
   bool _showCustomEmojis = false;
   bool _sendSilent = false;
   DateTime? _scheduledFor;
+  AttachmentUploadProgress? _attachmentUploadProgress;
+  ActiveMentionQuery? _activeMentionQuery;
   List<CustomEmojiEntity> _customEmojiEntities = [];
   String _lastInputText = '';
   bool _suppressInputEntityShift = false;
+  String? _highlightedPostId;
+  Timer? _highlightTimer;
+  Timer? _draftSaveTimer;
+  bool _draftRestored = false;
+  bool _hasPendingDraftSave = false;
+  String _pendingDraftText = '';
+  List<CustomEmojiEntity> _pendingDraftEntities = const [];
+  bool _pendingDraftSilent = false;
+  DateTime? _pendingDraftScheduledFor;
+  late final SettingsProvider _settings;
 
   // Mutable copy so edits to name/handle/avatar/privacy reflect immediately.
   late Conversation _channel;
@@ -402,6 +431,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   void initState() {
     super.initState();
     _channel = widget.channel;
+    _settings = context.read<SettingsProvider>();
+    _restoreLocalDraft();
     _inputCtrl.addListener(_onInputTextChanged);
     _load();
   }
@@ -416,6 +447,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     );
     _syncCustomEmojiEntities(shifted);
     _lastInputText = text;
+    _updateMentionQuery(_inputCtrl.value);
+    _scheduleDraftSave(text);
   }
 
   void _syncCustomEmojiEntities(List<CustomEmojiEntity> entities) {
@@ -425,9 +458,29 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     _suppressInputEntityShift = false;
   }
 
+  void _updateMentionQuery(TextEditingValue value) {
+    final next = value.selection.isValid && value.selection.isCollapsed
+        ? findActiveMentionQuery(value.text, value.selection.baseOffset)
+        : null;
+    final current = _activeMentionQuery;
+    if (current?.start == next?.start &&
+        current?.end == next?.end &&
+        current?.query == next?.query) {
+      return;
+    }
+    if (mounted) {
+      setState(() => _activeMentionQuery = next);
+    } else {
+      _activeMentionQuery = next;
+    }
+  }
+
   @override
   void dispose() {
+    _highlightTimer?.cancel();
     _inputCtrl.removeListener(_onInputTextChanged);
+    _draftSaveTimer?.cancel();
+    _flushDraftSave();
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
@@ -438,14 +491,16 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     try {
       final api = context.read<ApiService>();
       final storage = context.read<SecureStorageService>();
+      final chat = context.read<ChatProvider>();
+      final settings = context.read<SettingsProvider>();
       final currentUserId = await storage.getUserID() ?? '';
 
       // Check subscription + admin status
       final members = await api.getConversationMembers(channel.id);
       final me = members.where((m) => m.userId == currentUserId).firstOrNull;
+      _currentMember = me;
       _isSubscribed = me != null;
       _isAdmin = me?.isAdmin ?? false;
-      _isModerator = me?.isModerator ?? false;
 
       // Load posts
       final posts = await api.getChannelPosts(channel.id);
@@ -456,22 +511,97 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           p,
           channelWithMembers,
         );
-        _tryDecrypt(p, privateKey);
+        await _tryDecrypt(p, privateKey, notify: false);
+        chat.indexLoadedMessage(p);
       }
+      await _syncPinnedMessagesFromServer(
+        api: api,
+        settings: settings,
+        chat: chat,
+        channelWithMembers: channelWithMembers,
+        privateKey: privateKey,
+        loadedPosts: posts,
+      );
       setState(() {
         _channel = channelWithMembers;
         _posts = posts.reversed.toList();
+        _postKeys.removeWhere(
+          (messageId, _) => !_posts.any((post) => post.id == messageId),
+        );
         _loading = false;
       });
+      final initialPostId = widget.initialPostId;
+      if (initialPostId != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _jumpToPost(initialPostId);
+        });
+      }
     } catch (_) {
       setState(() => _loading = false);
     }
   }
 
-  void _tryDecrypt(Message msg, String privateKey) async {
+  Future<void> _syncPinnedMessagesFromServer({
+    required ApiService api,
+    required SettingsProvider settings,
+    required ChatProvider chat,
+    required Conversation channelWithMembers,
+    required String privateKey,
+    required List<Message> loadedPosts,
+  }) async {
+    try {
+      final serverPins = await api.getChannelPinnedPosts(channel.id);
+      final loadedById = {for (final post in loadedPosts) post.id: post};
+      final normalized = <ChannelPinnedMessage>[];
+      for (final pin in serverPins) {
+        final message = loadedById[pin.messageId] ?? pin.message;
+        if (message != null) {
+          ChatProvider.hydrateMessageSenderFromConversation(
+            message,
+            channelWithMembers,
+          );
+          await _tryDecrypt(message, privateKey, notify: false);
+          chat.indexLoadedMessage(message);
+        }
+        normalized.add(_pinnedMessageFromMessage(pin, message));
+      }
+      await settings.replaceChannelPinnedMessages(channel.id, normalized);
+    } catch (_) {
+      // Keep the last local pin cache when the shared pin endpoint is offline.
+    }
+  }
+
+  ChannelPinnedMessage _pinnedMessageFromMessage(
+    ChannelPinnedMessage pinned,
+    Message? message,
+  ) {
+    if (message == null) {
+      return pinned.copyWith(
+        conversationId: pinned.conversationId.isEmpty
+            ? channel.id
+            : pinned.conversationId,
+        preview: pinned.preview.isEmpty ? 'Pinned message' : pinned.preview,
+      );
+    }
+    return pinned.copyWith(
+      conversationId: pinned.conversationId.isEmpty
+          ? channel.id
+          : pinned.conversationId,
+      preview: _pinnedMessagePreview(message),
+      messageCreatedAt: message.createdAt,
+      senderUsername: message.sender?.username ?? pinned.senderUsername,
+      message: message,
+    );
+  }
+
+  Future<void> _tryDecrypt(
+    Message msg,
+    String privateKey, {
+    bool notify = true,
+  }) async {
     if (!msg.isEncrypted) {
       msg.setDecryptedContent(msg.encryptedPayload);
-      if (mounted) setState(() {});
+      if (notify && mounted) setState(() {});
       return;
     }
     try {
@@ -480,7 +610,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         privateKeyArmored: privateKey,
       );
       msg.setDecryptedContent(raw);
-      if (mounted) setState(() {});
+      if (notify && mounted) setState(() {});
     } catch (_) {
       msg.markDecryptionFailed();
     }
@@ -583,9 +713,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   Future<void> _showChannelUserActions(Message msg) async {
     final user = msg.sender;
     if (user == null) return;
-    final canModerateUser =
-        (_isAdmin || _isModerator) &&
+    final isNotSelf =
         msg.senderId != context.read<AuthProvider>().currentUser?.id;
+    final canDeleteUserMessages = _canDeleteChannelMessages && isNotSelf;
+    final canModerateUser = _canManageChannelModeration && isNotSelf;
     final action = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
@@ -600,20 +731,20 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               label: '@${user.username}',
               onTap: () => Navigator.pop(context, 'profile'),
             ),
-            if (canModerateUser) ...[
+            if (canDeleteUserMessages)
               _ChanTile(
                 icon: Icons.delete_sweep_outlined,
                 label: 'Delete their messages',
                 color: Colors.red,
                 onTap: () => Navigator.pop(context, 'delete_messages'),
               ),
+            if (canModerateUser)
               _ChanTile(
                 icon: Icons.block_rounded,
                 label: 'Ban from channel',
                 color: Colors.red,
                 onTap: () => Navigator.pop(context, 'ban'),
               ),
-            ],
             const SizedBox(height: 8),
           ],
         ),
@@ -1233,6 +1364,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       isPremium: auth.currentUser?.isPremium ?? false,
       canManageLifecycle: canManageLifecycle,
       isSubscribed: _isSubscribed,
+      canOpenModeration: _canManageChannelModeration || _canManageChannelRoles,
+      canManageInfo: _canManageChannelInfo,
+      canManageInvites: _canManageChannelInvites,
+      canManageSettings: _canManageChannelSettings,
+      canManageEncryption: _canManageChannelEncryption,
     );
     final action = await showModalBottomSheet<ChannelModerationAction>(
       context: context,
@@ -1287,14 +1423,20 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }
 
   Future<void> _showChannelSettingsMenu() async {
-    final isPremium =
-        context.read<AuthProvider>().currentUser?.isPremium ?? false;
+    final auth = context.read<AuthProvider>();
+    final currentUserId = auth.currentUser?.id ?? '';
+    final isPremium = auth.currentUser?.isPremium ?? false;
     final placement = ChannelActionPolicy.actionsFor(
       channel: channel,
       isAdmin: _isAdmin,
       isPremium: isPremium,
       canManageLifecycle: false,
       isSubscribed: _isSubscribed,
+      canOpenModeration: _canManageChannelModeration || _canManageChannelRoles,
+      canManageInfo: _canManageChannelInfo,
+      canManageInvites: _canManageChannelInvites,
+      canManageSettings: _canManageChannelSettings,
+      canManageEncryption: _canManageChannelEncryption,
     );
     final action = await showModalBottomSheet<ChannelSettingsAction>(
       context: context,
@@ -1310,7 +1452,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                 icon: switch (item) {
                   ChannelSettingsAction.appearance =>
                     Icons.format_color_fill_outlined,
+                  ChannelSettingsAction.sharedContent =>
+                    Icons.photo_library_outlined,
+                  ChannelSettingsAction.scheduledPosts =>
+                    Icons.schedule_send_outlined,
                   ChannelSettingsAction.edit => Icons.settings_outlined,
+                  ChannelSettingsAction.inviteLinks => Icons.link_rounded,
                   ChannelSettingsAction.background => Icons.wallpaper_outlined,
                   ChannelSettingsAction.autoDelete => Icons.timer_outlined,
                   ChannelSettingsAction.encryption =>
@@ -1322,7 +1469,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                 },
                 label: switch (item) {
                   ChannelSettingsAction.appearance => 'Chat appearance',
+                  ChannelSettingsAction.sharedContent => 'Shared content',
+                  ChannelSettingsAction.scheduledPosts => 'Scheduled posts',
                   ChannelSettingsAction.edit => 'Channel settings',
+                  ChannelSettingsAction.inviteLinks => 'Invite links',
                   ChannelSettingsAction.background =>
                     'Set chat background (Premium)',
                   ChannelSettingsAction.autoDelete => 'Disappearing messages',
@@ -1347,8 +1497,27 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     switch (action) {
       case ChannelSettingsAction.appearance:
         _showChatAppearance();
+      case ChannelSettingsAction.sharedContent:
+        unawaited(
+          showSharedContentSheet(
+            context,
+            conversation: channel,
+            currentUserId: currentUserId,
+            channel: true,
+            initialMessages: _posts,
+            onMessageSelected: (message) => _jumpToPost(message.id),
+          ),
+        );
+      case ChannelSettingsAction.scheduledPosts:
+        showScheduledMessagesSheet(
+          context,
+          conversation: channel,
+          channel: true,
+        );
       case ChannelSettingsAction.edit:
         _editChannelSettings();
+      case ChannelSettingsAction.inviteLinks:
+        _showInviteLinks();
       case ChannelSettingsAction.background:
         _setBackground();
       case ChannelSettingsAction.autoDelete:
@@ -1358,6 +1527,22 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       case ChannelSettingsAction.deleteOwnMessages:
         _deleteOwnChannelMessages();
     }
+  }
+
+  Future<void> _showInviteLinks() async {
+    await showConversationInviteLinksSheet(
+      context,
+      conversation: channel,
+      channel: true,
+      onJoinApprovalChanged: (required) {
+        if (mounted) {
+          setState(() {
+            _channel = _channel.copyWith(joinApprovalRequired: required);
+          });
+        }
+        unawaited(context.read<ChatProvider>().refreshConversationsSilently());
+      },
+    );
   }
 
   Future<void> _post({
@@ -1376,6 +1561,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           );
     if (draft.text.isEmpty) return;
     if (plaintextOverride == null) {
+      _draftSaveTimer?.cancel();
+      _hasPendingDraftSave = false;
       _setComposerValue(
         const TextEditingValue(
           text: '',
@@ -1391,7 +1578,19 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
 
     final api = context.read<ApiService>();
     final storage = context.read<SecureStorageService>();
+    final chat = context.read<ChatProvider>();
+    final auth = context.read<AuthProvider>();
     final privateKey = await storage.getPrivateKey() ?? '';
+    final currentUserId =
+        auth.currentUser?.id ?? await storage.getUserID() ?? '';
+    final mentionedUserIds = mentionedMemberIdsInText(
+      MessageContent.parse(
+        draft.payload,
+        _messageTypeFromWire(messageType),
+      ).text,
+      channel.members,
+      currentUserId: currentUserId,
+    );
 
     final String encrypted;
     final String sig;
@@ -1429,12 +1628,17 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       signature: sig,
       messageType: messageType,
       attachmentId: attachmentId,
+      mentionedUserIds: mentionedUserIds,
       silent: _sendSilent,
       scheduledFor: _scheduledFor,
     );
     msg.setDecryptedContent(draft.payload);
+    if (plaintextOverride == null) {
+      unawaited(_settings.clearMessageDraft(channel.id));
+    }
     if (_scheduledFor == null) {
       setState(() => _posts.add(msg));
+      chat.indexLoadedMessage(msg);
     } else if (mounted) {
       final scheduledFor = _scheduledFor;
       setState(() => _scheduledFor = null);
@@ -1444,6 +1648,31 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         ),
       );
     }
+  }
+
+  MessageType _messageTypeFromWire(String value) {
+    return switch (value) {
+      'sticker' => MessageType.sticker,
+      'file' => MessageType.file,
+      'image' => MessageType.image,
+      'video' => MessageType.video,
+      'voice' => MessageType.voice,
+      'audio' => MessageType.audio,
+      'animation' => MessageType.animation,
+      'video_note' => MessageType.videoNote,
+      'live_photo' => MessageType.livePhoto,
+      'poll' => MessageType.poll,
+      'location' => MessageType.location,
+      'venue' => MessageType.venue,
+      'contact' => MessageType.contact,
+      'dice' => MessageType.dice,
+      'checklist' => MessageType.checklist,
+      'invoice' => MessageType.invoice,
+      'payment_request' => MessageType.paymentRequest,
+      'payment_transfer' => MessageType.paymentTransfer,
+      'system' => MessageType.system,
+      _ => MessageType.text,
+    };
   }
 
   String _formatSchedule(DateTime? when) {
@@ -1488,6 +1717,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                 value: _sendSilent,
                 onChanged: (v) {
                   setState(() => _sendSilent = v);
+                  _scheduleDraftSave(_inputCtrl.text);
                   setSheetState(() {});
                 },
               ),
@@ -1525,6 +1755,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                         label: const Text('Clear'),
                         onPressed: () {
                           setState(() => _scheduledFor = null);
+                          _scheduleDraftSave(_inputCtrl.text);
                           Navigator.pop(ctx);
                         },
                       ),
@@ -1539,6 +1770,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                       label: const Text('Set'),
                       onPressed: () {
                         setState(() => _scheduledFor = draftSchedule);
+                        _scheduleDraftSave(_inputCtrl.text);
                         Navigator.pop(ctx);
                       },
                     ),
@@ -1582,36 +1814,297 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     );
   }
 
-  void _showPostMenu(Message msg, bool isMe) {
+  Future<void> _showPostMenu(Message msg, bool isMe) async {
     final isSystem = msg.type == MessageType.system;
-    final canDelete = isMe || _isAdmin;
-    showDialog<void>(
+    final canDelete = isMe || _canDeleteChannelMessages;
+    final settings = context.read<SettingsProvider>();
+    final canPin = !isSystem && _canPinChannelPosts;
+    final isPinned = settings.isChannelMessagePinned(channel.id, msg.id);
+    final hasCopyableText =
+        !isSystem && msg.isDecrypted && (msg.decryptedContent ?? '').isNotEmpty;
+    final selected = await showMessageActionSheet<String>(
       context: context,
-      builder: (ctx) => GlassSimpleDialog(
-        children: [
-          if (!isSystem && msg.isDecrypted)
-            ListTile(
-              leading: const Icon(Icons.copy),
-              title: const Text('Copy text'),
-              onTap: () {
-                Clipboard.setData(
-                  ClipboardData(text: msg.decryptedContent ?? ''),
-                );
-                Navigator.pop(ctx);
-              },
-            ),
-          if (canDelete)
-            ListTile(
-              leading: const Icon(Icons.delete_outline, color: Colors.red),
-              title: const Text('Delete', style: TextStyle(color: Colors.red)),
-              onTap: () {
-                Navigator.pop(ctx);
-                _deletePost(msg);
-              },
-            ),
-        ],
+      message: msg,
+      actions: [
+        if (canPin)
+          MessageActionSheetItem(
+            value: 'pin',
+            icon: isPinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
+            label: isPinned ? 'Unpin message' : 'Pin message',
+          ),
+        if (hasCopyableText)
+          const MessageActionSheetItem(
+            value: 'copy_text',
+            icon: Icons.copy_rounded,
+            label: 'Copy text',
+          ),
+        const MessageActionSheetItem(
+          value: 'copy_link',
+          icon: Icons.link_rounded,
+          label: 'Copy message link',
+        ),
+        if (canDownloadMessageAttachment(msg))
+          MessageActionSheetItem(
+            value: 'download',
+            icon: Icons.download_rounded,
+            label: 'Download attachment',
+            subtitle: suggestedAttachmentFileName(msg),
+          ),
+        if (!isMe && msg.sender != null)
+          MessageActionSheetItem(
+            value: 'sender',
+            icon: Icons.person_outline_rounded,
+            label: 'Sender actions',
+            subtitle: '@${msg.sender!.username}',
+          ),
+        if (canDelete)
+          const MessageActionSheetItem(
+            value: 'delete',
+            icon: Icons.delete_outline_rounded,
+            label: 'Delete',
+            color: Colors.red,
+            dividerBefore: true,
+          ),
+      ],
+    );
+    if (!mounted || selected == null) return;
+
+    switch (selected) {
+      case 'pin':
+        await _setPostPinned(msg, !isPinned);
+      case 'copy_text':
+        await _copyPostText(msg);
+      case 'copy_link':
+        await _copyPostLink(msg);
+      case 'download':
+        await _downloadPostAttachment(msg);
+      case 'sender':
+        await _showChannelUserActions(msg);
+      case 'delete':
+        await _deletePost(msg);
+    }
+  }
+
+  Future<void> _copyPostText(Message msg) async {
+    await Clipboard.setData(ClipboardData(text: msg.decryptedContent ?? ''));
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Post text copied')));
+  }
+
+  Future<void> _copyPostLink(Message msg) async {
+    await Clipboard.setData(
+      ClipboardData(
+        text: messageDeepLink(conversationId: channel.id, messageId: msg.id),
       ),
     );
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Post link copied')));
+  }
+
+  Future<void> _downloadPostAttachment(Message msg) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final file = await saveMessageAttachment(
+        message: msg,
+        attachmentService: AttachmentService(context.read<ApiService>()),
+      );
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text('Saved to ${file.path}')));
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text('Download failed: $e')));
+    }
+  }
+
+  bool _hasChannelPermission(String permission) =>
+      _currentMember?.hasPermission(permission) ?? false;
+
+  bool get _canManageChannelInfo =>
+      _hasChannelPermission(AdminPermission.manageInfo);
+
+  bool get _canManageChannelSettings =>
+      _hasChannelPermission(AdminPermission.manageSettings);
+
+  bool get _canManageChannelEncryption =>
+      _hasChannelPermission(AdminPermission.manageEncryption);
+
+  bool get _canManageChannelInvites =>
+      _hasChannelPermission(AdminPermission.manageInvites);
+
+  bool get _canManageChannelRoles =>
+      _hasChannelPermission(AdminPermission.manageRoles);
+
+  bool get _canManageChannelModeration =>
+      _hasChannelPermission(AdminPermission.manageModeration);
+
+  bool get _canDeleteChannelMessages =>
+      _hasChannelPermission(AdminPermission.deleteMessages);
+
+  bool get _canPostInBroadcastMode =>
+      _hasChannelPermission(AdminPermission.postMessages);
+
+  bool get _canPinChannelPosts {
+    final user = context.read<AuthProvider>().currentUser;
+    return _hasChannelPermission(AdminPermission.managePins) ||
+        user?.isSystemAdmin == true;
+  }
+
+  Future<void> _setPostPinned(Message msg, bool pinned) async {
+    final api = context.read<ApiService>();
+    final settings = context.read<SettingsProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      if (pinned) {
+        await api.pinChannelPost(channel.id, msg.id);
+        await settings.setChannelMessagePinned(
+          channel.id,
+          ChannelPinnedMessage(
+            conversationId: channel.id,
+            messageId: msg.id,
+            preview: _pinnedMessagePreview(msg),
+            messageCreatedAt: msg.createdAt,
+            pinnedAt: DateTime.now(),
+            senderUsername: msg.sender?.username,
+            message: msg,
+          ),
+          true,
+        );
+      } else {
+        await api.unpinChannelPost(channel.id, msg.id);
+        await settings.unpinChannelMessage(channel.id, msg.id);
+      }
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(pinned ? 'Pin failed: $e' : 'Unpin failed: $e')),
+      );
+    }
+  }
+
+  String _pinnedMessagePreview(Message msg) {
+    final preview = msg.listPreview.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (preview.isNotEmpty) return preview;
+    return switch (msg.type) {
+      MessageType.image => 'Photo',
+      MessageType.video => 'Video',
+      MessageType.voice => 'Voice message',
+      MessageType.audio => 'Audio',
+      MessageType.file => 'File',
+      MessageType.sticker => 'Sticker',
+      MessageType.poll => 'Poll',
+      MessageType.location => 'Location',
+      _ => 'Message',
+    };
+  }
+
+  void _jumpToPinnedMessage(ChannelPinnedMessage pinnedMessage) {
+    _jumpToPost(
+      pinnedMessage.messageId,
+      missingMessage: 'Pinned message is not loaded yet',
+    );
+  }
+
+  void _jumpToPost(
+    String messageId, {
+    String missingMessage = 'Message is not loaded yet',
+  }) {
+    final postContext = _postKeys[messageId]?.currentContext;
+    if (postContext == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(missingMessage)));
+      return;
+    }
+    Scrollable.ensureVisible(
+      postContext,
+      duration: const Duration(milliseconds: 360),
+      curve: Curves.easeOutCubic,
+      alignment: 0.35,
+    );
+    _highlightTimer?.cancel();
+    setState(() => _highlightedPostId = messageId);
+    _highlightTimer = Timer(const Duration(milliseconds: 1400), () {
+      if (mounted) setState(() => _highlightedPostId = null);
+    });
+  }
+
+  void _showPinnedMessagesSheet(
+    List<ChannelPinnedMessage> pinnedMessages,
+    bool canManagePins,
+  ) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => GlassBottomSheetFrame(
+        padding: const EdgeInsets.fromLTRB(8, 10, 8, 12),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.push_pin_rounded, size: 18),
+                    const SizedBox(width: 10),
+                    Text(
+                      pinnedMessages.length == 1
+                          ? 'Pinned message'
+                          : '${pinnedMessages.length} pinned messages',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(context).height * 0.52,
+                ),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: pinnedMessages.length,
+                  itemBuilder: (context, index) {
+                    final pinned = pinnedMessages[index];
+                    return _PinnedMessageSheetTile(
+                      pinnedMessage: pinned,
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _jumpToPinnedMessage(pinned);
+                      },
+                      onUnpin: canManagePins
+                          ? () {
+                              Navigator.pop(ctx);
+                              _unpinPinnedMessage(pinned);
+                            }
+                          : null,
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _unpinPinnedMessage(ChannelPinnedMessage pinnedMessage) async {
+    final api = context.read<ApiService>();
+    final settings = context.read<SettingsProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await api.unpinChannelPost(channel.id, pinnedMessage.messageId);
+      await settings.unpinChannelMessage(channel.id, pinnedMessage.messageId);
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Unpin failed: $e')));
+    }
   }
 
   Future<void> _toggleReaction(Message msg, String emoji) async {
@@ -1679,9 +2172,17 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
 
   Future<void> _deletePost(Message msg) async {
     final messenger = ScaffoldMessenger.of(context);
+    final api = context.read<ApiService>();
+    final settings = context.read<SettingsProvider>();
     try {
-      await context.read<ApiService>().deleteMessage(channel.id, msg.id);
-      if (mounted) setState(() => _posts.removeWhere((p) => p.id == msg.id));
+      await api.deleteMessage(channel.id, msg.id);
+      await settings.unpinChannelMessage(channel.id, msg.id);
+      if (mounted) {
+        setState(() {
+          _posts.removeWhere((p) => p.id == msg.id);
+          _postKeys.remove(msg.id);
+        });
+      }
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Delete failed: $e')));
     }
@@ -1732,6 +2233,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         selection: TextSelection.collapsed(offset: start + emoji.length),
       ),
     );
+    _scheduleDraftSave(newText);
   }
 
   void _setComposerValue(TextEditingValue value) {
@@ -1739,6 +2241,50 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     _inputCtrl.value = value;
     _lastInputText = value.text;
     _suppressInputEntityShift = false;
+    _updateMentionQuery(value);
+  }
+
+  List<ConversationMember> _mentionSuggestions(String currentUserId) {
+    return mentionSuggestionsForMembers(
+      members: channel.members,
+      active: _activeMentionQuery,
+      currentUserId: currentUserId,
+    );
+  }
+
+  void _insertMention(ConversationMember member) {
+    final username = member.user?.username.trim();
+    if (username == null || username.isEmpty) return;
+    final value = _inputCtrl.value;
+    final active = value.selection.isValid && value.selection.isCollapsed
+        ? findActiveMentionQuery(value.text, value.selection.baseOffset)
+        : _activeMentionQuery;
+    if (active == null) return;
+
+    final oldText = value.text;
+    final start = active.start.clamp(0, oldText.length).toInt();
+    final end = active.end.clamp(start, oldText.length).toInt();
+    final replacement = '@$username ';
+    final newText = oldText.replaceRange(start, end, replacement);
+    final shifted = shiftCustomEmojiEntitiesForTextEdit(
+      oldText: oldText,
+      newText: newText,
+      entities: _customEmojiEntities,
+    );
+
+    setState(() {
+      _activeMentionQuery = null;
+      _showStickers = false;
+      _showCustomEmojis = false;
+      _syncCustomEmojiEntities(shifted);
+    });
+    _setComposerValue(
+      TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: start + replacement.length),
+      ),
+    );
+    _scheduleDraftSave(newText);
   }
 
   void _restoreComposer(String text, List<CustomEmojiEntity> entities) {
@@ -1749,6 +2295,82 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       ),
     );
     setState(() => _syncCustomEmojiEntities(entities));
+    _pendingDraftText = text;
+    _pendingDraftEntities = entities;
+    _pendingDraftSilent = _sendSilent;
+    _pendingDraftScheduledFor = _scheduledFor;
+    _hasPendingDraftSave = false;
+    unawaited(
+      _settings.setMessageDraft(
+        channel.id,
+        text,
+        customEmojiEntities: entities,
+        sendSilent: _sendSilent,
+        scheduledFor: _scheduledFor,
+      ),
+    );
+  }
+
+  void _restoreLocalDraft() {
+    if (_draftRestored) return;
+    _draftRestored = true;
+    final draft = _settings.messageDraftFor(widget.channel.id);
+    if (draft == null || draft.isEmpty || _inputCtrl.text.isNotEmpty) return;
+    final scheduledFor = draft.scheduledFor;
+    final restoredSchedule =
+        scheduledFor != null &&
+            scheduledFor.isAfter(DateTime.now().add(const Duration(seconds: 5)))
+        ? scheduledFor
+        : null;
+    _setComposerValue(
+      TextEditingValue(
+        text: draft.text,
+        selection: TextSelection.collapsed(offset: draft.text.length),
+      ),
+    );
+    setState(() {
+      _sendSilent = draft.sendSilent;
+      _scheduledFor = restoredSchedule;
+      _syncCustomEmojiEntities(draft.customEmojiEntities);
+    });
+    _pendingDraftText = draft.text;
+    _pendingDraftEntities = draft.customEmojiEntities;
+    _pendingDraftSilent = draft.sendSilent;
+    _pendingDraftScheduledFor = restoredSchedule;
+  }
+
+  void _scheduleDraftSave(String text) {
+    _pendingDraftText = text;
+    _pendingDraftEntities = [..._customEmojiEntities];
+    _pendingDraftSilent = _sendSilent;
+    _pendingDraftScheduledFor = _scheduledFor;
+    _hasPendingDraftSave = true;
+    _draftSaveTimer?.cancel();
+    _draftSaveTimer = Timer(const Duration(milliseconds: 300), _flushDraftSave);
+  }
+
+  void _flushDraftSave() {
+    if (!_hasPendingDraftSave) return;
+    _hasPendingDraftSave = false;
+    unawaited(
+      _settings.setMessageDraft(
+        channel.id,
+        _pendingDraftText,
+        customEmojiEntities: _pendingDraftEntities,
+        sendSilent: _pendingDraftSilent,
+        scheduledFor: _pendingDraftScheduledFor,
+      ),
+    );
+  }
+
+  void _setAttachmentUploadProgress(AttachmentUploadProgress progress) {
+    if (!mounted) return;
+    setState(() => _attachmentUploadProgress = progress);
+  }
+
+  void _clearAttachmentUploadProgress() {
+    if (!mounted || _attachmentUploadProgress == null) return;
+    setState(() => _attachmentUploadProgress = null);
   }
 
   Future<void> _showAttachmentPicker() async {
@@ -1833,10 +2455,19 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     VoiceNoteRecording? voiceNote;
     try {
       pending = switch (choice) {
-        'gallery_image' => await attachmentService.pickImage(),
-        'camera_image' => await attachmentService.pickImage(fromCamera: true),
-        'gallery_video' => await attachmentService.pickVideo(),
-        'file' => await attachmentService.pickFile(),
+        'gallery_image' => await attachmentService.pickImage(
+          onProgress: _setAttachmentUploadProgress,
+        ),
+        'camera_image' => await attachmentService.pickImage(
+          fromCamera: true,
+          onProgress: _setAttachmentUploadProgress,
+        ),
+        'gallery_video' => await attachmentService.pickVideo(
+          onProgress: _setAttachmentUploadProgress,
+        ),
+        'file' => await attachmentService.pickFile(
+          onProgress: _setAttachmentUploadProgress,
+        ),
         'voice' => await (() async {
           voiceNote = await showVoiceNoteRecorder(context);
           final note = voiceNote;
@@ -1844,11 +2475,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           return attachmentService.uploadVoiceNote(
             note.file,
             duration: note.duration,
+            onProgress: _setAttachmentUploadProgress,
           );
         })(),
         _ => null,
       };
     } catch (e) {
+      _clearAttachmentUploadProgress();
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -1862,13 +2495,23 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         } catch (_) {}
       }
     }
-    if (pending == null) return;
+    if (pending == null) {
+      _clearAttachmentUploadProgress();
+      return;
+    }
 
-    await _post(
-      plaintextOverride: jsonEncode(pending.toPayloadJson()),
-      messageType: pending.messageType.name,
-      attachmentId: pending.attachmentId,
-    );
+    try {
+      _setAttachmentUploadProgress(
+        const AttachmentUploadProgress(stage: AttachmentUploadStage.sending),
+      );
+      await _post(
+        plaintextOverride: jsonEncode(pending.toPayloadJson()),
+        messageType: pending.messageType.name,
+        attachmentId: pending.attachmentId,
+      );
+    } finally {
+      _clearAttachmentUploadProgress();
+    }
   }
 
   Future<void> _showCreatePollDialog() async {
@@ -2055,21 +2698,28 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     // matching the server. Ordinary admins can't.
     final isOwner = channel.createdBy == currentUserId;
     final canManageLifecycle = isOwner || isSystemAdmin;
+    final canManagePins = _canPinChannelPosts;
     final isArchived = _archived || channel.isArchived;
-    final chatStyle = context.watch<SettingsProvider>().chatStyleFor(
-      channel.id,
-    );
+    final settings = context.watch<SettingsProvider>();
+    final pinnedMessages = settings.pinnedMessagesForChannel(channel.id);
+    final chatStyle = settings.chatStyleFor(channel.id);
     final meBubbleColor = chatStyle.myBubbleColor != null
         ? Color(chatStyle.myBubbleColor!)
         : auth.currentUser?.bubbleColor != null
         ? Color(auth.currentUser!.bubbleColor!)
         : null;
+    final mentionSuggestions = _mentionSuggestions(currentUserId);
     final actionPlacement = ChannelActionPolicy.actionsFor(
       channel: channel,
       isAdmin: _isAdmin,
       isPremium: isPremium,
       canManageLifecycle: canManageLifecycle,
       isSubscribed: _isSubscribed,
+      canOpenModeration: _canManageChannelModeration || _canManageChannelRoles,
+      canManageInfo: _canManageChannelInfo,
+      canManageInvites: _canManageChannelInvites,
+      canManageSettings: _canManageChannelSettings,
+      canManageEncryption: _canManageChannelEncryption,
     );
 
     return Scaffold(
@@ -2184,6 +2834,14 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                 ),
               ),
             ),
+          if (pinnedMessages.isNotEmpty)
+            _PinnedChannelMessagesBar(
+              latestPinnedMessage: pinnedMessages.first,
+              pinnedCount: pinnedMessages.length,
+              onTap: () => _jumpToPinnedMessage(pinnedMessages.first),
+              onShowAll: () =>
+                  _showPinnedMessagesSheet(pinnedMessages, canManagePins),
+            ),
           Expanded(
             child: DecoratedBox(
               decoration: _channelBackground(),
@@ -2223,24 +2881,40 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                       itemBuilder: (context, i) {
                         final msg = _posts[i];
                         final isMe = msg.senderId == currentUserId;
+                        final isPinned = settings.isChannelMessagePinned(
+                          channel.id,
+                          msg.id,
+                        );
                         final showAvatar =
                             !isMe &&
                             (i == _posts.length - 1 ||
                                 _posts[i + 1].senderId != msg.senderId);
-                        return _AnimatedChannelPost(
-                          id: msg.id,
-                          child: MessageBubble(
-                            message: msg,
-                            isMe: isMe,
-                            showAvatar: showAvatar,
-                            meBubbleColor: meBubbleColor,
-                            onTap: () => _showReactionMenu(msg),
-                            onReactionTap: (emoji) =>
-                                _toggleReaction(msg, emoji),
-                            onLongPress: () => _showPostMenu(msg, isMe),
-                            onAvatarTap: msg.sender != null
-                                ? () => _showChannelUserActions(msg)
-                                : null,
+                        final postKey = _postKeys.putIfAbsent(
+                          msg.id,
+                          GlobalKey.new,
+                        );
+                        return KeyedSubtree(
+                          key: postKey,
+                          child: _AnimatedChannelPost(
+                            id: msg.id,
+                            child: _PinnedChannelPostFrame(
+                              isPinned: isPinned,
+                              isHighlighted: _highlightedPostId == msg.id,
+                              isMe: isMe,
+                              child: MessageBubble(
+                                message: msg,
+                                isMe: isMe,
+                                showAvatar: showAvatar,
+                                meBubbleColor: meBubbleColor,
+                                onTap: () => _showReactionMenu(msg),
+                                onReactionTap: (emoji) =>
+                                    _toggleReaction(msg, emoji),
+                                onLongPress: () => _showPostMenu(msg, isMe),
+                                onAvatarTap: msg.sender != null
+                                    ? () => _showChannelUserActions(msg)
+                                    : null,
+                              ),
+                            ),
                           ),
                         );
                       },
@@ -2251,9 +2925,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           if (_showCustomEmojis)
             CustomEmojiPicker(onEmojiSelected: _insertCustomEmoji),
           if (_showStickers) StickerPicker(onStickerSelected: _sendSticker),
+          if (_attachmentUploadProgress != null)
+            AttachmentUploadProgressChip(progress: _attachmentUploadProgress!),
           // Admins can always post. When admin-only posting is OFF, any
           // subscriber can post too. Archived channels are read-only.
-          if ((_isAdmin || (!channel.ownerOnlyPost && _isSubscribed)) &&
+          if ((_canPostInBroadcastMode ||
+                  (!channel.ownerOnlyPost && _isSubscribed)) &&
               !_archived &&
               !channel.isArchived)
             ChannelPostBar(
@@ -2271,8 +2948,213 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               onAttach: _showAttachmentPicker,
               onOptions: _showSendOptions,
               hasOptions: _sendSilent || _scheduledFor != null,
+              mentionSuggestions: mentionSuggestions,
+              onMentionSelected: _insertMention,
               onPost: _post,
             ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PinnedChannelMessagesBar extends StatelessWidget {
+  final ChannelPinnedMessage latestPinnedMessage;
+  final int pinnedCount;
+  final VoidCallback onTap;
+  final VoidCallback onShowAll;
+
+  const _PinnedChannelMessagesBar({
+    required this.latestPinnedMessage,
+    required this.pinnedCount,
+    required this.onTap,
+    required this.onShowAll,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: GlassContainer(
+          shape: const LiquidRoundedSuperellipse(borderRadius: 22),
+          allowElevation: true,
+          glowIntensity: 0.05,
+          padding: const EdgeInsets.fromLTRB(12, 9, 6, 9),
+          child: Row(
+            children: [
+              Container(
+                width: 3,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: scheme.primary,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Icon(Icons.push_pin_rounded, size: 18, color: scheme.primary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      pinnedCount == 1
+                          ? 'Pinned message'
+                          : '$pinnedCount pinned messages',
+                      style: TextStyle(
+                        color: scheme.primary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      latestPinnedMessage.preview,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: scheme.onSurface.withValues(alpha: 0.72),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'Pinned messages',
+                icon: const Icon(Icons.keyboard_arrow_down_rounded),
+                onPressed: onShowAll,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PinnedMessageSheetTile extends StatelessWidget {
+  final ChannelPinnedMessage pinnedMessage;
+  final VoidCallback onTap;
+  final VoidCallback? onUnpin;
+
+  const _PinnedMessageSheetTile({
+    required this.pinnedMessage,
+    required this.onTap,
+    this.onUnpin,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ListTile(
+      leading: CircleAvatar(
+        radius: 18,
+        backgroundColor: scheme.primary.withValues(alpha: 0.12),
+        child: Icon(Icons.push_pin_rounded, size: 17, color: scheme.primary),
+      ),
+      title: Text(
+        pinnedMessage.preview,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      subtitle: pinnedMessage.senderUsername == null
+          ? null
+          : Text('@${pinnedMessage.senderUsername}'),
+      trailing: onUnpin == null
+          ? null
+          : IconButton(
+              tooltip: 'Unpin message',
+              icon: const Icon(Icons.close_rounded),
+              onPressed: onUnpin,
+            ),
+      onTap: onTap,
+    );
+  }
+}
+
+class _PinnedChannelPostFrame extends StatelessWidget {
+  final bool isPinned;
+  final bool isHighlighted;
+  final bool isMe;
+  final Widget child;
+
+  const _PinnedChannelPostFrame({
+    required this.isPinned,
+    required this.isHighlighted,
+    required this.isMe,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isPinned && !isHighlighted) return child;
+    final scheme = Theme.of(context).colorScheme;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      margin: EdgeInsets.symmetric(vertical: isHighlighted ? 4 : 0),
+      padding: EdgeInsets.symmetric(
+        horizontal: isHighlighted ? 6 : 0,
+        vertical: isHighlighted ? 4 : 0,
+      ),
+      decoration: isHighlighted
+          ? BoxDecoration(
+              color: scheme.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(
+                color: scheme.primary.withValues(alpha: 0.22),
+                width: 0.8,
+              ),
+            )
+          : null,
+      child: Column(
+        crossAxisAlignment: isMe
+            ? CrossAxisAlignment.end
+            : CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (isPinned)
+            Padding(
+              padding: EdgeInsets.only(
+                left: isMe ? 0 : 40,
+                right: isMe ? 6 : 0,
+                bottom: 2,
+              ),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: scheme.primary.withValues(alpha: 0.11),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.push_pin_rounded,
+                      size: 12,
+                      color: scheme.primary,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Pinned',
+                      style: TextStyle(
+                        color: scheme.primary,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          child,
         ],
       ),
     );
@@ -2308,10 +3190,12 @@ class ChannelPostBar extends StatelessWidget {
   final TextEditingController controller;
   final bool showStickers;
   final bool showCustomEmojis;
+  final List<ConversationMember> mentionSuggestions;
   final VoidCallback onToggleCustomEmojis;
   final VoidCallback onToggleStickers;
   final VoidCallback onAttach;
   final VoidCallback? onOptions;
+  final ValueChanged<ConversationMember> onMentionSelected;
   final bool hasOptions;
   final VoidCallback onPost;
 
@@ -2320,10 +3204,12 @@ class ChannelPostBar extends StatelessWidget {
     required this.controller,
     required this.showStickers,
     required this.showCustomEmojis,
+    this.mentionSuggestions = const [],
     required this.onToggleCustomEmojis,
     required this.onToggleStickers,
     required this.onAttach,
     this.onOptions,
+    required this.onMentionSelected,
     this.hasOptions = false,
     required this.onPost,
   });
@@ -2342,72 +3228,88 @@ class ChannelPostBar extends StatelessWidget {
           allowElevation: true,
           glowIntensity: 0.06,
           padding: const EdgeInsets.fromLTRB(4, 4, 6, 4),
-          child: Row(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              IconButton(
-                icon: Icon(
-                  showCustomEmojis
-                      ? Icons.keyboard
-                      : Icons.add_reaction_outlined,
+              if (mentionSuggestions.isNotEmpty)
+                MentionAutocompletePanel(
+                  members: mentionSuggestions,
+                  onSelected: onMentionSelected,
                 ),
-                tooltip: showCustomEmojis ? 'Keyboard' : 'Custom emoji',
-                onPressed: onToggleCustomEmojis,
-              ),
-              IconButton(
-                icon: Icon(
-                  showStickers ? Icons.keyboard : Icons.sticky_note_2_outlined,
-                ),
-                tooltip: showStickers ? 'Keyboard' : 'Stickers',
-                onPressed: onToggleStickers,
-              ),
-              Expanded(
-                child: TextField(
-                  controller: controller,
-                  maxLines: null,
-                  textInputAction: TextInputAction.send,
-                  onSubmitted: (_) => onPost(),
-                  style: const TextStyle(fontWeight: FontWeight.w500),
-                  decoration: InputDecoration(
-                    hintText: 'Write a post…',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(22),
-                      borderSide: BorderSide.none,
+              Row(
+                children: [
+                  IconButton(
+                    icon: Icon(
+                      showCustomEmojis
+                          ? Icons.keyboard
+                          : Icons.add_reaction_outlined,
                     ),
-                    filled: true,
-                    fillColor: scheme.surfaceContainerHighest.withValues(
-                      alpha: 0.30,
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 10,
-                    ),
-                    isDense: true,
+                    tooltip: showCustomEmojis ? 'Keyboard' : 'Custom emoji',
+                    onPressed: onToggleCustomEmojis,
                   ),
-                ),
-              ),
-              const SizedBox(width: 4),
-              GlassCircleIconButton(
-                onPressed: onAttach,
-                tooltip: 'Attach file',
-                icon: const Icon(Icons.attach_file_outlined, size: 22),
-              ),
-              const SizedBox(width: 4),
-              Tooltip(
-                message: 'Hold for post options',
-                child: GestureDetector(
-                  onTap: onPost,
-                  onLongPress: onOptions,
-                  child: GlassContainer(
-                    shape: const LiquidRoundedSuperellipse(borderRadius: 999),
-                    allowElevation: true,
-                    glowIntensity: 0.08,
-                    padding: const EdgeInsets.all(12),
-                    child: Icon(
-                      hasOptions ? Icons.schedule_send_outlined : Icons.send,
-                      size: 18,
+                  IconButton(
+                    icon: Icon(
+                      showStickers
+                          ? Icons.keyboard
+                          : Icons.sticky_note_2_outlined,
+                    ),
+                    tooltip: showStickers ? 'Keyboard' : 'Stickers',
+                    onPressed: onToggleStickers,
+                  ),
+                  Expanded(
+                    child: TextField(
+                      controller: controller,
+                      maxLines: null,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => onPost(),
+                      style: const TextStyle(fontWeight: FontWeight.w500),
+                      decoration: InputDecoration(
+                        hintText: 'Write a post…',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(22),
+                          borderSide: BorderSide.none,
+                        ),
+                        filled: true,
+                        fillColor: scheme.surfaceContainerHighest.withValues(
+                          alpha: 0.30,
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 10,
+                        ),
+                        isDense: true,
+                      ),
                     ),
                   ),
-                ),
+                  const SizedBox(width: 4),
+                  GlassCircleIconButton(
+                    onPressed: onAttach,
+                    tooltip: 'Attach file',
+                    icon: const Icon(Icons.attach_file_outlined, size: 22),
+                  ),
+                  const SizedBox(width: 4),
+                  Tooltip(
+                    message: 'Hold for post options',
+                    child: GestureDetector(
+                      onTap: onPost,
+                      onLongPress: onOptions,
+                      child: GlassContainer(
+                        shape: const LiquidRoundedSuperellipse(
+                          borderRadius: 999,
+                        ),
+                        allowElevation: true,
+                        glowIntensity: 0.08,
+                        padding: const EdgeInsets.all(12),
+                        child: Icon(
+                          hasOptions
+                              ? Icons.schedule_send_outlined
+                              : Icons.send,
+                          size: 18,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

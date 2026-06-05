@@ -24,6 +24,7 @@ import '../custom_emojis/custom_emoji_pack_screen.dart';
 import '../stickers/sticker_pack_screen.dart';
 import 'pgp_keys_screen.dart';
 import 'premium_screen.dart';
+import 'trust_center_screen.dart';
 import 'wallet_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -114,7 +115,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await GlassDialog.show<void>(
         context: context,
         title: 'Privacy notice',
-        message: 'Push notifications route metadata (sender, device ID) '
+        message:
+            'Push notifications route metadata (sender, device ID) '
             'through Google Firebase servers. No message content is sent.\n\n'
             'For full metadata privacy, use Background WebSocket instead.',
         actions: [
@@ -170,7 +172,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await GlassDialog.show<void>(
         context: context,
         title: 'Battery notice',
-        message: 'Background WebSocket keeps a live connection even when the '
+        message:
+            'Background WebSocket keeps a live connection even when the '
             'app is closed, providing real-time notifications without Firebase. '
             'On iOS the OS may still suspend it.',
         actions: [
@@ -217,9 +220,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       final storage = context.read<SecureStorageService>();
       final token = await storage.getAccessToken() ?? '';
+      final currentUserId = await storage.getUserID() ?? '';
       final started = await BackgroundWsService.start(
         accessToken: token,
         showSensitive: settings.notificationSensitiveContent,
+        conversationNotificationPreferences:
+            settings.conversationNotificationPreferences,
+        currentUserId: currentUserId,
       );
       if (!mounted) return;
       if (!started) {
@@ -424,9 +431,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   shape: BoxShape.circle,
                   gradient: const SweepGradient(
                     colors: [
-                      Color(0xFFFF0000), Color(0xFFFFFF00),
-                      Color(0xFF00FF00), Color(0xFF00FFFF),
-                      Color(0xFF0000FF), Color(0xFFFF00FF),
+                      Color(0xFFFF0000),
+                      Color(0xFFFFFF00),
+                      Color(0xFF00FF00),
+                      Color(0xFF00FFFF),
+                      Color(0xFF0000FF),
+                      Color(0xFFFF00FF),
                       Color(0xFFFF0000),
                     ],
                   ),
@@ -922,7 +932,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await GlassDialog.show<void>(
       context: context,
       title: 'Clear all local data?',
-      message: 'This permanently removes your PGP private key, session '
+      message:
+          'This permanently removes your PGP private key, session '
           'tokens, and all app preferences. You will be signed out and '
           'need to re-import your PGP key.',
       actions: [
@@ -1027,7 +1038,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               shape: BoxShape.circle,
                               color: scheme.primary,
                               border: Border.all(
-                                color: Theme.of(context).scaffoldBackgroundColor,
+                                color: Theme.of(
+                                  context,
+                                ).scaffoldBackgroundColor,
                                 width: 2,
                               ),
                             ),
@@ -1108,6 +1121,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
               children: [
                 _GlassTile(
+                  icon: Icons.shield_outlined,
+                  title: 'Trust Center',
+                  subtitle: 'Keys, encrypted chats, devices, and privacy',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const TrustCenterScreen(),
+                    ),
+                  ),
+                ),
+                _GlassDivider(),
+                _GlassTile(
                   icon: keys.hasKey ? Icons.verified_user : Icons.warning_amber,
                   iconColor: keys.hasKey ? Colors.green : Colors.orange,
                   title: 'PGP Keys',
@@ -1160,7 +1185,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _GlassSwitchTile(
                     icon: Icons.fingerprint,
                     title: 'Biometric Key Unlock',
-                    subtitle: 'Require fingerprint / face before exporting your key',
+                    subtitle:
+                        'Require fingerprint / face before exporting your key',
                     value: _biometricEnabled,
                     onChanged: _setBiometric,
                   ),
@@ -1194,7 +1220,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   if (mounted) auth.refreshCurrentUser();
                 } catch (e) {
                   if (mounted) {
-                    messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+                    messenger.showSnackBar(
+                      SnackBar(content: Text('Failed: $e')),
+                    );
                   }
                 }
               },
@@ -1347,7 +1375,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: 'Create and manage your sticker packs',
                   onTap: () => Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => const StickerPackScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => const StickerPackScreen(),
+                    ),
                   ),
                 ),
                 _GlassDivider(),
@@ -1473,10 +1503,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       await context.read<AuthProvider>().logout();
                     }
                   },
-                  isLast: !kIsWeb &&
-                      (defaultTargetPlatform == TargetPlatform.windows ||
-                          defaultTargetPlatform == TargetPlatform.linux ||
-                          defaultTargetPlatform == TargetPlatform.macOS)
+                  isLast:
+                      !kIsWeb &&
+                          (defaultTargetPlatform == TargetPlatform.windows ||
+                              defaultTargetPlatform == TargetPlatform.linux ||
+                              defaultTargetPlatform == TargetPlatform.macOS)
                       ? false
                       : true,
                 ),
@@ -1565,7 +1596,9 @@ class _GlassTile extends StatelessWidget {
                   height: 36,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: (iconColor ?? scheme.primary).withValues(alpha: 0.12),
+                    color: (iconColor ?? scheme.primary).withValues(
+                      alpha: 0.12,
+                    ),
                   ),
                   child: Icon(
                     icon,
@@ -1654,11 +1687,7 @@ class _GlassSwitchTile extends StatelessWidget {
                     shape: BoxShape.circle,
                     color: scheme.primary.withValues(alpha: 0.12),
                   ),
-                  child: Icon(
-                    icon,
-                    size: 18,
-                    color: scheme.primary,
-                  ),
+                  child: Icon(icon, size: 18, color: scheme.primary),
                 ),
                 const SizedBox(width: 14),
                 Expanded(
@@ -1784,10 +1813,19 @@ class _CustomAccentColorDialogState extends State<_CustomAccentColorDialog> {
           const SizedBox(height: 8),
           Row(
             children: [
-              Icon(Icons.tag, size: 15, color: scheme.onSurface.withValues(alpha: 0.6)),
+              Icon(
+                Icons.tag,
+                size: 15,
+                color: scheme.onSurface.withValues(alpha: 0.6),
+              ),
               const SizedBox(width: 4),
               Text(
-                _current.toARGB32().toRadixString(16).toUpperCase().padLeft(8, '0').substring(2),
+                _current
+                    .toARGB32()
+                    .toRadixString(16)
+                    .toUpperCase()
+                    .padLeft(8, '0')
+                    .substring(2),
                 style: TextStyle(
                   fontFamily: 'monospace',
                   fontSize: 13,
@@ -1814,18 +1852,20 @@ class _CustomAccentColorDialogState extends State<_CustomAccentColorDialog> {
   }
 
   Widget _label(BuildContext context, String text) => Padding(
-        padding: const EdgeInsets.only(bottom: 2),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Text(
-            text,
-            style: TextStyle(
-              fontSize: 11,
-              color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55),
-            ),
-          ),
+    padding: const EdgeInsets.only(bottom: 2),
+    child: Align(
+      alignment: Alignment.centerLeft,
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 11,
+          color: Theme.of(
+            context,
+          ).colorScheme.onSurface.withValues(alpha: 0.55),
         ),
-      );
+      ),
+    ),
+  );
 
   Widget _gradientSlider({
     required double value,
@@ -1870,11 +1910,17 @@ class _HueTrackShape extends RoundedRectSliderTrackShape {
     context.canvas.drawRRect(
       RRect.fromRectAndRadius(trackRect, const Radius.circular(7)),
       Paint()
-        ..shader = const LinearGradient(colors: [
-          Color(0xFFFF0000), Color(0xFFFFFF00), Color(0xFF00FF00),
-          Color(0xFF00FFFF), Color(0xFF0000FF), Color(0xFFFF00FF),
-          Color(0xFFFF0000),
-        ]).createShader(trackRect),
+        ..shader = const LinearGradient(
+          colors: [
+            Color(0xFFFF0000),
+            Color(0xFFFFFF00),
+            Color(0xFF00FF00),
+            Color(0xFF00FFFF),
+            Color(0xFF0000FF),
+            Color(0xFFFF00FF),
+            Color(0xFFFF0000),
+          ],
+        ).createShader(trackRect),
     );
   }
 }

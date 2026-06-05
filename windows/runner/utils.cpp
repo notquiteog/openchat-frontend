@@ -6,6 +6,20 @@
 #include <windows.h>
 
 #include <iostream>
+#include <string>
+
+namespace {
+constexpr size_t kMaxExecutablePathChars = 32767;
+
+bool SetRegistryString(HKEY key, const wchar_t* value_name,
+                       const std::wstring& value) {
+  return ::RegSetValueExW(
+             key, value_name, 0, REG_SZ,
+             reinterpret_cast<const BYTE*>(value.c_str()),
+             static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t))) ==
+         ERROR_SUCCESS;
+}
+}  // namespace
 
 void CreateAndAttachConsole() {
   if (::AllocConsole()) {
@@ -19,6 +33,47 @@ void CreateAndAttachConsole() {
     std::ios::sync_with_stdio();
     FlutterDesktopResyncOutputStreams();
   }
+}
+
+void RegisterUrlProtocol(const wchar_t* scheme, const wchar_t* display_name) {
+  if (scheme == nullptr || scheme[0] == L'\0') {
+    return;
+  }
+
+  std::wstring executable(kMaxExecutablePathChars, L'\0');
+  DWORD length = ::GetModuleFileNameW(
+      nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+  if (length == 0 || length >= executable.size()) {
+    return;
+  }
+  executable.resize(length);
+
+  const std::wstring base_key = L"Software\\Classes\\" + std::wstring(scheme);
+  HKEY protocol_key = nullptr;
+  if (::RegCreateKeyExW(HKEY_CURRENT_USER, base_key.c_str(), 0, nullptr, 0,
+                        KEY_WRITE, nullptr, &protocol_key, nullptr) !=
+      ERROR_SUCCESS) {
+    return;
+  }
+
+  const std::wstring label =
+      display_name != nullptr && display_name[0] != L'\0'
+          ? display_name
+          : scheme;
+  SetRegistryString(protocol_key, nullptr, L"URL:" + label);
+  SetRegistryString(protocol_key, L"URL Protocol", L"");
+  ::RegCloseKey(protocol_key);
+
+  HKEY command_key = nullptr;
+  if (::RegCreateKeyExW(HKEY_CURRENT_USER,
+                        (base_key + L"\\shell\\open\\command").c_str(), 0,
+                        nullptr, 0, KEY_WRITE, nullptr, &command_key,
+                        nullptr) != ERROR_SUCCESS) {
+    return;
+  }
+
+  SetRegistryString(command_key, nullptr, L"\"" + executable + L"\" \"%1\"");
+  ::RegCloseKey(command_key);
 }
 
 std::vector<std::string> GetCommandLineArguments() {

@@ -1,10 +1,16 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import '../config/api_config.dart' show ApiConfig, IceServer;
+import '../models/admin_audit_event.dart';
+import '../models/chat_folder.dart';
+import '../models/channel_pinned_message.dart';
 import '../models/user.dart';
 import '../models/message.dart';
 import '../models/conversation.dart';
+import '../models/conversation_invite.dart';
+import '../models/scheduled_message.dart';
 import '../models/story.dart';
 import '../services/secure_storage_service.dart';
 import '../services/key_cache_service.dart';
@@ -75,6 +81,15 @@ class DownloadInfo {
     mimeType: json['mime_type'] as String,
   );
 }
+
+class SharedContentPage {
+  final List<Message> items;
+  final String? nextCursor;
+
+  const SharedContentPage({required this.items, required this.nextCursor});
+}
+
+typedef UploadProgressCallback = void Function(int sentBytes, int totalBytes);
 
 class ApiService {
   final SecureStorageService _storage;
@@ -310,13 +325,31 @@ class ApiService {
     await _delete('/api/v1/conversations/$convID/members/$userID');
   }
 
+  Future<List<ChatFolder>> listChatFolders() async {
+    final resp = await _get('/api/v1/me/folders');
+    return (resp['data'] as List? ?? const [])
+        .map((e) => ChatFolder.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<ChatFolder> upsertChatFolder(ChatFolder folder) async {
+    final resp = await _put('/api/v1/me/folders', folder.toUpsertJson());
+    return ChatFolder.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<void> deleteChatFolder(String folderId) async {
+    await _delete('/api/v1/me/folders/$folderId');
+  }
+
   Future<void> setConversationMemberRole(
     String convID,
     String userID,
-    String role,
-  ) async {
+    String role, {
+    Map<String, bool>? adminPermissions,
+  }) async {
     await _put('/api/v1/conversations/$convID/members/$userID/role', {
       'role': role,
+      'admin_permissions': ?adminPermissions,
     });
   }
 
@@ -361,9 +394,13 @@ class ApiService {
   Future<void> setChannelMemberRole(
     String chanID,
     String userID,
-    String role,
-  ) async {
-    await _put('/api/v1/channels/$chanID/members/$userID/role', {'role': role});
+    String role, {
+    Map<String, bool>? adminPermissions,
+  }) async {
+    await _put('/api/v1/channels/$chanID/members/$userID/role', {
+      'role': role,
+      'admin_permissions': ?adminPermissions,
+    });
   }
 
   /// Ban a user from a channel (admins/moderators). Removes their membership.
@@ -409,12 +446,30 @@ class ApiService {
         .toList();
   }
 
+  Future<List<ChannelPinnedMessage>> getChannelPinnedPosts(
+    String chanID,
+  ) async {
+    final resp = await _get('/api/v1/channels/$chanID/pinned-posts');
+    return (resp['data'] as List)
+        .map((e) => ChannelPinnedMessage.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> pinChannelPost(String chanID, String msgID) async {
+    await _put('/api/v1/channels/$chanID/posts/$msgID/pin', {});
+  }
+
+  Future<void> unpinChannelPost(String chanID, String msgID) async {
+    await _delete('/api/v1/channels/$chanID/posts/$msgID/pin');
+  }
+
   Future<Message> postToChannel({
     required String chanID,
     required String encryptedPayload,
     required String signature,
     String messageType = 'text',
     String? attachmentId,
+    List<String> mentionedUserIds = const [],
     bool silent = false,
     DateTime? scheduledFor,
   }) async {
@@ -423,6 +478,7 @@ class ApiService {
       'signature': signature,
       'message_type': messageType,
       'attachment_id': ?attachmentId,
+      if (mentionedUserIds.isNotEmpty) 'mentioned_user_ids': mentionedUserIds,
       if (silent) 'silent': true,
       if (scheduledFor != null)
         'scheduled_for': scheduledFor.toUtc().toIso8601String(),
@@ -445,6 +501,30 @@ class ApiService {
         .toList();
   }
 
+  Future<SharedContentPage> getSharedContent(
+    String convID, {
+    required String section,
+    bool channel = false,
+    String? beforeID,
+    int limit = 50,
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    final encodedSection = Uri.encodeQueryComponent(section);
+    var path =
+        '$base/$convID/shared-content?section=$encodedSection&limit=$limit';
+    if (beforeID != null) path += '&before=$beforeID';
+    final resp = await _get(path);
+    final items = (resp['data'] as List? ?? const [])
+        .map((e) => Message.fromJson(e as Map<String, dynamic>))
+        .toList();
+    final meta = resp['meta'] as Map<String, dynamic>?;
+    final nextCursor = meta?['next_cursor'] as String?;
+    return SharedContentPage(
+      items: items,
+      nextCursor: nextCursor?.isEmpty == true ? null : nextCursor,
+    );
+  }
+
   Future<Message> sendMessage({
     required String convID,
     required String encryptedPayload,
@@ -453,6 +533,7 @@ class ApiService {
     String? replyTo,
     String? attachmentId,
     String? topicId,
+    List<String> mentionedUserIds = const [],
     bool silent = false,
     DateTime? scheduledFor,
   }) async {
@@ -463,10 +544,61 @@ class ApiService {
       'reply_to': ?replyTo,
       'attachment_id': ?attachmentId,
       'topic_id': ?topicId,
+      if (mentionedUserIds.isNotEmpty) 'mentioned_user_ids': mentionedUserIds,
       if (silent) 'silent': true,
       if (scheduledFor != null)
         'scheduled_for': scheduledFor.toUtc().toIso8601String(),
     });
+    return Message.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<List<ScheduledMessage>> listScheduledMessages(
+    String convID, {
+    bool channel = false,
+  }) async {
+    final base = channel
+        ? '/api/v1/channels/$convID/scheduled-posts'
+        : '/api/v1/conversations/$convID/scheduled-messages';
+    final resp = await _get(base);
+    return (resp['data'] as List? ?? const [])
+        .map((e) => ScheduledMessage.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> cancelScheduledMessage(
+    String convID,
+    String scheduledID, {
+    bool channel = false,
+  }) async {
+    final base = channel
+        ? '/api/v1/channels/$convID/scheduled-posts'
+        : '/api/v1/conversations/$convID/scheduled-messages';
+    await _delete('$base/$scheduledID');
+  }
+
+  Future<void> rescheduleScheduledMessage(
+    String convID,
+    String scheduledID, {
+    required DateTime scheduledFor,
+    bool channel = false,
+  }) async {
+    final base = channel
+        ? '/api/v1/channels/$convID/scheduled-posts'
+        : '/api/v1/conversations/$convID/scheduled-messages';
+    await _put('$base/$scheduledID', {
+      'scheduled_for': scheduledFor.toUtc().toIso8601String(),
+    });
+  }
+
+  Future<Message> sendScheduledMessageNow(
+    String convID,
+    String scheduledID, {
+    bool channel = false,
+  }) async {
+    final base = channel
+        ? '/api/v1/channels/$convID/scheduled-posts'
+        : '/api/v1/conversations/$convID/scheduled-messages';
+    final resp = await _post('$base/$scheduledID/send-now', {});
     return Message.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
@@ -555,6 +687,84 @@ class ApiService {
   }) async {
     final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
     await _put('$base/$convID/join-approval', {'required': required});
+  }
+
+  Future<List<ConversationInviteLink>> listConversationInviteLinks(
+    String convID, {
+    bool channel = false,
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    final resp = await _get('$base/$convID/invite-links');
+    return (resp['data'] as List? ?? const [])
+        .map((e) => ConversationInviteLink.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<ConversationInviteLink> createConversationInviteLink(
+    String convID, {
+    bool channel = false,
+    bool approvalRequired = false,
+    bool revokeExisting = false,
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    final resp = await _post('$base/$convID/invite-links', {
+      'approval_required': approvalRequired,
+      'revoke_existing': revokeExisting,
+    });
+    return ConversationInviteLink.fromJson(
+      resp['data'] as Map<String, dynamic>,
+    );
+  }
+
+  Future<void> revokeConversationInviteLink(
+    String convID,
+    String linkID, {
+    bool channel = false,
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    await _delete('$base/$convID/invite-links/$linkID');
+  }
+
+  Future<List<ConversationJoinRequest>> listJoinRequests(
+    String convID, {
+    bool channel = false,
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    final resp = await _get('$base/$convID/join-requests');
+    return (resp['data'] as List? ?? const [])
+        .map((e) => ConversationJoinRequest.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> approveJoinRequest(
+    String convID,
+    String userID, {
+    bool channel = false,
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    await _post('$base/$convID/join-requests/$userID/approve', {});
+  }
+
+  Future<void> rejectJoinRequest(
+    String convID,
+    String userID, {
+    bool channel = false,
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    await _delete('$base/$convID/join-requests/$userID');
+  }
+
+  Future<InvitePreview> getInvite(String token) async {
+    final resp = await _get('/api/v1/invites/${Uri.encodeComponent(token)}');
+    return InvitePreview.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<InviteJoinResult> joinInvite(String token) async {
+    final resp = await _post(
+      '/api/v1/invites/${Uri.encodeComponent(token)}/join',
+      {},
+    );
+    return InviteJoinResult.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
   Future<void> setTopicsEnabled(
@@ -712,8 +922,14 @@ class ApiService {
   Future<void> uploadBytes(
     String uploadUrl,
     Uint8List bytes,
-    String mimeType,
-  ) async {
+    String mimeType, {
+    UploadProgressCallback? onProgress,
+  }) async {
+    if (onProgress != null) {
+      await _uploadBytesWithProgress(uploadUrl, bytes, mimeType, onProgress);
+      return;
+    }
+
     final response = await _httpClient.put(
       Uri.parse(uploadUrl),
       headers: {'Content-Type': mimeType},
@@ -725,6 +941,50 @@ class ApiService {
         'UPLOAD_FAILED',
         'object storage upload failed',
       );
+    }
+  }
+
+  Future<void> _uploadBytesWithProgress(
+    String uploadUrl,
+    Uint8List bytes,
+    String mimeType,
+    UploadProgressCallback onProgress,
+  ) async {
+    final total = bytes.length;
+    final request = http.StreamedRequest('PUT', Uri.parse(uploadUrl));
+    request.headers['Content-Type'] = mimeType;
+    request.contentLength = total;
+
+    final responseFuture = _httpClient.send(request);
+    const chunkSize = 64 * 1024;
+    var sent = 0;
+    var closed = false;
+    onProgress(0, total);
+
+    try {
+      for (var offset = 0; offset < total; offset += chunkSize) {
+        final end = (offset + chunkSize).clamp(0, total).toInt();
+        request.sink.add(bytes.sublist(offset, end));
+        sent = end;
+        onProgress(sent, total);
+        await Future<void>.delayed(Duration.zero);
+      }
+      unawaited(request.sink.close());
+      closed = true;
+
+      final streamedResponse = await responseFuture;
+      final response = await http.Response.fromStream(streamedResponse);
+      if (response.statusCode >= 400) {
+        throw ApiException(
+          response.statusCode,
+          'UPLOAD_FAILED',
+          'object storage upload failed',
+        );
+      }
+    } finally {
+      if (!closed) {
+        unawaited(request.sink.close());
+      }
     }
   }
 
@@ -1360,6 +1620,18 @@ class ApiService {
   Future<List<dynamic>> listMutes(String convID) async {
     final resp = await _get('/api/v1/conversations/$convID/mutes');
     return (resp['data'] as List?) ?? const [];
+  }
+
+  Future<List<AdminAuditEvent>> listAdminAuditEvents(
+    String convID, {
+    bool channel = false,
+    int limit = 100,
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    final resp = await _get('$base/$convID/audit-events?limit=$limit');
+    return (resp['data'] as List? ?? const [])
+        .map((e) => AdminAuditEvent.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   /// Flip the channel/group into broadcast mode (only admins can post).

@@ -22,22 +22,37 @@ import '../../services/notification_service.dart';
 import '../../services/attachment_service.dart';
 import '../../utils/custom_emoji_payload.dart';
 import '../../utils/disappearing_message_duration.dart';
+import '../../utils/local_conversation_preferences.dart';
+import '../../utils/message_actions.dart';
+import '../../utils/mention_utils.dart';
+import '../../widgets/attachment_upload_progress.dart';
+import '../../widgets/admin_permissions_sheet.dart';
 import '../../widgets/conversation_encryption_status.dart';
 import '../../widgets/conversation_info_panel.dart';
+import '../../widgets/conversation_invite_links_sheet.dart';
 import '../../widgets/color_choices.dart';
 import '../../widgets/custom_emoji_picker.dart';
 import '../../widgets/custom_emoji_text_controller.dart';
 import '../../widgets/disappearing_messages_picker.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/location_map_preview.dart';
+import '../../widgets/message_action_sheet.dart';
+import '../../widgets/mention_autocomplete_panel.dart';
 import '../../widgets/message_bubble.dart';
+import '../../widgets/scheduled_messages_sheet.dart';
 import '../../widgets/sticker_picker.dart';
 import '../../widgets/voice_note_recorder.dart';
 import '../profile/user_profile_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final Conversation conversation;
-  const ChatScreen({super.key, required this.conversation});
+  final String? initialMessageId;
+
+  const ChatScreen({
+    super.key,
+    required this.conversation,
+    this.initialMessageId,
+  });
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -76,9 +91,22 @@ class _ChatScreenState extends State<ChatScreen> {
   int _pendingNewMessageCount = 0;
   Message? _replyingTo;
   Timer? _typingTimer;
+  Timer? _draftSaveTimer;
+  Timer? _highlightTimer;
+  final Map<String, GlobalKey> _messageKeys = {};
+  String? _highlightedMessageId;
+  AttachmentUploadProgress? _attachmentUploadProgress;
+  ActiveMentionQuery? _activeMentionQuery;
   List<CustomEmojiEntity> _customEmojiEntities = [];
   String _lastInputText = '';
   bool _suppressInputEntityShift = false;
+  bool _draftRestored = false;
+  bool _hasPendingDraftSave = false;
+  String _pendingDraftText = '';
+  List<CustomEmojiEntity> _pendingDraftEntities = const [];
+  bool _pendingDraftSilent = false;
+  DateTime? _pendingDraftScheduledFor;
+  late final SettingsProvider _settings;
 
   // Read the live conversation from the provider (members get loaded
   // asynchronously after the screen opens) and fall back to the one passed in.
@@ -93,10 +121,26 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    _settings = context.read<SettingsProvider>();
     NotificationService.setActiveConversation(widget.conversation.id);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final chat = context.read<ChatProvider>();
-      await chat.loadMessages(conv.id);
+      _restoreLocalDraft();
+      final initialMessageId = widget.initialMessageId;
+      if (initialMessageId == null) {
+        await chat.loadMessages(conv.id);
+      } else {
+        final found = await chat.ensureMessageLoaded(conv.id, initialMessageId);
+        if (mounted) {
+          if (found) {
+            await _jumpToMessage(initialMessageId);
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Message is not loaded yet')),
+            );
+          }
+        }
+      }
       unawaited(chat.loadConversationMembers(conv.id));
     });
     _scrollCtrl.addListener(_onScroll);
@@ -113,6 +157,8 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     _syncCustomEmojiEntities(shifted);
     _lastInputText = text;
+    _updateMentionQuery(_inputCtrl.value);
+    _scheduleDraftSave(text);
   }
 
   void _syncCustomEmojiEntities(List<CustomEmojiEntity> entities) {
@@ -120,6 +166,23 @@ class _ChatScreenState extends State<ChatScreen> {
     _suppressInputEntityShift = true;
     _inputCtrl.setCustomEmojiEntities(entities);
     _suppressInputEntityShift = false;
+  }
+
+  void _updateMentionQuery(TextEditingValue value) {
+    final next = value.selection.isValid && value.selection.isCollapsed
+        ? findActiveMentionQuery(value.text, value.selection.baseOffset)
+        : null;
+    final current = _activeMentionQuery;
+    if (current?.start == next?.start &&
+        current?.end == next?.end &&
+        current?.query == next?.query) {
+      return;
+    }
+    if (mounted) {
+      setState(() => _activeMentionQuery = next);
+    } else {
+      _activeMentionQuery = next;
+    }
   }
 
   void _onScroll() {
@@ -152,9 +215,12 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     NotificationService.setActiveConversation(null);
     _inputCtrl.removeListener(_onInputTextChanged);
+    _draftSaveTimer?.cancel();
+    _flushDraftSave();
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
     _typingTimer?.cancel();
+    _highlightTimer?.cancel();
     super.dispose();
   }
 
@@ -185,6 +251,8 @@ class _ChatScreenState extends State<ChatScreen> {
     if (draft.text.isEmpty) return;
     final rawText = _inputCtrl.text;
     final draftEntities = [..._customEmojiEntities];
+    _draftSaveTimer?.cancel();
+    _hasPendingDraftSave = false;
     _setComposerValue(
       const TextEditingValue(
         text: '',
@@ -210,6 +278,7 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       if (!mounted) return;
       if (sent) {
+        unawaited(_settings.clearMessageDraft(widget.conversation.id));
         if (_scheduledFor == null) {
           _scrollToBottom();
         } else {
@@ -346,6 +415,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 value: _sendSilent,
                 onChanged: (v) {
                   setState(() => _sendSilent = v);
+                  _scheduleDraftSave(_inputCtrl.text);
                   setSheetState(() {});
                 },
               ),
@@ -383,6 +453,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         label: const Text('Clear'),
                         onPressed: () {
                           setState(() => _scheduledFor = null);
+                          _scheduleDraftSave(_inputCtrl.text);
                           Navigator.pop(ctx);
                         },
                       ),
@@ -397,6 +468,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       label: const Text('Set'),
                       onPressed: () {
                         setState(() => _scheduledFor = draftSchedule);
+                        _scheduleDraftSave(_inputCtrl.text);
                         Navigator.pop(ctx);
                       },
                     ),
@@ -412,6 +484,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _sendSticker(String stickerID) async {
     final messenger = ScaffoldMessenger.of(context);
+    final replyTo = _replyingTo?.id;
     setState(() {
       _showStickers = false;
       _showCustomEmojis = false;
@@ -422,6 +495,7 @@ class _ChatScreenState extends State<ChatScreen> {
         convID: conv.id,
         plaintext: stickerID,
         messageType: 'sticker',
+        replyTo: replyTo,
       );
       if (sent) {
         _scrollToBottom();
@@ -478,6 +552,7 @@ class _ChatScreenState extends State<ChatScreen> {
         selection: TextSelection.collapsed(offset: start + emoji.length),
       ),
     );
+    _scheduleDraftSave(newText);
     _onTyping();
   }
 
@@ -486,6 +561,51 @@ class _ChatScreenState extends State<ChatScreen> {
     _inputCtrl.value = value;
     _lastInputText = value.text;
     _suppressInputEntityShift = false;
+    _updateMentionQuery(value);
+  }
+
+  List<ConversationMember> _mentionSuggestions(String currentUserID) {
+    return mentionSuggestionsForMembers(
+      members: conv.members,
+      active: _activeMentionQuery,
+      currentUserId: currentUserID,
+    );
+  }
+
+  void _insertMention(ConversationMember member) {
+    final username = member.user?.username.trim();
+    if (username == null || username.isEmpty) return;
+    final value = _inputCtrl.value;
+    final active = value.selection.isValid && value.selection.isCollapsed
+        ? findActiveMentionQuery(value.text, value.selection.baseOffset)
+        : _activeMentionQuery;
+    if (active == null) return;
+
+    final oldText = value.text;
+    final start = active.start.clamp(0, oldText.length).toInt();
+    final end = active.end.clamp(start, oldText.length).toInt();
+    final replacement = '@$username ';
+    final newText = oldText.replaceRange(start, end, replacement);
+    final shifted = shiftCustomEmojiEntitiesForTextEdit(
+      oldText: oldText,
+      newText: newText,
+      entities: _customEmojiEntities,
+    );
+
+    setState(() {
+      _activeMentionQuery = null;
+      _showStickers = false;
+      _showCustomEmojis = false;
+      _syncCustomEmojiEntities(shifted);
+    });
+    _setComposerValue(
+      TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: start + replacement.length),
+      ),
+    );
+    _scheduleDraftSave(newText);
+    _onTyping();
   }
 
   void _restoreComposedMessage(
@@ -505,6 +625,82 @@ class _ChatScreenState extends State<ChatScreen> {
       _replyingTo = replyingTo;
       _syncCustomEmojiEntities(entities);
     });
+    _pendingDraftText = text;
+    _pendingDraftEntities = entities;
+    _pendingDraftSilent = _sendSilent;
+    _pendingDraftScheduledFor = _scheduledFor;
+    _hasPendingDraftSave = false;
+    unawaited(
+      _settings.setMessageDraft(
+        widget.conversation.id,
+        text,
+        customEmojiEntities: entities,
+        sendSilent: _sendSilent,
+        scheduledFor: _scheduledFor,
+      ),
+    );
+  }
+
+  void _restoreLocalDraft() {
+    if (_draftRestored) return;
+    _draftRestored = true;
+    final draft = _settings.messageDraftFor(widget.conversation.id);
+    if (draft == null || draft.isEmpty || _inputCtrl.text.isNotEmpty) return;
+    final scheduledFor = draft.scheduledFor;
+    final restoredSchedule =
+        scheduledFor != null &&
+            scheduledFor.isAfter(DateTime.now().add(const Duration(seconds: 5)))
+        ? scheduledFor
+        : null;
+    _setComposerValue(
+      TextEditingValue(
+        text: draft.text,
+        selection: TextSelection.collapsed(offset: draft.text.length),
+      ),
+    );
+    setState(() {
+      _sendSilent = draft.sendSilent;
+      _scheduledFor = restoredSchedule;
+      _syncCustomEmojiEntities(draft.customEmojiEntities);
+    });
+    _pendingDraftText = draft.text;
+    _pendingDraftEntities = draft.customEmojiEntities;
+    _pendingDraftSilent = draft.sendSilent;
+    _pendingDraftScheduledFor = restoredSchedule;
+  }
+
+  void _scheduleDraftSave(String text) {
+    _pendingDraftText = text;
+    _pendingDraftEntities = [..._customEmojiEntities];
+    _pendingDraftSilent = _sendSilent;
+    _pendingDraftScheduledFor = _scheduledFor;
+    _hasPendingDraftSave = true;
+    _draftSaveTimer?.cancel();
+    _draftSaveTimer = Timer(const Duration(milliseconds: 300), _flushDraftSave);
+  }
+
+  void _flushDraftSave() {
+    if (!_hasPendingDraftSave) return;
+    _hasPendingDraftSave = false;
+    unawaited(
+      _settings.setMessageDraft(
+        widget.conversation.id,
+        _pendingDraftText,
+        customEmojiEntities: _pendingDraftEntities,
+        sendSilent: _pendingDraftSilent,
+        scheduledFor: _pendingDraftScheduledFor,
+      ),
+    );
+  }
+
+  void _setAttachmentUploadProgress(AttachmentUploadProgress progress) {
+    if (!mounted) return;
+    setState(() => _attachmentUploadProgress = progress);
+  }
+
+  void _clearAttachmentUploadProgress() {
+    if (!mounted || _attachmentUploadProgress == null) return;
+    setState(() => _attachmentUploadProgress = null);
   }
 
   void _scrollToBottom() {
@@ -526,6 +722,69 @@ class _ChatScreenState extends State<ChatScreen> {
         });
       }
     });
+  }
+
+  Future<void> _jumpToMessage(String msgID) async {
+    final messages = context.read<ChatProvider>().messagesFor(conv.id);
+    final chronologicalIndex = messages.indexWhere((msg) => msg.id == msgID);
+    if (chronologicalIndex < 0) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Message is not loaded')));
+      return;
+    }
+
+    if (_scrollCtrl.hasClients) {
+      final reverseIndex = messages.length - 1 - chronologicalIndex;
+      final estimatedOffset = reverseIndex * 88.0;
+      final position = _scrollCtrl.position;
+      await _scrollCtrl.animateTo(
+        estimatedOffset.clamp(0.0, position.maxScrollExtent).toDouble(),
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+      );
+    }
+
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    if (!mounted) return;
+    final targetContext = _messageKeys[msgID]?.currentContext;
+    if (targetContext != null && targetContext.mounted) {
+      unawaited(
+        Scrollable.ensureVisible(
+          targetContext,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+          alignment: 0.46,
+        ),
+      );
+    }
+
+    _highlightTimer?.cancel();
+    setState(() => _highlightedMessageId = msgID);
+    _highlightTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (mounted) setState(() => _highlightedMessageId = null);
+    });
+  }
+
+  Message? _replyPreviewFor(Message msg, List<Message> messages) {
+    final replyTo = msg.replyTo;
+    if (replyTo == null) return null;
+    return messages.where((message) => message.id == replyTo).firstOrNull;
+  }
+
+  Future<void> _jumpToReply(Message msg) async {
+    final replyTo = msg.replyTo;
+    if (replyTo == null) return;
+    final chat = context.read<ChatProvider>();
+    final found = await chat.ensureMessageLoaded(conv.id, replyTo);
+    if (!mounted) return;
+    if (!found) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Original message is not loaded yet')),
+      );
+      return;
+    }
+    await _jumpToMessage(replyTo);
   }
 
   Future<void> _showAttachmentPicker() async {
@@ -616,18 +875,27 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    final attachmentService = AttachmentService(
-      context.read(), // ApiService
-    );
+    final attachmentService = AttachmentService(context.read<ApiService>());
+    final chat = context.read<ChatProvider>();
+    final messenger = ScaffoldMessenger.of(context);
 
     PendingAttachment? pending;
     VoiceNoteRecording? voiceNote;
     try {
       pending = switch (choice) {
-        'gallery_image' => await attachmentService.pickImage(),
-        'camera_image' => await attachmentService.pickImage(fromCamera: true),
-        'gallery_video' => await attachmentService.pickVideo(),
-        'file' => await attachmentService.pickFile(),
+        'gallery_image' => await attachmentService.pickImage(
+          onProgress: _setAttachmentUploadProgress,
+        ),
+        'camera_image' => await attachmentService.pickImage(
+          fromCamera: true,
+          onProgress: _setAttachmentUploadProgress,
+        ),
+        'gallery_video' => await attachmentService.pickVideo(
+          onProgress: _setAttachmentUploadProgress,
+        ),
+        'file' => await attachmentService.pickFile(
+          onProgress: _setAttachmentUploadProgress,
+        ),
         'voice' => await (() async {
           voiceNote = await showVoiceNoteRecorder(context);
           final note = voiceNote;
@@ -635,15 +903,15 @@ class _ChatScreenState extends State<ChatScreen> {
           return attachmentService.uploadVoiceNote(
             note.file,
             duration: note.duration,
+            onProgress: _setAttachmentUploadProgress,
           );
         })(),
         _ => null,
       };
     } catch (e) {
+      _clearAttachmentUploadProgress();
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+        messenger.showSnackBar(SnackBar(content: Text('Upload failed: $e')));
       }
       return;
     } finally {
@@ -655,25 +923,31 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
 
-    if (pending == null || !mounted) return;
+    if (pending == null || !mounted) {
+      _clearAttachmentUploadProgress();
+      return;
+    }
 
     try {
-      final sent = await context.read<ChatProvider>().sendAttachment(
+      _setAttachmentUploadProgress(
+        const AttachmentUploadProgress(stage: AttachmentUploadStage.sending),
+      );
+      final sent = await chat.sendAttachment(
         convID: conv.id,
         attachment: pending,
       );
       if (sent) {
         _scrollToBottom();
       } else if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        messenger.showSnackBar(
           const SnackBar(content: Text('Attachment could not be sent')),
         );
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.toString())));
+      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      _clearAttachmentUploadProgress();
     }
   }
 
@@ -1375,7 +1649,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
     // Per-chat look. The current user's bubble color is also stored on their
     // profile so group/channel participants see the same sender color.
-    final chatStyle = context.watch<SettingsProvider>().chatStyleFor(conv.id);
+    final chatStyle = context.select<SettingsProvider, ChatStyle>(
+      (settings) => settings.chatStyleFor(widget.conversation.id),
+    );
     final meBubbleColor = chatStyle.myBubbleColor != null
         ? Color(chatStyle.myBubbleColor!)
         : auth.currentUser?.bubbleColor != null
@@ -1477,49 +1753,80 @@ class _ChatScreenState extends State<ChatScreen> {
                                             messages[messageIndex + 1]
                                                     .senderId !=
                                                 msg.senderId);
+                                    final highlighted =
+                                        _highlightedMessageId == msg.id;
+                                    final replyPreview = _replyPreviewFor(
+                                      msg,
+                                      messages,
+                                    );
                                     return _AnimatedMessageEntry(
+                                      key: _messageKeys.putIfAbsent(
+                                        msg.id,
+                                        () => GlobalKey(),
+                                      ),
                                       id: msg.id,
-                                      child: MessageBubble(
-                                        message: msg,
-                                        isMe: isMe,
-                                        showAvatar: showAvatar,
-                                        meBubbleColor: meBubbleColor,
-                                        bubbleRadius: chatStyle.bubbleRadius,
-                                        onTap: isLocationMessage
-                                            ? () => _openLocationMessage(msg)
-                                            : null,
-                                        onTapUp: isLocationMessage
-                                            ? null
-                                            : (details) => _showReactionMenu(
-                                                context,
-                                                msg,
-                                                details.globalPosition,
-                                              ),
-                                        onReactionTap: (emoji) =>
-                                            _toggleReaction(msg, emoji),
-                                        isLiveLocationSharing:
-                                            isMe &&
-                                            msg.location?.isLive == true &&
-                                            chat.isLiveLocationActive(msg.id),
-                                        onCancelLiveLocation: () => context
-                                            .read<ChatProvider>()
-                                            .stopLiveLocation(msg.id),
-                                        onLongPress: () => _showMessageMenu(
-                                          context,
-                                          msg,
-                                          isMe,
+                                      child: AnimatedContainer(
+                                        duration: const Duration(
+                                          milliseconds: 220,
                                         ),
-                                        onAvatarTap: msg.sender != null
-                                            ? () => Navigator.push(
-                                                context,
-                                                MaterialPageRoute(
-                                                  builder: (_) =>
-                                                      UserProfileScreen(
-                                                        user: msg.sender!,
-                                                      ),
+                                        curve: Curves.easeOutCubic,
+                                        decoration: BoxDecoration(
+                                          color: highlighted
+                                              ? Theme.of(context)
+                                                    .colorScheme
+                                                    .primary
+                                                    .withValues(alpha: 0.14)
+                                              : Colors.transparent,
+                                          borderRadius: BorderRadius.circular(
+                                            chatStyle.bubbleRadius + 10,
+                                          ),
+                                        ),
+                                        child: MessageBubble(
+                                          message: msg,
+                                          isMe: isMe,
+                                          showAvatar: showAvatar,
+                                          meBubbleColor: meBubbleColor,
+                                          bubbleRadius: chatStyle.bubbleRadius,
+                                          onTap: isLocationMessage
+                                              ? () => _openLocationMessage(msg)
+                                              : null,
+                                          onTapUp: isLocationMessage
+                                              ? null
+                                              : (details) => _showReactionMenu(
+                                                  context,
+                                                  msg,
+                                                  details.globalPosition,
                                                 ),
-                                              )
-                                            : null,
+                                          onReactionTap: (emoji) =>
+                                              _toggleReaction(msg, emoji),
+                                          replyPreview: replyPreview,
+                                          onReplyTap: msg.replyTo == null
+                                              ? null
+                                              : () => _jumpToReply(msg),
+                                          isLiveLocationSharing:
+                                              isMe &&
+                                              msg.location?.isLive == true &&
+                                              chat.isLiveLocationActive(msg.id),
+                                          onCancelLiveLocation: () => context
+                                              .read<ChatProvider>()
+                                              .stopLiveLocation(msg.id),
+                                          onLongPress: () => _showMessageMenu(
+                                            context,
+                                            msg,
+                                            isMe,
+                                          ),
+                                          onAvatarTap: msg.sender != null
+                                              ? () => Navigator.push(
+                                                  context,
+                                                  MaterialPageRoute(
+                                                    builder: (_) =>
+                                                        UserProfileScreen(
+                                                          user: msg.sender!,
+                                                        ),
+                                                  ),
+                                                )
+                                              : null,
+                                        ),
                                       ),
                                     );
                                   },
@@ -1589,11 +1896,15 @@ class _ChatScreenState extends State<ChatScreen> {
                   CustomEmojiPicker(onEmojiSelected: _insertCustomEmoji),
                 if (_showStickers)
                   StickerPicker(onStickerSelected: _sendSticker),
+                if (_attachmentUploadProgress != null)
+                  AttachmentUploadProgressChip(
+                    progress: _attachmentUploadProgress!,
+                  ),
                 if (typingUsers.isNotEmpty)
                   _TypingIndicator(
                     label: _typingLabel(typingUsers, currentUserID),
                   ),
-                _buildInputBar(context),
+                _buildInputBar(context, currentUserID),
               ],
             ),
           ),
@@ -1768,12 +2079,22 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Premium users can set a shared background on group chats (admins only) and
   /// bot chats. Regular DMs use the personal "Chat appearance" instead, and
   /// channels are handled from the channel screen.
+  ConversationMember? _currentMember(String currentUserID) {
+    for (final member in conv.members) {
+      if (member.userId == currentUserID) return member;
+    }
+    return null;
+  }
+
   bool _canSetConversationBackground(String currentUserID) {
     final user = context.read<AuthProvider>().currentUser;
     if (user == null || !user.isPremium) return false;
     if (conv.isBotDM(currentUserID)) return true;
     if (conv.isGroup) {
-      return conv.members.any((m) => m.userId == currentUserID && m.isAdmin);
+      return _currentMember(
+            currentUserID,
+          )?.hasPermission(AdminPermission.manageInfo) ??
+          false;
     }
     return false;
   }
@@ -1938,8 +2259,20 @@ class _ChatScreenState extends State<ChatScreen> {
     String currentUserID,
     String exitLabel,
   ) {
-    final isAdmin = conv.members.any(
-      (m) => m.userId == currentUserID && m.isAdmin,
+    final currentMember = _currentMember(currentUserID);
+    final canManageInfo =
+        currentMember?.hasPermission(AdminPermission.manageInfo) ?? false;
+    final canManageSettings =
+        currentMember?.hasPermission(AdminPermission.manageSettings) ?? false;
+    final canManageEncryption =
+        currentMember?.hasPermission(AdminPermission.manageEncryption) ?? false;
+    final canManageInvites =
+        currentMember?.hasPermission(AdminPermission.manageInvites) ?? false;
+    final settings = context.read<SettingsProvider>();
+    final notificationPreference = settings
+        .notificationPreferenceForConversation(conv.id);
+    final notificationLabel = settings.notificationLabelForConversation(
+      conv.id,
     );
     showModalBottomSheet<void>(
       context: context,
@@ -1958,7 +2291,27 @@ class _ChatScreenState extends State<ChatScreen> {
                 _showConversationInfo(context, currentUserID);
               },
             ),
-            if (conv.isDM || isAdmin)
+            _MenuTile(
+              icon: _notificationPreferenceIcon(notificationPreference),
+              label: 'Notifications: $notificationLabel',
+              onTap: () {
+                Navigator.pop(context);
+                _showConversationNotificationControls(context, conv.id);
+              },
+            ),
+            _MenuTile(
+              icon: Icons.schedule_send_outlined,
+              label: 'Scheduled messages',
+              onTap: () {
+                Navigator.pop(context);
+                showScheduledMessagesSheet(
+                  context,
+                  conversation: conv,
+                  channel: false,
+                );
+              },
+            ),
+            if (conv.isDM || canManageSettings)
               _MenuTile(
                 icon: Icons.timer_outlined,
                 label: 'Disappearing messages',
@@ -1967,7 +2320,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   _setDisappearing(context);
                 },
               ),
-            if (!conv.isDM && isAdmin)
+            if (!conv.isDM && canManageSettings)
               _MenuTile(
                 icon: Icons.hourglass_empty_rounded,
                 label: 'Slow mode',
@@ -1976,7 +2329,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   _setSlowMode(context);
                 },
               ),
-            if (!conv.isDM && isAdmin)
+            if (!conv.isDM && canManageEncryption)
               _MenuTile(
                 icon: Icons.lock_outline_rounded,
                 label: conv.encryptionEnabled
@@ -1987,7 +2340,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   _setEncryption(context);
                 },
               ),
-            if (conv.isGroup)
+            if (conv.isGroup && canManageInfo)
               _MenuTile(
                 icon: Icons.edit_outlined,
                 label: 'Edit group',
@@ -2003,6 +2356,15 @@ class _ChatScreenState extends State<ChatScreen> {
                 onTap: () {
                   Navigator.pop(context);
                   _showMembers(context, currentUserID);
+                },
+              ),
+            if (conv.isGroup && canManageInvites)
+              _MenuTile(
+                icon: Icons.link_rounded,
+                label: 'Invite links',
+                onTap: () {
+                  Navigator.pop(context);
+                  _showInviteLinks(context, conv);
                 },
               ),
             _MenuTile(
@@ -2050,8 +2412,169 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _buildInputBar(BuildContext context) {
+  Future<void> _showInviteLinks(BuildContext context, Conversation conv) async {
+    await showConversationInviteLinksSheet(
+      context,
+      conversation: conv,
+      channel: false,
+      onJoinApprovalChanged: (_) {
+        unawaited(context.read<ChatProvider>().refreshConversationsSilently());
+      },
+    );
+  }
+
+  Future<void> _showConversationNotificationControls(
+    BuildContext context,
+    String conversationId,
+  ) async {
+    final settings = context.read<SettingsProvider>();
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => GlassBottomSheetFrame(
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              _MenuTile(
+                icon: Icons.notifications_active_outlined,
+                label: 'All messages',
+                onTap: () => Navigator.pop(ctx, 'all'),
+              ),
+              _MenuTile(
+                icon: Icons.notification_important_outlined,
+                label: 'Mentions only',
+                onTap: () => Navigator.pop(ctx, 'mentions'),
+              ),
+              _MenuTile(
+                icon: Icons.notifications_paused_outlined,
+                label: 'Mute 1 hour',
+                onTap: () => Navigator.pop(ctx, 'mute_1h'),
+              ),
+              _MenuTile(
+                icon: Icons.notifications_paused_outlined,
+                label: 'Mute 8 hours',
+                onTap: () => Navigator.pop(ctx, 'mute_8h'),
+              ),
+              _MenuTile(
+                icon: Icons.schedule_outlined,
+                label: 'Mute until...',
+                onTap: () => Navigator.pop(ctx, 'mute_until'),
+              ),
+              _MenuTile(
+                icon: Icons.notifications_off_outlined,
+                label: 'Mute forever',
+                onTap: () => Navigator.pop(ctx, 'mute_forever'),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (selected == null) return;
+
+    switch (selected) {
+      case 'all':
+        await settings.setConversationNotificationPreference(
+          conversationId,
+          const ConversationNotificationPreference.all(),
+        );
+      case 'mentions':
+        await settings.setConversationMentionsOnly(conversationId);
+      case 'mute_1h':
+        await settings.muteConversationUntil(
+          conversationId,
+          DateTime.now().add(const Duration(hours: 1)),
+        );
+      case 'mute_8h':
+        await settings.muteConversationUntil(
+          conversationId,
+          DateTime.now().add(const Duration(hours: 8)),
+        );
+      case 'mute_forever':
+        await settings.setConversationMuted(conversationId, true);
+      case 'mute_until':
+        if (!context.mounted) return;
+        final mutedUntil = await _pickMuteUntil(context);
+        if (mutedUntil != null) {
+          await settings.muteConversationUntil(conversationId, mutedUntil);
+        }
+    }
+  }
+
+  Future<DateTime?> _pickMuteUntil(BuildContext context) async {
+    final now = DateTime.now();
+    var selected = now.add(const Duration(hours: 1));
+    return showModalBottomSheet<DateTime>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => GlassBottomSheetFrame(
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 216,
+                  child: CupertinoDatePicker(
+                    mode: CupertinoDatePickerMode.dateAndTime,
+                    minimumDate: now.add(const Duration(minutes: 1)),
+                    initialDateTime: selected,
+                    onDateTimeChanged: (value) =>
+                        setSheetState(() => selected = value),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () => Navigator.pop(ctx, selected),
+                          child: const Text('Done'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  IconData _notificationPreferenceIcon(
+    ConversationNotificationPreference preference,
+  ) {
+    if (preference.isMutedAt(DateTime.now())) {
+      return Icons.notifications_off_outlined;
+    }
+    return switch (preference.mode) {
+      ConversationNotificationMode.mentionsOnly =>
+        Icons.notification_important_outlined,
+      _ => Icons.notifications_active_outlined,
+    };
+  }
+
+  Widget _buildInputBar(BuildContext context, String currentUserID) {
     final scheme = Theme.of(context).colorScheme;
+    final mentionSuggestions = _mentionSuggestions(currentUserID);
     // The composer is an active control, so it lives in the Liquid Glass layer:
     // a free-floating capsule hovering above the bottom boundary with the chat
     // canvas peeking around it.
@@ -2067,6 +2590,11 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (mentionSuggestions.isNotEmpty)
+                MentionAutocompletePanel(
+                  members: mentionSuggestions,
+                  onSelected: _insertMention,
+                ),
               if (_replyingTo != null) _buildReplyPreview(context),
               Row(
                 children: [
@@ -2261,74 +2789,149 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  void _showMessageMenu(BuildContext context, Message msg, bool isMe) {
-    // Call events (and other system messages) carry no user text to copy or
-    // reply to — only offer deletion. In a DM either participant can delete any
-    // message; elsewhere only the sender can.
+  Future<void> _showMessageMenu(
+    BuildContext context,
+    Message msg,
+    bool isMe,
+  ) async {
     final isSystem = msg.type == MessageType.system;
     final canDelete = isMe || conv.isDM;
-    showDialog<void>(
+    final hasCopyableText =
+        !isSystem && msg.isDecrypted && (msg.decryptedContent ?? '').isNotEmpty;
+    final isLiveLocation =
+        msg.type == MessageType.location &&
+        isMe &&
+        context.read<ChatProvider>().isLiveLocationActive(msg.id) &&
+        msg.location != null &&
+        msg.location!.isLive;
+    final selected = await showMessageActionSheet<String>(
       context: context,
-      builder: (_) => GlassSimpleDialog(
-        children: [
-          if (!isSystem && msg.isDecrypted)
-            ListTile(
-              leading: const Icon(Icons.copy),
-              title: const Text('Copy text'),
-              onTap: () {
-                Clipboard.setData(
-                  ClipboardData(text: msg.decryptedContent ?? ''),
-                );
-                Navigator.pop(context);
-              },
-            ),
-          if (!isSystem)
-            ListTile(
-              leading: const Icon(Icons.reply),
-              title: const Text('Reply'),
-              onTap: () {
-                Navigator.pop(context);
-                setState(() => _replyingTo = msg);
-              },
-            ),
-          // Only the sender can edit, and only plain-text messages.
-          if (isMe && msg.type == MessageType.text && msg.isDecrypted)
-            ListTile(
-              leading: const Icon(Icons.edit_outlined),
-              title: const Text('Edit'),
-              onTap: () {
-                Navigator.pop(context);
-                _editMessage(msg);
-              },
-            ),
-          if (canDelete)
-            ListTile(
-              leading: const Icon(Icons.delete_outline, color: Colors.red),
-              title: const Text('Delete', style: TextStyle(color: Colors.red)),
-              onTap: () {
-                Navigator.pop(context);
-                context.read<ChatProvider>().deleteMessage(conv.id, msg.id);
-              },
-            ),
-          if (msg.type == MessageType.location &&
-              isMe &&
-              context.read<ChatProvider>().isLiveLocationActive(msg.id) &&
-              msg.location != null &&
-              msg.location!.isLive)
-            ListTile(
-              leading: const Icon(Icons.location_off, color: Colors.orange),
-              title: const Text(
-                'Stop location sharing',
-                style: TextStyle(color: Colors.orange),
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                context.read<ChatProvider>().stopLiveLocation(msg.id);
-              },
-            ),
-        ],
+      message: msg,
+      actions: [
+        if (!isSystem)
+          const MessageActionSheetItem(
+            value: 'reply',
+            icon: Icons.reply_rounded,
+            label: 'Reply',
+          ),
+        if (msg.replyTo != null)
+          const MessageActionSheetItem(
+            value: 'jump_reply',
+            icon: Icons.subdirectory_arrow_left_rounded,
+            label: 'Jump to replied message',
+          ),
+        if (hasCopyableText)
+          const MessageActionSheetItem(
+            value: 'copy_text',
+            icon: Icons.copy_rounded,
+            label: 'Copy text',
+          ),
+        const MessageActionSheetItem(
+          value: 'copy_link',
+          icon: Icons.link_rounded,
+          label: 'Copy message link',
+        ),
+        if (canDownloadMessageAttachment(msg))
+          MessageActionSheetItem(
+            value: 'download',
+            icon: Icons.download_rounded,
+            label: 'Download attachment',
+            subtitle: suggestedAttachmentFileName(msg),
+          ),
+        if (!isMe && msg.sender != null)
+          MessageActionSheetItem(
+            value: 'sender',
+            icon: Icons.person_outline_rounded,
+            label: 'View sender',
+            subtitle: '@${msg.sender!.username}',
+          ),
+        if (isMe && msg.type == MessageType.text && msg.isDecrypted)
+          const MessageActionSheetItem(
+            value: 'edit',
+            icon: Icons.edit_outlined,
+            label: 'Edit',
+          ),
+        if (isLiveLocation)
+          const MessageActionSheetItem(
+            value: 'stop_location',
+            icon: Icons.location_off_rounded,
+            label: 'Stop location sharing',
+            color: Colors.orange,
+            dividerBefore: true,
+          ),
+        if (canDelete)
+          const MessageActionSheetItem(
+            value: 'delete',
+            icon: Icons.delete_outline_rounded,
+            label: 'Delete',
+            color: Colors.red,
+            dividerBefore: true,
+          ),
+      ],
+    );
+    if (selected == null || !mounted) return;
+
+    switch (selected) {
+      case 'reply':
+        setState(() => _replyingTo = msg);
+      case 'jump_reply':
+        await _jumpToReply(msg);
+      case 'copy_text':
+        await _copyMessageText(msg);
+      case 'copy_link':
+        await _copyMessageLink(msg);
+      case 'download':
+        await _downloadMessageAttachment(msg);
+      case 'sender':
+        final sender = msg.sender;
+        if (sender != null && mounted) {
+          Navigator.push(
+            this.context,
+            MaterialPageRoute(builder: (_) => UserProfileScreen(user: sender)),
+          );
+        }
+      case 'edit':
+        _editMessage(msg);
+      case 'stop_location':
+        this.context.read<ChatProvider>().stopLiveLocation(msg.id);
+      case 'delete':
+        this.context.read<ChatProvider>().deleteMessage(conv.id, msg.id);
+    }
+  }
+
+  Future<void> _copyMessageText(Message msg) async {
+    await Clipboard.setData(ClipboardData(text: msg.decryptedContent ?? ''));
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Message text copied')));
+  }
+
+  Future<void> _copyMessageLink(Message msg) async {
+    await Clipboard.setData(
+      ClipboardData(
+        text: messageDeepLink(conversationId: conv.id, messageId: msg.id),
       ),
     );
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Message link copied')));
+  }
+
+  Future<void> _downloadMessageAttachment(Message msg) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final file = await saveMessageAttachment(
+        message: msg,
+        attachmentService: AttachmentService(context.read<ApiService>()),
+      );
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text('Saved to ${file.path}')));
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text('Download failed: $e')));
+    }
   }
 
   Future<void> _toggleReaction(Message msg, String emoji) async {
@@ -2524,6 +3127,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _showConversationInfo(BuildContext context, String currentUserID) {
+    final messages = context.read<ChatProvider>().messagesFor(conv.id);
     showDialog<void>(
       context: context,
       builder: (ctx) => GlassAlertDialog(
@@ -2531,6 +3135,25 @@ class _ChatScreenState extends State<ChatScreen> {
         content: ConversationInfoPanel(
           conversation: conv,
           currentUserId: currentUserID,
+          messages: messages,
+          onMessageSelected: (message) {
+            Navigator.pop(ctx);
+            _jumpToMessage(message.id);
+          },
+          onSharedSectionOpen: (section) {
+            Navigator.pop(ctx);
+            unawaited(
+              showSharedContentSheet(
+                context,
+                conversation: conv,
+                currentUserId: currentUserID,
+                channel: false,
+                initialSection: section,
+                initialMessages: messages,
+                onMessageSelected: (message) => _jumpToMessage(message.id),
+              ),
+            );
+          },
         ),
         actions: [
           TextButton(
@@ -2543,12 +3166,14 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _editGroup(BuildContext context, String currentUserID) {
-    final isAdmin = conv.members.any(
-      (m) => m.userId == currentUserID && m.isAdmin,
-    );
-    if (!isAdmin) {
+    final canManageInfo =
+        _currentMember(
+          currentUserID,
+        )?.hasPermission(AdminPermission.manageInfo) ??
+        false;
+    if (!canManageInfo) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Only group admins can edit the group')),
+        const SnackBar(content: Text('Missing permission to edit this group')),
       );
       return;
     }
@@ -2681,9 +3306,11 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _showMembers(BuildContext context, String currentUserID) {
-    final isAdmin = conv.members.any(
-      (m) => m.userId == currentUserID && m.isAdmin,
-    );
+    final currentMember = _currentMember(currentUserID);
+    final canManageMembers =
+        currentMember?.hasPermission(AdminPermission.manageMembers) ?? false;
+    final canManageRoles =
+        currentMember?.hasPermission(AdminPermission.manageRoles) ?? false;
 
     showModalBottomSheet(
       context: context,
@@ -2710,7 +3337,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const Spacer(),
-                      if (isAdmin)
+                      if (canManageMembers)
                         TextButton.icon(
                           icon: const Icon(Icons.person_add_outlined, size: 18),
                           label: const Text('Add'),
@@ -2740,8 +3367,9 @@ class _ChatScreenState extends State<ChatScreen> {
                               : null,
                         ),
                         title: Text(isSelf ? '$username (you)' : username),
-                        subtitle: m.isAdmin ? const Text('Admin') : null,
-                        trailing: isAdmin && !isSelf
+                        subtitle: Text(_roleLabel(m.role)),
+                        trailing:
+                            (canManageRoles || canManageMembers) && !isSelf
                             ? IconButton(
                                 icon: const Icon(Icons.more_vert),
                                 onPressed: () {
@@ -2754,47 +3382,34 @@ class _ChatScreenState extends State<ChatScreen> {
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           const SizedBox(height: 8),
-                                          if (!m.isAdmin)
+                                          if (canManageRoles)
                                             _MenuTile(
-                                              icon: Icons.star_outline_rounded,
-                                              label: 'Make admin',
+                                              icon: Icons
+                                                  .admin_panel_settings_outlined,
+                                              label: 'Permissions',
                                               onTap: () {
                                                 Navigator.pop(context);
-                                                _setGroupMemberRole(
+                                                _editGroupMemberPermissions(
                                                   context,
-                                                  m.userId,
-                                                  username,
-                                                  MemberRole.admin,
+                                                  m,
                                                 );
                                               },
                                             ),
-                                          if (m.isAdmin)
+                                          if (canManageMembers)
                                             _MenuTile(
-                                              icon: Icons.star_border_rounded,
-                                              label: 'Remove admin',
+                                              icon:
+                                                  Icons.person_remove_outlined,
+                                              label: 'Remove member',
+                                              color: Colors.red,
                                               onTap: () {
                                                 Navigator.pop(context);
-                                                _setGroupMemberRole(
+                                                _removeMember(
                                                   context,
                                                   m.userId,
                                                   username,
-                                                  MemberRole.member,
                                                 );
                                               },
                                             ),
-                                          _MenuTile(
-                                            icon: Icons.person_remove_outlined,
-                                            label: 'Remove member',
-                                            color: Colors.red,
-                                            onTap: () {
-                                              Navigator.pop(context);
-                                              _removeMember(
-                                                context,
-                                                m.userId,
-                                                username,
-                                              );
-                                            },
-                                          ),
                                           const SizedBox(height: 8),
                                         ],
                                       ),
@@ -2972,51 +3587,37 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Future<void> _setGroupMemberRole(
+  String _roleLabel(MemberRole role) => switch (role) {
+    MemberRole.admin => 'Admin',
+    MemberRole.moderator => 'Moderator',
+    MemberRole.member => 'Member',
+  };
+
+  Future<void> _editGroupMemberPermissions(
     BuildContext context,
-    String userID,
-    String username,
-    MemberRole role,
+    ConversationMember member,
   ) async {
     final api = context.read<ApiService>();
     final chat = context.read<ChatProvider>();
     final messenger = ScaffoldMessenger.of(context);
-    final roleLabel = role == MemberRole.admin ? 'admin' : 'member';
-    final confirmed = await showDialog<bool>(
+    final username = member.user?.username ?? member.userId;
+    await showAdminPermissionsSheet(
       context: context,
-      builder: (ctx) => GlassAlertDialog(
-        title: Text('Make @$username $roleLabel?'),
-        content: Text(
-          role == MemberRole.admin
-              ? 'They will be able to manage group members and settings.'
-              : 'They will lose group admin permissions.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Confirm'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-    try {
-      await api.setConversationMemberRole(conv.id, userID, roleLabel);
-      if (mounted) {
+      member: member,
+      onSave: (role, permissions) async {
+        await api.setConversationMemberRole(
+          conv.id,
+          member.userId,
+          role.apiValue,
+          adminPermissions: permissions,
+        );
+        if (!mounted) return;
         await chat.loadConversationMembers(conv.id);
         messenger.showSnackBar(
-          SnackBar(content: Text('@$username is now a $roleLabel')),
+          SnackBar(content: Text('@$username permissions updated')),
         );
-      }
-    } catch (e) {
-      if (mounted) {
-        messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
-      }
-    }
+      },
+    );
   }
 
   Future<void> _removeMember(
@@ -3064,9 +3665,10 @@ class _ChatScreenState extends State<ChatScreen> {
     BuildContext context,
     String currentUserId,
   ) async {
-    final isAdmin = conv.members.any(
-      (m) => m.userId == currentUserId && m.isAdmin,
-    );
+    final currentMember = _currentMember(currentUserId);
+    final canDeleteMessages =
+        currentMember?.hasPermission(AdminPermission.deleteMessages) ?? false;
+    final isAdmin = currentMember?.isAdmin ?? false;
     final chat = context.read<ChatProvider>();
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
@@ -3089,7 +3691,7 @@ class _ChatScreenState extends State<ChatScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
               child: Text(
-                isAdmin
+                canDeleteMessages
                     ? 'Choose which messages to remove from this group.'
                     : 'Delete all messages you have sent in this group?',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -3106,7 +3708,7 @@ class _ChatScreenState extends State<ChatScreen> {
               label: 'Delete mine',
               onTap: () => Navigator.pop(ctx, 'mine'),
             ),
-            if (isAdmin)
+            if (canDeleteMessages)
               _MenuTile(
                 icon: Icons.delete_sweep_outlined,
                 label: 'Delete everyone\'s messages',
@@ -3258,7 +3860,11 @@ class _AnimatedMessageEntry extends StatelessWidget {
   final String id;
   final Widget child;
 
-  const _AnimatedMessageEntry({required this.id, required this.child});
+  const _AnimatedMessageEntry({
+    super.key,
+    required this.id,
+    required this.child,
+  });
 
   @override
   Widget build(BuildContext context) {

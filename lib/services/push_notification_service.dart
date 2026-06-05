@@ -4,6 +4,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import '../firebase_options.dart';
+import '../utils/local_conversation_preferences.dart';
 import 'api_service.dart';
 import 'background_notification_intent.dart';
 import 'notification_service.dart';
@@ -168,7 +169,13 @@ class PushNotificationService {
     // is open (FCM does not display the system notification in this case).
     _foregroundSub?.cancel();
     _foregroundSub = FirebaseMessaging.onMessage.listen((RemoteMessage msg) {
-      final intent = foregroundNotificationIntent(msg);
+      final intent = foregroundNotificationIntent(
+        msg,
+        mutedConversationIds: NotificationService.mutedConversationIds,
+        conversationNotificationPreferences:
+            NotificationService.conversationNotificationPreferences,
+        currentUserId: NotificationService.notificationCurrentUserId,
+      );
       if (intent == null) return;
       switch (intent.kind) {
         case NotificationIntentKind.message:
@@ -178,6 +185,11 @@ class PushNotificationService {
             body: intent.body,
             showSensitive:
                 true, // title/body are already sanitised by the server
+            mentionedUserIds: mentionedUserIdsFromNotificationData(msg.data),
+            mentionedForCurrentUser: notificationDataMentionsCurrentUser(
+              msg.data,
+              NotificationService.notificationCurrentUserId,
+            ),
           );
           break;
         case NotificationIntentKind.incomingCall:
@@ -230,7 +242,14 @@ class PushNotificationService {
   /// Maps a foreground FCM message to the local notification OpenChat should
   /// display while the app is open.
   @visibleForTesting
-  static NotificationIntent? foregroundNotificationIntent(RemoteMessage msg) {
+  static NotificationIntent? foregroundNotificationIntent(
+    RemoteMessage msg, {
+    Set<String> mutedConversationIds = const {},
+    Map<String, ConversationNotificationPreference>
+        conversationNotificationPreferences =
+        const {},
+    String currentUserId = '',
+  }) {
     final type = msg.data['type'] as String?;
     if (type == 'incoming_call') {
       final caller = msg.data['caller_username'] as String? ?? 'Unknown';
@@ -245,6 +264,24 @@ class PushNotificationService {
     }
     if (type == 'new_message') {
       final conversationId = msg.data['conversation_id'] as String? ?? 'push';
+      final preferences = <String, ConversationNotificationPreference>{
+        ...conversationNotificationPreferences,
+        for (final id in mutedConversationIds)
+          if (!conversationNotificationPreferences.containsKey(id))
+            id: const ConversationNotificationPreference.mutedForever(),
+      };
+      if (!shouldNotifyForConversation(
+        conversationId: conversationId,
+        preferences: preferences,
+        currentUserId: currentUserId,
+        mentionedUserIds: mentionedUserIdsFromNotificationData(msg.data),
+        mentionedForCurrentUser: notificationDataMentionsCurrentUser(
+          msg.data,
+          currentUserId,
+        ),
+      )) {
+        return null;
+      }
       final notification = msg.notification;
       if (notification != null) {
         return NotificationIntent(
@@ -258,6 +295,10 @@ class PushNotificationService {
         type: 'new_message',
         data: msg.data,
         showSensitive: true,
+        mutedConversationIds: mutedConversationIds,
+        conversationNotificationPreferences:
+            conversationNotificationPreferences,
+        currentUserId: currentUserId,
       );
     }
     return null;
@@ -307,7 +348,9 @@ class PushNotificationService {
     } on UnsupportedError {
       return null;
     } catch (e) {
-      debugPrint('PushNotificationService: Firebase Dart config unavailable — $e');
+      debugPrint(
+        'PushNotificationService: Firebase Dart config unavailable — $e',
+      );
       return null;
     }
   }

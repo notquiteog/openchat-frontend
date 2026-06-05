@@ -9,6 +9,7 @@ import 'package:openchat/services/notification_service.dart';
 import 'package:openchat/services/push_notification_service.dart';
 import 'package:openchat/services/secure_storage_service.dart';
 import 'package:openchat/services/websocket_service.dart';
+import 'package:openchat/utils/local_conversation_preferences.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -183,6 +184,54 @@ void main() {
       expect(intent.body, 'New message');
     });
 
+    test('suppresses muted background websocket message intents', () {
+      final intent = BackgroundWsService.notificationIntentFromRawLine(
+        '{"type":"new_message","data":{"conversation_id":"conv-1","sender_username":"alice"}}',
+        showSensitive: true,
+        mutedConversationIds: {'conv-1'},
+      );
+
+      expect(intent, isNull);
+    });
+
+    test('mentions-only websocket intents require a mention target', () {
+      final preferences = {
+        'conv-1': const ConversationNotificationPreference.mentionsOnly(),
+      };
+
+      final unmentioned = BackgroundWsService.notificationIntentFromRawLine(
+        '{"type":"new_message","data":{"conversation_id":"conv-1","sender_username":"alice","mentioned_user_ids":["u-2"]}}',
+        showSensitive: true,
+        conversationNotificationPreferences: preferences,
+        currentUserId: 'u-1',
+      );
+      final mentioned = BackgroundWsService.notificationIntentFromRawLine(
+        '{"type":"new_message","data":{"conversation_id":"conv-1","sender_username":"alice","mentioned_user_ids":["u-1"]}}',
+        showSensitive: true,
+        conversationNotificationPreferences: preferences,
+        currentUserId: 'u-1',
+      );
+
+      expect(unmentioned, isNull);
+      expect(mentioned, isNotNull);
+    });
+
+    test('expired mute-until websocket preference no longer suppresses', () {
+      final intent = BackgroundWsService.notificationIntentFromRawLine(
+        '{"type":"new_message","data":{"conversation_id":"conv-1","sender_username":"alice"}}',
+        showSensitive: true,
+        conversationNotificationPreferences: {
+          'conv-1': ConversationNotificationPreference(
+            mode: ConversationNotificationMode.muted,
+            mutedUntil: DateTime.now().subtract(const Duration(minutes: 1)),
+          ),
+        },
+        currentUserId: 'u-1',
+      );
+
+      expect(intent, isNotNull);
+    });
+
     test(
       'maps data-only foreground push new_message into a message notification intent',
       () {
@@ -205,6 +254,44 @@ void main() {
         expect(intent.body, 'New message');
       },
     );
+
+    test('suppresses muted foreground push message intents', () {
+      const msg = RemoteMessage(
+        data: {
+          'type': 'new_message',
+          'conversation_id': 'conv-1',
+          'sender_username': 'alice',
+        },
+      );
+
+      final intent = PushNotificationService.foregroundNotificationIntent(
+        msg,
+        mutedConversationIds: {'conv-1'},
+      );
+
+      expect(intent, isNull);
+    });
+
+    test('mentions-only foreground push allows mentioned recipient', () {
+      const msg = RemoteMessage(
+        data: {
+          'type': 'new_message',
+          'conversation_id': 'conv-1',
+          'sender_username': 'alice',
+          'mentioned': 'true',
+        },
+      );
+
+      final intent = PushNotificationService.foregroundNotificationIntent(
+        msg,
+        conversationNotificationPreferences: {
+          'conv-1': const ConversationNotificationPreference.mentionsOnly(),
+        },
+        currentUserId: 'u-1',
+      );
+
+      expect(intent, isNotNull);
+    });
 
     test('maps call_offer into an incoming-call notification intent', () {
       final intent = BackgroundWsService.notificationIntentFromRawLine(
@@ -258,6 +345,20 @@ void main() {
         expect(intent.body, 'New message');
       },
     );
+
+    test('suppresses muted desktop websocket message intents', () {
+      final intent = ForegroundWsNotificationRouter.intentForEvent(
+        WsEvent(
+          type: WsEventType.newMessage,
+          data: {'conversation_id': 'conv-1', 'sender_username': 'alice'},
+        ),
+        showSensitive: true,
+        isDesktop: true,
+        mutedConversationIds: {'conv-1'},
+      );
+
+      expect(intent, isNull);
+    });
 
     test('ignores mobile foreground websocket events', () {
       final intent = ForegroundWsNotificationRouter.intentForEvent(

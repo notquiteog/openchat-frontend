@@ -17,6 +17,7 @@ import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
+import '../utils/mention_utils.dart';
 import 'glass.dart';
 import 'location_map_preview.dart';
 import 'message_image_layout.dart';
@@ -30,6 +31,8 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback? onLongPress;
   final VoidCallback? onAvatarTap;
   final ValueChanged<String>? onReactionTap;
+  final Message? replyPreview;
+  final VoidCallback? onReplyTap;
   final bool isLiveLocationSharing;
   final VoidCallback? onCancelLiveLocation;
   // The current user's own bubble can be previewed locally while the published
@@ -47,6 +50,8 @@ class MessageBubble extends StatelessWidget {
     this.onLongPress,
     this.onAvatarTap,
     this.onReactionTap,
+    this.replyPreview,
+    this.onReplyTap,
     this.isLiveLocationSharing = false,
     this.onCancelLiveLocation,
     this.meBubbleColor,
@@ -118,11 +123,25 @@ class MessageBubble extends StatelessWidget {
           ] else if (!isMe)
             const SizedBox(width: 34),
           Flexible(
-            child: GestureDetector(
-              onTap: onTap,
-              onTapUp: onTapUp,
-              onLongPress: onLongPress,
-              child: _buildBubble(context),
+            child: Column(
+              crossAxisAlignment: isMe
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (message.replyTo != null)
+                  _ReplyContextPreview(
+                    message: replyPreview,
+                    isMe: isMe,
+                    onTap: onReplyTap,
+                  ),
+                GestureDetector(
+                  onTap: onTap,
+                  onTapUp: onTapUp,
+                  onLongPress: onLongPress,
+                  child: _buildBubble(context),
+                ),
+              ],
             ),
           ),
         ],
@@ -334,6 +353,87 @@ class _CallEventChip extends StatelessWidget {
   }
 }
 
+class _ReplyContextPreview extends StatelessWidget {
+  final Message? message;
+  final bool isMe;
+  final VoidCallback? onTap;
+
+  const _ReplyContextPreview({
+    required this.message,
+    required this.isMe,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final sender = message?.sender?.username;
+    final title = sender == null ? 'Reply' : '@$sender';
+    final preview = message == null
+        ? 'Tap to load original'
+        : message!.listPreview;
+    final accent = isMe ? scheme.primary : scheme.secondary;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.sizeOf(context).width * 0.68,
+        ),
+        margin: const EdgeInsets.only(bottom: 3, left: 2, right: 2),
+        padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.70),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: accent.withValues(alpha: 0.24), width: 0.8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 3,
+              height: 28,
+              decoration: BoxDecoration(
+                color: accent,
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: accent,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  Text(
+                    preview,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: scheme.onSurface.withValues(alpha: 0.68),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ── Shell ─────────────────────────────────────────────────────────────────────
 
 class _BubbleShell extends StatelessWidget {
@@ -421,7 +521,11 @@ class _TextBubble extends StatelessWidget {
             ),
           Text.rich(
             TextSpan(
-              children: _formatMessageContent(message.content!, textColor),
+              children: _formatMessageContent(
+                message.content!,
+                textColor,
+                isMe ? textColor : cs.primary,
+              ),
             ),
             style: TextStyle(color: textColor, fontSize: 15, height: 1.25),
           ),
@@ -579,9 +683,13 @@ class _LocationBubble extends StatelessWidget {
   }
 }
 
-List<InlineSpan> _formatMessageContent(MessageContent content, Color color) {
+List<InlineSpan> _formatMessageContent(
+  MessageContent content,
+  Color color,
+  Color mentionColor,
+) {
   if (content.entities.isEmpty) {
-    return _formatMessageText(content.text, color);
+    return _formatMessageText(content.text, color, mentionColor);
   }
   final spans = <InlineSpan>[];
   final entities = normalizeRenderableEntities(content);
@@ -592,6 +700,7 @@ List<InlineSpan> _formatMessageContent(MessageContent content, Color color) {
         _formatMessageText(
           content.text.substring(cursor, entity.offset),
           color,
+          mentionColor,
         ),
       );
     }
@@ -604,7 +713,9 @@ List<InlineSpan> _formatMessageContent(MessageContent content, Color color) {
     cursor = entity.offset + entity.length;
   }
   if (cursor < content.text.length) {
-    spans.addAll(_formatMessageText(content.text.substring(cursor), color));
+    spans.addAll(
+      _formatMessageText(content.text.substring(cursor), color, mentionColor),
+    );
   }
   return spans;
 }
@@ -626,7 +737,11 @@ List<CustomEmojiEntity> normalizeRenderableEntities(MessageContent content) {
   return out;
 }
 
-List<InlineSpan> _formatMessageText(String text, Color color) {
+List<InlineSpan> _formatMessageText(
+  String text,
+  Color color,
+  Color mentionColor,
+) {
   final spans = <InlineSpan>[];
   var i = 0;
   while (i < text.length) {
@@ -637,18 +752,22 @@ List<InlineSpan> _formatMessageText(String text, Color color) {
       '||': text.indexOf('||', i),
     }..removeWhere((_, value) => value < 0);
     if (markers.isEmpty) {
-      spans.add(TextSpan(text: text.substring(i)));
+      spans.addAll(_formatPlainTextMentions(text.substring(i), mentionColor));
       break;
     }
     final next = markers.entries.reduce((a, b) => a.value <= b.value ? a : b);
     if (next.value > i) {
-      spans.add(TextSpan(text: text.substring(i, next.value)));
+      spans.addAll(
+        _formatPlainTextMentions(text.substring(i, next.value), mentionColor),
+      );
     }
     final marker = next.key;
     final start = next.value + marker.length;
     final end = text.indexOf(marker, start);
     if (end < 0) {
-      spans.add(TextSpan(text: text.substring(next.value)));
+      spans.addAll(
+        _formatPlainTextMentions(text.substring(next.value), mentionColor),
+      );
       break;
     }
     final inner = text.substring(start, end);
@@ -687,6 +806,34 @@ List<InlineSpan> _formatMessageText(String text, Color color) {
         );
     }
     i = end + marker.length;
+  }
+  return spans;
+}
+
+List<InlineSpan> _formatPlainTextMentions(String text, Color mentionColor) {
+  final ranges = findMentionRanges(text);
+  if (ranges.isEmpty) return [TextSpan(text: text)];
+  final spans = <InlineSpan>[];
+  var cursor = 0;
+  for (final range in ranges) {
+    if (range.start > cursor) {
+      spans.add(TextSpan(text: text.substring(cursor, range.start)));
+    }
+    spans.add(
+      TextSpan(
+        text: text.substring(range.start, range.end),
+        style: TextStyle(
+          color: mentionColor,
+          fontWeight: FontWeight.w800,
+          decoration: TextDecoration.underline,
+          decorationColor: mentionColor.withValues(alpha: 0.70),
+        ),
+      ),
+    );
+    cursor = range.end;
+  }
+  if (cursor < text.length) {
+    spans.add(TextSpan(text: text.substring(cursor)));
   }
   return spans;
 }

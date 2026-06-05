@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:window_manager/window_manager.dart';
+import '../utils/local_conversation_preferences.dart';
 
 @pragma('vm:entry-point')
 void openChatNotificationBackgroundHandler(NotificationResponse response) {
@@ -77,6 +78,10 @@ class NotificationService {
   /// Set to the currently open conversation ID so notifications for it are
   /// suppressed while the user is already reading it.
   static String? _activeConversationId;
+  static Set<String> _mutedConversationIds = const {};
+  static Map<String, ConversationNotificationPreference>
+  _conversationNotificationPreferences = const {};
+  static String _notificationCurrentUserId = '';
   static const int _activeCallNotificationId = 2;
   static const String _activeCallEndActionId = 'openchat_call_end';
   static const String _activeCallMuteActionId = 'openchat_call_mute';
@@ -188,6 +193,35 @@ class NotificationService {
       );
 
   static void setActiveConversation(String? id) => _activeConversationId = id;
+  static void setMutedConversations(Iterable<String> conversationIds) {
+    _mutedConversationIds = Set.unmodifiable(conversationIds);
+    _conversationNotificationPreferences = Map.unmodifiable({
+      for (final id in _mutedConversationIds)
+        id: const ConversationNotificationPreference.mutedForever(),
+    });
+  }
+
+  static void setConversationNotificationPreferences(
+    Map<String, ConversationNotificationPreference> preferences, {
+    String currentUserId = '',
+  }) {
+    _conversationNotificationPreferences = Map.unmodifiable(preferences);
+    _mutedConversationIds = Set.unmodifiable(
+      activeMutedConversationIds(_conversationNotificationPreferences),
+    );
+    _notificationCurrentUserId = currentUserId;
+  }
+
+  static Set<String> get mutedConversationIds => _mutedConversationIds;
+  static Map<String, ConversationNotificationPreference>
+  get conversationNotificationPreferences =>
+      _conversationNotificationPreferences;
+  static String get notificationCurrentUserId => _notificationCurrentUserId;
+
+  @visibleForTesting
+  static bool debugIsConversationMuted(String conversationId) =>
+      _mutedConversationIds.contains(conversationId);
+
   static void setAppFocused(bool focused) => _appFocused = focused;
 
   static bool get _desktop =>
@@ -451,8 +485,19 @@ class NotificationService {
     required String title,
     required String body,
     bool showSensitive = false,
+    Iterable<String> mentionedUserIds = const [],
+    bool mentionedForCurrentUser = false,
   }) async {
     if (!_supported) return;
+    if (!shouldNotifyForConversation(
+      conversationId: conversationId,
+      preferences: _conversationNotificationPreferences,
+      currentUserId: _notificationCurrentUserId,
+      mentionedUserIds: mentionedUserIds,
+      mentionedForCurrentUser: mentionedForCurrentUser,
+    )) {
+      return;
+    }
     if (await _shouldSuppressFocusedNotification()) return;
     if (_activeConversationId == conversationId) return;
     await init();

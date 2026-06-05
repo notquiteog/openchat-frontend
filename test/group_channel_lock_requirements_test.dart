@@ -72,8 +72,9 @@ void main() {
   });
 
   group('Conversation info surface', () {
-    testWidgets('group info shows avatar, description, and member count',
-        (tester) async {
+    testWidgets('group info shows avatar, description, and member count', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -108,15 +109,33 @@ void main() {
       expect(placement.topBar, isNot(contains(ChannelTopBarAction.autoDelete)));
       expect(placement.topBar, isNot(contains(ChannelTopBarAction.encryption)));
       expect(
-          placement.moderationMenu, contains(ChannelModerationAction.archive));
+        placement.moderationMenu,
+        contains(ChannelModerationAction.archive),
+      );
       expect(
-          placement.settingsMenu, contains(ChannelSettingsAction.appearance));
-      expect(placement.settingsMenu,
-          contains(ChannelSettingsAction.deleteOwnMessages));
+        placement.settingsMenu,
+        contains(ChannelSettingsAction.appearance),
+      );
       expect(
-          placement.settingsMenu, contains(ChannelSettingsAction.autoDelete));
+        placement.settingsMenu,
+        contains(ChannelSettingsAction.sharedContent),
+      );
       expect(
-          placement.settingsMenu, contains(ChannelSettingsAction.encryption));
+        placement.settingsMenu,
+        contains(ChannelSettingsAction.scheduledPosts),
+      );
+      expect(
+        placement.settingsMenu,
+        contains(ChannelSettingsAction.deleteOwnMessages),
+      );
+      expect(
+        placement.settingsMenu,
+        contains(ChannelSettingsAction.autoDelete),
+      );
+      expect(
+        placement.settingsMenu,
+        contains(ChannelSettingsAction.encryption),
+      );
     });
 
     test('channel subscribers get chat appearance for their bubble color', () {
@@ -131,32 +150,36 @@ void main() {
       expect(placement.topBar, contains(ChannelTopBarAction.settings));
       expect(placement.settingsMenu, [
         ChannelSettingsAction.appearance,
+        ChannelSettingsAction.sharedContent,
+        ChannelSettingsAction.scheduledPosts,
         ChannelSettingsAction.deleteOwnMessages,
       ]);
     });
 
-    test('archived channel exposes unarchive and delete in moderation menu',
-        () {
-      final placement = ChannelActionPolicy.actionsFor(
-        channel: _conversation(
-          type: ConversationType.channel,
-          archivedAt: DateTime.utc(2026, 6, 1),
-        ),
-        isAdmin: true,
-        isPremium: false,
-        canManageLifecycle: true,
-        isSubscribed: false,
-      );
+    test(
+      'archived channel exposes unarchive and delete in moderation menu',
+      () {
+        final placement = ChannelActionPolicy.actionsFor(
+          channel: _conversation(
+            type: ConversationType.channel,
+            archivedAt: DateTime.utc(2026, 6, 1),
+          ),
+          isAdmin: true,
+          isPremium: false,
+          canManageLifecycle: true,
+          isSubscribed: false,
+        );
 
-      expect(
-        placement.moderationMenu,
-        containsAll([
-          ChannelModerationAction.unarchive,
-          ChannelModerationAction.delete,
-        ]),
-      );
-      expect(placement.topBar, isNot(contains(ChannelTopBarAction.delete)));
-    });
+        expect(
+          placement.moderationMenu,
+          containsAll([
+            ChannelModerationAction.unarchive,
+            ChannelModerationAction.delete,
+          ]),
+        );
+        expect(placement.topBar, isNot(contains(ChannelTopBarAction.delete)));
+      },
+    );
 
     test('channel owner does not get an unsubscribe action', () {
       final placement = ChannelActionPolicy.actionsFor(
@@ -168,38 +191,41 @@ void main() {
       );
 
       expect(
-          placement.topBar, isNot(contains(ChannelTopBarAction.unsubscribe)));
+        placement.topBar,
+        isNot(contains(ChannelTopBarAction.unsubscribe)),
+      );
       expect(placement.topBar, isNot(contains(ChannelTopBarAction.subscribe)));
     });
   });
 
   group('Conversation exit labels', () {
-    test('group participants see leave language instead of delete language',
-        () {
-      expect(
-        conversationExitMenuLabel(
-          _conversation(),
-          currentUserId: 'member-2',
-        ),
-        'Leave group',
-      );
-    });
+    test(
+      'group participants see leave language instead of delete language',
+      () {
+        expect(
+          conversationExitMenuLabel(_conversation(), currentUserId: 'member-2'),
+          'Leave group',
+        );
+      },
+    );
 
     test('group owner with another admin still sees leave language', () {
-      final group = _conversation().copyWith(members: [
-        ConversationMember(
-          conversationId: 'conv-1',
-          userId: 'owner-1',
-          role: MemberRole.admin,
-          joinedAt: DateTime.utc(2026, 6, 1),
-        ),
-        ConversationMember(
-          conversationId: 'conv-1',
-          userId: 'admin-2',
-          role: MemberRole.admin,
-          joinedAt: DateTime.utc(2026, 6, 1),
-        ),
-      ]);
+      final group = _conversation().copyWith(
+        members: [
+          ConversationMember(
+            conversationId: 'conv-1',
+            userId: 'owner-1',
+            role: MemberRole.admin,
+            joinedAt: DateTime.utc(2026, 6, 1),
+          ),
+          ConversationMember(
+            conversationId: 'conv-1',
+            userId: 'admin-2',
+            role: MemberRole.admin,
+            joinedAt: DateTime.utc(2026, 6, 1),
+          ),
+        ],
+      );
 
       expect(
         conversationExitMenuLabel(group, currentUserId: 'owner-1'),

@@ -1,0 +1,632 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+
+import '../models/conversation.dart';
+import '../models/conversation_invite.dart';
+import '../services/api_service.dart';
+import 'glass.dart';
+
+Future<void> showConversationInviteLinksSheet(
+  BuildContext context, {
+  required Conversation conversation,
+  required bool channel,
+  ValueChanged<bool>? onJoinApprovalChanged,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (_) => ConversationInviteLinksSheet(
+      conversation: conversation,
+      channel: channel,
+      onJoinApprovalChanged: onJoinApprovalChanged,
+    ),
+  );
+}
+
+class ConversationInviteLinksSheet extends StatefulWidget {
+  final Conversation conversation;
+  final bool channel;
+  final ValueChanged<bool>? onJoinApprovalChanged;
+
+  const ConversationInviteLinksSheet({
+    super.key,
+    required this.conversation,
+    required this.channel,
+    this.onJoinApprovalChanged,
+  });
+
+  @override
+  State<ConversationInviteLinksSheet> createState() =>
+      _ConversationInviteLinksSheetState();
+}
+
+class _ConversationInviteLinksSheetState
+    extends State<ConversationInviteLinksSheet> {
+  var _links = <ConversationInviteLink>[];
+  var _requests = <ConversationJoinRequest>[];
+  late bool _approvalRequired;
+  bool _loading = true;
+  bool _busy = false;
+
+  ConversationInviteLink? get _activeLink =>
+      _links.isEmpty ? null : _links.first;
+
+  @override
+  void initState() {
+    super.initState();
+    _approvalRequired = widget.conversation.joinApprovalRequired;
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final api = context.read<ApiService>();
+      final results = await Future.wait([
+        api.listConversationInviteLinks(
+          widget.conversation.id,
+          channel: widget.channel,
+        ),
+        api.listJoinRequests(widget.conversation.id, channel: widget.channel),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _links = results[0] as List<ConversationInviteLink>;
+        _requests = results[1] as List<ConversationJoinRequest>;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      _showSnack('Invite settings failed: $e');
+    }
+  }
+
+  Future<void> _setApprovalRequired(bool required) async {
+    final previous = _approvalRequired;
+    setState(() {
+      _approvalRequired = required;
+      _busy = true;
+    });
+    try {
+      final api = context.read<ApiService>();
+      await api.setJoinApproval(
+        widget.conversation.id,
+        required,
+        channel: widget.channel,
+      );
+      ConversationInviteLink? rotatedLink;
+      final active = _activeLink;
+      if (active != null && active.approvalRequired != required) {
+        rotatedLink = await api.createConversationInviteLink(
+          widget.conversation.id,
+          channel: widget.channel,
+          approvalRequired: required,
+          revokeExisting: true,
+        );
+      }
+      if (!mounted) return;
+      setState(() {
+        if (rotatedLink != null) _links = [rotatedLink];
+        _busy = false;
+      });
+      widget.onJoinApprovalChanged?.call(required);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _approvalRequired = previous;
+        _busy = false;
+      });
+      _showSnack('Approval update failed: $e');
+      _load();
+    }
+  }
+
+  Future<void> _createLink({required bool rotate}) async {
+    setState(() => _busy = true);
+    try {
+      final link = await context
+          .read<ApiService>()
+          .createConversationInviteLink(
+            widget.conversation.id,
+            channel: widget.channel,
+            approvalRequired: _approvalRequired,
+            revokeExisting: rotate,
+          );
+      if (!mounted) return;
+      setState(() {
+        _links = rotate ? [link] : [link, ..._links];
+        _busy = false;
+      });
+      _showSnack(rotate ? 'Invite link regenerated' : 'Invite link created');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      _showSnack('Invite link failed: $e');
+    }
+  }
+
+  Future<void> _copyActiveLink() async {
+    final link = _activeLink;
+    if (link == null) return;
+    await Clipboard.setData(ClipboardData(text: link.inviteUri));
+    if (!mounted) return;
+    _showSnack('Invite link copied');
+  }
+
+  Future<void> _revokeActiveLink() async {
+    final link = _activeLink;
+    if (link == null) return;
+    setState(() => _busy = true);
+    try {
+      await context.read<ApiService>().revokeConversationInviteLink(
+        widget.conversation.id,
+        link.id,
+        channel: widget.channel,
+      );
+      if (!mounted) return;
+      setState(() {
+        _links = _links.where((item) => item.id != link.id).toList();
+        _busy = false;
+      });
+      _showSnack('Invite link revoked');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      _showSnack('Revoke failed: $e');
+    }
+  }
+
+  Future<void> _reviewRequest(
+    ConversationJoinRequest request, {
+    required bool approve,
+  }) async {
+    setState(() => _busy = true);
+    try {
+      final api = context.read<ApiService>();
+      if (approve) {
+        await api.approveJoinRequest(
+          widget.conversation.id,
+          request.userId,
+          channel: widget.channel,
+        );
+      } else {
+        await api.rejectJoinRequest(
+          widget.conversation.id,
+          request.userId,
+          channel: widget.channel,
+        );
+      }
+      if (!mounted) return;
+      setState(() {
+        _requests = _requests
+            .where((item) => item.userId != request.userId)
+            .toList();
+        _busy = false;
+      });
+      _showSnack(approve ? 'Request approved' : 'Request declined');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      _showSnack('Request review failed: $e');
+    }
+  }
+
+  void _showSnack(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final title =
+        widget.conversation.name ?? (widget.channel ? 'Channel' : 'Group');
+    return GlassBottomSheetFrame(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: scheme.primary.withValues(alpha: 0.14),
+                ),
+                child: Icon(Icons.link_rounded, color: scheme.primary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Invite links',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'Close',
+                icon: const Icon(Icons.close_rounded),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 28),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else ...[
+            _ApprovalSection(
+              value: _approvalRequired,
+              busy: _busy,
+              onChanged: _setApprovalRequired,
+            ),
+            const SizedBox(height: 12),
+            _LinkSection(
+              link: _activeLink,
+              busy: _busy,
+              onCreate: () => _createLink(rotate: false),
+              onCopy: _copyActiveLink,
+              onRegenerate: () => _createLink(rotate: true),
+              onRevoke: _revokeActiveLink,
+            ),
+            const SizedBox(height: 12),
+            _RequestsSection(
+              requests: _requests,
+              busy: _busy,
+              onApprove: (request) => _reviewRequest(request, approve: true),
+              onReject: (request) => _reviewRequest(request, approve: false),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ApprovalSection extends StatelessWidget {
+  final bool value;
+  final bool busy;
+  final ValueChanged<bool> onChanged;
+
+  const _ApprovalSection({
+    required this.value,
+    required this.busy,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return _InvitePanel(
+      child: Row(
+        children: [
+          Icon(
+            value ? Icons.verified_user_outlined : Icons.group_add_outlined,
+            color: scheme.primary,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Approve new members',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                ),
+                Text(
+                  value ? 'Required' : 'Anyone with the link',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Switch.adaptive(value: value, onChanged: busy ? null : onChanged),
+        ],
+      ),
+    );
+  }
+}
+
+class _LinkSection extends StatelessWidget {
+  final ConversationInviteLink? link;
+  final bool busy;
+  final VoidCallback onCreate;
+  final VoidCallback onCopy;
+  final VoidCallback onRegenerate;
+  final VoidCallback onRevoke;
+
+  const _LinkSection({
+    required this.link,
+    required this.busy,
+    required this.onCreate,
+    required this.onCopy,
+    required this.onRegenerate,
+    required this.onRevoke,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final active = link;
+    return _InvitePanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.ios_share_rounded, color: scheme.primary),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Active invite',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (active == null)
+            Text(
+              'No active link',
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+            )
+          else
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                color: scheme.surface.withValues(alpha: 0.26),
+                border: Border.all(
+                  color: scheme.outlineVariant.withValues(alpha: 0.28),
+                ),
+              ),
+              child: Text(
+                active.inviteUri,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (active == null)
+                GlassButtonWidget.icon(
+                  onPressed: busy ? null : onCreate,
+                  icon: const Icon(Icons.add_link_rounded),
+                  label: const Text('Create'),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                )
+              else ...[
+                GlassButtonWidget.icon(
+                  onPressed: busy ? null : onCopy,
+                  icon: const Icon(Icons.copy_rounded),
+                  label: const Text('Copy'),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                ),
+                GlassButtonWidget.icon(
+                  onPressed: busy ? null : onRegenerate,
+                  icon: const Icon(Icons.autorenew_rounded),
+                  label: const Text('Regenerate'),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                ),
+                GlassButtonWidget.icon(
+                  onPressed: busy ? null : onRevoke,
+                  icon: const Icon(Icons.link_off_rounded),
+                  label: const Text('Revoke'),
+                  foregroundColor: scheme.error,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RequestsSection extends StatelessWidget {
+  final List<ConversationJoinRequest> requests;
+  final bool busy;
+  final ValueChanged<ConversationJoinRequest> onApprove;
+  final ValueChanged<ConversationJoinRequest> onReject;
+
+  const _RequestsSection({
+    required this.requests,
+    required this.busy,
+    required this.onApprove,
+    required this.onReject,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return _InvitePanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.how_to_reg_outlined, color: scheme.primary),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Join requests',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                ),
+              ),
+              if (requests.isNotEmpty)
+                Text(
+                  '${requests.length}',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: scheme.primary,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (requests.isEmpty)
+            Text(
+              'No pending requests',
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+            )
+          else
+            for (final request in requests) ...[
+              _JoinRequestTile(
+                request: request,
+                busy: busy,
+                onApprove: () => onApprove(request),
+                onReject: () => onReject(request),
+              ),
+              if (request != requests.last)
+                Divider(color: scheme.outlineVariant.withValues(alpha: 0.24)),
+            ],
+        ],
+      ),
+    );
+  }
+}
+
+class _JoinRequestTile extends StatelessWidget {
+  final ConversationJoinRequest request;
+  final bool busy;
+  final VoidCallback onApprove;
+  final VoidCallback onReject;
+
+  const _JoinRequestTile({
+    required this.request,
+    required this.busy,
+    required this.onApprove,
+    required this.onReject,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final username = request.user?.username;
+    final label = username != null
+        ? '@$username'
+        : _shortUserId(request.userId);
+    final avatarText = label.replaceFirst('@', '');
+    final avatarInitial = avatarText.isEmpty
+        ? '?'
+        : avatarText.substring(0, 1).toUpperCase();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 18,
+            backgroundColor: scheme.primary.withValues(alpha: 0.14),
+            child: Text(
+              avatarInitial,
+              style: TextStyle(
+                color: scheme.primary,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Decline',
+            icon: Icon(Icons.close_rounded, color: scheme.error),
+            onPressed: busy ? null : onReject,
+          ),
+          IconButton(
+            tooltip: 'Approve',
+            icon: Icon(Icons.check_rounded, color: scheme.primary),
+            onPressed: busy ? null : onApprove,
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _shortUserId(String value) =>
+      value.length <= 8 ? value : value.substring(0, 8);
+}
+
+class _InvitePanel extends StatelessWidget {
+  final Widget child;
+
+  const _InvitePanel({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        color: scheme.surface.withValues(alpha: 0.18),
+        border: Border.all(
+          color: scheme.outlineVariant.withValues(alpha: 0.24),
+        ),
+      ),
+      child: child,
+    );
+  }
+}
