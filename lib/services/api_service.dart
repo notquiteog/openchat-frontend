@@ -4,12 +4,15 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import '../config/api_config.dart' show ApiConfig, IceServer;
 import '../models/admin_audit_event.dart';
+import '../models/channel_analytics.dart';
 import '../models/chat_folder.dart';
 import '../models/channel_pinned_message.dart';
 import '../models/user.dart';
 import '../models/message.dart';
 import '../models/conversation.dart';
 import '../models/conversation_invite.dart';
+import '../models/link_preview.dart';
+import '../models/moderation_report.dart';
 import '../models/scheduled_message.dart';
 import '../models/story.dart';
 import '../services/secure_storage_service.dart';
@@ -705,11 +708,15 @@ class ApiService {
     bool channel = false,
     bool approvalRequired = false,
     bool revokeExisting = false,
+    int expiresInSeconds = 0,
+    int? usageLimit,
   }) async {
     final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
     final resp = await _post('$base/$convID/invite-links', {
       'approval_required': approvalRequired,
       'revoke_existing': revokeExisting,
+      'expires_in_seconds': expiresInSeconds,
+      'usage_limit': ?usageLimit,
     });
     return ConversationInviteLink.fromJson(
       resp['data'] as Map<String, dynamic>,
@@ -776,9 +783,16 @@ class ApiService {
     await _put('$base/$convID/topics-enabled', {'enabled': enabled});
   }
 
-  Future<Map<String, dynamic>> getChannelStats(String chanID) async {
+  Future<ChannelAnalytics> getChannelStats(String chanID) async {
     final resp = await _get('/api/v1/channels/$chanID/stats');
-    return resp['data'] as Map<String, dynamic>;
+    return ChannelAnalytics.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<LinkPreview> fetchLinkPreview(String url) async {
+    final resp = await _get(
+      '/api/v1/link-preview?url=${Uri.encodeComponent(url)}',
+    );
+    return LinkPreview.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
   Future<void> setEncryptionEnabled(String convID, bool enabled) async {
@@ -1632,6 +1646,64 @@ class ApiService {
     return (resp['data'] as List? ?? const [])
         .map((e) => AdminAuditEvent.fromJson(e as Map<String, dynamic>))
         .toList();
+  }
+
+  Future<void> setAntiSpamControls(
+    String convID, {
+    bool channel = false,
+    required int newMemberCooldownSeconds,
+    required bool blockLinks,
+    required bool blockMedia,
+    required int mentionLimit,
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    await _put('$base/$convID/anti-spam', {
+      'new_member_cooldown_seconds': newMemberCooldownSeconds,
+      'block_links': blockLinks,
+      'block_media': blockMedia,
+      'mention_limit': mentionLimit,
+    });
+  }
+
+  Future<List<ModerationReport>> listModerationReports(
+    String convID, {
+    bool channel = false,
+    String status = 'open',
+    int limit = 100,
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    final resp = await _get(
+      '$base/$convID/reports?status=${Uri.encodeComponent(status)}&limit=$limit',
+    );
+    return (resp['data'] as List? ?? const [])
+        .map((e) => ModerationReport.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<ModerationReport> createModerationReport(
+    String convID, {
+    bool channel = false,
+    String? messageID,
+    String? reportedUserID,
+    String reason = '',
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    final resp = await _post('$base/$convID/reports', {
+      'message_id': ?messageID,
+      'reported_user_id': ?reportedUserID,
+      'reason': reason,
+    });
+    return ModerationReport.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<void> resolveModerationReport(
+    String convID,
+    String reportID, {
+    bool channel = false,
+    required String status,
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    await _put('$base/$convID/reports/$reportID', {'status': status});
   }
 
   /// Flip the channel/group into broadcast mode (only admins can post).

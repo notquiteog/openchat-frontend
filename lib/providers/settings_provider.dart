@@ -164,6 +164,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kPushEnabled = 'push_notifications_enabled';
   static const _kWsBgEnabled = 'ws_background_enabled';
   static const _kNotifSensitive = 'notification_sensitive_content';
+  static const _kLinkPreviewsEnabled = 'link_previews_enabled';
   static const _kReduceTransparency = 'reduce_transparency';
   static const _kSmartInboxFilter = 'smart_inbox_filter';
   static const _kPinnedConversations = 'pinned_conversations';
@@ -185,6 +186,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _pushEnabled = false;
   bool _wsBgEnabled = false;
   bool _notifSensitive = false;
+  bool _linkPreviewsEnabled = true;
   bool _reduceTransparency = false;
   SmartInboxFilter _smartInboxFilter = SmartInboxFilter.all;
   final Map<String, MessageDraft> _messageDrafts = {};
@@ -234,6 +236,9 @@ class SettingsProvider extends ChangeNotifier {
   /// Show sender name + message preview in notifications. Off = generic "New message" text.
   bool get notificationSensitiveContent => _notifSensitive;
 
+  /// Fetch link previews through the OpenChat proxy after local decryption.
+  bool get linkPreviewsEnabled => _linkPreviewsEnabled;
+
   Future<void> load() {
     _loadFuture ??= _load();
     return _loadFuture!;
@@ -252,6 +257,7 @@ class SettingsProvider extends ChangeNotifier {
       await _prefs!.setBool(_kWsBgEnabled, false);
     }
     _notifSensitive = _prefs!.getBool(_kNotifSensitive) ?? false;
+    _linkPreviewsEnabled = _prefs!.getBool(_kLinkPreviewsEnabled) ?? true;
     _reduceTransparency = _prefs!.getBool(_kReduceTransparency) ?? false;
     _smartInboxFilter = smartInboxFilterFromName(
       _prefs!.getString(_kSmartInboxFilter),
@@ -395,7 +401,7 @@ class SettingsProvider extends ChangeNotifier {
 
   String notificationLabelForConversation(String convID) {
     final preference = notificationPreferenceForConversation(convID);
-    return switch (preference.mode) {
+    final modeLabel = switch (preference.mode) {
       ConversationNotificationMode.all => 'All messages',
       ConversationNotificationMode.mentionsOnly => 'Mentions only',
       ConversationNotificationMode.muted =>
@@ -403,6 +409,13 @@ class SettingsProvider extends ChangeNotifier {
             ? 'Muted'
             : 'Muted until ${_formatMuteUntil(preference.mutedUntil!)}',
     };
+    final parts = <String>[modeLabel];
+    if (preference.priority) parts.add('Priority');
+    if (preference.keywords.isNotEmpty) {
+      parts.add('${preference.keywords.length} keywords');
+    }
+    if (preference.hasQuietHours) parts.add('Quiet hours');
+    return parts.join(' · ');
   }
 
   Future<void> setConversationNotificationPreference(
@@ -425,11 +438,18 @@ class SettingsProvider extends ChangeNotifier {
   }
 
   Future<void> setConversationMuted(String convID, bool muted) async {
+    final preference = notificationPreferenceForConversation(convID);
     return setConversationNotificationPreference(
       convID,
       muted
-          ? const ConversationNotificationPreference.mutedForever()
-          : const ConversationNotificationPreference.all(),
+          ? preference.copyWith(
+              mode: ConversationNotificationMode.muted,
+              clearMutedUntil: true,
+            )
+          : preference.copyWith(
+              mode: ConversationNotificationMode.all,
+              clearMutedUntil: true,
+            ),
     );
   }
 
@@ -438,9 +458,10 @@ class SettingsProvider extends ChangeNotifier {
   }
 
   Future<void> muteConversationUntil(String convID, DateTime mutedUntil) {
+    final preference = notificationPreferenceForConversation(convID);
     return setConversationNotificationPreference(
       convID,
-      ConversationNotificationPreference(
+      preference.copyWith(
         mode: ConversationNotificationMode.muted,
         mutedUntil: mutedUntil,
       ),
@@ -448,9 +469,58 @@ class SettingsProvider extends ChangeNotifier {
   }
 
   Future<void> setConversationMentionsOnly(String convID) {
+    final preference = notificationPreferenceForConversation(convID);
     return setConversationNotificationPreference(
       convID,
-      const ConversationNotificationPreference.mentionsOnly(),
+      preference.copyWith(
+        mode: ConversationNotificationMode.mentionsOnly,
+        clearMutedUntil: true,
+      ),
+    );
+  }
+
+  Future<void> setConversationNotificationKeywords(
+    String convID,
+    Iterable<String> keywords,
+  ) {
+    final preference = notificationPreferenceForConversation(convID);
+    return setConversationNotificationPreference(
+      convID,
+      preference.copyWith(keywords: normalizeNotificationKeywords(keywords)),
+    );
+  }
+
+  Future<void> setConversationPriorityNotifications(
+    String convID,
+    bool priority,
+  ) {
+    final preference = notificationPreferenceForConversation(convID);
+    return setConversationNotificationPreference(
+      convID,
+      preference.copyWith(priority: priority),
+    );
+  }
+
+  Future<void> setConversationQuietHours(
+    String convID, {
+    required int startMinute,
+    required int endMinute,
+  }) {
+    final preference = notificationPreferenceForConversation(convID);
+    return setConversationNotificationPreference(
+      convID,
+      preference.copyWith(
+        quietHoursStartMinute: startMinute.clamp(0, 1439).toInt(),
+        quietHoursEndMinute: endMinute.clamp(0, 1439).toInt(),
+      ),
+    );
+  }
+
+  Future<void> clearConversationQuietHours(String convID) {
+    final preference = notificationPreferenceForConversation(convID);
+    return setConversationNotificationPreference(
+      convID,
+      preference.copyWith(clearQuietHours: true),
     );
   }
 
@@ -636,6 +706,12 @@ class SettingsProvider extends ChangeNotifier {
     _notifSensitive = value;
     notifyListeners();
     await _prefs?.setBool(_kNotifSensitive, value);
+  }
+
+  Future<void> setLinkPreviewsEnabled(bool value) async {
+    _linkPreviewsEnabled = value;
+    notifyListeners();
+    await _prefs?.setBool(_kLinkPreviewsEnabled, value);
   }
 
   Future<void> setReduceTransparency(bool value) async {

@@ -787,5 +787,3 @@ class GlassBottomSheetFrame extends StatelessWidget {
   }
 }
 
-// Keep old name as alias for backwards compat
-typedef OldGlassButton = GlassButtonWidget;

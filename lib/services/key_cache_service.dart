@@ -102,12 +102,6 @@ class KeyCacheService {
     );
   }
 
-  /// Back-compat: legacy callers that want just the armored key bytes.
-  static Future<String?> getPublicKey(String userId) async {
-    final entry = await get(userId);
-    return entry?.publicKey;
-  }
-
   static Future<void> put(
     String userId,
     String publicKey,

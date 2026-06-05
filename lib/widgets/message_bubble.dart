@@ -12,11 +12,14 @@ import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import 'package:video_player/video_player.dart';
 import '../config/api_config.dart';
+import '../models/link_preview.dart';
 import '../models/message.dart';
 import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
+import '../providers/settings_provider.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
+import '../utils/link_preview_utils.dart';
 import '../utils/mention_utils.dart';
 import 'glass.dart';
 import 'location_map_preview.dart';
@@ -217,6 +220,18 @@ class MessageBubble extends StatelessWidget {
 
     final content = message.content!;
 
+    if (message is PendingMessage &&
+        content.hasAttachment &&
+        (message.attachmentId?.startsWith('pending-attachment-') ?? false)) {
+      return _PendingAttachmentBubble(
+        message: message as PendingMessage,
+        content: content,
+        bubbleColor: bubbleColor,
+        textColor: textColor,
+        radii: radii,
+      );
+    }
+
     if (content.hasAttachment) {
       return switch (message.type) {
         MessageType.image => _ImageBubble(
@@ -285,6 +300,91 @@ class MessageBubble extends StatelessWidget {
     return Text(
       timeago.format(message.createdAt, locale: 'en_short'),
       style: TextStyle(fontSize: 10, color: textColor.withValues(alpha: 0.6)),
+    );
+  }
+}
+
+class _PendingAttachmentBubble extends StatelessWidget {
+  final PendingMessage message;
+  final MessageContent content;
+  final Color bubbleColor;
+  final Color textColor;
+  final BorderRadius radii;
+
+  const _PendingAttachmentBubble({
+    required this.message,
+    required this.content,
+    required this.bubbleColor,
+    required this.textColor,
+    required this.radii,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = switch (message.type) {
+      MessageType.image => Icons.image_outlined,
+      MessageType.video => Icons.play_circle_outline_rounded,
+      MessageType.voice || MessageType.audio => Icons.graphic_eq_rounded,
+      _ => Icons.insert_drive_file_outlined,
+    };
+    final status = switch (message.status) {
+      PendingMessageStatus.sending => 'Sending',
+      PendingMessageStatus.queued => 'Queued for upload',
+      PendingMessageStatus.failed => 'Waiting to retry',
+    };
+    return _BubbleShell(
+      color: bubbleColor,
+      radii: radii,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: textColor, size: 28),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      content.fileName ?? 'Attachment',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: textColor,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    Text(
+                      status,
+                      style: TextStyle(
+                        color: textColor.withValues(alpha: 0.72),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (content.text.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                content.text,
+                style: TextStyle(color: textColor, fontSize: 14),
+              ),
+            ),
+          ],
+          const SizedBox(height: 6),
+          _Timestamp(message: message, textColor: textColor),
+        ],
+      ),
     );
   }
 }
@@ -499,6 +599,17 @@ class _TextBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    var linkPreviewsEnabled = true;
+    try {
+      linkPreviewsEnabled = context
+          .watch<SettingsProvider>()
+          .linkPreviewsEnabled;
+    } on ProviderNotFoundException {
+      linkPreviewsEnabled = true;
+    }
+    final previewUrl = linkPreviewsEnabled
+        ? firstLinkPreviewUrl(message.content!.text)
+        : null;
 
     return _BubbleShell(
       color: bubbleColor,
@@ -529,6 +640,10 @@ class _TextBubble extends StatelessWidget {
             ),
             style: TextStyle(color: textColor, fontSize: 15, height: 1.25),
           ),
+          if (previewUrl != null) ...[
+            const SizedBox(height: 8),
+            _LinkPreviewCard(url: previewUrl, isMe: isMe, textColor: textColor),
+          ],
           if (message.reactions.isNotEmpty) ...[
             const SizedBox(height: 6),
             _ReactionChips(
@@ -539,6 +654,163 @@ class _TextBubble extends StatelessWidget {
           ],
           const SizedBox(height: 2),
           _Timestamp(message: message, textColor: textColor),
+        ],
+      ),
+    );
+  }
+}
+
+class _LinkPreviewCard extends StatefulWidget {
+  final String url;
+  final bool isMe;
+  final Color textColor;
+
+  const _LinkPreviewCard({
+    required this.url,
+    required this.isMe,
+    required this.textColor,
+  });
+
+  @override
+  State<_LinkPreviewCard> createState() => _LinkPreviewCardState();
+}
+
+class _LinkPreviewCardState extends State<_LinkPreviewCard> {
+  Future<LinkPreview?>? _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _LinkPreviewCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url) {
+      _future = _load();
+    }
+  }
+
+  Future<LinkPreview?> _load() async {
+    try {
+      return await context.read<ApiService>().fetchLinkPreview(widget.url);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<LinkPreview?>(
+      future: _future,
+      builder: (context, snapshot) {
+        final preview = snapshot.data;
+        if (preview == null) return const SizedBox.shrink();
+        final title = preview.title.trim();
+        final description = preview.description.trim();
+        final host = preview.siteName.trim().isNotEmpty
+            ? preview.siteName
+            : preview.displayHost;
+        if (title.isEmpty && description.isEmpty && host.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        return _LinkPreviewBody(
+          host: host,
+          title: title,
+          description: description,
+          isMe: widget.isMe,
+          textColor: widget.textColor,
+        );
+      },
+    );
+  }
+}
+
+class _LinkPreviewBody extends StatelessWidget {
+  final String host;
+  final String title;
+  final String description;
+  final bool isMe;
+  final Color textColor;
+
+  const _LinkPreviewBody({
+    required this.host,
+    required this.title,
+    required this.description,
+    required this.isMe,
+    required this.textColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final accent = isMe ? Colors.white : scheme.primary;
+    final borderColor = accent.withValues(alpha: isMe ? 0.38 : 0.24);
+    final fill = isMe
+        ? Colors.white.withValues(alpha: 0.10)
+        : scheme.surface.withValues(alpha: 0.34);
+    return Container(
+      constraints: const BoxConstraints(minWidth: 180, maxWidth: 280),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: fill,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: borderColor),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.link_rounded, size: 18, color: accent),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (host.isNotEmpty)
+                  Text(
+                    host,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: textColor.withValues(alpha: 0.72),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                if (title.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: textColor,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                        height: 1.18,
+                      ),
+                    ),
+                  ),
+                if (description.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Text(
+                      description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: textColor.withValues(alpha: 0.72),
+                        fontSize: 12,
+                        height: 1.18,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -2584,9 +2856,25 @@ class _Timestamp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final pending = message is PendingMessage
+        ? message as PendingMessage
+        : null;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (pending != null)
+          Padding(
+            padding: const EdgeInsets.only(right: 3),
+            child: Icon(
+              switch (pending.status) {
+                PendingMessageStatus.sending => Icons.sync_rounded,
+                PendingMessageStatus.queued => Icons.cloud_upload_outlined,
+                PendingMessageStatus.failed => Icons.error_outline_rounded,
+              },
+              size: 11,
+              color: textColor.withValues(alpha: 0.62),
+            ),
+          ),
         if (message.decryptionFailed)
           Icon(Icons.lock, size: 10, color: textColor.withValues(alpha: 0.5)),
         if (message.silent)
@@ -2599,7 +2887,13 @@ class _Timestamp extends StatelessWidget {
             ),
           ),
         Text(
-          timeago.format(message.createdAt, locale: 'en_short'),
+          pending == null
+              ? timeago.format(message.createdAt, locale: 'en_short')
+              : switch (pending.status) {
+                  PendingMessageStatus.sending => 'sending',
+                  PendingMessageStatus.queued => 'queued',
+                  PendingMessageStatus.failed => 'retrying',
+                },
           style: TextStyle(
             fontSize: 10,
             color: textColor.withValues(alpha: 0.6),
@@ -2803,99 +3097,99 @@ class _StickerPackSheetState extends State<_StickerPackSheet> {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
               child: Row(
-              children: [
-                if (coverUrl != null) ...[
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(6),
-                    child: CachedNetworkImage(
-                      imageUrl: ApiConfig.resolveMedia(coverUrl),
-                      width: 40,
-                      height: 40,
-                      fit: BoxFit.cover,
-                      errorWidget: (_, _, _) => const SizedBox.shrink(),
+                children: [
+                  if (coverUrl != null) ...[
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: CachedNetworkImage(
+                        imageUrl: ApiConfig.resolveMedia(coverUrl),
+                        width: 40,
+                        height: 40,
+                        fit: BoxFit.cover,
+                        errorWidget: (_, _, _) => const SizedBox.shrink(),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _pack?['name'] as String? ?? 'Sticker Pack',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                          ),
+                        ),
+                        if (_pack?['description'] != null)
+                          Text(
+                            _pack!['description'] as String,
+                            style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: 13,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  GlassButtonWidget.icon(
+                    onPressed: _adding ? null : _addToLibrary,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    icon: _adding
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.add, size: 18),
+                    label: const Text('Add'),
+                  ),
                 ],
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _pack?['name'] as String? ?? 'Sticker Pack',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 16,
-                        ),
-                      ),
-                      if (_pack?['description'] != null)
-                        Text(
-                          _pack!['description'] as String,
-                          style: TextStyle(
-                            color: Colors.grey[600],
-                            fontSize: 13,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                    ],
-                  ),
-                ),
-                GlassButtonWidget.icon(
-                  onPressed: _adding ? null : _addToLibrary,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 10,
-                  ),
-                  icon: _adding
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.add, size: 18),
-                  label: const Text('Add'),
-                ),
-              ],
+              ),
             ),
-          ),
-          const Divider(height: 1),
-          Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator())
-                : stickers.isEmpty
-                ? const Center(child: Text('No stickers in this pack'))
-                : GridView.builder(
-                    controller: controller,
-                    padding: const EdgeInsets.all(8),
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 4,
-                          crossAxisSpacing: 6,
-                          mainAxisSpacing: 6,
-                        ),
-                    itemCount: stickers.length,
-                    itemBuilder: (_, i) {
-                      final st = stickers[i];
-                      final url = st['file_url'] as String?;
-                      return ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: url != null
-                            ? CachedNetworkImage(
-                                imageUrl: ApiConfig.resolveMedia(url),
-                                fit: BoxFit.contain,
-                                errorWidget: (_, _, _) => const Center(
+            const Divider(height: 1),
+            Expanded(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : stickers.isEmpty
+                  ? const Center(child: Text('No stickers in this pack'))
+                  : GridView.builder(
+                      controller: controller,
+                      padding: const EdgeInsets.all(8),
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 4,
+                            crossAxisSpacing: 6,
+                            mainAxisSpacing: 6,
+                          ),
+                      itemCount: stickers.length,
+                      itemBuilder: (_, i) {
+                        final st = stickers[i];
+                        final url = st['file_url'] as String?;
+                        return ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: url != null
+                              ? CachedNetworkImage(
+                                  imageUrl: ApiConfig.resolveMedia(url),
+                                  fit: BoxFit.contain,
+                                  errorWidget: (_, _, _) => const Center(
+                                    child: Icon(Icons.broken_image_outlined),
+                                  ),
+                                )
+                              : const Center(
                                   child: Icon(Icons.broken_image_outlined),
                                 ),
-                              )
-                            : const Center(
-                                child: Icon(Icons.broken_image_outlined),
-                              ),
-                      );
-                    },
-                  ),
-          ),
-        ],
+                        );
+                      },
+                    ),
+            ),
+          ],
         ),
       ),
     );

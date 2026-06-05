@@ -742,9 +742,17 @@ class MessageReactionSummary {
       );
 }
 
+enum PendingMessageStatus { sending, queued, failed }
+
 /// Optimistic local message shown while the server confirms delivery.
 class PendingMessage extends Message {
-  final bool isSending;
+  final PendingMessageStatus status;
+  final String? outboxId;
+  final String? lastError;
+
+  bool get isSending => status == PendingMessageStatus.sending;
+  bool get isQueued => status == PendingMessageStatus.queued;
+  bool get isFailed => status == PendingMessageStatus.failed;
 
   PendingMessage({
     required super.id,
@@ -764,7 +772,9 @@ class PendingMessage extends Message {
     super.poll,
     required super.createdAt,
     required String plaintext,
-    this.isSending = true,
+    this.status = PendingMessageStatus.sending,
+    this.outboxId,
+    this.lastError,
   }) {
     setDecryptedContent(plaintext);
   }

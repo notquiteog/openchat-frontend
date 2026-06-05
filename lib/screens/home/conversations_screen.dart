@@ -1,4 +1,3 @@
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:provider/provider.dart';
@@ -18,6 +17,7 @@ import '../../utils/mention_utils.dart';
 import '../../utils/local_conversation_preferences.dart';
 import '../../utils/smart_inbox_filter.dart';
 import '../../widgets/glass.dart';
+import '../../widgets/conversation_notification_controls_sheet.dart';
 import '../../widgets/stories_strip.dart';
 import '../channels/channel_screen.dart';
 import '../chat/chat_screen.dart';
@@ -321,7 +321,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     if (selected == 'pin') {
       await settings.toggleConversationPinned(conv.id);
     } else if (selected == 'notifications' && context.mounted) {
-      await _showConversationNotificationControls(context, conv);
+      await showConversationNotificationControlsSheet(
+        context,
+        conversationId: conv.id,
+      );
     } else if (selected == 'archive') {
       await settings.toggleConversationArchived(conv.id);
     } else if (selected == 'delete' && context.mounted) {
@@ -329,146 +332,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     }
   }
 
-  Future<void> _showConversationNotificationControls(
-    BuildContext context,
-    Conversation conv,
-  ) async {
-    final settings = context.read<SettingsProvider>();
-    final selected = await GlassModalSheet.show<String>(
-      context: context,
-      initialState: SheetState.half,
-      halfSize: 0.58,
-      enableInteractionGlow: true,
-      builder: (ctx) => SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            _SheetTile(
-              icon: Icons.notifications_active_outlined,
-              label: 'All messages',
-              onTap: () => Navigator.pop(ctx, 'all'),
-            ),
-            _SheetTile(
-              icon: Icons.notification_important_outlined,
-              label: 'Mentions only',
-              onTap: () => Navigator.pop(ctx, 'mentions'),
-            ),
-            _SheetTile(
-              icon: Icons.notifications_paused_outlined,
-              label: 'Mute 1 hour',
-              onTap: () => Navigator.pop(ctx, 'mute_1h'),
-            ),
-            _SheetTile(
-              icon: Icons.notifications_paused_outlined,
-              label: 'Mute 8 hours',
-              onTap: () => Navigator.pop(ctx, 'mute_8h'),
-            ),
-            _SheetTile(
-              icon: Icons.schedule_outlined,
-              label: 'Mute until...',
-              onTap: () => Navigator.pop(ctx, 'mute_until'),
-            ),
-            _SheetTile(
-              icon: Icons.notifications_off_outlined,
-              label: 'Mute forever',
-              onTap: () => Navigator.pop(ctx, 'mute_forever'),
-            ),
-            const SizedBox(height: 12),
-          ],
-        ),
-      ),
-    );
-    if (selected == null) return;
-
-    switch (selected) {
-      case 'all':
-        await settings.setConversationNotificationPreference(
-          conv.id,
-          const ConversationNotificationPreference.all(),
-        );
-      case 'mentions':
-        await settings.setConversationMentionsOnly(conv.id);
-      case 'mute_1h':
-        await settings.muteConversationUntil(
-          conv.id,
-          DateTime.now().add(const Duration(hours: 1)),
-        );
-      case 'mute_8h':
-        await settings.muteConversationUntil(
-          conv.id,
-          DateTime.now().add(const Duration(hours: 8)),
-        );
-      case 'mute_forever':
-        await settings.setConversationMuted(conv.id, true);
-      case 'mute_until':
-        if (!context.mounted) return;
-        final mutedUntil = await _pickMuteUntil(context);
-        if (mutedUntil != null) {
-          await settings.muteConversationUntil(conv.id, mutedUntil);
-        }
-    }
-  }
-
-  Future<DateTime?> _pickMuteUntil(BuildContext context) async {
-    final now = DateTime.now();
-    var selected = now.add(const Duration(hours: 1));
-    return showModalBottomSheet<DateTime>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) => GlassBottomSheetFrame(
-          child: SafeArea(
-            top: false,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 12),
-                SizedBox(
-                  height: 216,
-                  child: CupertinoDatePicker(
-                    mode: CupertinoDatePickerMode.dateAndTime,
-                    minimumDate: now.add(const Duration(minutes: 1)),
-                    initialDateTime: selected,
-                    onDateTimeChanged: (value) =>
-                        setSheetState(() => selected = value),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextButton(
-                          onPressed: () => Navigator.pop(ctx),
-                          child: const Text('Cancel'),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: FilledButton(
-                          onPressed: () => Navigator.pop(ctx, selected),
-                          child: const Text('Done'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   IconData _notificationPreferenceIcon(
     ConversationNotificationPreference preference,
   ) {
     if (preference.isMutedAt(DateTime.now())) {
       return Icons.notifications_off_outlined;
+    }
+    if (preference.priority) {
+      return Icons.star_outline_rounded;
     }
     return switch (preference.mode) {
       ConversationNotificationMode.mentionsOnly =>
@@ -1629,6 +1500,7 @@ class _ConversationTile extends StatelessWidget {
     final hasUnreadMention = unreadMentionMessageId != null;
     final hasDraft = draftPreview != null && draftPreview.isNotEmpty;
     final isMuted = notificationPreference.isMutedAt(DateTime.now());
+    final isPriority = notificationPreference.priority;
     final isMentionsOnly =
         notificationPreference.mode ==
         ConversationNotificationMode.mentionsOnly;
@@ -1700,6 +1572,15 @@ class _ConversationTile extends StatelessWidget {
                               Icons.notifications_off_outlined,
                               size: 13,
                               color: scheme.onSurface.withValues(alpha: 0.38),
+                            ),
+                          ),
+                        if (isPriority)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Icon(
+                              Icons.star_outline_rounded,
+                              size: 13,
+                              color: scheme.primary.withValues(alpha: 0.70),
                             ),
                           ),
                         if (isMentionsOnly)

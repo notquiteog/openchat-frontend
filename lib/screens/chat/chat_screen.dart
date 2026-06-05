@@ -30,6 +30,7 @@ import '../../widgets/admin_permissions_sheet.dart';
 import '../../widgets/conversation_encryption_status.dart';
 import '../../widgets/conversation_info_panel.dart';
 import '../../widgets/conversation_invite_links_sheet.dart';
+import '../../widgets/conversation_notification_controls_sheet.dart';
 import '../../widgets/color_choices.dart';
 import '../../widgets/custom_emoji_picker.dart';
 import '../../widgets/custom_emoji_text_controller.dart';
@@ -879,28 +880,28 @@ class _ChatScreenState extends State<ChatScreen> {
     final chat = context.read<ChatProvider>();
     final messenger = ScaffoldMessenger.of(context);
 
-    PendingAttachment? pending;
+    EncryptedAttachmentUpload? pending;
     VoiceNoteRecording? voiceNote;
     try {
       pending = switch (choice) {
-        'gallery_image' => await attachmentService.pickImage(
+        'gallery_image' => await attachmentService.pickImageForOutbox(
           onProgress: _setAttachmentUploadProgress,
         ),
-        'camera_image' => await attachmentService.pickImage(
+        'camera_image' => await attachmentService.pickImageForOutbox(
           fromCamera: true,
           onProgress: _setAttachmentUploadProgress,
         ),
-        'gallery_video' => await attachmentService.pickVideo(
+        'gallery_video' => await attachmentService.pickVideoForOutbox(
           onProgress: _setAttachmentUploadProgress,
         ),
-        'file' => await attachmentService.pickFile(
+        'file' => await attachmentService.pickFileForOutbox(
           onProgress: _setAttachmentUploadProgress,
         ),
         'voice' => await (() async {
           voiceNote = await showVoiceNoteRecorder(context);
           final note = voiceNote;
           if (note == null) return null;
-          return attachmentService.uploadVoiceNote(
+          return attachmentService.prepareVoiceNoteForOutbox(
             note.file,
             duration: note.duration,
             onProgress: _setAttachmentUploadProgress,
@@ -932,9 +933,10 @@ class _ChatScreenState extends State<ChatScreen> {
       _setAttachmentUploadProgress(
         const AttachmentUploadProgress(stage: AttachmentUploadStage.sending),
       );
-      final sent = await chat.sendAttachment(
+      final sent = await chat.sendPreparedAttachment(
         convID: conv.id,
         attachment: pending,
+        onProgress: _setAttachmentUploadProgress,
       );
       if (sent) {
         _scrollToBottom();
@@ -2296,7 +2298,10 @@ class _ChatScreenState extends State<ChatScreen> {
               label: 'Notifications: $notificationLabel',
               onTap: () {
                 Navigator.pop(context);
-                _showConversationNotificationControls(context, conv.id);
+                showConversationNotificationControlsSheet(
+                  context,
+                  conversationId: conv.id,
+                );
               },
             ),
             _MenuTile(
@@ -2423,147 +2428,14 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Future<void> _showConversationNotificationControls(
-    BuildContext context,
-    String conversationId,
-  ) async {
-    final settings = context.read<SettingsProvider>();
-    final selected = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => GlassBottomSheetFrame(
-        child: SafeArea(
-          top: false,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 8),
-              _MenuTile(
-                icon: Icons.notifications_active_outlined,
-                label: 'All messages',
-                onTap: () => Navigator.pop(ctx, 'all'),
-              ),
-              _MenuTile(
-                icon: Icons.notification_important_outlined,
-                label: 'Mentions only',
-                onTap: () => Navigator.pop(ctx, 'mentions'),
-              ),
-              _MenuTile(
-                icon: Icons.notifications_paused_outlined,
-                label: 'Mute 1 hour',
-                onTap: () => Navigator.pop(ctx, 'mute_1h'),
-              ),
-              _MenuTile(
-                icon: Icons.notifications_paused_outlined,
-                label: 'Mute 8 hours',
-                onTap: () => Navigator.pop(ctx, 'mute_8h'),
-              ),
-              _MenuTile(
-                icon: Icons.schedule_outlined,
-                label: 'Mute until...',
-                onTap: () => Navigator.pop(ctx, 'mute_until'),
-              ),
-              _MenuTile(
-                icon: Icons.notifications_off_outlined,
-                label: 'Mute forever',
-                onTap: () => Navigator.pop(ctx, 'mute_forever'),
-              ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        ),
-      ),
-    );
-    if (selected == null) return;
-
-    switch (selected) {
-      case 'all':
-        await settings.setConversationNotificationPreference(
-          conversationId,
-          const ConversationNotificationPreference.all(),
-        );
-      case 'mentions':
-        await settings.setConversationMentionsOnly(conversationId);
-      case 'mute_1h':
-        await settings.muteConversationUntil(
-          conversationId,
-          DateTime.now().add(const Duration(hours: 1)),
-        );
-      case 'mute_8h':
-        await settings.muteConversationUntil(
-          conversationId,
-          DateTime.now().add(const Duration(hours: 8)),
-        );
-      case 'mute_forever':
-        await settings.setConversationMuted(conversationId, true);
-      case 'mute_until':
-        if (!context.mounted) return;
-        final mutedUntil = await _pickMuteUntil(context);
-        if (mutedUntil != null) {
-          await settings.muteConversationUntil(conversationId, mutedUntil);
-        }
-    }
-  }
-
-  Future<DateTime?> _pickMuteUntil(BuildContext context) async {
-    final now = DateTime.now();
-    var selected = now.add(const Duration(hours: 1));
-    return showModalBottomSheet<DateTime>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) => GlassBottomSheetFrame(
-          child: SafeArea(
-            top: false,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 12),
-                SizedBox(
-                  height: 216,
-                  child: CupertinoDatePicker(
-                    mode: CupertinoDatePickerMode.dateAndTime,
-                    minimumDate: now.add(const Duration(minutes: 1)),
-                    initialDateTime: selected,
-                    onDateTimeChanged: (value) =>
-                        setSheetState(() => selected = value),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextButton(
-                          onPressed: () => Navigator.pop(ctx),
-                          child: const Text('Cancel'),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: FilledButton(
-                          onPressed: () => Navigator.pop(ctx, selected),
-                          child: const Text('Done'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   IconData _notificationPreferenceIcon(
     ConversationNotificationPreference preference,
   ) {
     if (preference.isMutedAt(DateTime.now())) {
       return Icons.notifications_off_outlined;
+    }
+    if (preference.priority) {
+      return Icons.star_outline_rounded;
     }
     return switch (preference.mode) {
       ConversationNotificationMode.mentionsOnly =>
@@ -2859,6 +2731,14 @@ class _ChatScreenState extends State<ChatScreen> {
             color: Colors.orange,
             dividerBefore: true,
           ),
+        if (!isMe && !isSystem && msg.sender != null)
+          const MessageActionSheetItem(
+            value: 'report',
+            icon: Icons.flag_outlined,
+            label: 'Report',
+            color: Colors.orange,
+            dividerBefore: true,
+          ),
         if (canDelete)
           const MessageActionSheetItem(
             value: 'delete',
@@ -2894,8 +2774,57 @@ class _ChatScreenState extends State<ChatScreen> {
         _editMessage(msg);
       case 'stop_location':
         this.context.read<ChatProvider>().stopLiveLocation(msg.id);
+      case 'report':
+        await _reportMessage(msg);
       case 'delete':
         this.context.read<ChatProvider>().deleteMessage(conv.id, msg.id);
+    }
+  }
+
+  Future<void> _reportMessage(Message msg) async {
+    final reasonCtrl = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (ctx) => GlassAlertDialog(
+        title: const Text('Report message'),
+        content: TextField(
+          controller: reasonCtrl,
+          autofocus: true,
+          maxLength: 500,
+          maxLines: 3,
+          decoration: const InputDecoration(labelText: 'Reason'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, reasonCtrl.text.trim()),
+            child: const Text('Report'),
+          ),
+        ],
+      ),
+    );
+    reasonCtrl.dispose();
+    if (reason == null || !mounted) return;
+    try {
+      await context.read<ApiService>().createModerationReport(
+        conv.id,
+        channel: conv.isChannel,
+        messageID: msg.id,
+        reportedUserID: msg.senderId,
+        reason: reason,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Report sent')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to report: $e')));
     }
   }
 
@@ -2940,26 +2869,14 @@ class _ChatScreenState extends State<ChatScreen> {
       (reaction) => reaction.emoji == emoji && reaction.reactedByMe,
     );
     final chat = context.read<ChatProvider>();
-    chat.setLocalReaction(
-      convID: conv.id,
-      msgID: msg.id,
-      emoji: emoji,
-      reacted: !alreadyReacted,
-    );
     try {
-      final api = context.read<ApiService>();
-      if (alreadyReacted) {
-        await api.removeReaction(msg.id, emoji);
-      } else {
-        await api.reactToMessage(msg.id, emoji);
-      }
-    } catch (e) {
-      chat.setLocalReaction(
+      await chat.setReaction(
         convID: conv.id,
         msgID: msg.id,
         emoji: emoji,
-        reacted: alreadyReacted,
+        reacted: !alreadyReacted,
       );
+    } catch (e) {
       if (mounted) {
         messenger.showSnackBar(SnackBar(content: Text('Reaction failed: $e')));
       }

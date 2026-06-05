@@ -72,6 +72,7 @@ NotificationIntent? notificationIntentFromEvent({
         data,
         currentUserId,
       ),
+      notificationText: notificationRuleTextFromData(data),
     )) {
       return null;
     }

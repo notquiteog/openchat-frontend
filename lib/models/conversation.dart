@@ -20,6 +20,11 @@ class Conversation {
   /// When true, only conversation admins can post (broadcast mode).
   final bool ownerOnlyPost;
 
+  final int newMemberCooldownSeconds;
+  final bool antiSpamBlockLinks;
+  final bool antiSpamBlockMedia;
+  final int antiSpamMentionLimit;
+
   /// Disappearing-messages timer in seconds (0 = off).
   final int messageTtlSeconds;
   final bool encryptionEnabled;
@@ -45,6 +50,10 @@ class Conversation {
     this.handle,
     this.archivedAt,
     this.ownerOnlyPost = false,
+    this.newMemberCooldownSeconds = 0,
+    this.antiSpamBlockLinks = false,
+    this.antiSpamBlockMedia = false,
+    this.antiSpamMentionLimit = 0,
     this.messageTtlSeconds = 0,
     this.encryptionEnabled = true,
     this.slowModeSeconds = 0,
@@ -76,6 +85,10 @@ class Conversation {
         ? DateTime.parse(json['archived_at'] as String)
         : null,
     ownerOnlyPost: json['owner_only_post'] as bool? ?? false,
+    newMemberCooldownSeconds: json['new_member_cooldown_seconds'] as int? ?? 0,
+    antiSpamBlockLinks: json['anti_spam_block_links'] as bool? ?? false,
+    antiSpamBlockMedia: json['anti_spam_block_media'] as bool? ?? false,
+    antiSpamMentionLimit: json['anti_spam_mention_limit'] as int? ?? 0,
     messageTtlSeconds: json['message_ttl_seconds'] as int? ?? 0,
     encryptionEnabled: json['encryption_enabled'] as bool? ?? true,
     slowModeSeconds: json['slow_mode_seconds'] as int? ?? 0,
@@ -160,6 +173,10 @@ class Conversation {
     List<ConversationMember>? members,
     DateTime? archivedAt,
     bool? ownerOnlyPost,
+    int? newMemberCooldownSeconds,
+    bool? antiSpamBlockLinks,
+    bool? antiSpamBlockMedia,
+    int? antiSpamMentionLimit,
     bool? encryptionEnabled,
     int? slowModeSeconds,
     bool? joinApprovalRequired,
@@ -177,6 +194,11 @@ class Conversation {
     handle: handle,
     archivedAt: archivedAt ?? this.archivedAt,
     ownerOnlyPost: ownerOnlyPost ?? this.ownerOnlyPost,
+    newMemberCooldownSeconds:
+        newMemberCooldownSeconds ?? this.newMemberCooldownSeconds,
+    antiSpamBlockLinks: antiSpamBlockLinks ?? this.antiSpamBlockLinks,
+    antiSpamBlockMedia: antiSpamBlockMedia ?? this.antiSpamBlockMedia,
+    antiSpamMentionLimit: antiSpamMentionLimit ?? this.antiSpamMentionLimit,
     messageTtlSeconds: messageTtlSeconds,
     encryptionEnabled: encryptionEnabled ?? this.encryptionEnabled,
     slowModeSeconds: slowModeSeconds ?? this.slowModeSeconds,

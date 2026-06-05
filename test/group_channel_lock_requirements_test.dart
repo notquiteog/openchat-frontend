@@ -120,6 +120,7 @@ void main() {
         placement.settingsMenu,
         contains(ChannelSettingsAction.sharedContent),
       );
+      expect(placement.settingsMenu, contains(ChannelSettingsAction.analytics));
       expect(
         placement.settingsMenu,
         contains(ChannelSettingsAction.scheduledPosts),

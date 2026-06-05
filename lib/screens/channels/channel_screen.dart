@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart'
@@ -18,7 +19,9 @@ import '../../providers/chat_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/attachment_service.dart';
+import '../../services/offline_outbox_service.dart';
 import '../../services/secure_storage_service.dart';
+import '../../services/websocket_service.dart';
 import '../../crypto/pgp_service.dart';
 import '../../utils/custom_emoji_payload.dart';
 import '../../utils/disappearing_message_duration.dart';
@@ -41,6 +44,7 @@ import '../../widgets/sticker_picker.dart';
 import '../../widgets/voice_note_recorder.dart';
 import '../profile/user_profile_screen.dart';
 import 'channel_action_policy.dart';
+import 'channel_analytics_screen.dart';
 import 'moderation_screen.dart';
 
 /// Shows the channel-creation dialog and creates the channel. Returns the new
@@ -393,6 +397,22 @@ class ChannelFeedScreen extends StatefulWidget {
   State<ChannelFeedScreen> createState() => _ChannelFeedScreenState();
 }
 
+class _PreparedChannelPostPayload {
+  final String encryptedPayload;
+  final String signature;
+  final List<String> mentionedUserIds;
+  final String senderId;
+  final bool isEncrypted;
+
+  const _PreparedChannelPostPayload({
+    required this.encryptedPayload,
+    required this.signature,
+    required this.mentionedUserIds,
+    required this.senderId,
+    required this.isEncrypted,
+  });
+}
+
 class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   final _inputCtrl = CustomEmojiTextEditingController();
   final _scrollCtrl = ScrollController();
@@ -422,6 +442,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   bool _pendingDraftSilent = false;
   DateTime? _pendingDraftScheduledFor;
   late final SettingsProvider _settings;
+  late final OfflineOutboxService _outbox;
+  late final WebSocketService _ws;
+  List<OfflineOutboxItem> _outboxItems = const [];
+  Future<void>? _outboxLoadInFlight;
+  bool _outboxLoaded = false;
+  bool _drainingOutbox = false;
 
   // Mutable copy so edits to name/handle/avatar/privacy reflect immediately.
   late Conversation _channel;
@@ -432,8 +458,16 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     super.initState();
     _channel = widget.channel;
     _settings = context.read<SettingsProvider>();
+    _outbox = OfflineOutboxService(
+      context.read<SecureStorageService>(),
+      storeFileName: 'channel_offline_outbox.json',
+      attachmentDirName: 'channel_offline_outbox_attachments',
+    );
+    _ws = context.read<WebSocketService>();
+    _ws.addListener(_onWsConnectionChanged);
     _restoreLocalDraft();
     _inputCtrl.addListener(_onInputTextChanged);
+    unawaited(_loadOutbox());
     _load();
   }
 
@@ -479,6 +513,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   void dispose() {
     _highlightTimer?.cancel();
     _inputCtrl.removeListener(_onInputTextChanged);
+    _ws.removeListener(_onWsConnectionChanged);
     _draftSaveTimer?.cancel();
     _flushDraftSave();
     _inputCtrl.dispose();
@@ -522,14 +557,17 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         privateKey: privateKey,
         loadedPosts: posts,
       );
+      await _ensureOutboxLoaded();
+      final visiblePosts = _withOutboxOverlays(posts.reversed.toList());
       setState(() {
         _channel = channelWithMembers;
-        _posts = posts.reversed.toList();
+        _posts = visiblePosts;
         _postKeys.removeWhere(
           (messageId, _) => !_posts.any((post) => post.id == messageId),
         );
         _loading = false;
       });
+      unawaited(_drainOutbox());
       final initialPostId = widget.initialPostId;
       if (initialPostId != null) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -539,6 +577,368 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     } catch (_) {
       setState(() => _loading = false);
     }
+  }
+
+  void _onWsConnectionChanged() {
+    if (_ws.isMonitoring) {
+      unawaited(_drainOutbox());
+    }
+  }
+
+  Future<void> _loadOutbox() {
+    _outboxLoadInFlight ??= _outbox
+        .list()
+        .then((items) {
+          _outboxItems = items;
+          _outboxLoaded = true;
+          _overlayOutboxOnPosts();
+        })
+        .whenComplete(() {
+          _outboxLoadInFlight = null;
+        });
+    return _outboxLoadInFlight!;
+  }
+
+  Future<void> _ensureOutboxLoaded() {
+    final inFlight = _outboxLoadInFlight;
+    if (inFlight != null) return inFlight;
+    if (_outboxLoaded) return Future.value();
+    return _loadOutbox();
+  }
+
+  void _overlayOutboxOnPosts() {
+    if (!mounted) return;
+    setState(() {
+      _posts = _withOutboxOverlays(_posts);
+      _postKeys.removeWhere(
+        (messageId, _) => !_posts.any((post) => post.id == messageId),
+      );
+    });
+  }
+
+  List<Message> _withOutboxOverlays(List<Message> base) {
+    final items = _outboxItems
+        .where((item) => item.conversationId == channel.id)
+        .toList(growable: false);
+    final next = base
+        .where(
+          (message) => message is! PendingMessage || message.outboxId == null,
+        )
+        .toList();
+    if (items.isEmpty) return next;
+
+    for (final item in items) {
+      switch (item.action) {
+        case OfflineOutboxAction.channelPost ||
+            OfflineOutboxAction.channelAttachmentUpload:
+          final pending = _pendingPostFromOutbox(item);
+          if (pending != null) {
+            next.removeWhere((message) => message.id == pending.id);
+            next.add(pending);
+          }
+        case OfflineOutboxAction.channelReaction:
+          final msgID = item.data['message_id'] as String?;
+          final emoji = item.data['emoji'] as String?;
+          final reacted = item.data['reacted'] as bool? ?? false;
+          if (msgID == null || emoji == null) break;
+          final idx = next.indexWhere((message) => message.id == msgID);
+          if (idx == -1) break;
+          next[idx] = next[idx].copyWith(
+            reactions: _reactionsWithViewerState(
+              next[idx].reactions,
+              emoji: emoji,
+              reacted: reacted,
+            ),
+          );
+        case OfflineOutboxAction.sendMessage ||
+            OfflineOutboxAction.editMessage ||
+            OfflineOutboxAction.reaction ||
+            OfflineOutboxAction.attachmentUpload:
+          break;
+      }
+    }
+    next.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return next;
+  }
+
+  PendingMessage? _pendingPostFromOutbox(OfflineOutboxItem item) {
+    final data = item.data;
+    final pendingID = data['pending_message_id'] as String?;
+    final plaintext = data['plaintext_payload'] as String?;
+    final senderID = data['sender_id'] as String? ?? '';
+    if (pendingID == null ||
+        pendingID.isEmpty ||
+        plaintext == null ||
+        senderID.isEmpty) {
+      return null;
+    }
+    final createdAt =
+        DateTime.tryParse(data['created_at'] as String? ?? '') ??
+        item.createdAt;
+    final pending = PendingMessage(
+      id: pendingID,
+      conversationId: item.conversationId,
+      senderId: senderID,
+      type: _messageTypeFromWire(data['message_type'] as String? ?? 'text'),
+      encryptedPayload:
+          data['encrypted_payload'] as String? ??
+          data['plaintext_payload'] as String? ??
+          '',
+      signature: data['signature'] as String? ?? '',
+      isEncrypted: data['is_encrypted'] as bool? ?? channel.encryptionEnabled,
+      attachmentId: data['attachment_id'] as String?,
+      silent: data['silent'] as bool? ?? false,
+      createdAt: createdAt,
+      plaintext: plaintext,
+      outboxId: item.id,
+      status: switch (item.status) {
+        OfflineOutboxStatus.failed => PendingMessageStatus.failed,
+        OfflineOutboxStatus.sending => PendingMessageStatus.sending,
+        OfflineOutboxStatus.queued => PendingMessageStatus.queued,
+      },
+      lastError: item.lastError,
+    );
+    ChatProvider.hydrateMessageSenderFromConversation(pending, channel);
+    return pending;
+  }
+
+  String _newChannelOutboxId() =>
+      'channel-outbox-${DateTime.now().microsecondsSinceEpoch}-${_outboxItems.length}';
+
+  Future<void> _upsertOutboxItem(
+    OfflineOutboxItem item, {
+    bool coalesceReaction = false,
+  }) async {
+    await _ensureOutboxLoaded();
+    final next = List<OfflineOutboxItem>.from(_outboxItems);
+    if (coalesceReaction &&
+        item.action == OfflineOutboxAction.channelReaction) {
+      final msgID = item.data['message_id'];
+      final emoji = item.data['emoji'];
+      next.removeWhere(
+        (existing) =>
+            existing.action == OfflineOutboxAction.channelReaction &&
+            existing.conversationId == item.conversationId &&
+            existing.data['message_id'] == msgID &&
+            existing.data['emoji'] == emoji,
+      );
+    } else {
+      next.removeWhere((existing) => existing.id == item.id);
+    }
+    next.add(item);
+    next.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    _outboxItems = next;
+    await _outbox.replaceAll(next);
+    _overlayOutboxOnPosts();
+    if (_ws.isMonitoring && !_drainingOutbox) {
+      unawaited(_drainOutbox());
+    } else {
+      unawaited(_ws.connect());
+    }
+  }
+
+  Future<void> _removeOutboxItem(String id) async {
+    _outboxItems = _outboxItems
+        .where((item) => item.id != id)
+        .toList(growable: false);
+    await _outbox.remove(id);
+    _overlayOutboxOnPosts();
+  }
+
+  Future<void> _updateOutboxItem(OfflineOutboxItem item) async {
+    final next = List<OfflineOutboxItem>.from(_outboxItems);
+    final index = next.indexWhere((existing) => existing.id == item.id);
+    if (index == -1) {
+      next.add(item);
+    } else {
+      next[index] = item;
+    }
+    next.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    _outboxItems = next;
+    await _outbox.replaceAll(next);
+    _overlayOutboxOnPosts();
+  }
+
+  bool _shouldRetryOutboxError(Object error) {
+    if (error is SocketException || error is TimeoutException) return true;
+    if (error is ApiException) {
+      return error.statusCode == 408 ||
+          error.statusCode == 429 ||
+          error.statusCode >= 500;
+    }
+    return true;
+  }
+
+  Future<void> _drainOutbox() async {
+    if (_drainingOutbox) return;
+    if (!_ws.isMonitoring) {
+      unawaited(_ws.connect());
+      return;
+    }
+    _drainingOutbox = true;
+    try {
+      await _ensureOutboxLoaded();
+      final currentItems = _outboxItems
+          .where((item) => item.conversationId == channel.id)
+          .toList(growable: false);
+      for (final item in currentItems) {
+        if (!_outboxItems.any((current) => current.id == item.id)) continue;
+        final sending = item.copyWith(
+          status: OfflineOutboxStatus.sending,
+          clearLastError: true,
+        );
+        await _updateOutboxItem(sending);
+        try {
+          switch (item.action) {
+            case OfflineOutboxAction.channelPost:
+              await _deliverQueuedChannelPost(sending);
+            case OfflineOutboxAction.channelAttachmentUpload:
+              await _deliverQueuedChannelAttachment(sending);
+            case OfflineOutboxAction.channelReaction:
+              await _deliverQueuedChannelReaction(sending);
+            case OfflineOutboxAction.sendMessage ||
+                OfflineOutboxAction.editMessage ||
+                OfflineOutboxAction.reaction ||
+                OfflineOutboxAction.attachmentUpload:
+              continue;
+          }
+          await _removeOutboxItem(item.id);
+        } catch (e) {
+          final retry = _shouldRetryOutboxError(e);
+          await _updateOutboxItem(
+            sending.copyWith(
+              attempts: sending.attempts + 1,
+              status: retry
+                  ? OfflineOutboxStatus.queued
+                  : OfflineOutboxStatus.failed,
+              lastError: e.toString(),
+            ),
+          );
+          if (retry) {
+            unawaited(_ws.connect());
+            return;
+          }
+        }
+      }
+    } finally {
+      _drainingOutbox = false;
+    }
+  }
+
+  Future<void> _deliverQueuedChannelPost(OfflineOutboxItem item) async {
+    final data = item.data;
+    final plaintext = data['plaintext_payload'] as String? ?? '';
+    final confirmed = await context.read<ApiService>().postToChannel(
+      chanID: item.conversationId,
+      encryptedPayload: data['encrypted_payload'] as String? ?? '',
+      signature: data['signature'] as String? ?? '',
+      messageType: data['message_type'] as String? ?? 'text',
+      attachmentId: data['attachment_id'] as String?,
+      mentionedUserIds: _stringList(data['mentioned_user_ids']),
+      silent: data['silent'] as bool? ?? false,
+    );
+    _replacePendingWithConfirmed(
+      pendingID: data['pending_message_id'] as String?,
+      confirmed: confirmed,
+      plaintextPayload: plaintext,
+    );
+  }
+
+  Future<void> _deliverQueuedChannelAttachment(OfflineOutboxItem item) async {
+    final api = context.read<ApiService>();
+    final data = item.data;
+    final ciphertextPath = data['ciphertext_path'] as String?;
+    if (ciphertextPath == null || ciphertextPath.isEmpty) {
+      throw const ChatSendException('Queued attachment file is missing.');
+    }
+    final ciphertext = await _outbox.readAttachmentCiphertext(ciphertextPath);
+    final encryptedAttachment = EncryptedAttachmentUpload.fromMetadataJson(
+      Map<String, dynamic>.from(data['attachment'] as Map? ?? const {}),
+      ciphertext: ciphertext,
+    );
+    final attachment = await AttachmentService(
+      api,
+    ).uploadEncryptedAttachment(encryptedAttachment);
+    final plaintext = jsonEncode(
+      attachment.toPayloadJson(caption: data['caption'] as String? ?? ''),
+    );
+    await _prepareAndSendChannelPayload(
+      plaintextPayload: plaintext,
+      messageType: attachment.messageType.name,
+      pendingID: data['pending_message_id'] as String?,
+      attachmentId: attachment.attachmentId,
+      silent: data['silent'] as bool? ?? false,
+    );
+    await _outbox.deleteAttachmentCiphertext(ciphertextPath);
+  }
+
+  Future<void> _deliverQueuedChannelReaction(OfflineOutboxItem item) async {
+    final data = item.data;
+    final msgID = data['message_id'] as String? ?? '';
+    final emoji = data['emoji'] as String? ?? '';
+    final reacted = data['reacted'] as bool? ?? false;
+    final api = context.read<ApiService>();
+    if (reacted) {
+      await api.reactToMessage(msgID, emoji);
+    } else {
+      await api.removeReaction(msgID, emoji);
+    }
+  }
+
+  Future<void> _prepareAndSendChannelPayload({
+    required String plaintextPayload,
+    required String messageType,
+    required String? pendingID,
+    String? attachmentId,
+    bool silent = false,
+  }) async {
+    final api = context.read<ApiService>();
+    final prepared = await _prepareChannelPostPayload(
+      plaintextPayload: plaintextPayload,
+      messageType: messageType,
+    );
+    final confirmed = await api.postToChannel(
+      chanID: channel.id,
+      encryptedPayload: prepared.encryptedPayload,
+      signature: prepared.signature,
+      messageType: messageType,
+      attachmentId: attachmentId,
+      mentionedUserIds: prepared.mentionedUserIds,
+      silent: silent,
+    );
+    _replacePendingWithConfirmed(
+      pendingID: pendingID,
+      confirmed: confirmed,
+      plaintextPayload: plaintextPayload,
+    );
+  }
+
+  void _replacePendingWithConfirmed({
+    required String? pendingID,
+    required Message confirmed,
+    required String plaintextPayload,
+  }) {
+    confirmed.setDecryptedContent(plaintextPayload);
+    ChatProvider.hydrateMessageSenderFromConversation(confirmed, channel);
+    if (mounted) {
+      context.read<ChatProvider>().indexLoadedMessage(confirmed);
+      setState(() {
+        _posts = [
+          ..._posts.where(
+            (post) => post.id != pendingID && post.id != confirmed.id,
+          ),
+          confirmed,
+        ]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        _postKeys.removeWhere(
+          (messageId, _) => !_posts.any((post) => post.id == messageId),
+        );
+      });
+    }
+  }
+
+  List<String> _stringList(Object? value) {
+    if (value is! List) return const [];
+    return value.map((item) => item.toString()).toList();
   }
 
   Future<void> _syncPinnedMessagesFromServer({
@@ -1369,6 +1769,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       canManageInvites: _canManageChannelInvites,
       canManageSettings: _canManageChannelSettings,
       canManageEncryption: _canManageChannelEncryption,
+      canViewAnalytics: _isAdmin,
     );
     final action = await showModalBottomSheet<ChannelModerationAction>(
       context: context,
@@ -1437,6 +1838,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       canManageInvites: _canManageChannelInvites,
       canManageSettings: _canManageChannelSettings,
       canManageEncryption: _canManageChannelEncryption,
+      canViewAnalytics: _isAdmin,
     );
     final action = await showModalBottomSheet<ChannelSettingsAction>(
       context: context,
@@ -1454,6 +1856,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                     Icons.format_color_fill_outlined,
                   ChannelSettingsAction.sharedContent =>
                     Icons.photo_library_outlined,
+                  ChannelSettingsAction.analytics => Icons.query_stats_outlined,
                   ChannelSettingsAction.scheduledPosts =>
                     Icons.schedule_send_outlined,
                   ChannelSettingsAction.edit => Icons.settings_outlined,
@@ -1470,6 +1873,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                 label: switch (item) {
                   ChannelSettingsAction.appearance => 'Chat appearance',
                   ChannelSettingsAction.sharedContent => 'Shared content',
+                  ChannelSettingsAction.analytics => 'Analytics',
                   ChannelSettingsAction.scheduledPosts => 'Scheduled posts',
                   ChannelSettingsAction.edit => 'Channel settings',
                   ChannelSettingsAction.inviteLinks => 'Invite links',
@@ -1506,6 +1910,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             channel: true,
             initialMessages: _posts,
             onMessageSelected: (message) => _jumpToPost(message.id),
+          ),
+        );
+      case ChannelSettingsAction.analytics:
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ChannelAnalyticsScreen(conversation: channel),
           ),
         );
       case ChannelSettingsAction.scheduledPosts:
@@ -1545,6 +1956,201 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     );
   }
 
+  Future<_PreparedChannelPostPayload> _prepareChannelPostPayload({
+    required String plaintextPayload,
+    required String messageType,
+  }) async {
+    final api = context.read<ApiService>();
+    final storage = context.read<SecureStorageService>();
+    final auth = context.read<AuthProvider>();
+    final privateKey = await storage.getPrivateKey() ?? '';
+    final userID = auth.currentUser?.id ?? await storage.getUserID() ?? '';
+    if (userID.isEmpty) {
+      throw const ChatSendException(
+        'Your session is incomplete. Sign in again.',
+      );
+    }
+
+    final mentionedUserIds = mentionedMemberIdsInText(
+      MessageContent.parse(
+        plaintextPayload,
+        _messageTypeFromWire(messageType),
+      ).text,
+      channel.members,
+      currentUserId: userID,
+    );
+
+    if (!channel.encryptionEnabled) {
+      return _PreparedChannelPostPayload(
+        encryptedPayload: plaintextPayload,
+        signature: '',
+        mentionedUserIds: mentionedUserIds,
+        senderId: userID,
+        isEncrypted: false,
+      );
+    }
+
+    if (privateKey.isEmpty) {
+      throw const ChatSendException(
+        'Your PGP key is locked or missing. Unlock or import it in Settings.',
+      );
+    }
+
+    List<ConversationMember> members;
+    try {
+      members = await api.getConversationMembers(channel.id);
+      if (members.isNotEmpty && mounted) {
+        setState(() => _channel = channel.copyWith(members: members));
+      }
+    } catch (_) {
+      members = channel.members;
+    }
+
+    final selfPublicKey = await storage.getPublicKey() ?? '';
+    final keysByUser = <String, String>{};
+    for (final member in members) {
+      if (member.userId == userID) continue;
+      if (member.user?.isKeyExpired ?? false) continue;
+      try {
+        final freshKey = await api.getFreshUserPublicKey(member.userId);
+        if (freshKey != null && freshKey.trim().isNotEmpty) {
+          keysByUser[member.userId] = freshKey;
+          continue;
+        }
+      } catch (_) {
+        final embeddedKey = member.user?.publicKey ?? '';
+        if (embeddedKey.trim().isNotEmpty) {
+          keysByUser[member.userId] = embeddedKey;
+          continue;
+        }
+        throw const ChatSendException(
+          'Could not load every recipient key. Refresh the channel and try again.',
+        );
+      }
+
+      final embeddedKey = member.user?.publicKey ?? '';
+      if (embeddedKey.trim().isNotEmpty) {
+        keysByUser[member.userId] = embeddedKey;
+      } else {
+        throw const ChatSendException(
+          'Could not load every recipient key. Refresh the channel and try again.',
+        );
+      }
+    }
+    if (selfPublicKey.trim().isNotEmpty) keysByUser[userID] = selfPublicKey;
+    final recipientKeys = keysByUser.values
+        .where((key) => key.trim().isNotEmpty)
+        .toList();
+    if (recipientKeys.isEmpty) {
+      throw const ChatSendException(
+        'Could not load recipient keys. Refresh the channel and try again.',
+      );
+    }
+
+    final encrypted = await PgpService.encrypt(
+      plaintext: plaintextPayload,
+      recipientPublicKeys: recipientKeys,
+      signingPrivateKeyArmored: privateKey,
+    ).timeout(const Duration(seconds: 30));
+    final signature = await PgpService.sign(
+      data: '${channel.id}:$encrypted',
+      privateKeyArmored: privateKey,
+    ).timeout(const Duration(seconds: 30));
+    return _PreparedChannelPostPayload(
+      encryptedPayload: encrypted,
+      signature: signature,
+      mentionedUserIds: mentionedUserIds,
+      senderId: userID,
+      isEncrypted: true,
+    );
+  }
+
+  Future<void> _queueChannelPost({
+    required String plaintextPayload,
+    required String messageType,
+    required String encryptedPayload,
+    required String signature,
+    required List<String> mentionedUserIds,
+    required String senderId,
+    required bool isEncrypted,
+    String? attachmentId,
+    bool silent = false,
+  }) async {
+    final itemID = _newChannelOutboxId();
+    final now = DateTime.now();
+    await _upsertOutboxItem(
+      OfflineOutboxItem(
+        id: itemID,
+        action: OfflineOutboxAction.channelPost,
+        conversationId: channel.id,
+        createdAt: now,
+        data: {
+          'pending_message_id': 'pending-$itemID',
+          'sender_id': senderId,
+          'plaintext_payload': plaintextPayload,
+          'encrypted_payload': encryptedPayload,
+          'signature': signature,
+          'message_type': messageType,
+          'mentioned_user_ids': mentionedUserIds,
+          'is_encrypted': isEncrypted,
+          'created_at': now.toUtc().toIso8601String(),
+          'attachment_id': ?attachmentId,
+          if (silent) 'silent': true,
+        },
+      ),
+    );
+  }
+
+  Future<void> _queueChannelAttachmentUpload({
+    required EncryptedAttachmentUpload attachment,
+    String caption = '',
+    bool silent = false,
+  }) async {
+    final storage = context.read<SecureStorageService>();
+    final auth = context.read<AuthProvider>();
+    final userID = auth.currentUser?.id ?? await storage.getUserID() ?? '';
+    if (userID.isEmpty) {
+      throw const ChatSendException(
+        'Your session is incomplete. Sign in again.',
+      );
+    }
+
+    final itemID = _newChannelOutboxId();
+    final pendingAttachmentID = 'pending-attachment-$itemID';
+    final now = DateTime.now();
+    final ciphertextPath = await _outbox.saveAttachmentCiphertext(
+      itemID,
+      attachment.ciphertext,
+    );
+    final plaintext = jsonEncode(
+      attachment.toPayloadJson(
+        attachmentId: pendingAttachmentID,
+        caption: caption,
+      ),
+    );
+    await _upsertOutboxItem(
+      OfflineOutboxItem(
+        id: itemID,
+        action: OfflineOutboxAction.channelAttachmentUpload,
+        conversationId: channel.id,
+        createdAt: now,
+        data: {
+          'pending_message_id': 'pending-$itemID',
+          'sender_id': userID,
+          'plaintext_payload': plaintext,
+          'message_type': attachment.messageType.name,
+          'attachment_id': pendingAttachmentID,
+          'attachment': attachment.toMetadataJson(),
+          'ciphertext_path': ciphertextPath,
+          'caption': caption,
+          'is_encrypted': channel.encryptionEnabled,
+          'created_at': now.toUtc().toIso8601String(),
+          if (silent) 'silent': true,
+        },
+      ),
+    );
+  }
+
   Future<void> _post({
     String? plaintextOverride,
     String messageType = 'text',
@@ -1576,71 +2182,94 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       _showCustomEmojis = false;
     });
 
-    final api = context.read<ApiService>();
-    final storage = context.read<SecureStorageService>();
     final chat = context.read<ChatProvider>();
-    final auth = context.read<AuthProvider>();
-    final privateKey = await storage.getPrivateKey() ?? '';
-    final currentUserId =
-        auth.currentUser?.id ?? await storage.getUserID() ?? '';
-    final mentionedUserIds = mentionedMemberIdsInText(
-      MessageContent.parse(
-        draft.payload,
-        _messageTypeFromWire(messageType),
-      ).text,
-      channel.members,
-      currentUserId: currentUserId,
-    );
-
-    final String encrypted;
-    final String sig;
-    if (channel.encryptionEnabled) {
-      final members = await api.getConversationMembers(channel.id);
-      final fetchedKeys = await Future.wait(
-        members.map((m) => api.getFreshUserPublicKey(m.userId)),
+    final api = context.read<ApiService>();
+    final scheduledFor = _scheduledFor;
+    final silent = _sendSilent;
+    late final _PreparedChannelPostPayload prepared;
+    try {
+      prepared = await _prepareChannelPostPayload(
+        plaintextPayload: draft.payload,
+        messageType: messageType,
       );
-      final recipientKeys = [for (final k in fetchedKeys) ?k];
+    } catch (e) {
+      if (plaintextOverride == null) {
+        _restoreComposer(rawText, draftEntities);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+      return;
+    }
 
-      if (privateKey.isEmpty || recipientKeys.isEmpty) {
+    if (scheduledFor == null && !_ws.isMonitoring) {
+      await _queueChannelPost(
+        plaintextPayload: draft.payload,
+        messageType: messageType,
+        encryptedPayload: prepared.encryptedPayload,
+        signature: prepared.signature,
+        mentionedUserIds: prepared.mentionedUserIds,
+        senderId: prepared.senderId,
+        isEncrypted: prepared.isEncrypted,
+        attachmentId: attachmentId,
+        silent: silent,
+      );
+      if (plaintextOverride == null) {
+        unawaited(_settings.clearMessageDraft(channel.id));
+      }
+      return;
+    }
+
+    late final Message msg;
+    try {
+      msg = await api.postToChannel(
+        chanID: channel.id,
+        encryptedPayload: prepared.encryptedPayload,
+        signature: prepared.signature,
+        messageType: messageType,
+        attachmentId: attachmentId,
+        mentionedUserIds: prepared.mentionedUserIds,
+        silent: silent,
+        scheduledFor: scheduledFor,
+      );
+    } catch (e) {
+      if (scheduledFor == null && _shouldRetryOutboxError(e)) {
+        await _queueChannelPost(
+          plaintextPayload: draft.payload,
+          messageType: messageType,
+          encryptedPayload: prepared.encryptedPayload,
+          signature: prepared.signature,
+          mentionedUserIds: prepared.mentionedUserIds,
+          senderId: prepared.senderId,
+          isEncrypted: prepared.isEncrypted,
+          attachmentId: attachmentId,
+          silent: silent,
+        );
         if (plaintextOverride == null) {
-          _restoreComposer(rawText, draftEntities);
+          unawaited(_settings.clearMessageDraft(channel.id));
         }
         return;
       }
-
-      encrypted = await PgpService.encrypt(
-        plaintext: draft.payload,
-        recipientPublicKeys: recipientKeys,
-        signingPrivateKeyArmored: privateKey,
-      );
-      sig = await PgpService.sign(
-        data: '${channel.id}:$encrypted',
-        privateKeyArmored: privateKey,
-      );
-    } else {
-      encrypted = draft.payload;
-      sig = '';
+      if (plaintextOverride == null) {
+        _restoreComposer(rawText, draftEntities);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Post failed: $e')));
+      }
+      return;
     }
-
-    final msg = await api.postToChannel(
-      chanID: channel.id,
-      encryptedPayload: encrypted,
-      signature: sig,
-      messageType: messageType,
-      attachmentId: attachmentId,
-      mentionedUserIds: mentionedUserIds,
-      silent: _sendSilent,
-      scheduledFor: _scheduledFor,
-    );
     msg.setDecryptedContent(draft.payload);
     if (plaintextOverride == null) {
       unawaited(_settings.clearMessageDraft(channel.id));
     }
-    if (_scheduledFor == null) {
+    if (scheduledFor == null) {
       setState(() => _posts.add(msg));
       chat.indexLoadedMessage(msg);
     } else if (mounted) {
-      final scheduledFor = _scheduledFor;
       setState(() => _scheduledFor = null);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -1857,6 +2486,14 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             label: 'Sender actions',
             subtitle: '@${msg.sender!.username}',
           ),
+        if (!isMe && !isSystem && msg.sender != null)
+          const MessageActionSheetItem(
+            value: 'report',
+            icon: Icons.flag_outlined,
+            label: 'Report',
+            color: Colors.orange,
+            dividerBefore: true,
+          ),
         if (canDelete)
           const MessageActionSheetItem(
             value: 'delete',
@@ -1880,8 +2517,57 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         await _downloadPostAttachment(msg);
       case 'sender':
         await _showChannelUserActions(msg);
+      case 'report':
+        await _reportPost(msg);
       case 'delete':
         await _deletePost(msg);
+    }
+  }
+
+  Future<void> _reportPost(Message msg) async {
+    final reasonCtrl = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (ctx) => GlassAlertDialog(
+        title: const Text('Report post'),
+        content: TextField(
+          controller: reasonCtrl,
+          autofocus: true,
+          maxLength: 500,
+          maxLines: 3,
+          decoration: const InputDecoration(labelText: 'Reason'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, reasonCtrl.text.trim()),
+            child: const Text('Report'),
+          ),
+        ],
+      ),
+    );
+    reasonCtrl.dispose();
+    if (reason == null || !mounted) return;
+    try {
+      await context.read<ApiService>().createModerationReport(
+        channel.id,
+        channel: true,
+        messageID: msg.id,
+        reportedUserID: msg.senderId,
+        reason: reason,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Report sent')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to report: $e')));
     }
   }
 
@@ -2109,10 +2795,33 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
 
   Future<void> _toggleReaction(Message msg, String emoji) async {
     final messenger = ScaffoldMessenger.of(context);
+    if (msg is PendingMessage) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Post is still queued')),
+      );
+      return;
+    }
     final alreadyReacted = msg.reactions.any(
       (reaction) => reaction.emoji == emoji && reaction.reactedByMe,
     );
     _setLocalReaction(msg.id, emoji, !alreadyReacted);
+    if (!_ws.isMonitoring) {
+      await _upsertOutboxItem(
+        OfflineOutboxItem(
+          id: _newChannelOutboxId(),
+          action: OfflineOutboxAction.channelReaction,
+          conversationId: channel.id,
+          createdAt: DateTime.now(),
+          data: {
+            'message_id': msg.id,
+            'emoji': emoji,
+            'reacted': !alreadyReacted,
+          },
+        ),
+        coalesceReaction: true,
+      );
+      return;
+    }
     try {
       final api = context.read<ApiService>();
       if (alreadyReacted) {
@@ -2121,6 +2830,23 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         await api.reactToMessage(msg.id, emoji);
       }
     } catch (e) {
+      if (_shouldRetryOutboxError(e)) {
+        await _upsertOutboxItem(
+          OfflineOutboxItem(
+            id: _newChannelOutboxId(),
+            action: OfflineOutboxAction.channelReaction,
+            conversationId: channel.id,
+            createdAt: DateTime.now(),
+            data: {
+              'message_id': msg.id,
+              'emoji': emoji,
+              'reacted': !alreadyReacted,
+            },
+          ),
+          coalesceReaction: true,
+        );
+        return;
+      }
       _setLocalReaction(msg.id, emoji, alreadyReacted);
       if (mounted) {
         messenger.showSnackBar(SnackBar(content: Text('Reaction failed: $e')));
@@ -2131,43 +2857,53 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   void _setLocalReaction(String msgID, String emoji, bool reacted) {
     final idx = _posts.indexWhere((post) => post.id == msgID);
     if (idx == -1) return;
-    final reactions = List<MessageReactionSummary>.from(_posts[idx].reactions);
+    final reactions = _reactionsWithViewerState(
+      _posts[idx].reactions,
+      emoji: emoji,
+      reacted: reacted,
+    );
+    if (!mounted) return;
+    setState(() {
+      _posts[idx] = _posts[idx].copyWith(reactions: reactions);
+    });
+  }
+
+  List<MessageReactionSummary> _reactionsWithViewerState(
+    List<MessageReactionSummary> reactions, {
+    required String emoji,
+    required bool reacted,
+  }) {
+    final next = List<MessageReactionSummary>.from(reactions);
     final reactionIdx = reactions.indexWhere(
       (reaction) => reaction.emoji == emoji,
     );
     if (reacted) {
       if (reactionIdx == -1) {
-        reactions.add(
+        next.add(
           MessageReactionSummary(emoji: emoji, count: 1, reactedByMe: true),
         );
       } else {
-        final current = reactions[reactionIdx];
-        reactions[reactionIdx] = current.copyWith(
+        final current = next[reactionIdx];
+        next[reactionIdx] = current.copyWith(
           count: current.reactedByMe ? current.count : current.count + 1,
           reactedByMe: true,
         );
       }
     } else if (reactionIdx != -1) {
-      final current = reactions[reactionIdx];
+      final current = next[reactionIdx];
       final count = current.reactedByMe ? current.count - 1 : current.count;
       if (count <= 0) {
-        reactions.removeAt(reactionIdx);
+        next.removeAt(reactionIdx);
       } else {
-        reactions[reactionIdx] = current.copyWith(
-          count: count,
-          reactedByMe: false,
-        );
+        next[reactionIdx] = current.copyWith(count: count, reactedByMe: false);
       }
     }
-    reactions.sort((a, b) {
+    next.sort((a, b) {
       final count = b.count.compareTo(a.count);
       if (count != 0) return count;
       return a.emoji.compareTo(b.emoji);
     });
-    if (!mounted) return;
-    setState(() {
-      _posts[idx] = _posts[idx].copyWith(reactions: reactions);
-    });
+    return next;
   }
 
   Future<void> _deletePost(Message msg) async {
@@ -2451,28 +3187,28 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     }
 
     final attachmentService = AttachmentService(context.read<ApiService>());
-    PendingAttachment? pending;
+    EncryptedAttachmentUpload? pending;
     VoiceNoteRecording? voiceNote;
     try {
       pending = switch (choice) {
-        'gallery_image' => await attachmentService.pickImage(
+        'gallery_image' => await attachmentService.pickImageForOutbox(
           onProgress: _setAttachmentUploadProgress,
         ),
-        'camera_image' => await attachmentService.pickImage(
+        'camera_image' => await attachmentService.pickImageForOutbox(
           fromCamera: true,
           onProgress: _setAttachmentUploadProgress,
         ),
-        'gallery_video' => await attachmentService.pickVideo(
+        'gallery_video' => await attachmentService.pickVideoForOutbox(
           onProgress: _setAttachmentUploadProgress,
         ),
-        'file' => await attachmentService.pickFile(
+        'file' => await attachmentService.pickFileForOutbox(
           onProgress: _setAttachmentUploadProgress,
         ),
         'voice' => await (() async {
           voiceNote = await showVoiceNoteRecorder(context);
           final note = voiceNote;
           if (note == null) return null;
-          return attachmentService.uploadVoiceNote(
+          return attachmentService.prepareVoiceNoteForOutbox(
             note.file,
             duration: note.duration,
             onProgress: _setAttachmentUploadProgress,
@@ -2504,11 +3240,34 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       _setAttachmentUploadProgress(
         const AttachmentUploadProgress(stage: AttachmentUploadStage.sending),
       );
-      await _post(
-        plaintextOverride: jsonEncode(pending.toPayloadJson()),
-        messageType: pending.messageType.name,
-        attachmentId: pending.attachmentId,
+      if (_scheduledFor == null && !_ws.isMonitoring) {
+        await _queueChannelAttachmentUpload(
+          attachment: pending,
+          silent: _sendSilent,
+        );
+        return;
+      }
+      final uploaded = await attachmentService.uploadEncryptedAttachment(
+        pending,
+        onProgress: _setAttachmentUploadProgress,
       );
+      await _post(
+        plaintextOverride: jsonEncode(uploaded.toPayloadJson()),
+        messageType: uploaded.messageType.name,
+        attachmentId: uploaded.attachmentId,
+      );
+    } catch (e) {
+      if (_scheduledFor == null && _shouldRetryOutboxError(e)) {
+        await _queueChannelAttachmentUpload(
+          attachment: pending,
+          silent: _sendSilent,
+        );
+        return;
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
     } finally {
       _clearAttachmentUploadProgress();
     }
@@ -2720,6 +3479,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       canManageInvites: _canManageChannelInvites,
       canManageSettings: _canManageChannelSettings,
       canManageEncryption: _canManageChannelEncryption,
+      canViewAnalytics: _isAdmin,
     );
 
     return Scaffold(

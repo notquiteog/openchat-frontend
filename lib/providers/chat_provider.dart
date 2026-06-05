@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import '../crypto/pgp_service.dart';
@@ -12,6 +13,7 @@ import '../services/api_service.dart';
 import '../services/attachment_service.dart';
 import '../services/message_search_service.dart';
 import '../services/notification_service.dart';
+import '../services/offline_outbox_service.dart';
 import '../services/secure_storage_service.dart';
 import '../services/websocket_service.dart';
 import '../utils/mention_utils.dart';
@@ -70,19 +72,44 @@ class LiveLocationShareStatus {
   });
 }
 
+class _PreparedEncryptedPayload {
+  final String encryptedPayload;
+  final String signature;
+  final List<String> mentionedUserIds;
+  final bool isEncrypted;
+  final int autoDeleteSeconds;
+  final DateTime? autoDeleteExpiresAt;
+  final String senderId;
+
+  const _PreparedEncryptedPayload({
+    required this.encryptedPayload,
+    required this.signature,
+    required this.mentionedUserIds,
+    required this.isEncrypted,
+    required this.autoDeleteSeconds,
+    required this.autoDeleteExpiresAt,
+    required this.senderId,
+  });
+}
+
 class ChatProvider extends ChangeNotifier {
   final ApiService _api;
   final SecureStorageService _storage;
   final WebSocketService _ws;
   final SettingsProvider _settings;
   final MessageSearchService _search;
+  final OfflineOutboxService _outbox;
 
   final Map<String, List<Message>> _messages = {};
   final Map<String, Conversation> _conversations = {};
   final List<ChatFolder> _chatFolders = [];
   final Map<String, Set<String>> _typingUsers = {};
   final Map<String, _ActiveLiveLocationShare> _liveLocationShares = {};
+  List<OfflineOutboxItem> _outboxItems = const [];
   String? _selfId;
+  Future<void>? _outboxLoadInFlight;
+  bool _drainingOutbox = false;
+  bool _outboxLoaded = false;
 
   List<Conversation> get conversations =>
       _conversations.values.toList()..sort((a, b) {
@@ -95,6 +122,8 @@ class ChatProvider extends ChangeNotifier {
 
   List<Message> messagesFor(String convID) =>
       List.unmodifiable(_messages[convID] ?? []);
+
+  int get pendingOutboxCount => _outboxItems.length;
 
   Set<String> typingUsersFor(String convID) => _typingUsers[convID] ?? {};
 
@@ -112,7 +141,9 @@ class ChatProvider extends ChangeNotifier {
     this._ws,
     this._settings, {
     MessageSearchService? searchService,
-  }) : _search = searchService ?? MessageSearchService(_storage) {
+    OfflineOutboxService? outboxService,
+  }) : _search = searchService ?? MessageSearchService(_storage),
+       _outbox = outboxService ?? OfflineOutboxService(_storage) {
     _wsSub = _ws.events.listen(_handleWsEvent);
     _ws.addListener(_onWsConnectionChanged);
     NotificationService.setLiveLocationHandlers(
@@ -120,6 +151,7 @@ class ChatProvider extends ChangeNotifier {
     );
     _ws.connect();
     _storage.getUserID().then((id) => _selfId = id);
+    unawaited(_loadOutbox());
   }
 
   Future<List<MessageSearchResult>> searchMessages(
@@ -145,11 +177,36 @@ class ChatProvider extends ChangeNotifier {
     _conversations.clear();
     _chatFolders.clear();
     _typingUsers.clear();
+    _outboxItems = const [];
+    _outboxLoaded = false;
     _wasWsMonitoring = false;
     unawaited(_search.clearAll());
+    unawaited(_outbox.clearAll());
     unawaited(_stopAllLiveLocationShares());
     _ws.disconnect();
     notifyListeners();
+  }
+
+  Future<void> _loadOutbox() {
+    _outboxLoadInFlight ??= _outbox
+        .list()
+        .then((items) {
+          _outboxItems = items;
+          _outboxLoaded = true;
+          _overlayOutboxOnLoadedMessages();
+          notifyListeners();
+        })
+        .whenComplete(() {
+          _outboxLoadInFlight = null;
+        });
+    return _outboxLoadInFlight!;
+  }
+
+  Future<void> _ensureOutboxLoaded() {
+    final inFlight = _outboxLoadInFlight;
+    if (inFlight != null) return inFlight;
+    if (_outboxLoaded) return Future.value();
+    return _loadOutbox();
   }
 
   Future<void> _stopAllLiveLocationShares() async {
@@ -178,6 +235,7 @@ class ChatProvider extends ChangeNotifier {
     final token = await _storage.getAccessToken();
     if (token == null) return;
     await refreshConversationsSilently();
+    await drainOutbox();
     final loadedConversationIds = _messages.keys.toList(growable: false);
     await Future.wait(loadedConversationIds.map(loadMessages));
   }
@@ -347,7 +405,7 @@ class ChatProvider extends ChangeNotifier {
         }
       }
 
-      _messages[convID] = result;
+      _messages[convID] = _withOutboxOverlays(convID, result);
       notifyListeners();
     } catch (_) {}
   }
@@ -371,11 +429,366 @@ class ChatProvider extends ChangeNotifier {
       for (final msg in older) {
         await _syncLiveLocationShareFromMessage(msg);
       }
-      _messages[convID] = [...older.reversed, ...existing];
+      _messages[convID] = _withOutboxOverlays(convID, [
+        ...older.reversed,
+        ...existing.where(
+          (message) => message is! PendingMessage || message.outboxId == null,
+        ),
+      ]);
       notifyListeners();
       return older.length;
     } catch (_) {}
     return null;
+  }
+
+  void _overlayOutboxOnLoadedMessages() {
+    if (_messages.isEmpty) return;
+    for (final convID in _messages.keys.toList(growable: false)) {
+      _messages[convID] = _withOutboxOverlays(convID, _messages[convID] ?? []);
+    }
+  }
+
+  List<Message> _withOutboxOverlays(String convID, List<Message> base) {
+    final items = _outboxItems
+        .where((item) => item.conversationId == convID)
+        .toList(growable: false);
+    var next = base
+        .where(
+          (message) => message is! PendingMessage || message.outboxId == null,
+        )
+        .toList();
+    if (items.isEmpty) return next;
+
+    for (final item in items) {
+      switch (item.action) {
+        case OfflineOutboxAction.sendMessage ||
+            OfflineOutboxAction.attachmentUpload:
+          final pending = _pendingMessageFromOutbox(item);
+          if (pending != null) {
+            next.removeWhere((message) => message.id == pending.id);
+            next.add(pending);
+          }
+        case OfflineOutboxAction.editMessage:
+          final msgID = item.data['message_id'] as String?;
+          final plaintext = item.data['plaintext_payload'] as String?;
+          final encrypted = item.data['encrypted_payload'] as String?;
+          final signature = item.data['signature'] as String? ?? '';
+          if (msgID == null || plaintext == null || encrypted == null) break;
+          final idx = next.indexWhere((message) => message.id == msgID);
+          if (idx == -1) break;
+          final edited = next[idx].copyWith(
+            encryptedPayload: encrypted,
+            signature: signature,
+            editedAt: DateTime.now(),
+          );
+          edited.setDecryptedContent(plaintext);
+          next[idx] = edited;
+        case OfflineOutboxAction.reaction:
+          final msgID = item.data['message_id'] as String?;
+          final emoji = item.data['emoji'] as String?;
+          final reacted = item.data['reacted'] as bool? ?? false;
+          if (msgID == null || emoji == null) break;
+          final idx = next.indexWhere((message) => message.id == msgID);
+          if (idx == -1) break;
+          next[idx] = next[idx].copyWith(
+            reactions: _reactionsWithViewerState(
+              next[idx].reactions,
+              emoji: emoji,
+              reacted: reacted,
+            ),
+          );
+        case OfflineOutboxAction.channelPost ||
+            OfflineOutboxAction.channelAttachmentUpload ||
+            OfflineOutboxAction.channelReaction:
+          break;
+      }
+    }
+    next.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return next;
+  }
+
+  PendingMessage? _pendingMessageFromOutbox(OfflineOutboxItem item) {
+    final data = item.data;
+    final pendingID = data['pending_message_id'] as String?;
+    final encrypted = data['encrypted_payload'] as String?;
+    final signature = data['signature'] as String? ?? '';
+    final plaintext = data['plaintext_payload'] as String?;
+    final senderID = data['sender_id'] as String? ?? _selfId ?? '';
+    final messageType = data['message_type'] as String? ?? 'text';
+    if (pendingID == null ||
+        pendingID.isEmpty ||
+        plaintext == null ||
+        senderID.isEmpty) {
+      return null;
+    }
+
+    final createdAt =
+        DateTime.tryParse(data['created_at'] as String? ?? '') ??
+        item.createdAt;
+    final pending = PendingMessage(
+      id: pendingID,
+      conversationId: item.conversationId,
+      senderId: senderID,
+      type: _messageTypeFromWire(messageType),
+      encryptedPayload: encrypted ?? plaintext,
+      signature: signature,
+      isEncrypted: data['is_encrypted'] as bool? ?? true,
+      autoDeleteSeconds: data['auto_delete_seconds'] as int? ?? 0,
+      autoDeleteExpiresAt: data['auto_delete_expires_at'] != null
+          ? DateTime.tryParse(data['auto_delete_expires_at'] as String)
+          : null,
+      attachmentId: data['attachment_id'] as String?,
+      replyTo: data['reply_to'] as String?,
+      topicId: data['topic_id'] as String?,
+      silent: data['silent'] as bool? ?? false,
+      createdAt: createdAt,
+      plaintext: plaintext,
+      outboxId: item.id,
+      status: switch (item.status) {
+        OfflineOutboxStatus.failed => PendingMessageStatus.failed,
+        OfflineOutboxStatus.sending => PendingMessageStatus.sending,
+        OfflineOutboxStatus.queued => PendingMessageStatus.queued,
+      },
+      lastError: item.lastError,
+    );
+    _hydrateMessageSender(pending);
+    return pending;
+  }
+
+  String _newOutboxId() =>
+      'outbox-${DateTime.now().microsecondsSinceEpoch}-${_outboxItems.length}';
+
+  Future<void> _upsertOutboxItem(
+    OfflineOutboxItem item, {
+    bool coalesceReaction = false,
+  }) async {
+    await _ensureOutboxLoaded();
+    final next = List<OfflineOutboxItem>.from(_outboxItems);
+    if (coalesceReaction && item.action == OfflineOutboxAction.reaction) {
+      final msgID = item.data['message_id'];
+      final emoji = item.data['emoji'];
+      next.removeWhere(
+        (existing) =>
+            existing.action == OfflineOutboxAction.reaction &&
+            existing.data['message_id'] == msgID &&
+            existing.data['emoji'] == emoji,
+      );
+    } else {
+      next.removeWhere((existing) => existing.id == item.id);
+    }
+    next.add(item);
+    next.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    _outboxItems = next;
+    await _outbox.replaceAll(next);
+    _overlayOutboxOnLoadedMessages();
+    notifyListeners();
+    if (_ws.isMonitoring && !_drainingOutbox) {
+      unawaited(drainOutbox());
+    } else {
+      unawaited(_ws.connect());
+    }
+  }
+
+  Future<void> _removeOutboxItem(String id) async {
+    _outboxItems = _outboxItems
+        .where((item) => item.id != id)
+        .toList(growable: false);
+    await _outbox.remove(id);
+    _overlayOutboxOnLoadedMessages();
+    notifyListeners();
+  }
+
+  Future<void> _updateOutboxItem(OfflineOutboxItem item) async {
+    final next = List<OfflineOutboxItem>.from(_outboxItems);
+    final index = next.indexWhere((existing) => existing.id == item.id);
+    if (index == -1) {
+      next.add(item);
+    } else {
+      next[index] = item;
+    }
+    next.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    _outboxItems = next;
+    await _outbox.replaceAll(next);
+    _overlayOutboxOnLoadedMessages();
+    notifyListeners();
+  }
+
+  bool _shouldRetryOutboxError(Object error) {
+    if (error is SocketException || error is TimeoutException) return true;
+    if (error is ApiException) {
+      return error.statusCode == 408 ||
+          error.statusCode == 429 ||
+          error.statusCode >= 500;
+    }
+    return true;
+  }
+
+  Future<void> drainOutbox() async {
+    if (_drainingOutbox) return;
+    _drainingOutbox = true;
+    try {
+      await _ensureOutboxLoaded();
+      if (_outboxItems.isEmpty) return;
+      for (final item in List<OfflineOutboxItem>.from(_outboxItems)) {
+        if (!_outboxItems.any((current) => current.id == item.id)) continue;
+        final sending = item.copyWith(
+          status: OfflineOutboxStatus.sending,
+          clearLastError: true,
+        );
+        await _updateOutboxItem(sending);
+        try {
+          switch (item.action) {
+            case OfflineOutboxAction.sendMessage:
+              await _deliverQueuedMessage(sending);
+            case OfflineOutboxAction.attachmentUpload:
+              await _deliverQueuedAttachment(sending);
+            case OfflineOutboxAction.editMessage:
+              await _deliverQueuedEdit(sending);
+            case OfflineOutboxAction.reaction:
+              await _deliverQueuedReaction(sending);
+            case OfflineOutboxAction.channelPost ||
+                OfflineOutboxAction.channelAttachmentUpload ||
+                OfflineOutboxAction.channelReaction:
+              continue;
+          }
+          await _removeOutboxItem(item.id);
+        } catch (e) {
+          final retry = _shouldRetryOutboxError(e);
+          await _updateOutboxItem(
+            sending.copyWith(
+              attempts: sending.attempts + 1,
+              status: retry
+                  ? OfflineOutboxStatus.queued
+                  : OfflineOutboxStatus.failed,
+              lastError: e.toString(),
+            ),
+          );
+          if (retry) return;
+        }
+      }
+    } finally {
+      _drainingOutbox = false;
+    }
+  }
+
+  Future<void> _deliverQueuedMessage(OfflineOutboxItem item) async {
+    final data = item.data;
+    final plaintext = data['plaintext_payload'] as String? ?? '';
+    final confirmed = await _api.sendMessage(
+      convID: item.conversationId,
+      encryptedPayload: data['encrypted_payload'] as String? ?? '',
+      signature: data['signature'] as String? ?? '',
+      messageType: data['message_type'] as String? ?? 'text',
+      replyTo: data['reply_to'] as String?,
+      attachmentId: data['attachment_id'] as String?,
+      topicId: data['topic_id'] as String?,
+      mentionedUserIds: _stringList(data['mentioned_user_ids']),
+      silent: data['silent'] as bool? ?? false,
+    );
+    _replacePendingWithConfirmed(
+      convID: item.conversationId,
+      pendingID: data['pending_message_id'] as String?,
+      confirmed: confirmed,
+      plaintextPayload: plaintext,
+    );
+  }
+
+  Future<void> _deliverQueuedAttachment(OfflineOutboxItem item) async {
+    final data = item.data;
+    final ciphertextPath = data['ciphertext_path'] as String?;
+    if (ciphertextPath == null || ciphertextPath.isEmpty) {
+      throw const ChatSendException('Queued attachment file is missing.');
+    }
+    final ciphertext = await _outbox.readAttachmentCiphertext(ciphertextPath);
+    final encryptedAttachment = EncryptedAttachmentUpload.fromMetadataJson(
+      Map<String, dynamic>.from(data['attachment'] as Map? ?? const {}),
+      ciphertext: ciphertext,
+    );
+    final attachment = await AttachmentService(
+      _api,
+    ).uploadEncryptedAttachment(encryptedAttachment);
+    final plaintext = jsonEncode(
+      attachment.toPayloadJson(caption: data['caption'] as String? ?? ''),
+    );
+    final sent = await _prepareAndSendOutboxPayload(
+      convID: item.conversationId,
+      plaintextPayload: plaintext,
+      messageType: attachment.messageType.name,
+      pendingID: data['pending_message_id'] as String?,
+      attachmentId: attachment.attachmentId,
+      replyTo: data['reply_to'] as String?,
+      topicId: data['topic_id'] as String?,
+      silent: data['silent'] as bool? ?? false,
+    );
+    if (sent) {
+      await _outbox.deleteAttachmentCiphertext(ciphertextPath);
+    }
+  }
+
+  Future<void> _deliverQueuedEdit(OfflineOutboxItem item) async {
+    final data = item.data;
+    final msgID = data['message_id'] as String? ?? '';
+    final plaintext = data['plaintext_payload'] as String? ?? '';
+    final updated = await _api.editMessage(
+      convID: item.conversationId,
+      msgID: msgID,
+      encryptedPayload: data['encrypted_payload'] as String? ?? '',
+      signature: data['signature'] as String? ?? '',
+    );
+    updated.setDecryptedContent(plaintext);
+    _replaceMessage(item.conversationId, msgID, updated);
+  }
+
+  Future<void> _deliverQueuedReaction(OfflineOutboxItem item) async {
+    final data = item.data;
+    final msgID = data['message_id'] as String? ?? '';
+    final emoji = data['emoji'] as String? ?? '';
+    final reacted = data['reacted'] as bool? ?? false;
+    if (reacted) {
+      await _api.reactToMessage(msgID, emoji);
+    } else {
+      await _api.removeReaction(msgID, emoji);
+    }
+  }
+
+  Future<bool> _prepareAndSendOutboxPayload({
+    required String convID,
+    required String plaintextPayload,
+    required String messageType,
+    required String? pendingID,
+    String? replyTo,
+    String? attachmentId,
+    String? topicId,
+    bool silent = false,
+  }) async {
+    final prepared = await _prepareEncryptedPayload(
+      convID: convID,
+      plaintextPayload: plaintextPayload,
+      messageType: messageType,
+    );
+    final confirmed = await _api.sendMessage(
+      convID: convID,
+      encryptedPayload: prepared.encryptedPayload,
+      signature: prepared.signature,
+      messageType: messageType,
+      replyTo: replyTo,
+      attachmentId: attachmentId,
+      topicId: topicId,
+      mentionedUserIds: prepared.mentionedUserIds,
+      silent: silent,
+    );
+    _replacePendingWithConfirmed(
+      convID: convID,
+      pendingID: pendingID,
+      confirmed: confirmed,
+      plaintextPayload: plaintextPayload,
+    );
+    return true;
+  }
+
+  List<String> _stringList(Object? value) {
+    if (value is! List) return const [];
+    return value.map((item) => item.toString()).toList();
   }
 
   Future<bool> ensureMessageLoaded(
@@ -429,6 +842,122 @@ class ChatProvider extends ChangeNotifier {
     );
   }
 
+  Future<bool> sendPreparedAttachment({
+    required String convID,
+    required EncryptedAttachmentUpload attachment,
+    String caption = '',
+    AttachmentUploadProgressCallback? onProgress,
+  }) async {
+    try {
+      if (!_ws.isMonitoring) {
+        await _queueAttachmentUpload(
+          convID: convID,
+          attachment: attachment,
+          caption: caption,
+        );
+        return true;
+      }
+      final uploaded = await AttachmentService(
+        _api,
+      ).uploadEncryptedAttachment(attachment, onProgress: onProgress);
+      return sendAttachment(
+        convID: convID,
+        attachment: uploaded,
+        caption: caption,
+      );
+    } catch (e) {
+      if (_shouldRetryOutboxError(e)) {
+        await _queueAttachmentUpload(
+          convID: convID,
+          attachment: attachment,
+          caption: caption,
+        );
+        return true;
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _queueAttachmentUpload({
+    required String convID,
+    required EncryptedAttachmentUpload attachment,
+    String caption = '',
+  }) async {
+    final conv = _conversations[convID];
+    if (conv == null) {
+      throw const ChatSendException(
+        'Conversation is not ready. Reopen the chat and try again.',
+      );
+    }
+    final userID = await _storage.getUserID() ?? '';
+    if (userID.isEmpty) {
+      throw const ChatSendException(
+        'Your session is incomplete. Sign in again.',
+      );
+    }
+
+    final itemID = _newOutboxId();
+    final pendingAttachmentID = 'pending-attachment-$itemID';
+    final pendingMessageID = 'pending-$itemID';
+    final ciphertextPath = await _outbox.saveAttachmentCiphertext(
+      itemID,
+      attachment.ciphertext,
+    );
+    final plaintext = jsonEncode(
+      attachment.toPayloadJson(
+        attachmentId: pendingAttachmentID,
+        caption: caption,
+      ),
+    );
+    final now = DateTime.now();
+    final pending = PendingMessage(
+      id: pendingMessageID,
+      conversationId: convID,
+      senderId: userID,
+      type: attachment.messageType,
+      encryptedPayload: plaintext,
+      signature: '',
+      isEncrypted: conv.encryptionEnabled,
+      autoDeleteSeconds: conv.messageTtlSeconds,
+      autoDeleteExpiresAt: conv.messageTtlSeconds > 0
+          ? now.add(Duration(seconds: conv.messageTtlSeconds))
+          : null,
+      attachmentId: pendingAttachmentID,
+      createdAt: now,
+      plaintext: plaintext,
+      outboxId: itemID,
+      status: PendingMessageStatus.queued,
+    );
+    _messages[convID] = [...?_messages[convID], pending];
+    notifyListeners();
+
+    await _upsertOutboxItem(
+      OfflineOutboxItem(
+        id: itemID,
+        action: OfflineOutboxAction.attachmentUpload,
+        conversationId: convID,
+        createdAt: now,
+        data: {
+          'pending_message_id': pendingMessageID,
+          'sender_id': userID,
+          'plaintext_payload': plaintext,
+          'message_type': attachment.messageType.name,
+          'attachment_id': pendingAttachmentID,
+          'attachment': attachment.toMetadataJson(),
+          'ciphertext_path': ciphertextPath,
+          'caption': caption,
+          'is_encrypted': conv.encryptionEnabled,
+          'auto_delete_seconds': conv.messageTtlSeconds,
+          if (pending.autoDeleteExpiresAt != null)
+            'auto_delete_expires_at': pending.autoDeleteExpiresAt!
+                .toUtc()
+                .toIso8601String(),
+          'created_at': now.toUtc().toIso8601String(),
+        },
+      ),
+    );
+  }
+
   Future<bool> sendOneTimeLocation({required String convID}) async {
     await _ensureLocationPermission(background: false);
     final pos = await _getCurrentPosition();
@@ -473,6 +1002,7 @@ class ChatProvider extends ChangeNotifier {
       convID: convID,
       plaintextPayload: jsonEncode(payload.toJson()),
       messageType: 'location',
+      allowOutbox: false,
     );
     if (msg == null) return null;
     await _beginLiveLocationShare(
@@ -676,24 +1206,79 @@ class ChatProvider extends ChangeNotifier {
       signature = '';
     }
 
-    final updated = await _api.editMessage(
-      convID: convID,
-      msgID: msgID,
-      encryptedPayload: encrypted,
-      signature: signature,
-    );
-    // We can't always re-decrypt our own message from the server, so set the
-    // plaintext we already know directly.
-    updated.setDecryptedContent(newPlaintext);
-    _indexMessage(updated);
-
     final list = _messages[convID] ?? [];
     final idx = list.indexWhere((m) => m.id == msgID);
+    Message? original;
     if (idx != -1) {
-      updated.sender ??= list[idx].sender;
-      list[idx] = updated;
+      original = list[idx];
+      final optimistic = list[idx].copyWith(
+        encryptedPayload: encrypted,
+        signature: signature,
+        editedAt: DateTime.now(),
+      );
+      optimistic.setDecryptedContent(newPlaintext);
+      list[idx] = optimistic;
       _messages[convID] = List.from(list);
       notifyListeners();
+    }
+
+    if (!_ws.isMonitoring) {
+      await _upsertOutboxItem(
+        OfflineOutboxItem(
+          id: _newOutboxId(),
+          action: OfflineOutboxAction.editMessage,
+          conversationId: convID,
+          createdAt: DateTime.now(),
+          data: {
+            'message_id': msgID,
+            'plaintext_payload': newPlaintext,
+            'encrypted_payload': encrypted,
+            'signature': signature,
+          },
+        ),
+      );
+      return;
+    }
+
+    try {
+      final updated = await _api.editMessage(
+        convID: convID,
+        msgID: msgID,
+        encryptedPayload: encrypted,
+        signature: signature,
+      );
+      // We can't always re-decrypt our own message from the server, so set the
+      // plaintext we already know directly.
+      updated.setDecryptedContent(newPlaintext);
+      _replaceMessage(convID, msgID, updated);
+    } catch (e) {
+      if (_shouldRetryOutboxError(e)) {
+        await _upsertOutboxItem(
+          OfflineOutboxItem(
+            id: _newOutboxId(),
+            action: OfflineOutboxAction.editMessage,
+            conversationId: convID,
+            createdAt: DateTime.now(),
+            data: {
+              'message_id': msgID,
+              'plaintext_payload': newPlaintext,
+              'encrypted_payload': encrypted,
+              'signature': signature,
+            },
+          ),
+        );
+        return;
+      }
+      if (original != null) {
+        final current = _messages[convID] ?? [];
+        final currentIdx = current.indexWhere((m) => m.id == msgID);
+        if (currentIdx != -1) {
+          current[currentIdx] = original;
+          _messages[convID] = List.from(current);
+          notifyListeners();
+        }
+      }
+      rethrow;
     }
   }
 
@@ -722,15 +1307,10 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<Message?> _sendEncryptedPayloadWithResult({
+  Future<_PreparedEncryptedPayload> _prepareEncryptedPayload({
     required String convID,
     required String plaintextPayload,
     required String messageType,
-    String? replyTo,
-    String? attachmentId,
-    String? topicId,
-    bool silent = false,
-    DateTime? scheduledFor,
   }) async {
     final conv = _conversations[convID];
     if (conv == null) {
@@ -758,58 +1338,104 @@ class ChatProvider extends ChangeNotifier {
       userID,
     );
 
-    final String encrypted;
-    final String signature;
-    if (conv.encryptionEnabled) {
-      final recipientKeys = await _freshRecipientKeys(convID, conv);
-      if (recipientKeys.isEmpty) {
-        throw const ChatSendException(
-          'Could not load recipient keys. Refresh the chat and try again.',
-        );
-      }
-
-      try {
-        encrypted = await PgpService.encrypt(
-          plaintext: plaintextPayload,
-          recipientPublicKeys: recipientKeys,
-          signingPrivateKeyArmored: privateKey,
-        ).timeout(const Duration(seconds: 30));
-      } on TimeoutException {
-        throw const ChatSendException(
-          'Encryption timed out. Your stored key may be corrupted — try rotating it in Settings → PGP Keys.',
-        );
-      } catch (e) {
-        throw ChatSendException('Encryption failed: $e');
-      }
-
-      final sigData = '$convID:$encrypted';
-      try {
-        signature = await PgpService.sign(
-          data: sigData,
-          privateKeyArmored: privateKey,
-        ).timeout(const Duration(seconds: 30));
-      } on TimeoutException {
-        throw const ChatSendException(
-          'Signing timed out. Your stored key may be corrupted — try rotating it in Settings → PGP Keys.',
-        );
-      } catch (e) {
-        throw ChatSendException('Signing failed: $e');
-      }
-    } else {
-      encrypted = plaintextPayload;
-      signature = '';
+    if (!conv.encryptionEnabled) {
+      return _PreparedEncryptedPayload(
+        encryptedPayload: plaintextPayload,
+        signature: '',
+        mentionedUserIds: mentionedUserIds,
+        isEncrypted: false,
+        autoDeleteSeconds: conv.messageTtlSeconds,
+        autoDeleteExpiresAt: conv.messageTtlSeconds > 0
+            ? DateTime.now().add(Duration(seconds: conv.messageTtlSeconds))
+            : null,
+        senderId: userID,
+      );
     }
+
+    final recipientKeys = await _freshRecipientKeys(convID, conv);
+    if (recipientKeys.isEmpty) {
+      throw const ChatSendException(
+        'Could not load recipient keys. Refresh the chat and try again.',
+      );
+    }
+
+    final String encrypted;
+    try {
+      encrypted = await PgpService.encrypt(
+        plaintext: plaintextPayload,
+        recipientPublicKeys: recipientKeys,
+        signingPrivateKeyArmored: privateKey,
+      ).timeout(const Duration(seconds: 30));
+    } on TimeoutException {
+      throw const ChatSendException(
+        'Encryption timed out. Your stored key may be corrupted — try rotating it in Settings → PGP Keys.',
+      );
+    } catch (e) {
+      throw ChatSendException('Encryption failed: $e');
+    }
+
+    final sigData = '$convID:$encrypted';
+    final String signature;
+    try {
+      signature = await PgpService.sign(
+        data: sigData,
+        privateKeyArmored: privateKey,
+      ).timeout(const Duration(seconds: 30));
+    } on TimeoutException {
+      throw const ChatSendException(
+        'Signing timed out. Your stored key may be corrupted — try rotating it in Settings → PGP Keys.',
+      );
+    } catch (e) {
+      throw ChatSendException('Signing failed: $e');
+    }
+
+    return _PreparedEncryptedPayload(
+      encryptedPayload: encrypted,
+      signature: signature,
+      mentionedUserIds: mentionedUserIds,
+      isEncrypted: true,
+      autoDeleteSeconds: conv.messageTtlSeconds,
+      autoDeleteExpiresAt: conv.messageTtlSeconds > 0
+          ? DateTime.now().add(Duration(seconds: conv.messageTtlSeconds))
+          : null,
+      senderId: userID,
+    );
+  }
+
+  Future<Message?> _sendEncryptedPayloadWithResult({
+    required String convID,
+    required String plaintextPayload,
+    required String messageType,
+    String? replyTo,
+    String? attachmentId,
+    String? topicId,
+    bool silent = false,
+    DateTime? scheduledFor,
+    bool allowOutbox = true,
+  }) async {
+    final conv = _conversations[convID];
+    if (conv == null) {
+      throw const ChatSendException(
+        'Conversation is not ready. Reopen the chat and try again.',
+      );
+    }
+
+    final prepared = await _prepareEncryptedPayload(
+      convID: convID,
+      plaintextPayload: plaintextPayload,
+      messageType: messageType,
+    );
 
     if (scheduledFor != null) {
       await _api.sendMessage(
         convID: convID,
-        encryptedPayload: encrypted,
-        signature: signature,
+        encryptedPayload: prepared.encryptedPayload,
+        signature: prepared.signature,
         messageType: messageType,
         replyTo: replyTo,
         attachmentId: attachmentId,
         topicId: topicId,
-        mentionedUserIds: mentionedUserIds,
+        mentionedUserIds: prepared.mentionedUserIds,
         silent: silent,
         scheduledFor: scheduledFor,
       );
@@ -819,18 +1445,16 @@ class ChatProvider extends ChangeNotifier {
     final pending = PendingMessage(
       id: 'pending-${DateTime.now().millisecondsSinceEpoch}',
       conversationId: convID,
-      senderId: userID,
+      senderId: prepared.senderId,
       type: MessageType.values.firstWhere(
         (t) => t.name == messageType,
         orElse: () => MessageType.text,
       ),
-      encryptedPayload: encrypted,
-      signature: signature,
-      isEncrypted: conv.encryptionEnabled,
-      autoDeleteSeconds: conv.messageTtlSeconds,
-      autoDeleteExpiresAt: conv.messageTtlSeconds > 0
-          ? DateTime.now().add(Duration(seconds: conv.messageTtlSeconds))
-          : null,
+      encryptedPayload: prepared.encryptedPayload,
+      signature: prepared.signature,
+      isEncrypted: prepared.isEncrypted,
+      autoDeleteSeconds: prepared.autoDeleteSeconds,
+      autoDeleteExpiresAt: prepared.autoDeleteExpiresAt,
       attachmentId: attachmentId,
       replyTo: replyTo,
       topicId: topicId,
@@ -842,51 +1466,178 @@ class ChatProvider extends ChangeNotifier {
     _messages[convID] = [...?_messages[convID], pending];
     notifyListeners();
 
+    if (allowOutbox && !_ws.isMonitoring) {
+      await _queuePreparedMessageSend(
+        convID: convID,
+        pending: pending,
+        plaintextPayload: plaintextPayload,
+        messageType: messageType,
+        encryptedPayload: prepared.encryptedPayload,
+        signature: prepared.signature,
+        replyTo: replyTo,
+        attachmentId: attachmentId,
+        topicId: topicId,
+        silent: silent,
+        mentionedUserIds: prepared.mentionedUserIds,
+        isEncrypted: prepared.isEncrypted,
+        autoDeleteSeconds: prepared.autoDeleteSeconds,
+        autoDeleteExpiresAt: prepared.autoDeleteExpiresAt,
+      );
+      return null;
+    }
+
     try {
       final confirmed = await _api.sendMessage(
         convID: convID,
-        encryptedPayload: encrypted,
-        signature: signature,
+        encryptedPayload: prepared.encryptedPayload,
+        signature: prepared.signature,
         messageType: messageType,
         replyTo: replyTo,
         attachmentId: attachmentId,
         topicId: topicId,
-        mentionedUserIds: mentionedUserIds,
+        mentionedUserIds: prepared.mentionedUserIds,
         silent: silent,
       );
-      confirmed.setDecryptedContent(plaintextPayload);
-      _indexMessage(confirmed);
-
-      // Remove the pending placeholder and any WS-delivered copy of the same
-      // real message ID. The WS new_message event can race the API response:
-      // when it arrives first it lands as a separate, undecryptable entry
-      // (the PGP library can't decrypt sender's own messages from the server).
-      // Filtering both IDs then appending confirmed leaves exactly one copy.
-      final list = _messages[convID] ?? [];
-      _messages[convID] = [
-        ...list.where((m) => m.id != pending.id && m.id != confirmed.id),
-        confirmed,
-      ];
-
-      // Keep the conversation preview pointing at our decryptable copy so the
-      // home screen never shows "🔒 Encrypted" for messages we just sent.
-      final existingConv = _conversations[convID];
-      if (existingConv != null) {
-        _conversations[convID] = existingConv.copyWith(lastMessage: confirmed);
-      }
-
-      notifyListeners();
+      _replacePendingWithConfirmed(
+        convID: convID,
+        pendingID: pending.id,
+        confirmed: confirmed,
+        plaintextPayload: plaintextPayload,
+      );
       return confirmed;
-    } catch (_) {
+    } catch (e) {
+      if (allowOutbox && _shouldRetryOutboxError(e)) {
+        await _queuePreparedMessageSend(
+          convID: convID,
+          pending: pending,
+          plaintextPayload: plaintextPayload,
+          messageType: messageType,
+          encryptedPayload: prepared.encryptedPayload,
+          signature: prepared.signature,
+          replyTo: replyTo,
+          attachmentId: attachmentId,
+          topicId: topicId,
+          silent: silent,
+          mentionedUserIds: prepared.mentionedUserIds,
+          isEncrypted: prepared.isEncrypted,
+          autoDeleteSeconds: prepared.autoDeleteSeconds,
+          autoDeleteExpiresAt: prepared.autoDeleteExpiresAt,
+        );
+        return null;
+      }
       final list = _messages[convID] ?? [];
       final idx = list.indexWhere((m) => m.id == pending.id);
       if (idx != -1) {
-        list[idx].markDecryptionFailed();
+        list[idx] = PendingMessage(
+          id: pending.id,
+          conversationId: pending.conversationId,
+          senderId: pending.senderId,
+          type: pending.type,
+          encryptedPayload: pending.encryptedPayload,
+          signature: pending.signature,
+          isEncrypted: pending.isEncrypted,
+          autoDeleteSeconds: pending.autoDeleteSeconds,
+          autoDeleteExpiresAt: pending.autoDeleteExpiresAt,
+          attachmentId: pending.attachmentId,
+          replyTo: pending.replyTo,
+          topicId: pending.topicId,
+          silent: pending.silent,
+          createdAt: pending.createdAt,
+          plaintext: plaintextPayload,
+          status: PendingMessageStatus.failed,
+          lastError: e.toString(),
+        );
         _messages[convID] = List.from(list);
         notifyListeners();
       }
       rethrow;
     }
+  }
+
+  Future<void> _queuePreparedMessageSend({
+    required String convID,
+    required PendingMessage pending,
+    required String plaintextPayload,
+    required String messageType,
+    required String encryptedPayload,
+    required String signature,
+    required List<String> mentionedUserIds,
+    required bool isEncrypted,
+    required int autoDeleteSeconds,
+    required DateTime? autoDeleteExpiresAt,
+    String? replyTo,
+    String? attachmentId,
+    String? topicId,
+    bool silent = false,
+  }) async {
+    final item = OfflineOutboxItem(
+      id: _newOutboxId(),
+      action: OfflineOutboxAction.sendMessage,
+      conversationId: convID,
+      createdAt: DateTime.now(),
+      data: {
+        'pending_message_id': pending.id,
+        'sender_id': pending.senderId,
+        'plaintext_payload': plaintextPayload,
+        'encrypted_payload': encryptedPayload,
+        'signature': signature,
+        'message_type': messageType,
+        'mentioned_user_ids': mentionedUserIds,
+        'is_encrypted': isEncrypted,
+        'auto_delete_seconds': autoDeleteSeconds,
+        if (autoDeleteExpiresAt != null)
+          'auto_delete_expires_at': autoDeleteExpiresAt
+              .toUtc()
+              .toIso8601String(),
+        'reply_to': ?replyTo,
+        'attachment_id': ?attachmentId,
+        'topic_id': ?topicId,
+        if (silent) 'silent': true,
+        'created_at': pending.createdAt.toUtc().toIso8601String(),
+      },
+    );
+    await _upsertOutboxItem(item);
+  }
+
+  void _replacePendingWithConfirmed({
+    required String convID,
+    required String? pendingID,
+    required Message confirmed,
+    required String plaintextPayload,
+  }) {
+    confirmed.setDecryptedContent(plaintextPayload);
+    _hydrateMessageSender(confirmed);
+    _indexMessage(confirmed);
+
+    final list = _messages[convID] ?? [];
+    _messages[convID] = [
+      ...list.where((m) => m.id != pendingID && m.id != confirmed.id),
+      confirmed,
+    ]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+
+    final existingConv = _conversations[convID];
+    if (existingConv != null) {
+      _conversations[convID] = existingConv.copyWith(lastMessage: confirmed);
+    }
+
+    notifyListeners();
+  }
+
+  void _replaceMessage(String convID, String msgID, Message updated) {
+    _hydrateMessageSender(updated);
+    _indexMessage(updated);
+    final list = _messages[convID] ?? [];
+    final idx = list.indexWhere((message) => message.id == msgID);
+    if (idx != -1) {
+      final next = List<Message>.from(list);
+      next[idx] = updated;
+      _messages[convID] = next;
+    }
+    final conv = _conversations[convID];
+    if (conv?.lastMessage?.id == msgID) {
+      _conversations[convID] = conv!.copyWith(lastMessage: updated);
+    }
+    notifyListeners();
   }
 
   List<String> _mentionedUserIdsForPayload(
@@ -1333,6 +2084,77 @@ class ChatProvider extends ChangeNotifier {
     );
   }
 
+  Future<void> setReaction({
+    required String convID,
+    required String msgID,
+    required String emoji,
+    required bool reacted,
+  }) async {
+    final list = _messages[convID] ?? const <Message>[];
+    final current = list.firstWhere(
+      (message) => message.id == msgID,
+      orElse: () => Message(
+        id: msgID,
+        conversationId: convID,
+        senderId: '',
+        type: MessageType.text,
+        encryptedPayload: '',
+        signature: '',
+        createdAt: DateTime.now(),
+      ),
+    );
+    final alreadyReacted = current.reactions.any(
+      (reaction) => reaction.emoji == emoji && reaction.reactedByMe,
+    );
+    setLocalReaction(
+      convID: convID,
+      msgID: msgID,
+      emoji: emoji,
+      reacted: reacted,
+    );
+    if (!_ws.isMonitoring) {
+      await _upsertOutboxItem(
+        OfflineOutboxItem(
+          id: _newOutboxId(),
+          action: OfflineOutboxAction.reaction,
+          conversationId: convID,
+          createdAt: DateTime.now(),
+          data: {'message_id': msgID, 'emoji': emoji, 'reacted': reacted},
+        ),
+        coalesceReaction: true,
+      );
+      return;
+    }
+    try {
+      if (reacted) {
+        await _api.reactToMessage(msgID, emoji);
+      } else {
+        await _api.removeReaction(msgID, emoji);
+      }
+    } catch (e) {
+      if (_shouldRetryOutboxError(e)) {
+        await _upsertOutboxItem(
+          OfflineOutboxItem(
+            id: _newOutboxId(),
+            action: OfflineOutboxAction.reaction,
+            conversationId: convID,
+            createdAt: DateTime.now(),
+            data: {'message_id': msgID, 'emoji': emoji, 'reacted': reacted},
+          ),
+          coalesceReaction: true,
+        );
+        return;
+      }
+      setLocalReaction(
+        convID: convID,
+        msgID: msgID,
+        emoji: emoji,
+        reacted: alreadyReacted,
+      );
+      rethrow;
+    }
+  }
+
   void _handleWsEvent(WsEvent event) {
     switch (event.type) {
       case WsEventType.newMessage:
@@ -1619,6 +2441,7 @@ class ChatProvider extends ChangeNotifier {
         title: title,
         body: body,
         showSensitive: _settings.notificationSensitiveContent,
+        notificationText: body,
       );
     }
 

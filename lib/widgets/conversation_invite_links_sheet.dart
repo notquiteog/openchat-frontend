@@ -47,6 +47,8 @@ class _ConversationInviteLinksSheetState
   var _links = <ConversationInviteLink>[];
   var _requests = <ConversationJoinRequest>[];
   late bool _approvalRequired;
+  int _expiresInSeconds = 0;
+  int _usageLimit = 0;
   bool _loading = true;
   bool _busy = false;
 
@@ -105,6 +107,8 @@ class _ConversationInviteLinksSheetState
           channel: widget.channel,
           approvalRequired: required,
           revokeExisting: true,
+          expiresInSeconds: _expiresInSeconds,
+          usageLimit: _usageLimit == 0 ? null : _usageLimit,
         );
       }
       if (!mounted) return;
@@ -134,6 +138,8 @@ class _ConversationInviteLinksSheetState
             channel: widget.channel,
             approvalRequired: _approvalRequired,
             revokeExisting: rotate,
+            expiresInSeconds: _expiresInSeconds,
+            usageLimit: _usageLimit == 0 ? null : _usageLimit,
           );
       if (!mounted) return;
       setState(() {
@@ -291,6 +297,12 @@ class _ConversationInviteLinksSheetState
               onCopy: _copyActiveLink,
               onRegenerate: () => _createLink(rotate: true),
               onRevoke: _revokeActiveLink,
+              expiresInSeconds: _expiresInSeconds,
+              usageLimit: _usageLimit,
+              onExpiresChanged: (value) =>
+                  setState(() => _expiresInSeconds = value),
+              onUsageLimitChanged: (value) =>
+                  setState(() => _usageLimit = value),
             ),
             const SizedBox(height: 12),
             _RequestsSection(
@@ -361,6 +373,10 @@ class _LinkSection extends StatelessWidget {
   final VoidCallback onCopy;
   final VoidCallback onRegenerate;
   final VoidCallback onRevoke;
+  final int expiresInSeconds;
+  final int usageLimit;
+  final ValueChanged<int> onExpiresChanged;
+  final ValueChanged<int> onUsageLimitChanged;
 
   const _LinkSection({
     required this.link,
@@ -369,12 +385,18 @@ class _LinkSection extends StatelessWidget {
     required this.onCopy,
     required this.onRegenerate,
     required this.onRevoke,
+    required this.expiresInSeconds,
+    required this.usageLimit,
+    required this.onExpiresChanged,
+    required this.onUsageLimitChanged,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final active = link;
+    final linkAvailable =
+        active != null && !active.isExpired && !active.isUsageLimitReached;
     return _InvitePanel(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -401,7 +423,7 @@ class _LinkSection extends StatelessWidget {
                 context,
               ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             )
-          else
+          else ...[
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
@@ -420,6 +442,43 @@ class _LinkSection extends StatelessWidget {
                 ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
               ),
             ),
+            const SizedBox(height: 10),
+            _InviteStats(link: active),
+          ],
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _InviteDropdown<int>(
+                  label: 'Expires',
+                  value: expiresInSeconds,
+                  items: const [
+                    DropdownMenuItem(value: 0, child: Text('Never')),
+                    DropdownMenuItem(value: 3600, child: Text('1 hour')),
+                    DropdownMenuItem(value: 86400, child: Text('1 day')),
+                    DropdownMenuItem(value: 604800, child: Text('7 days')),
+                    DropdownMenuItem(value: 2592000, child: Text('30 days')),
+                  ],
+                  onChanged: busy ? null : onExpiresChanged,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _InviteDropdown<int>(
+                  label: 'Uses',
+                  value: usageLimit,
+                  items: const [
+                    DropdownMenuItem(value: 0, child: Text('No cap')),
+                    DropdownMenuItem(value: 1, child: Text('1')),
+                    DropdownMenuItem(value: 10, child: Text('10')),
+                    DropdownMenuItem(value: 25, child: Text('25')),
+                    DropdownMenuItem(value: 100, child: Text('100')),
+                  ],
+                  onChanged: busy ? null : onUsageLimitChanged,
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,
@@ -437,7 +496,7 @@ class _LinkSection extends StatelessWidget {
                 )
               else ...[
                 GlassButtonWidget.icon(
-                  onPressed: busy ? null : onCopy,
+                  onPressed: busy || !linkAvailable ? null : onCopy,
                   icon: const Icon(Icons.copy_rounded),
                   label: const Text('Copy'),
                   padding: const EdgeInsets.symmetric(
@@ -468,6 +527,95 @@ class _LinkSection extends StatelessWidget {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _InviteStats extends StatelessWidget {
+  final ConversationInviteLink link;
+
+  const _InviteStats({required this.link});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final style = Theme.of(context).textTheme.bodySmall?.copyWith(
+      color: scheme.onSurfaceVariant,
+      fontWeight: FontWeight.w700,
+    );
+    return Wrap(
+      spacing: 10,
+      runSpacing: 6,
+      children: [
+        _StatText(text: 'Views ${link.previewCount}', style: style),
+        _StatText(text: 'Joins ${link.joinCount}', style: style),
+        _StatText(text: 'Requests ${link.joinRequestCount}', style: style),
+        _StatText(text: _usageLabel(link), style: style),
+        _StatText(text: _expiryLabel(link), style: style),
+      ],
+    );
+  }
+
+  String _usageLabel(ConversationInviteLink link) {
+    if (link.usageLimit == null) return 'Uses ${link.usageCount}';
+    return 'Uses ${link.usageCount}/${link.usageLimit}';
+  }
+
+  String _expiryLabel(ConversationInviteLink link) {
+    final expiresAt = link.expiresAt;
+    if (expiresAt == null) return 'Never expires';
+    final local = expiresAt.toLocal().toString().split('.').first;
+    return link.isExpired ? 'Expired $local' : 'Expires $local';
+  }
+}
+
+class _StatText extends StatelessWidget {
+  final String text;
+  final TextStyle? style;
+
+  const _StatText({required this.text, this.style});
+
+  @override
+  Widget build(BuildContext context) => Text(text, style: style);
+}
+
+class _InviteDropdown<T> extends StatelessWidget {
+  final String label;
+  final T value;
+  final List<DropdownMenuItem<T>> items;
+  final ValueChanged<T>? onChanged;
+
+  const _InviteDropdown({
+    required this.label,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InputDecorator(
+      decoration: InputDecoration(
+        labelText: label,
+        isDense: true,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<T>(
+          value: value,
+          isDense: true,
+          isExpanded: true,
+          iconEnabledColor: scheme.primary,
+          items: items,
+          onChanged: onChanged == null
+              ? null
+              : (value) {
+                  if (value != null) onChanged!(value);
+                },
+        ),
       ),
     );
   }

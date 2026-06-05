@@ -487,6 +487,7 @@ class NotificationService {
     bool showSensitive = false,
     Iterable<String> mentionedUserIds = const [],
     bool mentionedForCurrentUser = false,
+    String? notificationText,
   }) async {
     if (!_supported) return;
     if (!shouldNotifyForConversation(
@@ -495,6 +496,7 @@ class NotificationService {
       currentUserId: _notificationCurrentUserId,
       mentionedUserIds: mentionedUserIds,
       mentionedForCurrentUser: mentionedForCurrentUser,
+      notificationText: notificationText ?? '$title $body',
     )) {
       return;
     }

@@ -16,6 +16,7 @@ enum ChannelModerationAction { openModeration, archive, unarchive, delete }
 enum ChannelSettingsAction {
   appearance,
   sharedContent,
+  analytics,
   scheduledPosts,
   edit,
   inviteLinks,
@@ -51,6 +52,7 @@ class ChannelActionPolicy {
     bool? canManageInvites,
     bool? canManageSettings,
     bool? canManageEncryption,
+    bool? canViewAnalytics,
   }) {
     final isArchived = channel.isArchived;
     final opensModeration = canOpenModeration ?? isAdmin;
@@ -58,6 +60,7 @@ class ChannelActionPolicy {
     final managesInvites = canManageInvites ?? isAdmin;
     final managesSettings = canManageSettings ?? isAdmin;
     final managesEncryption = canManageEncryption ?? isAdmin;
+    final viewsAnalytics = canViewAnalytics ?? isAdmin;
     final topBar = <ChannelTopBarAction>[];
     final moderation = <ChannelModerationAction>[];
     final settings = <ChannelSettingsAction>[];
@@ -79,11 +82,18 @@ class ChannelActionPolicy {
     }
 
     final hasAdminSettings =
-        managesInfo || managesInvites || managesSettings || managesEncryption;
+        managesInfo ||
+        managesInvites ||
+        managesSettings ||
+        managesEncryption ||
+        viewsAnalytics;
     if (isSubscribed || hasAdminSettings) {
       topBar.add(ChannelTopBarAction.settings);
       settings.add(ChannelSettingsAction.appearance);
       settings.add(ChannelSettingsAction.sharedContent);
+      if (viewsAnalytics) {
+        settings.add(ChannelSettingsAction.analytics);
+      }
       settings.add(ChannelSettingsAction.scheduledPosts);
       settings.add(ChannelSettingsAction.deleteOwnMessages);
     }

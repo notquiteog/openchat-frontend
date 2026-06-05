@@ -190,6 +190,7 @@ class PushNotificationService {
               msg.data,
               NotificationService.notificationCurrentUserId,
             ),
+            notificationText: notificationRuleTextFromData(msg.data),
           );
           break;
         case NotificationIntentKind.incomingCall:

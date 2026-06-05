@@ -216,6 +216,72 @@ void main() {
       expect(mentioned, isNotNull);
     });
 
+    test('keyword rules can notify in mentions-only conversations', () {
+      final shouldNotify = shouldNotifyForConversation(
+        conversationId: 'conv-1',
+        preferences: {
+          'conv-1': const ConversationNotificationPreference(
+            mode: ConversationNotificationMode.mentionsOnly,
+            keywords: ['deploy'],
+          ),
+        },
+        currentUserId: 'u-1',
+        mentionedUserIds: const ['u-2'],
+        notificationText: 'The deploy is ready',
+      );
+
+      expect(shouldNotify, isTrue);
+    });
+
+    test('quiet hours suppress unless the conversation is priority', () {
+      final quiet = ConversationNotificationPreference(
+        quietHoursStartMinute: 22 * 60,
+        quietHoursEndMinute: 7 * 60,
+      );
+      final duringQuietHours = DateTime(2026, 1, 2, 23, 30);
+
+      expect(
+        shouldNotifyForConversation(
+          conversationId: 'conv-1',
+          preferences: {'conv-1': quiet},
+          currentUserId: 'u-1',
+          now: duringQuietHours,
+        ),
+        isFalse,
+      );
+      expect(
+        shouldNotifyForConversation(
+          conversationId: 'conv-1',
+          preferences: {'conv-1': quiet.copyWith(priority: true)},
+          currentUserId: 'u-1',
+          now: duringQuietHours,
+        ),
+        isTrue,
+      );
+    });
+
+    test('notification rule preferences round-trip through storage json', () {
+      final encoded = encodeConversationNotificationPreferences({
+        'conv-1': const ConversationNotificationPreference(
+          mode: ConversationNotificationMode.mentionsOnly,
+          keywords: ['urgent', 'deploy'],
+          priority: true,
+          quietHoursStartMinute: 22 * 60,
+          quietHoursEndMinute: 7 * 60,
+        ),
+      });
+
+      final decoded = decodeConversationNotificationPreferences(encoded);
+
+      expect(
+        decoded['conv-1']?.mode,
+        ConversationNotificationMode.mentionsOnly,
+      );
+      expect(decoded['conv-1']?.keywords, ['urgent', 'deploy']);
+      expect(decoded['conv-1']?.priority, isTrue);
+      expect(decoded['conv-1']?.quietHoursStartMinute, 22 * 60);
+    });
+
     test('expired mute-until websocket preference no longer suppresses', () {
       final intent = BackgroundWsService.notificationIntentFromRawLine(
         '{"type":"new_message","data":{"conversation_id":"conv-1","sender_username":"alice"}}',

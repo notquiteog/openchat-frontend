@@ -40,6 +40,7 @@ class SecureStorageService {
   static const _keyBiometricEnabled = 'biometric_enabled';
   static const _keyAppLockEnabled = 'app_lock_enabled';
   static const _keySearchIndexKey = 'search_index_key_v1';
+  static const _keyOutboxKey = 'offline_outbox_key_v1';
   static const _keyStorageProbe = '_openchat_secure_storage_probe';
 
   static const linuxKeyringWarning =
@@ -122,10 +123,20 @@ class SecureStorageService {
   Future<String> getOrCreateSearchIndexKey() async {
     final existing = await _readOrNull(_keySearchIndexKey);
     if (existing != null && existing.isNotEmpty) return existing;
+    return _createRandomStorageKey(_keySearchIndexKey);
+  }
+
+  Future<String> getOrCreateOutboxKey() async {
+    final existing = await _readOrNull(_keyOutboxKey);
+    if (existing != null && existing.isNotEmpty) return existing;
+    return _createRandomStorageKey(_keyOutboxKey);
+  }
+
+  Future<String> _createRandomStorageKey(String key) async {
     final random = Random.secure();
     final bytes = List<int>.generate(32, (_) => random.nextInt(256));
     final encoded = base64Encode(bytes);
-    await _storage.write(key: _keySearchIndexKey, value: encoded);
+    await _storage.write(key: key, value: encoded);
     return encoded;
   }
 

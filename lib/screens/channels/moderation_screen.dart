@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../models/admin_audit_event.dart';
 import '../../models/conversation.dart';
+import '../../models/moderation_report.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
 import '../../widgets/admin_permissions_sheet.dart';
 import '../../widgets/glass.dart';
+import 'admin_audit_log_screen.dart';
 
 /// Owner-side moderation for a channel or group. Two controls:
 ///
@@ -26,16 +27,26 @@ class ModerationScreen extends StatefulWidget {
 
 class _ModerationScreenState extends State<ModerationScreen> {
   late bool _ownerOnly;
+  late int _newMemberCooldownSeconds;
+  late bool _blockLinks;
+  late bool _blockMedia;
+  late int _mentionLimit;
   List<Map<String, dynamic>> _mutes = [];
+  List<ModerationReport> _reports = [];
   List<ConversationMember> _members = [];
   bool _canManageModeration = false;
   bool _canManageRoles = false;
   bool _loading = true;
+  bool _savingAntiSpam = false;
 
   @override
   void initState() {
     super.initState();
     _ownerOnly = widget.conversation.ownerOnlyPost;
+    _newMemberCooldownSeconds = widget.conversation.newMemberCooldownSeconds;
+    _blockLinks = widget.conversation.antiSpamBlockLinks;
+    _blockMedia = widget.conversation.antiSpamBlockMedia;
+    _mentionLimit = widget.conversation.antiSpamMentionLimit;
     _load();
   }
 
@@ -52,9 +63,16 @@ class _ModerationScreenState extends State<ModerationScreen> {
       final mutes = canManageModeration
           ? await api.listMutes(widget.conversation.id)
           : <dynamic>[];
+      final reports = canManageModeration
+          ? await api.listModerationReports(
+              widget.conversation.id,
+              channel: widget.conversation.isChannel,
+            )
+          : <ModerationReport>[];
       if (!mounted) return;
       setState(() {
         _mutes = mutes.cast<Map<String, dynamic>>();
+        _reports = reports;
         _members = members;
         _canManageModeration = canManageModeration;
         _canManageRoles = canManageRoles;
@@ -77,6 +95,68 @@ class _ModerationScreenState extends State<ModerationScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _ownerOnly = !value);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed: $e')));
+    }
+  }
+
+  Future<void> _saveAntiSpamControls({
+    int? newMemberCooldownSeconds,
+    bool? blockLinks,
+    bool? blockMedia,
+    int? mentionLimit,
+  }) async {
+    final previousCooldown = _newMemberCooldownSeconds;
+    final previousBlockLinks = _blockLinks;
+    final previousBlockMedia = _blockMedia;
+    final previousMentionLimit = _mentionLimit;
+    setState(() {
+      _newMemberCooldownSeconds =
+          newMemberCooldownSeconds ?? _newMemberCooldownSeconds;
+      _blockLinks = blockLinks ?? _blockLinks;
+      _blockMedia = blockMedia ?? _blockMedia;
+      _mentionLimit = mentionLimit ?? _mentionLimit;
+      _savingAntiSpam = true;
+    });
+    try {
+      await context.read<ApiService>().setAntiSpamControls(
+        widget.conversation.id,
+        channel: widget.conversation.isChannel,
+        newMemberCooldownSeconds: _newMemberCooldownSeconds,
+        blockLinks: _blockLinks,
+        blockMedia: _blockMedia,
+        mentionLimit: _mentionLimit,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _newMemberCooldownSeconds = previousCooldown;
+        _blockLinks = previousBlockLinks;
+        _blockMedia = previousBlockMedia;
+        _mentionLimit = previousMentionLimit;
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed: $e')));
+    } finally {
+      if (mounted) {
+        setState(() => _savingAntiSpam = false);
+      }
+    }
+  }
+
+  Future<void> _resolveReport(ModerationReport report, String status) async {
+    try {
+      await context.read<ApiService>().resolveModerationReport(
+        widget.conversation.id,
+        report.id,
+        channel: widget.conversation.isChannel,
+        status: status,
+      );
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Failed: $e')));
@@ -160,26 +240,11 @@ class _ModerationScreenState extends State<ModerationScreen> {
   }
 
   Future<void> _showAuditHistory() async {
-    final api = context.read<ApiService>();
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      final events = await api.listAdminAuditEvents(
-        widget.conversation.id,
-        channel: widget.conversation.isChannel,
-      );
-      if (!mounted) return;
-      await showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder: (_) => _AuditHistorySheet(events: events),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Failed to load history: $e')),
-      );
-    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AdminAuditLogScreen(conversation: widget.conversation),
+      ),
+    );
   }
 
   Future<void> _ban(ConversationMember m) async {
@@ -247,7 +312,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
                 if (_canManageModeration || _canManageRoles)
                   ListTile(
                     leading: const Icon(Icons.history_rounded),
-                    title: const Text('Audit history'),
+                    title: const Text('Audit log'),
                     trailing: const Icon(Icons.chevron_right_rounded),
                     onTap: _showAuditHistory,
                   ),
@@ -262,6 +327,109 @@ class _ModerationScreenState extends State<ModerationScreen> {
                     onChanged: _toggleOwnerOnly,
                   ),
                 if (_canManageModeration) ...[
+                  const Divider(),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                    child: Text(
+                      'Anti-spam controls',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.hourglass_bottom_rounded),
+                    title: const Text('New-user cooldown'),
+                    trailing: DropdownButton<int>(
+                      value: _newMemberCooldownSeconds,
+                      underline: const SizedBox.shrink(),
+                      items: const [
+                        DropdownMenuItem(value: 0, child: Text('Off')),
+                        DropdownMenuItem(value: 60, child: Text('1 min')),
+                        DropdownMenuItem(value: 300, child: Text('5 min')),
+                        DropdownMenuItem(value: 3600, child: Text('1 hour')),
+                        DropdownMenuItem(value: 86400, child: Text('1 day')),
+                      ],
+                      onChanged: _savingAntiSpam
+                          ? null
+                          : (value) => _saveAntiSpamControls(
+                              newMemberCooldownSeconds: value,
+                            ),
+                    ),
+                  ),
+                  SwitchListTile(
+                    secondary: const Icon(Icons.perm_media_outlined),
+                    title: const Text('Block media'),
+                    value: _blockMedia,
+                    onChanged: _savingAntiSpam
+                        ? null
+                        : (value) => _saveAntiSpamControls(blockMedia: value),
+                  ),
+                  SwitchListTile(
+                    secondary: const Icon(Icons.link_off_rounded),
+                    title: const Text('Block links'),
+                    value: _blockLinks,
+                    onChanged: _savingAntiSpam
+                        ? null
+                        : (value) => _saveAntiSpamControls(blockLinks: value),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.alternate_email_rounded),
+                    title: const Text('Mention limit'),
+                    trailing: DropdownButton<int>(
+                      value: _mentionLimit,
+                      underline: const SizedBox.shrink(),
+                      items: const [
+                        DropdownMenuItem(value: 0, child: Text('Off')),
+                        DropdownMenuItem(value: 1, child: Text('1')),
+                        DropdownMenuItem(value: 3, child: Text('3')),
+                        DropdownMenuItem(value: 5, child: Text('5')),
+                        DropdownMenuItem(value: 10, child: Text('10')),
+                        DropdownMenuItem(value: 25, child: Text('25')),
+                      ],
+                      onChanged: _savingAntiSpam
+                          ? null
+                          : (value) =>
+                                _saveAntiSpamControls(mentionLimit: value),
+                    ),
+                  ),
+                  const Divider(),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                    child: Text(
+                      'Reports (${_reports.length})',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ),
+                  if (_reports.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      child: Text(
+                        'No open reports.',
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ),
+                  for (final report in _reports)
+                    ListTile(
+                      leading: const Icon(Icons.report_problem_outlined),
+                      title: Text(_reportTitle(report)),
+                      subtitle: Text(_reportSubtitle(report)),
+                      trailing: PopupMenuButton<String>(
+                        icon: const Icon(Icons.more_vert),
+                        onSelected: (status) => _resolveReport(report, status),
+                        itemBuilder: (context) => const [
+                          PopupMenuItem(
+                            value: 'resolved',
+                            child: Text('Resolve'),
+                          ),
+                          PopupMenuItem(
+                            value: 'dismissed',
+                            child: Text('Dismiss'),
+                          ),
+                        ],
+                      ),
+                    ),
                   const Divider(),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
@@ -395,6 +563,28 @@ class _ModerationScreenState extends State<ModerationScreen> {
     if (reason != null && reason.isNotEmpty) parts.add('· $reason');
     return parts.join(' ');
   }
+
+  String _reportTitle(ModerationReport report) {
+    final reported = report.reportedUsername;
+    if (reported != null && reported.isNotEmpty) return '@$reported';
+    final id = report.reportedUserId;
+    return id == null ? 'Reported message' : id.substring(0, 8);
+  }
+
+  String _reportSubtitle(ModerationReport report) {
+    final reporter = report.reporterUsername;
+    final parts = <String>[
+      reporter == null || reporter.isEmpty ? 'Report' : 'By @$reporter',
+      _formatLocal(report.createdAt),
+    ];
+    if (report.reason.trim().isNotEmpty) {
+      parts.add(report.reason.trim());
+    }
+    return parts.join(' · ');
+  }
+
+  String _formatLocal(DateTime value) =>
+      value.toLocal().toString().split('.').first;
 }
 
 class _ModTile extends StatelessWidget {
@@ -449,174 +639,5 @@ class _ModTile extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-class _AuditHistorySheet extends StatelessWidget {
-  final List<AdminAuditEvent> events;
-
-  const _AuditHistorySheet({required this.events});
-
-  @override
-  Widget build(BuildContext context) {
-    return GlassBottomSheetFrame(
-      child: SafeArea(
-        top: false,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxHeight: 680),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 8, 8),
-                child: Row(
-                  children: [
-                    const Icon(Icons.history_rounded),
-                    const SizedBox(width: 10),
-                    Text(
-                      'Audit history',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      icon: const Icon(Icons.close_rounded),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-              ),
-              if (events.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(20, 28, 20, 36),
-                  child: Text('No admin events yet.'),
-                )
-              else
-                Flexible(
-                  child: ListView.separated(
-                    shrinkWrap: true,
-                    itemCount: events.length,
-                    separatorBuilder: (_, _) => const Divider(height: 1),
-                    itemBuilder: (context, index) =>
-                        _AuditHistoryTile(event: events[index]),
-                  ),
-                ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _AuditHistoryTile extends StatelessWidget {
-  final AdminAuditEvent event;
-
-  const _AuditHistoryTile({required this.event});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return ListTile(
-      leading: Icon(_auditIcon(event.action), color: scheme.primary),
-      title: Text(_auditTitle(event)),
-      subtitle: Text(_auditSubtitle(event)),
-      isThreeLine: true,
-    );
-  }
-}
-
-IconData _auditIcon(String action) => switch (action) {
-  'member_role_updated' => Icons.admin_panel_settings_outlined,
-  'member_muted' || 'member_unmuted' => Icons.volume_off_outlined,
-  'member_banned' || 'member_unbanned' => Icons.block_rounded,
-  'message_deleted' || 'messages_deleted' => Icons.delete_sweep_outlined,
-  'channel_post_pinned' || 'channel_post_unpinned' => Icons.push_pin_outlined,
-  'invite_link_created' || 'invite_link_revoked' => Icons.link_rounded,
-  'join_request_approved' ||
-  'join_request_rejected' => Icons.how_to_reg_outlined,
-  'encryption_updated' => Icons.lock_outline_rounded,
-  'slow_mode_updated' || 'message_ttl_updated' => Icons.timer_outlined,
-  'topic_created' ||
-  'topic_updated' ||
-  'topics_enabled_updated' => Icons.forum_outlined,
-  'owner_only_post_updated' => Icons.campaign_outlined,
-  _ => Icons.shield_outlined,
-};
-
-String _auditTitle(AdminAuditEvent event) => switch (event.action) {
-  'conversation_info_updated' => 'Updated group info',
-  'channel_info_updated' => 'Updated channel info',
-  'background_updated' => 'Updated background',
-  'member_added' => 'Added ${event.targetLabel}',
-  'member_removed' => 'Removed ${event.targetLabel}',
-  'member_role_updated' => 'Updated ${event.targetLabel}',
-  'member_muted' => 'Muted ${event.targetLabel}',
-  'member_unmuted' => 'Unmuted ${event.targetLabel}',
-  'member_banned' => 'Banned ${event.targetLabel}',
-  'member_unbanned' => 'Unbanned ${event.targetLabel}',
-  'message_deleted' => 'Deleted a message',
-  'messages_deleted' => 'Deleted messages',
-  'channel_post_pinned' => 'Pinned a post',
-  'channel_post_unpinned' => 'Unpinned a post',
-  'invite_link_created' => 'Created invite link',
-  'invite_link_revoked' => 'Revoked invite link',
-  'slow_mode_updated' => 'Updated slow mode',
-  'message_ttl_updated' => 'Updated disappearing messages',
-  'encryption_updated' => 'Updated encryption',
-  'join_approval_updated' => 'Updated join approval',
-  'topics_enabled_updated' => 'Updated topics',
-  'topic_created' => 'Created topic',
-  'topic_updated' => 'Updated topic',
-  'admin_anonymity_updated' => 'Updated ${event.targetLabel}',
-  'join_request_approved' => 'Approved ${event.targetLabel}',
-  'join_request_rejected' => 'Rejected ${event.targetLabel}',
-  'owner_only_post_updated' => 'Updated posting mode',
-  _ => event.action.replaceAll('_', ' '),
-};
-
-String _auditSubtitle(AdminAuditEvent event) {
-  final parts = <String>[event.actorLabel, _formatAuditTime(event.createdAt)];
-  final detail = _auditMetadataDetail(event);
-  if (detail != null) parts.add(detail);
-  return parts.join(' · ');
-}
-
-String _formatAuditTime(DateTime value) {
-  final local = value.toLocal();
-  final date =
-      '${local.year.toString().padLeft(4, '0')}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}';
-  final time =
-      '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
-  return '$date $time';
-}
-
-String? _auditMetadataDetail(AdminAuditEvent event) {
-  final metadata = event.metadata;
-  switch (event.action) {
-    case 'member_role_updated':
-      final role = metadata['role'];
-      return role is String ? role : null;
-    case 'messages_deleted':
-      final scope = metadata['scope'];
-      final count = metadata['count'];
-      if (scope is String && count is int) return '$scope · $count';
-      return null;
-    case 'member_muted':
-      final minutes = metadata['duration_minutes'];
-      if (minutes is int && minutes > 0) return '$minutes min';
-      return 'Indefinite';
-    case 'slow_mode_updated':
-    case 'message_ttl_updated':
-      final seconds = metadata['seconds'];
-      return seconds is int ? '${seconds}s' : null;
-    case 'join_approval_updated':
-    case 'topics_enabled_updated':
-    case 'encryption_updated':
-    case 'owner_only_post_updated':
-      final enabled = metadata['enabled'] ?? metadata['required'];
-      return enabled is bool ? (enabled ? 'On' : 'Off') : null;
-    default:
-      return null;
   }
 }

@@ -8,6 +8,13 @@ class ConversationInviteLink {
   final String token;
   final String createdBy;
   final bool approvalRequired;
+  final DateTime? expiresAt;
+  final int? usageLimit;
+  final int usageCount;
+  final int previewCount;
+  final int joinCount;
+  final int joinRequestCount;
+  final DateTime? lastUsedAt;
   final DateTime? revokedAt;
   final DateTime createdAt;
 
@@ -17,6 +24,13 @@ class ConversationInviteLink {
     required this.token,
     required this.createdBy,
     this.approvalRequired = false,
+    this.expiresAt,
+    this.usageLimit,
+    this.usageCount = 0,
+    this.previewCount = 0,
+    this.joinCount = 0,
+    this.joinRequestCount = 0,
+    this.lastUsedAt,
     this.revokedAt,
     required this.createdAt,
   });
@@ -28,6 +42,17 @@ class ConversationInviteLink {
         token: json['token'] as String,
         createdBy: json['created_by'] as String,
         approvalRequired: json['approval_required'] as bool? ?? false,
+        expiresAt: json['expires_at'] != null
+            ? DateTime.parse(json['expires_at'] as String)
+            : null,
+        usageLimit: json['usage_limit'] as int?,
+        usageCount: json['usage_count'] as int? ?? 0,
+        previewCount: json['preview_count'] as int? ?? 0,
+        joinCount: json['join_count'] as int? ?? 0,
+        joinRequestCount: json['join_request_count'] as int? ?? 0,
+        lastUsedAt: json['last_used_at'] != null
+            ? DateTime.parse(json['last_used_at'] as String)
+            : null,
         revokedAt: json['revoked_at'] != null
             ? DateTime.parse(json['revoked_at'] as String)
             : null,
@@ -35,6 +60,12 @@ class ConversationInviteLink {
       );
 
   String get inviteUri => inviteDeepLink(token: token);
+
+  bool get isExpired =>
+      expiresAt != null && !DateTime.now().isBefore(expiresAt!);
+
+  bool get isUsageLimitReached =>
+      usageLimit != null && usageCount >= usageLimit!;
 }
 
 class ConversationJoinRequest {

@@ -47,6 +47,89 @@ class PendingAttachment {
   };
 }
 
+class EncryptedAttachmentUpload {
+  final Uint8List ciphertext;
+  final String fileName;
+  final int fileSize;
+  final int encryptedFileSize;
+  final String mimeType;
+  final MessageType messageType;
+  final int? durationMs;
+  final String fileKey;
+  final String fileNonce;
+
+  const EncryptedAttachmentUpload({
+    required this.ciphertext,
+    required this.fileName,
+    required this.fileSize,
+    required this.encryptedFileSize,
+    required this.mimeType,
+    required this.messageType,
+    this.durationMs,
+    required this.fileKey,
+    required this.fileNonce,
+  });
+
+  Map<String, dynamic> toMetadataJson() => {
+    'file_name': fileName,
+    'file_size': fileSize,
+    'encrypted_file_size': encryptedFileSize,
+    'mime_type': mimeType,
+    'message_type': messageType.name,
+    if (durationMs != null) 'duration_ms': durationMs,
+    'file_key': fileKey,
+    'file_nonce': fileNonce,
+  };
+
+  factory EncryptedAttachmentUpload.fromMetadataJson(
+    Map<String, dynamic> json, {
+    required Uint8List ciphertext,
+  }) {
+    return EncryptedAttachmentUpload(
+      ciphertext: ciphertext,
+      fileName: json['file_name'] as String? ?? 'attachment',
+      fileSize: json['file_size'] as int? ?? 0,
+      encryptedFileSize:
+          json['encrypted_file_size'] as int? ?? ciphertext.length,
+      mimeType: json['mime_type'] as String? ?? 'application/octet-stream',
+      messageType: MessageType.values.firstWhere(
+        (type) => type.name == json['message_type'],
+        orElse: () => MessageType.file,
+      ),
+      durationMs: json['duration_ms'] as int?,
+      fileKey: json['file_key'] as String? ?? '',
+      fileNonce: json['file_nonce'] as String? ?? '',
+    );
+  }
+
+  Map<String, dynamic> toPayloadJson({
+    required String attachmentId,
+    String caption = '',
+  }) => {
+    'text': caption,
+    'attachment_id': attachmentId,
+    'file_name': fileName,
+    'file_size': fileSize,
+    'mime_type': mimeType,
+    if (durationMs != null) 'duration_ms': durationMs,
+    'file_key': fileKey,
+    'file_nonce': fileNonce,
+  };
+
+  PendingAttachment toPendingAttachment(String attachmentId) {
+    return PendingAttachment(
+      attachmentId: attachmentId,
+      fileName: fileName,
+      fileSize: fileSize,
+      mimeType: mimeType,
+      messageType: messageType,
+      durationMs: durationMs,
+      fileKey: fileKey,
+      fileNonce: fileNonce,
+    );
+  }
+}
+
 enum AttachmentUploadStage {
   preparing,
   encrypting,
@@ -129,6 +212,27 @@ class AttachmentService {
     return _processPrepared(prepared, onProgress: onProgress);
   }
 
+  Future<EncryptedAttachmentUpload?> pickImageForOutbox({
+    bool fromCamera = false,
+    AttachmentUploadProgressCallback? onProgress,
+  }) async {
+    final XFile? file = fromCamera
+        ? await _imagePicker.pickImage(
+            source: ImageSource.camera,
+            imageQuality: 85,
+          )
+        : await _imagePicker.pickImage(
+            source: ImageSource.gallery,
+            imageQuality: 85,
+          );
+    if (file == null) return null;
+    onProgress?.call(
+      const AttachmentUploadProgress(stage: AttachmentUploadStage.preparing),
+    );
+    final prepared = await prepareGalleryPhotoForUpload(File(file.path));
+    return encryptPreparedAttachment(prepared, onProgress: onProgress);
+  }
+
   Future<PendingAttachment?> pickVideo({
     bool fromCamera = false,
     AttachmentUploadProgressCallback? onProgress,
@@ -144,6 +248,21 @@ class AttachmentService {
     return _processPrepared(prepared, onProgress: onProgress);
   }
 
+  Future<EncryptedAttachmentUpload?> pickVideoForOutbox({
+    bool fromCamera = false,
+    AttachmentUploadProgressCallback? onProgress,
+  }) async {
+    final XFile? file = fromCamera
+        ? await _imagePicker.pickVideo(source: ImageSource.camera)
+        : await _imagePicker.pickVideo(source: ImageSource.gallery);
+    if (file == null) return null;
+    onProgress?.call(
+      const AttachmentUploadProgress(stage: AttachmentUploadStage.preparing),
+    );
+    final prepared = await prepareFileForUpload(File(file.path));
+    return encryptPreparedAttachment(prepared, onProgress: onProgress);
+  }
+
   Future<PendingAttachment?> pickFile({
     AttachmentUploadProgressCallback? onProgress,
   }) async {
@@ -154,6 +273,18 @@ class AttachmentService {
     );
     final prepared = await prepareSelectedFileForUpload(file);
     return _processPrepared(prepared, onProgress: onProgress);
+  }
+
+  Future<EncryptedAttachmentUpload?> pickFileForOutbox({
+    AttachmentUploadProgressCallback? onProgress,
+  }) async {
+    final file = await fs.openFile();
+    if (file == null) return null;
+    onProgress?.call(
+      const AttachmentUploadProgress(stage: AttachmentUploadStage.preparing),
+    );
+    final prepared = await prepareSelectedFileForUpload(file);
+    return encryptPreparedAttachment(prepared, onProgress: onProgress);
   }
 
   Future<PendingAttachment?> pickVoice({
@@ -206,6 +337,30 @@ class AttachmentService {
     );
     final prepared = await prepareFileForUpload(file);
     return _processPrepared(
+      PreparedAttachmentInput(
+        bytes: prepared.bytes,
+        fileName: prepared.fileName,
+        mimeType: prepared.mimeType == 'application/octet-stream'
+            ? 'audio/mp4'
+            : prepared.mimeType,
+        messageType: MessageType.voice,
+        originalFileSize: prepared.originalFileSize,
+      ),
+      durationMs: duration?.inMilliseconds,
+      onProgress: onProgress,
+    );
+  }
+
+  Future<EncryptedAttachmentUpload> prepareVoiceNoteForOutbox(
+    File file, {
+    Duration? duration,
+    AttachmentUploadProgressCallback? onProgress,
+  }) async {
+    onProgress?.call(
+      const AttachmentUploadProgress(stage: AttachmentUploadStage.preparing),
+    );
+    final prepared = await prepareFileForUpload(file);
+    return encryptPreparedAttachment(
       PreparedAttachmentInput(
         bytes: prepared.bytes,
         fileName: prepared.fileName,
@@ -283,6 +438,19 @@ class AttachmentService {
     int? durationMs,
     AttachmentUploadProgressCallback? onProgress,
   }) async {
+    final encrypted = await encryptPreparedAttachment(
+      prepared,
+      durationMs: durationMs,
+      onProgress: onProgress,
+    );
+    return uploadEncryptedAttachment(encrypted, onProgress: onProgress);
+  }
+
+  Future<EncryptedAttachmentUpload> encryptPreparedAttachment(
+    PreparedAttachmentInput prepared, {
+    int? durationMs,
+    AttachmentUploadProgressCallback? onProgress,
+  }) async {
     final bytes = prepared.bytes;
     final fileName = prepared.fileName;
     final mimeType = prepared.mimeType;
@@ -308,24 +476,41 @@ class AttachmentService {
     final keyB64 = base64Encode(keyBytes);
     final nonceB64 = base64Encode(nonce);
 
+    return EncryptedAttachmentUpload(
+      ciphertext: ciphertext,
+      fileName: fileName,
+      fileSize: prepared.originalFileSize,
+      encryptedFileSize: ciphertext.length,
+      mimeType: mimeType,
+      messageType: msgType,
+      durationMs: durationMs,
+      fileKey: keyB64,
+      fileNonce: nonceB64,
+    );
+  }
+
+  Future<PendingAttachment> uploadEncryptedAttachment(
+    EncryptedAttachmentUpload encrypted, {
+    AttachmentUploadProgressCallback? onProgress,
+  }) async {
     // 4. Request a presigned upload URL.
     final uploadReq = await _api.requestUpload(
-      fileName: fileName,
-      fileSize: ciphertext.length,
-      mimeType: mimeType,
+      fileName: encrypted.fileName,
+      fileSize: encrypted.ciphertext.length,
+      mimeType: encrypted.mimeType,
     );
 
     // 5. Upload the ciphertext directly to object storage.
     onProgress?.call(
       AttachmentUploadProgress(
         stage: AttachmentUploadStage.uploading,
-        totalBytes: ciphertext.length,
+        totalBytes: encrypted.ciphertext.length,
       ),
     );
     await _api.uploadBytes(
       uploadReq.uploadUrl,
-      ciphertext,
-      mimeType,
+      encrypted.ciphertext,
+      encrypted.mimeType,
       onProgress: (sent, total) => onProgress?.call(
         AttachmentUploadProgress(
           stage: AttachmentUploadStage.uploading,
@@ -339,23 +524,13 @@ class AttachmentService {
     onProgress?.call(
       AttachmentUploadProgress(
         stage: AttachmentUploadStage.confirming,
-        sentBytes: ciphertext.length,
-        totalBytes: ciphertext.length,
+        sentBytes: encrypted.ciphertext.length,
+        totalBytes: encrypted.ciphertext.length,
       ),
     );
     await _api.confirmUpload(uploadReq.attachmentId);
 
-    return PendingAttachment(
-      attachmentId: uploadReq.attachmentId,
-      fileName: fileName,
-      fileSize:
-          prepared.originalFileSize, // original unencrypted size for display
-      mimeType: mimeType,
-      messageType: msgType,
-      durationMs: durationMs,
-      fileKey: keyB64,
-      fileNonce: nonceB64,
-    );
+    return encrypted.toPendingAttachment(uploadReq.attachmentId);
   }
 
   static Future<Uint8List?> _compressToWebp(File file, Uint8List bytes) async {
