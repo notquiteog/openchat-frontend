@@ -411,7 +411,7 @@ class Message {
   final String id;
   final String conversationId;
   final String senderId;
-  final MessageType type;
+  MessageType type;
 
   /// PGP-armored ciphertext — decrypted client-side using the local private key.
   final String encryptedPayload;
@@ -492,6 +492,11 @@ class Message {
   );
 
   void setDecryptedContent(String raw) {
+    final wrapped = _tryParseOpenChatMessage(raw);
+    if (wrapped != null) {
+      type = _parseType(wrapped.type);
+      raw = wrapped.payload;
+    }
     if (type == MessageType.location) {
       final location = MessageLocation.tryParse(raw);
       _location = location;
@@ -578,6 +583,20 @@ class Message {
     _ => MessageType.text,
   };
 
+  static _OpenChatMessagePayload? _tryParseOpenChatMessage(String raw) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return null;
+      if (decoded['openchat_message'] != 1) return null;
+      final type = decoded['type'];
+      final payload = decoded['payload'];
+      if (type is! String || payload is! String) return null;
+      return _OpenChatMessagePayload(type: type, payload: payload);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Message copyWith({
     String? encryptedPayload,
     String? signature,
@@ -620,6 +639,13 @@ class Message {
     msg._decryptionFailed = _decryptionFailed;
     return msg;
   }
+}
+
+class _OpenChatMessagePayload {
+  final String type;
+  final String payload;
+
+  const _OpenChatMessagePayload({required this.type, required this.payload});
 }
 
 class Poll {

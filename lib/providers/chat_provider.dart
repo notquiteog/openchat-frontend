@@ -75,6 +75,7 @@ class LiveLocationShareStatus {
 class _PreparedEncryptedPayload {
   final String encryptedPayload;
   final String signature;
+  final String cleartextPayload;
   final List<String> mentionedUserIds;
   final bool isEncrypted;
   final int autoDeleteSeconds;
@@ -84,6 +85,7 @@ class _PreparedEncryptedPayload {
   const _PreparedEncryptedPayload({
     required this.encryptedPayload,
     required this.signature,
+    required this.cleartextPayload,
     required this.mentionedUserIds,
     required this.isEncrypted,
     required this.autoDeleteSeconds,
@@ -514,7 +516,10 @@ class ChatProvider extends ChangeNotifier {
     final signature = data['signature'] as String? ?? '';
     final plaintext = data['plaintext_payload'] as String?;
     final senderID = data['sender_id'] as String? ?? _selfId ?? '';
-    final messageType = data['message_type'] as String? ?? 'text';
+    final messageType =
+        data['local_message_type'] as String? ??
+        data['message_type'] as String? ??
+        'text';
     if (pendingID == null ||
         pendingID.isEmpty ||
         plaintext == null ||
@@ -1185,16 +1190,27 @@ class ChatProvider extends ChangeNotifier {
     final conv = _conversations[convID];
     if (conv == null) return;
     final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
+    final list = _messages[convID] ?? [];
+    final idx = list.indexWhere((m) => m.id == msgID);
+    Message? original = idx != -1 ? list[idx] : null;
+    final editMessageType = _messageTypeWire(
+      original?.type ?? MessageType.text,
+    );
     final String encrypted;
     final String signature;
+    final String cleartextPayload;
     if (conv.encryptionEnabled) {
       if (privateKey.isEmpty) return;
-      final recipientKeys = await _freshRecipientKeys(convID, conv);
-      if (recipientKeys.isEmpty) return;
+      final recipients = await _freshRecipientKeys(convID, conv);
+      if (recipients.isEmpty) return;
+      cleartextPayload = _encryptedCleartextPayload(
+        plaintextPayload: newPlaintext,
+        messageType: editMessageType,
+      );
 
       encrypted = await PgpService.encrypt(
-        plaintext: newPlaintext,
-        recipientPublicKeys: recipientKeys,
+        plaintext: cleartextPayload,
+        recipients: recipients,
         signingPrivateKeyArmored: privateKey,
       );
       signature = await PgpService.sign(
@@ -1204,19 +1220,16 @@ class ChatProvider extends ChangeNotifier {
     } else {
       encrypted = newPlaintext;
       signature = '';
+      cleartextPayload = newPlaintext;
     }
 
-    final list = _messages[convID] ?? [];
-    final idx = list.indexWhere((m) => m.id == msgID);
-    Message? original;
     if (idx != -1) {
-      original = list[idx];
       final optimistic = list[idx].copyWith(
         encryptedPayload: encrypted,
         signature: signature,
         editedAt: DateTime.now(),
       );
-      optimistic.setDecryptedContent(newPlaintext);
+      optimistic.setDecryptedContent(cleartextPayload);
       list[idx] = optimistic;
       _messages[convID] = List.from(list);
       notifyListeners();
@@ -1231,7 +1244,7 @@ class ChatProvider extends ChangeNotifier {
           createdAt: DateTime.now(),
           data: {
             'message_id': msgID,
-            'plaintext_payload': newPlaintext,
+            'plaintext_payload': cleartextPayload,
             'encrypted_payload': encrypted,
             'signature': signature,
           },
@@ -1249,7 +1262,7 @@ class ChatProvider extends ChangeNotifier {
       );
       // We can't always re-decrypt our own message from the server, so set the
       // plaintext we already know directly.
-      updated.setDecryptedContent(newPlaintext);
+      updated.setDecryptedContent(cleartextPayload);
       _replaceMessage(convID, msgID, updated);
     } catch (e) {
       if (_shouldRetryOutboxError(e)) {
@@ -1261,7 +1274,7 @@ class ChatProvider extends ChangeNotifier {
             createdAt: DateTime.now(),
             data: {
               'message_id': msgID,
-              'plaintext_payload': newPlaintext,
+              'plaintext_payload': cleartextPayload,
               'encrypted_payload': encrypted,
               'signature': signature,
             },
@@ -1342,6 +1355,7 @@ class ChatProvider extends ChangeNotifier {
       return _PreparedEncryptedPayload(
         encryptedPayload: plaintextPayload,
         signature: '',
+        cleartextPayload: plaintextPayload,
         mentionedUserIds: mentionedUserIds,
         isEncrypted: false,
         autoDeleteSeconds: conv.messageTtlSeconds,
@@ -1352,18 +1366,22 @@ class ChatProvider extends ChangeNotifier {
       );
     }
 
-    final recipientKeys = await _freshRecipientKeys(convID, conv);
-    if (recipientKeys.isEmpty) {
+    final recipients = await _freshRecipientKeys(convID, conv);
+    if (recipients.isEmpty) {
       throw const ChatSendException(
         'Could not load recipient keys. Refresh the chat and try again.',
       );
     }
+    final cleartextPayload = _encryptedCleartextPayload(
+      plaintextPayload: plaintextPayload,
+      messageType: messageType,
+    );
 
     final String encrypted;
     try {
       encrypted = await PgpService.encrypt(
-        plaintext: plaintextPayload,
-        recipientPublicKeys: recipientKeys,
+        plaintext: cleartextPayload,
+        recipients: recipients,
         signingPrivateKeyArmored: privateKey,
       ).timeout(const Duration(seconds: 30));
     } on TimeoutException {
@@ -1392,7 +1410,8 @@ class ChatProvider extends ChangeNotifier {
     return _PreparedEncryptedPayload(
       encryptedPayload: encrypted,
       signature: signature,
-      mentionedUserIds: mentionedUserIds,
+      cleartextPayload: cleartextPayload,
+      mentionedUserIds: const [],
       isEncrypted: true,
       autoDeleteSeconds: conv.messageTtlSeconds,
       autoDeleteExpiresAt: conv.messageTtlSeconds > 0
@@ -1425,13 +1444,14 @@ class ChatProvider extends ChangeNotifier {
       plaintextPayload: plaintextPayload,
       messageType: messageType,
     );
+    final serverMessageType = prepared.isEncrypted ? 'text' : messageType;
 
     if (scheduledFor != null) {
       await _api.sendMessage(
         convID: convID,
         encryptedPayload: prepared.encryptedPayload,
         signature: prepared.signature,
-        messageType: messageType,
+        messageType: serverMessageType,
         replyTo: replyTo,
         attachmentId: attachmentId,
         topicId: topicId,
@@ -1460,7 +1480,7 @@ class ChatProvider extends ChangeNotifier {
       topicId: topicId,
       silent: silent,
       createdAt: DateTime.now(),
-      plaintext: plaintextPayload,
+      plaintext: prepared.cleartextPayload,
     );
 
     _messages[convID] = [...?_messages[convID], pending];
@@ -1470,8 +1490,9 @@ class ChatProvider extends ChangeNotifier {
       await _queuePreparedMessageSend(
         convID: convID,
         pending: pending,
-        plaintextPayload: plaintextPayload,
-        messageType: messageType,
+        plaintextPayload: prepared.cleartextPayload,
+        messageType: serverMessageType,
+        localMessageType: messageType,
         encryptedPayload: prepared.encryptedPayload,
         signature: prepared.signature,
         replyTo: replyTo,
@@ -1491,7 +1512,7 @@ class ChatProvider extends ChangeNotifier {
         convID: convID,
         encryptedPayload: prepared.encryptedPayload,
         signature: prepared.signature,
-        messageType: messageType,
+        messageType: serverMessageType,
         replyTo: replyTo,
         attachmentId: attachmentId,
         topicId: topicId,
@@ -1502,7 +1523,7 @@ class ChatProvider extends ChangeNotifier {
         convID: convID,
         pendingID: pending.id,
         confirmed: confirmed,
-        plaintextPayload: plaintextPayload,
+        plaintextPayload: prepared.cleartextPayload,
       );
       return confirmed;
     } catch (e) {
@@ -1510,8 +1531,9 @@ class ChatProvider extends ChangeNotifier {
         await _queuePreparedMessageSend(
           convID: convID,
           pending: pending,
-          plaintextPayload: plaintextPayload,
-          messageType: messageType,
+          plaintextPayload: prepared.cleartextPayload,
+          messageType: serverMessageType,
+          localMessageType: messageType,
           encryptedPayload: prepared.encryptedPayload,
           signature: prepared.signature,
           replyTo: replyTo,
@@ -1543,7 +1565,7 @@ class ChatProvider extends ChangeNotifier {
           topicId: pending.topicId,
           silent: pending.silent,
           createdAt: pending.createdAt,
-          plaintext: plaintextPayload,
+          plaintext: prepared.cleartextPayload,
           status: PendingMessageStatus.failed,
           lastError: e.toString(),
         );
@@ -1559,6 +1581,7 @@ class ChatProvider extends ChangeNotifier {
     required PendingMessage pending,
     required String plaintextPayload,
     required String messageType,
+    required String localMessageType,
     required String encryptedPayload,
     required String signature,
     required List<String> mentionedUserIds,
@@ -1582,6 +1605,7 @@ class ChatProvider extends ChangeNotifier {
         'encrypted_payload': encryptedPayload,
         'signature': signature,
         'message_type': messageType,
+        'local_message_type': localMessageType,
         'mentioned_user_ids': mentionedUserIds,
         'is_encrypted': isEncrypted,
         'auto_delete_seconds': autoDeleteSeconds,
@@ -1679,6 +1703,40 @@ class ChatProvider extends ChangeNotifier {
       _ => MessageType.text,
     };
   }
+
+  String _messageTypeWire(MessageType type) {
+    return switch (type) {
+      MessageType.sticker => 'sticker',
+      MessageType.file => 'file',
+      MessageType.image => 'image',
+      MessageType.video => 'video',
+      MessageType.voice => 'voice',
+      MessageType.audio => 'audio',
+      MessageType.animation => 'animation',
+      MessageType.videoNote => 'video_note',
+      MessageType.livePhoto => 'live_photo',
+      MessageType.poll => 'poll',
+      MessageType.location => 'location',
+      MessageType.venue => 'venue',
+      MessageType.contact => 'contact',
+      MessageType.dice => 'dice',
+      MessageType.checklist => 'checklist',
+      MessageType.invoice => 'invoice',
+      MessageType.paymentRequest => 'payment_request',
+      MessageType.paymentTransfer => 'payment_transfer',
+      MessageType.system => 'system',
+      MessageType.text => 'text',
+    };
+  }
+
+  String _encryptedCleartextPayload({
+    required String plaintextPayload,
+    required String messageType,
+  }) => jsonEncode({
+    'openchat_message': 1,
+    'type': messageType,
+    'payload': plaintextPayload,
+  });
 
   Future<bool> _sendEncryptedPayload({
     required String convID,
@@ -1927,7 +1985,7 @@ class ChatProvider extends ChangeNotifier {
   /// The sender's own key is always ensured via their local storage entry so
   /// they can re-decrypt their sent messages from the server after a fresh
   /// login.
-  Future<List<String>> _freshRecipientKeys(
+  Future<List<PgpRecipient>> _freshRecipientKeys(
     String convID,
     Conversation fallback,
   ) async {
@@ -1943,7 +2001,8 @@ class ChatProvider extends ChangeNotifier {
     // Collect keys by user ID — deduplication by identity, not by key string.
     final selfId = await _storage.getUserID() ?? '';
     final ownPublicKey = await _storage.getPublicKey() ?? '';
-    final keysByUser = <String, String>{};
+    final ownFingerprint = await _storage.getFingerprint() ?? '';
+    final keysByUser = <String, PgpRecipient>{};
 
     for (final member in members) {
       if (member.user?.isKeyExpired ?? false) continue;
@@ -1951,32 +2010,47 @@ class ChatProvider extends ChangeNotifier {
       if (member.userId == selfId) continue;
 
       try {
-        final freshKey = await _api.getFreshUserPublicKey(member.userId);
-        if (freshKey != null && freshKey.trim().isNotEmpty) {
-          keysByUser[member.userId] = freshKey;
+        final freshKey = await _api.getFreshUserPublicKeyEntry(member.userId);
+        if (freshKey != null && freshKey.publicKey.trim().isNotEmpty) {
+          keysByUser[member.userId] = PgpRecipient(
+            userId: member.userId,
+            publicKeyArmored: freshKey.publicKey,
+            keyFingerprint: freshKey.fingerprint,
+          );
           continue;
         }
+        continue;
       } catch (_) {
         final embeddedKey = member.user?.publicKey ?? '';
-        if (embeddedKey.trim().isNotEmpty) {
-          keysByUser[member.userId] = embeddedKey;
+        final embeddedFingerprint = member.user?.keyFingerprint ?? '';
+        if (embeddedKey.trim().isNotEmpty &&
+            embeddedFingerprint.trim().isNotEmpty) {
+          keysByUser[member.userId] = PgpRecipient(
+            userId: member.userId,
+            publicKeyArmored: embeddedKey,
+            keyFingerprint: embeddedFingerprint,
+          );
           continue;
         }
         throw const ChatSendException(
           'Could not load every recipient key. Refresh the chat and try again.',
         );
       }
+    }
 
-      throw const ChatSendException(
-        'Could not load every recipient key. Refresh the chat and try again.',
+    if (selfId.isNotEmpty &&
+        ownPublicKey.trim().isNotEmpty &&
+        ownFingerprint.trim().isNotEmpty) {
+      keysByUser[selfId] = PgpRecipient(
+        userId: selfId,
+        publicKeyArmored: ownPublicKey,
+        keyFingerprint: ownFingerprint,
       );
     }
 
-    if (selfId.isNotEmpty && ownPublicKey.isNotEmpty) {
-      keysByUser[selfId] = ownPublicKey;
-    }
-
-    return keysByUser.values.where((k) => k.trim().isNotEmpty).toList();
+    final out = keysByUser.values.toList()
+      ..sort((a, b) => a.userId.compareTo(b.userId));
+    return out;
   }
 
   Future<List<ConversationMember>> _loadMembersForEncryption(

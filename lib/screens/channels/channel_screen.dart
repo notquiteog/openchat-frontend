@@ -400,6 +400,8 @@ class ChannelFeedScreen extends StatefulWidget {
 class _PreparedChannelPostPayload {
   final String encryptedPayload;
   final String signature;
+  final String cleartextPayload;
+  final String serverMessageType;
   final List<String> mentionedUserIds;
   final String senderId;
   final bool isEncrypted;
@@ -407,6 +409,8 @@ class _PreparedChannelPostPayload {
   const _PreparedChannelPostPayload({
     required this.encryptedPayload,
     required this.signature,
+    required this.cleartextPayload,
+    required this.serverMessageType,
     required this.mentionedUserIds,
     required this.senderId,
     required this.isEncrypted,
@@ -679,7 +683,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       id: pendingID,
       conversationId: item.conversationId,
       senderId: senderID,
-      type: _messageTypeFromWire(data['message_type'] as String? ?? 'text'),
+      type: _messageTypeFromWire(
+        data['local_message_type'] as String? ??
+            data['message_type'] as String? ??
+            'text',
+      ),
       encryptedPayload:
           data['encrypted_payload'] as String? ??
           data['plaintext_payload'] as String? ??
@@ -901,7 +909,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       chanID: channel.id,
       encryptedPayload: prepared.encryptedPayload,
       signature: prepared.signature,
-      messageType: messageType,
+      messageType: prepared.serverMessageType,
       attachmentId: attachmentId,
       mentionedUserIds: prepared.mentionedUserIds,
       silent: silent,
@@ -909,7 +917,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     _replacePendingWithConfirmed(
       pendingID: pendingID,
       confirmed: confirmed,
-      plaintextPayload: plaintextPayload,
+      plaintextPayload: prepared.cleartextPayload,
     );
   }
 
@@ -1984,6 +1992,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       return _PreparedChannelPostPayload(
         encryptedPayload: plaintextPayload,
         signature: '',
+        cleartextPayload: plaintextPayload,
+        serverMessageType: messageType,
         mentionedUserIds: mentionedUserIds,
         senderId: userID,
         isEncrypted: false,
@@ -2007,49 +2017,61 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     }
 
     final selfPublicKey = await storage.getPublicKey() ?? '';
-    final keysByUser = <String, String>{};
+    final selfFingerprint = await storage.getFingerprint() ?? '';
+    final keysByUser = <String, PgpRecipient>{};
     for (final member in members) {
       if (member.userId == userID) continue;
       if (member.user?.isKeyExpired ?? false) continue;
       try {
-        final freshKey = await api.getFreshUserPublicKey(member.userId);
-        if (freshKey != null && freshKey.trim().isNotEmpty) {
-          keysByUser[member.userId] = freshKey;
+        final freshKey = await api.getFreshUserPublicKeyEntry(member.userId);
+        if (freshKey != null && freshKey.publicKey.trim().isNotEmpty) {
+          keysByUser[member.userId] = PgpRecipient(
+            userId: member.userId,
+            publicKeyArmored: freshKey.publicKey,
+            keyFingerprint: freshKey.fingerprint,
+          );
           continue;
         }
+        continue;
       } catch (_) {
         final embeddedKey = member.user?.publicKey ?? '';
-        if (embeddedKey.trim().isNotEmpty) {
-          keysByUser[member.userId] = embeddedKey;
+        final embeddedFingerprint = member.user?.keyFingerprint ?? '';
+        if (embeddedKey.trim().isNotEmpty &&
+            embeddedFingerprint.trim().isNotEmpty) {
+          keysByUser[member.userId] = PgpRecipient(
+            userId: member.userId,
+            publicKeyArmored: embeddedKey,
+            keyFingerprint: embeddedFingerprint,
+          );
           continue;
         }
-        throw const ChatSendException(
-          'Could not load every recipient key. Refresh the channel and try again.',
-        );
-      }
-
-      final embeddedKey = member.user?.publicKey ?? '';
-      if (embeddedKey.trim().isNotEmpty) {
-        keysByUser[member.userId] = embeddedKey;
-      } else {
         throw const ChatSendException(
           'Could not load every recipient key. Refresh the channel and try again.',
         );
       }
     }
-    if (selfPublicKey.trim().isNotEmpty) keysByUser[userID] = selfPublicKey;
-    final recipientKeys = keysByUser.values
-        .where((key) => key.trim().isNotEmpty)
-        .toList();
-    if (recipientKeys.isEmpty) {
+    if (selfPublicKey.trim().isNotEmpty && selfFingerprint.trim().isNotEmpty) {
+      keysByUser[userID] = PgpRecipient(
+        userId: userID,
+        publicKeyArmored: selfPublicKey,
+        keyFingerprint: selfFingerprint,
+      );
+    }
+    final recipients = keysByUser.values.toList()
+      ..sort((a, b) => a.userId.compareTo(b.userId));
+    if (recipients.isEmpty) {
       throw const ChatSendException(
         'Could not load recipient keys. Refresh the channel and try again.',
       );
     }
+    final cleartextPayload = _encryptedCleartextPayload(
+      plaintextPayload: plaintextPayload,
+      messageType: messageType,
+    );
 
     final encrypted = await PgpService.encrypt(
-      plaintext: plaintextPayload,
-      recipientPublicKeys: recipientKeys,
+      plaintext: cleartextPayload,
+      recipients: recipients,
       signingPrivateKeyArmored: privateKey,
     ).timeout(const Duration(seconds: 30));
     final signature = await PgpService.sign(
@@ -2059,7 +2081,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     return _PreparedChannelPostPayload(
       encryptedPayload: encrypted,
       signature: signature,
-      mentionedUserIds: mentionedUserIds,
+      cleartextPayload: cleartextPayload,
+      serverMessageType: 'text',
+      mentionedUserIds: const [],
       senderId: userID,
       isEncrypted: true,
     );
@@ -2068,6 +2092,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   Future<void> _queueChannelPost({
     required String plaintextPayload,
     required String messageType,
+    required String localMessageType,
     required String encryptedPayload,
     required String signature,
     required List<String> mentionedUserIds,
@@ -2091,6 +2116,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           'encrypted_payload': encryptedPayload,
           'signature': signature,
           'message_type': messageType,
+          if (isEncrypted) 'local_message_type': localMessageType,
           'mentioned_user_ids': mentionedUserIds,
           'is_encrypted': isEncrypted,
           'created_at': now.toUtc().toIso8601String(),
@@ -2206,8 +2232,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
 
     if (scheduledFor == null && !_ws.isMonitoring) {
       await _queueChannelPost(
-        plaintextPayload: draft.payload,
-        messageType: messageType,
+        plaintextPayload: prepared.cleartextPayload,
+        messageType: prepared.serverMessageType,
+        localMessageType: messageType,
         encryptedPayload: prepared.encryptedPayload,
         signature: prepared.signature,
         mentionedUserIds: prepared.mentionedUserIds,
@@ -2228,7 +2255,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         chanID: channel.id,
         encryptedPayload: prepared.encryptedPayload,
         signature: prepared.signature,
-        messageType: messageType,
+        messageType: prepared.serverMessageType,
         attachmentId: attachmentId,
         mentionedUserIds: prepared.mentionedUserIds,
         silent: silent,
@@ -2237,8 +2264,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     } catch (e) {
       if (scheduledFor == null && _shouldRetryOutboxError(e)) {
         await _queueChannelPost(
-          plaintextPayload: draft.payload,
-          messageType: messageType,
+          plaintextPayload: prepared.cleartextPayload,
+          messageType: prepared.serverMessageType,
+          localMessageType: messageType,
           encryptedPayload: prepared.encryptedPayload,
           signature: prepared.signature,
           mentionedUserIds: prepared.mentionedUserIds,
@@ -2262,7 +2290,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       }
       return;
     }
-    msg.setDecryptedContent(draft.payload);
+    msg.setDecryptedContent(prepared.cleartextPayload);
     if (plaintextOverride == null) {
       unawaited(_settings.clearMessageDraft(channel.id));
     }
@@ -2303,6 +2331,15 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       _ => MessageType.text,
     };
   }
+
+  String _encryptedCleartextPayload({
+    required String plaintextPayload,
+    required String messageType,
+  }) => jsonEncode({
+    'openchat_message': 1,
+    'type': messageType,
+    'payload': plaintextPayload,
+  });
 
   String _formatSchedule(DateTime? when) {
     if (when == null) return '';

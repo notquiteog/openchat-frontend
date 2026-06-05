@@ -39,8 +39,12 @@ void main() {
       const second =
           '-----BEGIN PGP MESSAGE-----\nsecond\n-----END PGP MESSAGE-----';
       final payload = jsonEncode({
-        'openchat_encrypted_envelope': 1,
-        'ciphertexts': [first, second],
+        'openchat_encrypted_envelope': 2,
+        'cipher': 'openpgp',
+        'recipients': {
+          'user-b': {'key_fingerprint': 'BBB', 'ciphertext': second},
+          'user-a': {'key_fingerprint': 'AAA', 'ciphertext': first},
+        },
       });
 
       expect(PgpService.isOpenChatEnvelope(payload), isTrue);

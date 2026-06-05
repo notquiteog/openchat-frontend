@@ -174,9 +174,9 @@ class ApiService {
   /// whose key has expired — callers building a multi-recipient envelope
   /// should drop those recipients so the resulting PGP message is decodable
   /// only by people who still have a valid key.
-  Future<String?> getUserPublicKey(String userID) async {
+  Future<CachedKey?> getUserPublicKeyEntry(String userID) async {
     final cached = await KeyCacheService.get(userID);
-    if (cached != null) return cached.publicKey;
+    if (cached != null) return cached;
 
     final resp = await _get('/api/v1/users/$userID/public-key');
     final data = resp['data'] as Map<String, dynamic>;
@@ -194,7 +194,16 @@ class ApiService {
       fingerprint,
       expiresAt: expiresAt,
     );
-    return publicKey;
+    return CachedKey(
+      publicKey: publicKey,
+      fingerprint: fingerprint,
+      expiresAt: expiresAt,
+    );
+  }
+
+  Future<String?> getUserPublicKey(String userID) async {
+    final entry = await getUserPublicKeyEntry(userID);
+    return entry?.publicKey;
   }
 
   /// Fetch a user's public key directly from the server, bypassing the local
@@ -203,6 +212,11 @@ class ApiService {
   Future<String?> getFreshUserPublicKey(String userID) async {
     await KeyCacheService.invalidate(userID);
     return getUserPublicKey(userID);
+  }
+
+  Future<CachedKey?> getFreshUserPublicKeyEntry(String userID) async {
+    await KeyCacheService.invalidate(userID);
+    return getUserPublicKeyEntry(userID);
   }
 
   /// Change the account login password. Verified against the current password

@@ -43,7 +43,7 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
     await NotificationService.showMessage(
       conversationId: conversationId,
       title: 'OpenChat',
-      body: 'You have a new message',
+      body: 'New message',
       mentionedUserIds: mentionedUserIdsFromNotificationData(message.data),
       mentionedForCurrentUser: notificationDataMentionsCurrentUser(
         message.data,

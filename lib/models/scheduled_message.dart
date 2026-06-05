@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'message.dart';
 
 class ScheduledMessage {
@@ -90,7 +92,11 @@ class ScheduledMessage {
   String get previewText {
     final raw = decryptedContent?.trim();
     if (raw != null && raw.isNotEmpty) {
-      final preview = _previewFromDecrypted(raw).trim();
+      final unwrapped = _tryParseOpenChatMessage(raw);
+      final preview = _previewFromDecrypted(
+        unwrapped?.payload ?? raw,
+        unwrapped?.type,
+      ).trim();
       if (preview.isNotEmpty) return preview;
     }
     return typeLabel;
@@ -121,13 +127,14 @@ class ScheduledMessage {
     };
   }
 
-  String _previewFromDecrypted(String raw) {
-    if (type == MessageType.location) {
+  String _previewFromDecrypted(String raw, String? wrappedType) {
+    final effectiveType = wrappedType == null ? type : _parseType(wrappedType);
+    if (effectiveType == MessageType.location) {
       final location = MessageLocation.tryParse(raw);
       if (location != null) return location.previewLabel;
     }
 
-    final content = MessageContent.parse(raw, type);
+    final content = MessageContent.parse(raw, effectiveType);
     final text = content.text.trim();
     if (text.isNotEmpty) return text;
 
@@ -137,6 +144,20 @@ class ScheduledMessage {
     }
 
     return '';
+  }
+
+  _ScheduledOpenChatPayload? _tryParseOpenChatMessage(String raw) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return null;
+      if (decoded['openchat_message'] != 1) return null;
+      final type = decoded['type'];
+      final payload = decoded['payload'];
+      if (type is! String || payload is! String) return null;
+      return _ScheduledOpenChatPayload(type: type, payload: payload);
+    } catch (_) {
+      return null;
+    }
   }
 
   static DateTime? _parseOptionalDate(Object? raw) {
@@ -168,4 +189,11 @@ class ScheduledMessage {
       _ => MessageType.text,
     };
   }
+}
+
+class _ScheduledOpenChatPayload {
+  final String type;
+  final String payload;
+
+  const _ScheduledOpenChatPayload({required this.type, required this.payload});
 }

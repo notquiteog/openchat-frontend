@@ -14,8 +14,10 @@ import 'package:openpgp/openpgp.dart';
 ///   sender decrypt their own messages after an app restart.
 class PgpService {
   static const _envelopeKey = 'openchat_encrypted_envelope';
-  static const _envelopeVersion = 1;
-  static const _ciphertextsKey = 'ciphertexts';
+  static const _envelopeVersion = 2;
+  static const _cipherKey = 'cipher';
+  static const _cipherName = 'openpgp';
+  static const _recipientsKey = 'recipients';
 
   /// Generate a new ECC key pair (Curve25519 + Ed25519).
   static Future<PgpKeyPair> generateKeyPair({
@@ -41,22 +43,21 @@ class PgpService {
   }) {
     return switch (keyType) {
       KeyType.curve25519 => generateKeyPair(
-          username: username,
-          passphrase: passphrase,
-        ),
+        username: username,
+        passphrase: passphrase,
+      ),
       KeyType.rsa4096 => generateRsaKeyPair(
-          username: username,
-          passphrase: passphrase,
-        ),
+        username: username,
+        passphrase: passphrase,
+      ),
       KeyType.mldsa65Ed25519 ||
       KeyType.mldsa87Ed448 ||
       KeyType.mlkem768X25519 ||
-      KeyType.mlkem1024X448 =>
-        generateQuantumKeyPair(
-          username: username,
-          keyType: keyType,
-          passphrase: passphrase,
-        ),
+      KeyType.mlkem1024X448 => generateQuantumKeyPair(
+        username: username,
+        keyType: keyType,
+        passphrase: passphrase,
+      ),
     };
   }
 
@@ -135,8 +136,8 @@ class PgpService {
 
   /// Encrypt a plaintext message for multiple recipients.
   ///
-  /// [recipientPublicKeys] should include ALL conversation members (sender
-  /// included).
+  /// [recipients] should include every active non-expired conversation member
+  /// (sender included), keyed by user ID with the member's current fingerprint.
   ///
   /// Always stores a compact OpenChat envelope containing one signed+encrypted
   /// PGP message per recipient. Using the same envelope path for DMs and groups
@@ -145,53 +146,80 @@ class PgpService {
   /// after a restart.
   static Future<String> encrypt({
     required String plaintext,
-    required List<String> recipientPublicKeys,
+    required List<PgpRecipient> recipients,
     required String signingPrivateKeyArmored,
     String signingKeyPassphrase = '',
   }) async {
-    final keys = _normalizeArmoredKeys(recipientPublicKeys);
-    if (keys.isEmpty) {
+    final normalizedRecipients = _normalizeRecipients(recipients);
+    if (normalizedRecipients.isEmpty) {
       throw ArgumentError.value(
-        recipientPublicKeys,
-        'recipientPublicKeys',
+        recipients,
+        'recipients',
         'must contain at least one public key',
       );
     }
     return _encryptEnvelope(
       plaintext: plaintext,
-      recipientPublicKeys: keys,
+      recipients: normalizedRecipients,
       signingPrivateKeyArmored: signingPrivateKeyArmored,
       signingKeyPassphrase: signingKeyPassphrase,
     );
   }
 
-  static List<String> _normalizeArmoredKeys(List<String> keys) {
+  static List<PgpRecipient> _normalizeRecipients(
+    List<PgpRecipient> recipients,
+  ) {
     final seen = <String>{};
-    final out = <String>[];
-    for (final raw in keys) {
-      final key = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n').trim();
-      if (key.isEmpty || !seen.add(key)) continue;
-      out.add(key);
+    final out = <PgpRecipient>[];
+    for (final raw in recipients) {
+      final userId = raw.userId.trim();
+      final publicKey = raw.publicKeyArmored
+          .replaceAll('\r\n', '\n')
+          .replaceAll('\r', '\n')
+          .trim();
+      final fingerprint = raw.keyFingerprint.trim().toUpperCase();
+      if (userId.isEmpty ||
+          publicKey.isEmpty ||
+          fingerprint.isEmpty ||
+          !seen.add(userId)) {
+        continue;
+      }
+      out.add(
+        PgpRecipient(
+          userId: userId,
+          publicKeyArmored: publicKey,
+          keyFingerprint: fingerprint,
+        ),
+      );
     }
+    out.sort((a, b) => a.userId.compareTo(b.userId));
     return out;
   }
 
   static Future<String> _encryptEnvelope({
     required String plaintext,
-    required List<String> recipientPublicKeys,
+    required List<PgpRecipient> recipients,
     required String signingPrivateKeyArmored,
     required String signingKeyPassphrase,
   }) async {
-    final ciphertexts = <String>[];
-    for (final key in recipientPublicKeys) {
+    final encryptedRecipients = <String, Map<String, String>>{};
+    for (final recipient in recipients) {
       final signer = Entity()
         ..privateKey = signingPrivateKeyArmored
         ..passphrase = signingKeyPassphrase;
-      ciphertexts.add(await OpenPGP.encrypt(plaintext, key, signed: signer));
+      encryptedRecipients[recipient.userId] = {
+        'key_fingerprint': recipient.keyFingerprint,
+        'ciphertext': await OpenPGP.encrypt(
+          plaintext,
+          recipient.publicKeyArmored,
+          signed: signer,
+        ),
+      };
     }
     return jsonEncode({
       _envelopeKey: _envelopeVersion,
-      _ciphertextsKey: ciphertexts,
+      _cipherKey: _cipherName,
+      _recipientsKey: encryptedRecipients,
     });
   }
 
@@ -202,13 +230,13 @@ class PgpService {
   static Future<String> encryptBytes({
     required List<int> data,
     required String filename,
-    required List<String> recipientPublicKeys,
+    required List<PgpRecipient> recipients,
     required String signingPrivateKeyArmored,
     String signingKeyPassphrase = '',
   }) {
     return encrypt(
       plaintext: base64.encode(data),
-      recipientPublicKeys: recipientPublicKeys,
+      recipients: recipients,
       signingPrivateKeyArmored: signingPrivateKeyArmored,
       signingKeyPassphrase: signingKeyPassphrase,
     );
@@ -246,7 +274,8 @@ class PgpService {
       String encryptedArmor,
       String privateKeyArmored,
       String privateKeyPassphrase,
-    ) decryptor,
+    )
+    decryptor,
   }) async {
     Object? lastError;
     for (final ciphertext in ciphertexts) {
@@ -294,9 +323,19 @@ class PgpService {
       final decoded = jsonDecode(trimmed);
       if (decoded is! Map<String, dynamic>) return null;
       if (decoded[_envelopeKey] != _envelopeVersion) return null;
-      final values = decoded[_ciphertextsKey];
-      if (values is! List) return const [];
-      return values.whereType<String>().toList(growable: false);
+      if (decoded[_cipherKey] != _cipherName) return null;
+      final values = decoded[_recipientsKey];
+      if (values is! Map) return const [];
+      final ciphertexts = <String>[];
+      final keys = values.keys.map((key) => key.toString()).toList()..sort();
+      for (final key in keys) {
+        final recipient = values[key];
+        if (recipient is Map) {
+          final ciphertext = recipient['ciphertext'];
+          if (ciphertext is String) ciphertexts.add(ciphertext);
+        }
+      }
+      return ciphertexts;
     } catch (_) {
       return null;
     }
@@ -350,6 +389,18 @@ class PgpService {
   static Future<String> publicKeyFromPrivate(String privateKeyArmored) {
     return OpenPGP.convertPrivateKeyToPublicKey(privateKeyArmored);
   }
+}
+
+class PgpRecipient {
+  final String userId;
+  final String publicKeyArmored;
+  final String keyFingerprint;
+
+  const PgpRecipient({
+    required this.userId,
+    required this.publicKeyArmored,
+    required this.keyFingerprint,
+  });
 }
 
 enum KeyType {
