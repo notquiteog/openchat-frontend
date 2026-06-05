@@ -1057,6 +1057,7 @@ class _ChatScreenState extends State<ChatScreen> {
               final fiatCurrency = isCryptoAmount
                   ? null
                   : amountUnit.toUpperCase();
+              final chat = context.read<ChatProvider>();
               setSheet(() => submitting = true);
               try {
                 if (payMode) {
@@ -1072,7 +1073,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       );
                       return;
                     }
-                    await api.sendPaymentTransfer(
+                    final result = await api.sendPaymentTransfer(
                       toUserID: selectedUserID,
                       provider: provider,
                       amount: isCryptoAmount ? amount : null,
@@ -1081,6 +1082,18 @@ class _ChatScreenState extends State<ChatScreen> {
                       conversationID: conv.id,
                       note: noteCtrl.text,
                     );
+                    final transfer =
+                        result['transfer'] as Map<String, dynamic>?;
+                    if (transfer != null) {
+                      await chat.sendPaymentArtifact(
+                        convID: conv.id,
+                        kind: 'payment_transfer',
+                        payload: {
+                          'kind': 'payment_transfer',
+                          'transfer': transfer,
+                        },
+                      );
+                    }
                   } else {
                     final result = await api.createExternalPaymentTransfer(
                       toUserID: selectedUserID,
@@ -1091,14 +1104,32 @@ class _ChatScreenState extends State<ChatScreen> {
                       conversationID: conv.id,
                       note: noteCtrl.text,
                     );
+                    final deposit = result['deposit'] as Map<String, dynamic>?;
+                    if (deposit != null) {
+                      await chat.sendPaymentArtifact(
+                        convID: conv.id,
+                        kind: 'invoice',
+                        payload: {
+                          'kind': 'invoice',
+                          'invoice': {
+                            'id': deposit['id'],
+                            'title': 'External payment',
+                            'description': noteCtrl.text.trim(),
+                            'provider': deposit['provider'],
+                            'crypto_amount': deposit['expected_amount'],
+                            'crypto_address': deposit['crypto_address'],
+                            'status': deposit['status'],
+                          },
+                        },
+                      );
+                    }
                     if (!mounted || !sheetCtx.mounted) return;
                     Navigator.pop(sheetCtx);
-                    final deposit = result['deposit'] as Map<String, dynamic>?;
                     if (deposit != null) _showExternalPaymentAddress(deposit);
                     return;
                   }
                 } else {
-                  await api.createPaymentRequest(
+                  final result = await api.createPaymentRequest(
                     payerID: selectedUserID,
                     conversationID: conv.id,
                     provider: provider,
@@ -1108,6 +1139,14 @@ class _ChatScreenState extends State<ChatScreen> {
                     title: 'Payment request',
                     note: noteCtrl.text,
                   );
+                  final request = result['request'] as Map<String, dynamic>?;
+                  if (request != null) {
+                    await chat.sendPaymentArtifact(
+                      convID: conv.id,
+                      kind: 'payment_request',
+                      payload: {'kind': 'payment_request', 'request': request},
+                    );
+                  }
                 }
                 if (!mounted || !sheetCtx.mounted) return;
                 Navigator.pop(sheetCtx);

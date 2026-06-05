@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:uuid/uuid.dart';
 import '../crypto/pgp_service.dart';
 import '../models/chat_folder.dart';
 import '../models/conversation.dart';
@@ -425,6 +426,7 @@ class ChatProvider extends ChangeNotifier {
             poll: msg.poll,
             editedAt: msg.editedAt,
           );
+          _applyArtifactState(merged);
           _hydrateMessageSender(merged, fresh: msg);
           result.add(merged);
           await _syncLiveLocationShareFromMessage(merged);
@@ -887,6 +889,18 @@ class ChatProvider extends ChangeNotifier {
     );
   }
 
+  Future<bool> sendPaymentArtifact({
+    required String convID,
+    required String kind,
+    required Map<String, dynamic> payload,
+  }) {
+    return _sendEncryptedPayload(
+      convID: convID,
+      plaintextPayload: jsonEncode(payload),
+      messageType: kind,
+    );
+  }
+
   /// Encrypt a local file (via [AttachmentService]) and send as a media message.
   Future<bool> sendAttachment({
     required String convID,
@@ -1172,6 +1186,17 @@ class ChatProvider extends ChangeNotifier {
     bool allowsMultipleAnswers = false,
     bool silent = false,
   }) async {
+    final conv = _conversations[convID];
+    if (conv?.isEncrypted == true) {
+      return _sendEncryptedPoll(
+        convID: convID,
+        question: question,
+        options: options,
+        isAnonymous: isAnonymous,
+        allowsMultipleAnswers: allowsMultipleAnswers,
+        silent: silent,
+      );
+    }
     final userID = await _storage.getUserID() ?? '';
     if (userID.isEmpty) {
       throw const ChatSendException(
@@ -1198,6 +1223,142 @@ class ChatProvider extends ChangeNotifier {
     return true;
   }
 
+  Future<bool> _sendEncryptedPoll({
+    required String convID,
+    required String question,
+    required List<String> options,
+    required bool isAnonymous,
+    required bool allowsMultipleAnswers,
+    required bool silent,
+  }) async {
+    final userID = await _storage.getUserID() ?? '';
+    if (userID.isEmpty) {
+      throw const ChatSendException(
+        'Your session is incomplete. Sign in again.',
+      );
+    }
+    final cleanQuestion = question.trim();
+    final cleanOptions = options.map((option) => option.trim()).toList();
+    if (cleanQuestion.isEmpty || cleanOptions.any((option) => option.isEmpty)) {
+      throw const ChatSendException('Poll question and options are required.');
+    }
+    if (cleanOptions.isEmpty || cleanOptions.length > 10) {
+      throw const ChatSendException('Polls must have 1 to 10 options.');
+    }
+
+    final uuid = const Uuid();
+    final pollID = uuid.v4();
+    final optionIDs = [for (final _ in cleanOptions) uuid.v4()];
+    final localPoll = Poll(
+      id: pollID,
+      question: cleanQuestion,
+      type: 'regular',
+      isAnonymous: isAnonymous,
+      allowsMultipleAnswers: allowsMultipleAnswers,
+      allowsRevoting: true,
+      isClosed: false,
+      totalVoterCount: 0,
+      options: [
+        for (var i = 0; i < cleanOptions.length; i++)
+          PollOption(
+            id: optionIDs[i],
+            index: i,
+            text: cleanOptions[i],
+            voterCount: 0,
+            persistentId: optionIDs[i],
+          ),
+      ],
+    );
+    final payload = jsonEncode({
+      'poll': {
+        'id': pollID,
+        'question': cleanQuestion,
+        'type': 'regular',
+        'is_anonymous': isAnonymous,
+        'allows_multiple_answers': allowsMultipleAnswers,
+        'allows_revoting': true,
+        'options': [
+          for (var i = 0; i < cleanOptions.length; i++)
+            {
+              'id': optionIDs[i],
+              'option_index': i,
+              'text': cleanOptions[i],
+              'persistent_id': optionIDs[i],
+            },
+        ],
+      },
+    });
+    final prepared = await _prepareEncryptedPayload(
+      convID: convID,
+      plaintextPayload: payload,
+      messageType: 'poll',
+    );
+
+    final pending = PendingMessage(
+      id: 'pending-${DateTime.now().millisecondsSinceEpoch}',
+      conversationId: convID,
+      senderId: userID,
+      type: MessageType.poll,
+      encryptedPayload: prepared.encryptedPayload,
+      signature: prepared.signature,
+      isEncrypted: true,
+      autoDeleteSeconds: prepared.autoDeleteSeconds,
+      autoDeleteExpiresAt: prepared.autoDeleteExpiresAt,
+      silent: silent,
+      createdAt: DateTime.now(),
+      plaintext: prepared.cleartextPayload,
+      poll: localPoll,
+    );
+    _messages[convID] = [...?_messages[convID], pending];
+    notifyListeners();
+
+    try {
+      final confirmed = await _api.createEncryptedPoll(
+        convID: convID,
+        pollID: pollID,
+        optionIDs: optionIDs,
+        encryptedPayload: prepared.encryptedPayload,
+        postToken: prepared.postToken ?? '',
+        isAnonymous: isAnonymous,
+        allowsMultipleAnswers: allowsMultipleAnswers,
+        allowsRevoting: true,
+        silent: silent,
+      );
+      _replacePendingWithConfirmed(
+        convID: convID,
+        pendingID: pending.id,
+        confirmed: confirmed,
+        plaintextPayload: prepared.cleartextPayload,
+      );
+      return true;
+    } catch (e) {
+      final list = _messages[convID] ?? [];
+      final idx = list.indexWhere((m) => m.id == pending.id);
+      if (idx != -1) {
+        list[idx] = PendingMessage(
+          id: pending.id,
+          conversationId: pending.conversationId,
+          senderId: pending.senderId,
+          type: pending.type,
+          encryptedPayload: pending.encryptedPayload,
+          signature: pending.signature,
+          isEncrypted: pending.isEncrypted,
+          autoDeleteSeconds: pending.autoDeleteSeconds,
+          autoDeleteExpiresAt: pending.autoDeleteExpiresAt,
+          silent: pending.silent,
+          createdAt: pending.createdAt,
+          plaintext: prepared.cleartextPayload,
+          poll: localPoll,
+          status: PendingMessageStatus.failed,
+          lastError: e.toString(),
+        );
+        _messages[convID] = List.from(list);
+        notifyListeners();
+      }
+      rethrow;
+    }
+  }
+
   Future<void> votePoll({
     required String convID,
     required String pollID,
@@ -1209,7 +1370,14 @@ class ChatProvider extends ChangeNotifier {
     final idx = list.indexWhere((m) => m.poll?.id == pollID);
     if (idx == -1) return;
     final updated = List<Message>.from(list);
-    updated[idx] = updated[idx].copyWith(poll: updatedPoll);
+    final current = updated[idx];
+    updated[idx] = current.copyWith(
+      poll: _pollWithArtifactLabels(
+        updatedPoll,
+        current.artifact,
+        fallback: current.poll,
+      ),
+    );
     _messages[convID] = updated;
     notifyListeners();
   }
@@ -1255,7 +1423,7 @@ class ChatProvider extends ChangeNotifier {
     final String cleartextPayload;
     if (conv.usesMls) {
       cleartextPayload = _encryptedCleartextPayload(
-        plaintextPayload: newPlaintext,
+        plaintextPayload: _chatArtifactPayload(editMessageType, newPlaintext),
         messageType: editMessageType,
       );
       encrypted = await _mls.encryptPayload(
@@ -1396,9 +1564,13 @@ class ChatProvider extends ChangeNotifier {
           'Your PGP key is locked or missing. Unlock or import it in Settings to post sealed MLS messages.',
         );
       }
+      final artifactPayload = _chatArtifactPayload(
+        messageType,
+        plaintextPayload,
+      );
       final cleartextPayload = await _signedPgpCleartextPayload(
         convID: convID,
-        plaintextPayload: plaintextPayload,
+        plaintextPayload: artifactPayload,
         messageType: messageType,
         senderId: userID,
         privateKey: privateKey,
@@ -1446,9 +1618,10 @@ class ChatProvider extends ChangeNotifier {
         'Could not load recipient keys. Refresh the chat and try again.',
       );
     }
+    final artifactPayload = _chatArtifactPayload(messageType, plaintextPayload);
     final cleartextPayload = await _signedPgpCleartextPayload(
       convID: convID,
-      plaintextPayload: plaintextPayload,
+      plaintextPayload: artifactPayload,
       messageType: messageType,
       senderId: userID,
       privateKey: privateKey,
@@ -1716,6 +1889,7 @@ class ChatProvider extends ChangeNotifier {
   }) {
     try {
       confirmed.setDecryptedContent(plaintextPayload);
+      _applyArtifactState(confirmed);
     } catch (error, stackTrace) {
       confirmed.markDecryptionFailed();
       debugPrint('Failed to hydrate confirmed message plaintext: $error');
@@ -1823,6 +1997,18 @@ class ChatProvider extends ChangeNotifier {
     'type': messageType,
     'payload': plaintextPayload,
   });
+
+  String _chatArtifactPayload(String kind, String plaintextPayload) {
+    if (ChatArtifact.tryParse(plaintextPayload) != null) {
+      return plaintextPayload;
+    }
+    Object payload = plaintextPayload;
+    try {
+      final decoded = jsonDecode(plaintextPayload);
+      if (decoded is Map || decoded is List) payload = decoded;
+    } catch (_) {}
+    return ChatArtifact.encodePayload(kind: kind, payload: payload);
+  }
 
   Future<String> _signedPgpCleartextPayload({
     required String convID,
@@ -2610,10 +2796,18 @@ class ChatProvider extends ChangeNotifier {
       update: (msg) {
         var nextPoll = poll;
         final currentPoll = msg.poll;
-        if (currentPoll?.id == poll.id &&
-            poll.voterOptionIds.isEmpty &&
-            currentPoll!.voterOptionIds.isNotEmpty) {
-          nextPoll = poll.copyWith(voterOptionIds: currentPoll.voterOptionIds);
+        if (currentPoll?.id == poll.id) {
+          nextPoll = _pollWithArtifactLabels(
+            poll,
+            msg.artifact,
+            fallback: currentPoll,
+          );
+          if (poll.voterOptionIds.isEmpty &&
+              currentPoll!.voterOptionIds.isNotEmpty) {
+            nextPoll = nextPoll.copyWith(
+              voterOptionIds: currentPoll.voterOptionIds,
+            );
+          }
         }
         return msg.copyWith(poll: nextPoll);
       },
@@ -2800,8 +2994,8 @@ class ChatProvider extends ChangeNotifier {
   void _applyPaymentTransferUpdate(Message msg) {
     if (msg.type != MessageType.paymentTransfer) return;
     try {
-      final raw = jsonDecode(msg.encryptedPayload);
-      if (raw is! Map) return;
+      final raw = _paymentPayloadMap(msg);
+      if (raw == null) return;
       final transfer = raw['transfer'];
       final request = raw['request'];
       final requestID =
@@ -2872,8 +3066,8 @@ class ChatProvider extends ChangeNotifier {
   }) {
     if (msg.type != MessageType.paymentRequest) return null;
     try {
-      final raw = jsonDecode(msg.encryptedPayload);
-      if (raw is! Map) return null;
+      final raw = _paymentPayloadMap(msg);
+      if (raw == null) return null;
       final currentRequestRaw = raw['request'];
       if (currentRequestRaw is! Map) return null;
       final currentRequest = Map<String, dynamic>.from(currentRequestRaw);
@@ -2887,11 +3081,38 @@ class ChatProvider extends ChangeNotifier {
       final nextPayload = Map<String, dynamic>.from(raw);
       nextPayload['request'] = nextRequest;
       final encoded = jsonEncode(nextPayload);
-      if (encoded == msg.encryptedPayload) return null;
+      if (encoded == (msg.decryptedPayload ?? msg.encryptedPayload)) {
+        return null;
+      }
+      if (msg.artifact != null || msg.isEncrypted) {
+        final next = msg.copyWith();
+        next.setDecryptedContent(
+          ChatArtifact.encodePayload(
+            kind: 'payment_request',
+            payload: nextPayload,
+          ),
+          verifiedSenderId: msg.senderId,
+        );
+        return next;
+      }
       return msg.copyWith(encryptedPayload: encoded);
     } catch (_) {
       return null;
     }
+  }
+
+  Map<String, dynamic>? _paymentPayloadMap(Message msg) {
+    final artifact = msg.artifact?.payloadMap;
+    if (artifact != null) return artifact;
+    final raw = msg.decryptedPayload ?? msg.encryptedPayload;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map) {
+        return decoded.map((key, value) => MapEntry(key.toString(), value));
+      }
+    } catch (_) {}
+    return null;
   }
 
   Message? _cachedDecryptedMessage(Message msg) {
@@ -2920,6 +3141,60 @@ class ChatProvider extends ChangeNotifier {
     final conv = _conversations[msg.conversationId];
     final conversationTitle = conv?.displayName(_selfId ?? '');
     unawaited(_search.indexMessage(msg, conversationTitle: conversationTitle));
+  }
+
+  void _applyArtifactState(Message msg) {
+    if (msg.poll != null) {
+      msg.poll = _pollWithArtifactLabels(msg.poll!, msg.artifact);
+    }
+  }
+
+  Poll _pollWithArtifactLabels(
+    Poll poll,
+    ChatArtifact? artifact, {
+    Poll? fallback,
+  }) {
+    final raw = artifact?.payloadMap?['poll'];
+    final pollPayload = raw is Map ? Map<String, dynamic>.from(raw) : null;
+    final fallbackById = {
+      for (final option in fallback?.options ?? const <PollOption>[])
+        option.id: option,
+    };
+    final payloadById = <String, Map<String, dynamic>>{};
+    final payloadByIndex = <int, Map<String, dynamic>>{};
+    final rawOptions = pollPayload?['options'];
+    if (rawOptions is List) {
+      for (final rawOption in rawOptions.whereType<Map>()) {
+        final option = Map<String, dynamic>.from(rawOption);
+        final id = option['id']?.toString();
+        final indexRaw = option['option_index'];
+        if (id != null && id.isNotEmpty) payloadById[id] = option;
+        if (indexRaw is num) payloadByIndex[indexRaw.toInt()] = option;
+      }
+    }
+    final options = [
+      for (final option in poll.options)
+        option.copyWith(
+          text:
+              payloadById[option.id]?['text']?.toString() ??
+              payloadByIndex[option.index]?['text']?.toString() ??
+              fallbackById[option.id]?.text,
+        ),
+    ];
+    return poll.copyWith(
+      question:
+          pollPayload?['question']?.toString() ??
+          (poll.question.isEmpty ? fallback?.question : null),
+      description:
+          pollPayload?['description']?.toString() ??
+          (poll.description == null || poll.description!.isEmpty
+              ? fallback?.description
+              : null),
+      options: options,
+      voterOptionIds: poll.voterOptionIds.isNotEmpty
+          ? poll.voterOptionIds
+          : fallback?.voterOptionIds,
+    );
   }
 
   void _deleteSearchMessage(String messageId) {
@@ -2961,11 +3236,13 @@ class ChatProvider extends ChangeNotifier {
   }) async {
     if (msg.type == MessageType.poll) {
       msg.setDecryptedContent(msg.encryptedPayload);
+      _applyArtifactState(msg);
       _indexMessage(msg);
       return;
     }
     if (!msg.isEncrypted) {
       msg.setDecryptedContent(msg.encryptedPayload);
+      _applyArtifactState(msg);
       _indexMessage(msg);
       return;
     }
@@ -2987,6 +3264,7 @@ class ChatProvider extends ChangeNotifier {
           return;
         }
         msg.setDecryptedContent(raw, verifiedSenderId: verifiedSenderId);
+        _applyArtifactState(msg);
         _hydrateMessageSender(msg);
         _indexMessage(msg);
       } else {
@@ -3011,6 +3289,7 @@ class ChatProvider extends ChangeNotifier {
           return;
         }
         msg.setDecryptedContent(raw, verifiedSenderId: verifiedSenderId);
+        _applyArtifactState(msg);
         _hydrateMessageSender(msg);
         _indexMessage(msg);
       } else {

@@ -2120,8 +2120,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           'Your PGP key is locked or missing. Unlock or import it in Settings to post sealed MLS messages.',
         );
       }
+      final artifactPayload = _chatArtifactPayload(
+        messageType,
+        plaintextPayload,
+      );
       final cleartextPayload = await _signedPgpCleartextPayload(
-        plaintextPayload: plaintextPayload,
+        plaintextPayload: artifactPayload,
         messageType: messageType,
         senderId: userID,
         privateKey: privateKey,
@@ -2206,8 +2210,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         'Could not load recipient keys. Refresh the channel and try again.',
       );
     }
+    final artifactPayload = _chatArtifactPayload(messageType, plaintextPayload);
     final cleartextPayload = await _signedPgpCleartextPayload(
-      plaintextPayload: plaintextPayload,
+      plaintextPayload: artifactPayload,
       messageType: messageType,
       senderId: userID,
       privateKey: privateKey,
@@ -2528,6 +2533,18 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         'signature': signature,
       },
     });
+  }
+
+  String _chatArtifactPayload(String kind, String plaintextPayload) {
+    if (ChatArtifact.tryParse(plaintextPayload) != null) {
+      return plaintextPayload;
+    }
+    Object payload = plaintextPayload;
+    try {
+      final decoded = jsonDecode(plaintextPayload);
+      if (decoded is Map || decoded is List) payload = decoded;
+    } catch (_) {}
+    return ChatArtifact.encodePayload(kind: kind, payload: payload);
   }
 
   Future<String> _sealedPostToken(String privateKey) async {

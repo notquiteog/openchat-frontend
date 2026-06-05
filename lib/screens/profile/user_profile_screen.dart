@@ -6,6 +6,7 @@ import '../../config/api_config.dart';
 import '../../models/conversation.dart';
 import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/chat_provider.dart';
 import '../../services/api_service.dart';
 import '../../utils/identity_qr.dart';
 import '../../widgets/glass.dart';
@@ -254,6 +255,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
               final fiatCurrency = isCryptoAmount
                   ? null
                   : amountUnit.toUpperCase();
+              final chat = context.read<ChatProvider>();
               setSheet(() => submitting = true);
               try {
                 if (payMode) {
@@ -265,7 +267,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                       _snack('Not enough app wallet balance.');
                       return;
                     }
-                    await api.sendPaymentTransfer(
+                    final result = await api.sendPaymentTransfer(
                       toUserID: _user.id,
                       provider: provider,
                       amount: isCryptoAmount ? amount : null,
@@ -273,6 +275,19 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                       fiatCurrency: fiatCurrency,
                       note: noteCtrl.text,
                     );
+                    final transfer =
+                        result['transfer'] as Map<String, dynamic>?;
+                    if (transfer != null) {
+                      final conv = await chat.openDM(_user.id);
+                      await chat.sendPaymentArtifact(
+                        convID: conv.id,
+                        kind: 'payment_transfer',
+                        payload: {
+                          'kind': 'payment_transfer',
+                          'transfer': transfer,
+                        },
+                      );
+                    }
                   } else {
                     final result = await api.createExternalPaymentTransfer(
                       toUserID: _user.id,
@@ -282,14 +297,33 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                       fiatCurrency: fiatCurrency,
                       note: noteCtrl.text,
                     );
+                    final deposit = result['deposit'] as Map<String, dynamic>?;
+                    if (deposit != null) {
+                      final conv = await chat.openDM(_user.id);
+                      await chat.sendPaymentArtifact(
+                        convID: conv.id,
+                        kind: 'invoice',
+                        payload: {
+                          'kind': 'invoice',
+                          'invoice': {
+                            'id': deposit['id'],
+                            'title': 'External payment',
+                            'description': noteCtrl.text.trim(),
+                            'provider': deposit['provider'],
+                            'crypto_amount': deposit['expected_amount'],
+                            'crypto_address': deposit['crypto_address'],
+                            'status': deposit['status'],
+                          },
+                        },
+                      );
+                    }
                     if (!mounted || !sheetCtx.mounted) return;
                     Navigator.pop(sheetCtx);
-                    final deposit = result['deposit'] as Map<String, dynamic>?;
                     if (deposit != null) _showExternalPaymentAddress(deposit);
                     return;
                   }
                 } else {
-                  await api.createPaymentRequest(
+                  final result = await api.createPaymentRequest(
                     payerID: _user.id,
                     provider: provider,
                     amount: isCryptoAmount ? amount : null,
@@ -298,6 +332,15 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                     title: 'Payment request',
                     note: noteCtrl.text,
                   );
+                  final request = result['request'] as Map<String, dynamic>?;
+                  if (request != null) {
+                    final conv = await chat.openDM(_user.id);
+                    await chat.sendPaymentArtifact(
+                      convID: conv.id,
+                      kind: 'payment_request',
+                      payload: {'kind': 'payment_request', 'request': request},
+                    );
+                  }
                 }
                 if (!mounted || !sheetCtx.mounted) return;
                 Navigator.pop(sheetCtx);

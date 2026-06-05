@@ -180,6 +180,8 @@ class AttachmentService {
   final ApiService _api;
   final _cipher = AesGcm.with256bits();
   final _imagePicker = ImagePicker();
+  static const String _serverOpaqueFileName = 'attachment.bin';
+  static const String _serverOpaqueMimeType = 'application/octet-stream';
 
   // Decrypted attachment bytes are content-immutable per attachmentId, so cache
   // them process-wide to avoid re-downloading + re-decrypting on every rebuild
@@ -498,9 +500,9 @@ class AttachmentService {
   }) async {
     // 4. Request a presigned upload URL.
     final uploadReq = await _api.requestUpload(
-      fileName: encrypted.fileName,
+      fileName: _serverOpaqueFileName,
       fileSize: encrypted.ciphertext.length,
-      mimeType: encrypted.mimeType,
+      mimeType: _serverOpaqueMimeType,
     );
 
     // 5. Upload the ciphertext directly to object storage.
@@ -513,7 +515,7 @@ class AttachmentService {
     await _api.uploadBytes(
       uploadReq.uploadUrl,
       encrypted.ciphertext,
-      encrypted.mimeType,
+      _serverOpaqueMimeType,
       onProgress: (sent, total) => onProgress?.call(
         AttachmentUploadProgress(
           stage: AttachmentUploadStage.uploading,

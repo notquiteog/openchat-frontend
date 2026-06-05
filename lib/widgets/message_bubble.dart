@@ -1490,7 +1490,7 @@ class _PaymentEnvelope {
 
   static _PaymentEnvelope? tryParse(Message message) {
     try {
-      final raw = jsonDecode(message.encryptedPayload);
+      final raw = _paymentPayload(message);
       if (raw is! Map<String, dynamic>) return null;
       final request = _asMap(raw['request']);
       final transfer = _asMap(raw['transfer']);
@@ -1534,6 +1534,29 @@ class _PaymentEnvelope {
     } catch (_) {
       return null;
     }
+    return null;
+  }
+
+  static Map<String, dynamic>? _paymentPayload(Message message) {
+    final artifact = message.artifact?.payloadMap;
+    if (artifact != null) return artifact;
+    final decrypted = message.decryptedPayload;
+    if (decrypted != null && decrypted.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(decrypted);
+        if (decoded is Map<String, dynamic>) return decoded;
+        if (decoded is Map) {
+          return decoded.map((key, value) => MapEntry(key.toString(), value));
+        }
+      } catch (_) {}
+    }
+    try {
+      final decoded = jsonDecode(message.encryptedPayload);
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map) {
+        return decoded.map((key, value) => MapEntry(key.toString(), value));
+      }
+    } catch (_) {}
     return null;
   }
 
@@ -1666,13 +1689,21 @@ class _PaymentBubbleState extends State<_PaymentBubble> {
       ),
     );
     if (ok != true || !mounted) return;
+    final api = context.read<ApiService>();
+    final chat = context.read<ChatProvider>();
     setState(() => _paying = true);
     try {
-      await context.read<ApiService>().payPaymentRequest(widget.payment.id);
+      final result = await api.payPaymentRequest(widget.payment.id);
+      final transfer = result['transfer'] as Map<String, dynamic>?;
+      if (transfer != null) {
+        await chat.sendPaymentArtifact(
+          convID: widget.message.conversationId,
+          kind: 'payment_transfer',
+          payload: {'kind': 'payment_transfer', 'transfer': transfer},
+        );
+      }
       if (!mounted) return;
-      await context.read<ChatProvider>().loadMessages(
-        widget.message.conversationId,
-      );
+      await chat.loadMessages(widget.message.conversationId);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -1685,14 +1716,35 @@ class _PaymentBubbleState extends State<_PaymentBubble> {
 
   Future<void> _payExternal() async {
     if (_paying || _declining || _declined) return;
+    final api = context.read<ApiService>();
+    final chat = context.read<ChatProvider>();
     setState(() => _paying = true);
     try {
-      final result = await context
-          .read<ApiService>()
-          .payPaymentRequestExternally(requestID: widget.payment.id);
+      final result = await api.payPaymentRequestExternally(
+        requestID: widget.payment.id,
+      );
       if (!mounted) return;
       final deposit = result['deposit'] as Map<String, dynamic>?;
-      if (deposit != null) _showExternalPaymentAddress(deposit);
+      if (deposit != null) {
+        await chat.sendPaymentArtifact(
+          convID: widget.message.conversationId,
+          kind: 'invoice',
+          payload: {
+            'kind': 'invoice',
+            'invoice': {
+              'id': deposit['id'],
+              'title': 'External payment',
+              'description': widget.payment.note,
+              'provider': deposit['provider'],
+              'crypto_amount': deposit['expected_amount'],
+              'crypto_address': deposit['crypto_address'],
+              'status': deposit['status'],
+            },
+          },
+        );
+        if (!mounted) return;
+        _showExternalPaymentAddress(deposit);
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(

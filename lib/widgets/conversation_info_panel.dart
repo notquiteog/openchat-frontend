@@ -1130,7 +1130,7 @@ String _trimAroundLink(String text, String url) {
 }
 
 String _paymentTitle(Message message) {
-  final raw = message.encryptedPayload;
+  final raw = message.decryptedPayload ?? message.encryptedPayload;
   if (raw.contains('"transfer"')) return 'Payment sent';
   if (raw.contains('"invoice"')) return 'Invoice';
   return 'Payment request';

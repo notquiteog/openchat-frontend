@@ -10,6 +10,8 @@ import 'package:openchat/models/message.dart';
 import 'package:openchat/models/user.dart';
 import 'package:openchat/providers/settings_provider.dart';
 import 'package:openchat/services/attachment_service.dart';
+import 'package:openchat/services/api_service.dart';
+import 'package:openchat/services/secure_storage_service.dart';
 import 'package:openchat/widgets/conversation_encryption_status.dart';
 import 'package:openchat/widgets/message_bubble.dart';
 import 'package:openchat/widgets/message_image_layout.dart';
@@ -75,6 +77,50 @@ Message _voiceMessage() {
     }),
   );
   return msg;
+}
+
+class _RecordingApiService extends ApiService {
+  _RecordingApiService() : super(SecureStorageService());
+
+  String? requestedFileName;
+  int? requestedFileSize;
+  String? requestedMimeType;
+  String? uploadedMimeType;
+  Uint8List? uploadedBytes;
+  String? confirmedAttachmentId;
+
+  @override
+  Future<UploadRequest> requestUpload({
+    required String fileName,
+    required int fileSize,
+    required String mimeType,
+  }) async {
+    requestedFileName = fileName;
+    requestedFileSize = fileSize;
+    requestedMimeType = mimeType;
+    return UploadRequest(
+      attachmentId: 'opaque-attachment-id',
+      uploadUrl: 'https://upload.invalid/object',
+      expiresIn: 900,
+    );
+  }
+
+  @override
+  Future<void> uploadBytes(
+    String uploadUrl,
+    Uint8List bytes,
+    String mimeType, {
+    UploadProgressCallback? onProgress,
+  }) async {
+    uploadedBytes = bytes;
+    uploadedMimeType = mimeType;
+    onProgress?.call(bytes.length, bytes.length);
+  }
+
+  @override
+  Future<void> confirmUpload(String attachmentId) async {
+    confirmedAttachmentId = attachmentId;
+  }
 }
 
 void main() {
@@ -224,6 +270,73 @@ void main() {
 
     expect(pending.toPayloadJson()['duration_ms'], 3600);
   });
+
+  test('chat artifact unwraps encrypted structured payment payloads', () {
+    final msg = Message(
+      id: 'payment-msg-1',
+      conversationId: 'conv-1',
+      senderId: '',
+      sealedSender: true,
+      type: MessageType.text,
+      encryptedPayload: 'cipher',
+      signature: '',
+      createdAt: DateTime.utc(2026, 1, 1),
+    );
+    final artifact = ChatArtifact.encodePayload(
+      kind: 'payment_request',
+      payload: {
+        'kind': 'payment_request',
+        'request': {'id': 'request-1', 'title': 'Dinner', 'note': 'Pizza'},
+      },
+    );
+    msg.setDecryptedContent(
+      jsonEncode({
+        'openchat_message': 1,
+        'type': 'payment_request',
+        'payload': artifact,
+      }),
+      verifiedSenderId: 'sender-1',
+    );
+
+    expect(msg.type, MessageType.paymentRequest);
+    expect(msg.senderId, 'sender-1');
+    expect(msg.artifact?.kind, 'payment_request');
+    expect(msg.artifact?.payloadMap?['request'], isA<Map>());
+    expect(msg.decryptedPayload, contains('Dinner'));
+    expect(msg.encryptedPayload, isNot(contains('Dinner')));
+  });
+
+  test(
+    'encrypted attachment uploads register opaque server metadata',
+    () async {
+      final api = _RecordingApiService();
+      final service = AttachmentService(api);
+      final upload = EncryptedAttachmentUpload(
+        ciphertext: Uint8List.fromList([1, 2, 3, 4]),
+        fileName: 'family-photo.jpg',
+        fileSize: 2048,
+        encryptedFileSize: 4,
+        mimeType: 'image/jpeg',
+        messageType: MessageType.image,
+        fileKey: 'key',
+        fileNonce: 'nonce',
+      );
+
+      final pending = await service.uploadEncryptedAttachment(upload);
+
+      expect(api.requestedFileName, 'attachment.bin');
+      expect(api.requestedFileSize, upload.ciphertext.length);
+      expect(api.requestedMimeType, 'application/octet-stream');
+      expect(api.uploadedMimeType, 'application/octet-stream');
+      expect(api.uploadedBytes, upload.ciphertext);
+      expect(api.confirmedAttachmentId, 'opaque-attachment-id');
+
+      final payload = pending.toPayloadJson(caption: 'private caption');
+      expect(payload['file_name'], 'family-photo.jpg');
+      expect(payload['mime_type'], 'image/jpeg');
+      expect(payload['text'], 'private caption');
+    },
+  );
 
   testWidgets('message bubbles stay on the content layer (no backdrop blur)', (
     tester,

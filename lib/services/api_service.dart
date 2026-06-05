@@ -1078,6 +1078,30 @@ class ApiService {
     return Message.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
+  Future<Message> createEncryptedPoll({
+    required String convID,
+    required String pollID,
+    required List<String> optionIDs,
+    required String encryptedPayload,
+    required String postToken,
+    bool isAnonymous = true,
+    bool allowsMultipleAnswers = false,
+    bool allowsRevoting = true,
+    bool silent = false,
+  }) async {
+    final resp = await _post('/api/v1/conversations/$convID/polls', {
+      'poll_id': pollID,
+      'option_ids': optionIDs,
+      'encrypted_payload': encryptedPayload,
+      'post_token': postToken,
+      'is_anonymous': isAnonymous,
+      'allows_multiple_answers': allowsMultipleAnswers,
+      'allows_revoting': allowsRevoting,
+      if (silent) 'silent': true,
+    });
+    return Message.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
   Future<Poll> votePoll(String pollID, List<String> optionIDs) async {
     final resp = await _post('/api/v1/polls/$pollID/votes', {
       'option_ids': optionIDs,

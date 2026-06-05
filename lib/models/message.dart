@@ -348,7 +348,10 @@ class MessageContent {
     try {
       final decoded = jsonDecode(raw);
       if (decoded is! Map<String, dynamic>) return null;
-      if (!decoded.containsKey('entities')) return null;
+      if (!decoded.containsKey('entities') &&
+          !decoded.containsKey('link_preview')) {
+        return null;
+      }
       return MessageContent.fromJson(decoded);
     } catch (_) {
       return null;
@@ -362,6 +365,60 @@ class MessageContent {
         .map((e) => CustomEmojiEntity.fromJson(Map<String, dynamic>.from(e)))
         .where((e) => e.type == 'custom_emoji' && e.customEmojiId.isNotEmpty)
         .toList();
+  }
+}
+
+class ChatArtifact {
+  static const marker = 'openchat_artifact';
+  static const version = 1;
+
+  final String kind;
+  final Object? payload;
+
+  const ChatArtifact({required this.kind, required this.payload});
+
+  String get legacyPayload {
+    final value = payload;
+    if (value is String) return value;
+    if (value == null) return '';
+    return jsonEncode(value);
+  }
+
+  Map<String, dynamic>? get payloadMap {
+    final value = payload;
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) {
+      return value.map((key, value) => MapEntry(key.toString(), value));
+    }
+    return null;
+  }
+
+  Map<String, dynamic> toJson() => {
+    marker: version,
+    'kind': kind,
+    'payload': payload,
+  };
+
+  String encode() => jsonEncode(toJson());
+
+  static String encodePayload({
+    required String kind,
+    required Object? payload,
+  }) {
+    return ChatArtifact(kind: kind, payload: payload).encode();
+  }
+
+  static ChatArtifact? tryParse(String raw) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return null;
+      if (decoded[marker] != version) return null;
+      final kind = decoded['kind'];
+      if (kind is! String || kind.isEmpty) return null;
+      return ChatArtifact(kind: kind, payload: decoded['payload']);
+    } catch (_) {
+      return null;
+    }
   }
 }
 
@@ -435,7 +492,7 @@ class Message {
   final String? mediaGroupId;
   final bool silent;
   final List<MessageReactionSummary> reactions;
-  final Poll? poll;
+  Poll? poll;
   final DateTime createdAt;
   final DateTime? editedAt;
   // Not final: realtime new_message events arrive without sender details, so
@@ -445,6 +502,8 @@ class Message {
   // Decrypted on client — never stored or sent to server
   MessageContent? _content;
   MessageLocation? _location;
+  ChatArtifact? _artifact;
+  String? _decryptedPayload;
   bool _decryptionFailed = false;
 
   Message({
@@ -512,6 +571,15 @@ class Message {
         senderId = verifiedSenderId;
       }
     }
+    final artifact = ChatArtifact.tryParse(raw);
+    if (artifact != null) {
+      type = _parseType(artifact.kind);
+      raw = artifact.legacyPayload;
+      _artifact = artifact;
+    } else {
+      _artifact = null;
+    }
+    _decryptedPayload = raw;
     if (type == MessageType.location) {
       final location = MessageLocation.tryParse(raw);
       _location = location;
@@ -531,6 +599,8 @@ class Message {
   }
 
   MessageContent? get content => _content;
+  ChatArtifact? get artifact => _artifact;
+  String? get decryptedPayload => _decryptedPayload;
   bool get isDecrypted => _content != null;
   bool get decryptionFailed => _decryptionFailed;
   bool get isEdited => editedAt != null;
@@ -677,6 +747,8 @@ class Message {
     } else {
       if (_content != null) msg._content = _content;
       if (_location != null) msg._location = _location;
+      if (_artifact != null) msg._artifact = _artifact;
+      if (_decryptedPayload != null) msg._decryptedPayload = _decryptedPayload;
     }
     msg._decryptionFailed = _decryptionFailed;
     return msg;
@@ -765,18 +837,23 @@ class Poll {
 
   bool isSelected(String optionId) => voterOptionIds.contains(optionId);
 
-  Poll copyWith({List<String>? voterOptionIds}) => Poll(
+  Poll copyWith({
+    String? question,
+    String? description,
+    List<PollOption>? options,
+    List<String>? voterOptionIds,
+  }) => Poll(
     id: id,
     messageId: messageId,
-    question: question,
-    description: description,
+    question: question ?? this.question,
+    description: description ?? this.description,
     type: type,
     isAnonymous: isAnonymous,
     allowsMultipleAnswers: allowsMultipleAnswers,
     allowsRevoting: allowsRevoting,
     isClosed: isClosed,
     totalVoterCount: totalVoterCount,
-    options: options,
+    options: options ?? this.options,
     voterOptionIds: voterOptionIds ?? this.voterOptionIds,
   );
 }
@@ -802,6 +879,14 @@ class PollOption {
     text: json['text'] as String? ?? '',
     voterCount: json['voter_count'] as int? ?? 0,
     persistentId: json['persistent_id'] as String?,
+  );
+
+  PollOption copyWith({String? text, int? voterCount}) => PollOption(
+    id: id,
+    index: index,
+    text: text ?? this.text,
+    voterCount: voterCount ?? this.voterCount,
+    persistentId: persistentId,
   );
 }
 
