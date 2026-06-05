@@ -577,46 +577,57 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final chat = context.read<ChatProvider>();
     final currentUserId = context.read<AuthProvider>().currentUser?.id ?? '';
 
-    await showSearch(
+    final selection = await showSearch<_ChatSearchSelection?>(
       context: context,
       delegate: _ChatSearchDelegate(
         api: api,
         chat: chat,
         currentUserId: currentUserId,
-        onUserSelected: (userID) async {
-          final conv = await chat.openDM(userID);
-          if (context.mounted) {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => ChatScreen(conversation: conv)),
-            );
-          }
-        },
-        onChannelSelected: (channel) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => ChannelFeedScreen(channel: channel),
-            ),
-          );
-        },
-        onMessageSelected: (result) async {
-          var conv = chat.conversations
-              .where((conversation) => conversation.id == result.conversationId)
-              .firstOrNull;
-          if (conv == null) {
-            await chat.loadConversations();
-            conv = chat.conversations
-                .where(
-                  (conversation) => conversation.id == result.conversationId,
-                )
-                .firstOrNull;
-          }
-          if (!context.mounted || conv == null) return;
-          _openConversation(context, conv, initialMessageId: result.messageId);
-        },
       ),
     );
+
+    if (!context.mounted || selection == null) return;
+    if (selection is _UserSearchSelection) {
+      final conv = await chat.openDM(selection.userID);
+      if (!context.mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => ChatScreen(conversation: conv)),
+      );
+      return;
+    }
+    if (selection is _ChannelSearchSelection) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ChannelFeedScreen(channel: selection.channel),
+        ),
+      );
+      return;
+    }
+    if (selection is _MessageSearchSelection) {
+      var conv = chat.conversations
+          .where(
+            (conversation) =>
+                conversation.id == selection.result.conversationId,
+          )
+          .firstOrNull;
+      if (conv == null) {
+        await chat.loadConversations();
+        conv = chat.conversations
+            .where(
+              (conversation) =>
+                  conversation.id == selection.result.conversationId,
+            )
+            .firstOrNull;
+      }
+      if (!context.mounted || conv == null) return;
+      _openConversation(
+        context,
+        conv,
+        initialMessageId: selection.result.messageId,
+      );
+    }
   }
 
   Future<void> _showNewConversation(BuildContext context) async {
@@ -1802,22 +1813,38 @@ class _ConvAvatar extends StatelessWidget {
 
 // ── Search delegate ────────────────────────────────────────────────────────────
 
-class _ChatSearchDelegate extends SearchDelegate<String?> {
+sealed class _ChatSearchSelection {
+  const _ChatSearchSelection();
+}
+
+class _UserSearchSelection extends _ChatSearchSelection {
+  final String userID;
+
+  const _UserSearchSelection(this.userID);
+}
+
+class _ChannelSearchSelection extends _ChatSearchSelection {
+  final Conversation channel;
+
+  const _ChannelSearchSelection(this.channel);
+}
+
+class _MessageSearchSelection extends _ChatSearchSelection {
+  final MessageSearchResult result;
+
+  const _MessageSearchSelection(this.result);
+}
+
+class _ChatSearchDelegate extends SearchDelegate<_ChatSearchSelection?> {
   final ApiService api;
   final ChatProvider chat;
   final String currentUserId;
-  final Future<void> Function(String userID) onUserSelected;
-  final void Function(Conversation channel) onChannelSelected;
-  final Future<void> Function(MessageSearchResult result) onMessageSelected;
   MessageSearchCategory? _messageCategory;
 
   _ChatSearchDelegate({
     required this.api,
     required this.chat,
     required this.currentUserId,
-    required this.onUserSelected,
-    required this.onChannelSelected,
-    required this.onMessageSelected,
   });
 
   @override
@@ -1892,10 +1919,7 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
                     timeago.format(message.createdAt),
                     style: Theme.of(context).textTheme.labelSmall,
                   ),
-                  onTap: () {
-                    close(context, null);
-                    onMessageSelected(message);
-                  },
+                  onTap: () => close(context, _MessageSearchSelection(message)),
                 ),
             ],
             if (results.users.isNotEmpty)
@@ -1937,10 +1961,7 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
                     ),
                   ),
                 ),
-                onTap: () {
-                  close(context, u.id);
-                  onUserSelected(u.id);
-                },
+                onTap: () => close(context, _UserSearchSelection(u.id)),
               ),
             if (results.channels.isNotEmpty)
               const _SearchSectionHeader(label: 'Channels'),
@@ -1963,10 +1984,7 @@ class _ChatSearchDelegate extends SearchDelegate<String?> {
                       : (ch.description ?? 'Public channel'),
                 ),
                 trailing: const Icon(Icons.campaign_outlined),
-                onTap: () {
-                  close(context, null);
-                  onChannelSelected(ch);
-                },
+                onTap: () => close(context, _ChannelSearchSelection(ch)),
               ),
           ],
         );

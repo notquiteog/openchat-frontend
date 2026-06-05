@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.4.25+65
+version: 0.4.26+66
 publish_to: 'none'
 
 environment:
@@ -95,6 +95,7 @@ dependencies:
   record: ^7.0.0
   permission_handler: ^12.0.3
   app_links: ^7.1.1
+  openmls: ^1.3.0
 
 flutter:
   uses-material-design: true
