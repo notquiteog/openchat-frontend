@@ -1532,6 +1532,7 @@ class ChatProvider extends ChangeNotifier {
             : (old.decryptedContent ?? ''),
       );
     }
+    if (msg.senderId.isEmpty) msg.senderId = old.senderId;
     msg.sender ??= old.sender;
     list[idx] = msg;
     await _syncLiveLocationShareFromMessage(msg);
@@ -1906,6 +1907,15 @@ class ChatProvider extends ChangeNotifier {
     required Message confirmed,
     required String plaintextPayload,
   }) {
+    // Sealed-sender messages come back from the server without sender_id.
+    // Restore it from the local pending so isMe / avatar hydration still work.
+    if (confirmed.senderId.isEmpty && pendingID != null) {
+      final list = _messages[convID] ?? const <Message>[];
+      final idx = list.indexWhere((m) => m.id == pendingID);
+      if (idx != -1 && list[idx].senderId.isNotEmpty) {
+        confirmed.senderId = list[idx].senderId;
+      }
+    }
     try {
       confirmed.setDecryptedContent(plaintextPayload);
       _applyArtifactState(confirmed);
