@@ -49,6 +49,22 @@ class _GlassPageTransitionsBuilder extends PageTransitionsBuilder {
   }
 }
 
+class OpenChatScrollBehavior extends MaterialScrollBehavior {
+  final bool reduceTransparency;
+
+  const OpenChatScrollBehavior({required this.reduceTransparency});
+
+  @override
+  Widget buildOverscrollIndicator(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    if (reduceTransparency) return child;
+    return super.buildOverscrollIndicator(context, child, details);
+  }
+}
+
 /// Central Material 3 theme for OpenChat. Both light and dark variants are
 /// generated from a single brand seed, then refined for iOS 26 Liquid Glass:
 /// softer backgrounds, ultra-rounded surfaces, specular-rim chrome and

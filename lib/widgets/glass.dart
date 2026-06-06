@@ -1,7 +1,9 @@
 import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
+    hide GlassContainer, GlassDialog, GlassDialogAction;
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart' as lg;
 
 // Re-export the package's key types so call-sites can import them from a
 // single place instead of importing both libraries.
@@ -12,7 +14,6 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
     show
         // Containers
-        GlassContainer,
         GlassListTile,
         GlassGroupedSection,
         GlassDivider,
@@ -36,8 +37,6 @@ export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
         GlassToast,
         // Overlays
         GlassSheet,
-        GlassDialog,
-        GlassDialogAction,
         GlassModalSheet,
         showGlassActionSheet,
         GlassActionSheetAction,
@@ -55,6 +54,10 @@ export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
         LiquidShape,
         LiquidOval,
         LiquidRoundedSuperellipse,
+        GlassTheme,
+        GlassThemeData,
+        GlassThemeVariant,
+        GlassThemeSettings,
         GlassAccessibilityScope,
         GlassAccessibilityData;
 
@@ -66,6 +69,131 @@ export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
 ///  2. The system `MediaQuery.highContrastOf` flag (iOS/Android accessibility).
 bool glassReduceTransparency(BuildContext context) =>
     GlassAccessibilityData.of(context).reduceTransparency;
+
+Color reducedGlassSurfaceColor(BuildContext context) {
+  final theme = Theme.of(context);
+  final scheme = theme.colorScheme;
+  final isDark = theme.brightness == Brightness.dark;
+  final base = isDark
+      ? scheme.surfaceContainerHigh
+      : scheme.surfaceContainerLow;
+  final tint = scheme.primary.withValues(alpha: isDark ? 0.08 : 0.025);
+  return Color.alphaBlend(tint, base).withValues(alpha: 1);
+}
+
+Color _reducedGlassOutlineColor(BuildContext context) {
+  final theme = Theme.of(context);
+  final scheme = theme.colorScheme;
+  final isDark = theme.brightness == Brightness.dark;
+  return isDark
+      ? Colors.white.withValues(alpha: 0.14)
+      : scheme.outlineVariant.withValues(alpha: 0.62);
+}
+
+ShapeBorder _shapeWithFallbackSide(BuildContext context, LiquidShape shape) {
+  if (shape.side != BorderSide.none) return shape;
+  return shape.copyWith(
+    side: BorderSide(color: _reducedGlassOutlineColor(context), width: 0.7),
+  );
+}
+
+class GlassContainer extends StatelessWidget {
+  final Widget? child;
+  final AlignmentGeometry? alignment;
+  final double? width;
+  final double? height;
+  final EdgeInsetsGeometry? padding;
+  final EdgeInsetsGeometry? margin;
+  final LiquidShape shape;
+  final LiquidGlassSettings? settings;
+  final bool useOwnLayer;
+  final GlassQuality? quality;
+  final Clip clipBehavior;
+  final bool allowElevation;
+  final double glowIntensity;
+
+  const GlassContainer({
+    super.key,
+    this.child,
+    this.width,
+    this.height,
+    this.padding,
+    this.margin,
+    this.shape = const LiquidRoundedSuperellipse(borderRadius: 16),
+    this.settings,
+    this.useOwnLayer = false,
+    this.quality,
+    this.clipBehavior = Clip.none,
+    this.alignment,
+    this.allowElevation = false,
+    this.glowIntensity = 0.0,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (!glassReduceTransparency(context)) {
+      return lg.GlassContainer(
+        width: width,
+        height: height,
+        padding: padding,
+        margin: margin,
+        shape: shape,
+        settings: settings,
+        useOwnLayer: useOwnLayer,
+        quality: quality,
+        clipBehavior: clipBehavior,
+        alignment: alignment,
+        allowElevation: allowElevation,
+        glowIntensity: glowIntensity,
+        child: child,
+      );
+    }
+
+    Widget content = child ?? const SizedBox.shrink();
+    if (padding != null) {
+      content = Padding(padding: padding!, child: content);
+    }
+    if (alignment != null) {
+      content = Align(alignment: alignment!, child: content);
+    }
+
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final effectiveShape = _shapeWithFallbackSide(context, shape);
+    Widget surface = DecoratedBox(
+      decoration: ShapeDecoration(
+        color: reducedGlassSurfaceColor(context),
+        shape: effectiveShape,
+        shadows: allowElevation
+            ? [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: isDark ? 0.34 : 0.10),
+                  blurRadius: 24,
+                  spreadRadius: -10,
+                  offset: const Offset(0, 12),
+                ),
+              ]
+            : null,
+      ),
+      child: content,
+    );
+
+    if (clipBehavior != Clip.none) {
+      surface = ClipPath(
+        clipper: ShapeBorderClipper(shape: effectiveShape),
+        clipBehavior: clipBehavior,
+        child: surface,
+      );
+    }
+    if (width != null || height != null) {
+      surface = SizedBox(width: width, height: height, child: surface);
+    }
+    if (margin != null) {
+      surface = Padding(padding: margin!, child: surface);
+    }
+    return surface;
+  }
+}
 
 // ── LiquidGlass ─────────────────────────────────────────────────────────────
 
@@ -201,9 +329,14 @@ class GlassSurface extends StatelessWidget {
         child: Container(
           padding: padding,
           decoration: BoxDecoration(
-            color: scheme.surface.withValues(alpha: isDark ? 0.97 : 0.99),
+            color: reducedGlassSurfaceColor(context),
             borderRadius: borderRadius,
-            border: border,
+            border:
+                border ??
+                Border.all(
+                  color: _reducedGlassOutlineColor(context),
+                  width: 0.7,
+                ),
             boxShadow: boxShadow,
           ),
           child: child,
@@ -338,6 +471,123 @@ class GlassCard extends StatelessWidget {
   }
 }
 
+TextStyle _glassOverlayTextStyle(BuildContext context) {
+  final scheme = Theme.of(context).colorScheme;
+  return (Theme.of(context).textTheme.bodyMedium ??
+          TextStyle(color: scheme.onSurface, fontSize: 14))
+      .copyWith(
+        color: scheme.onSurface,
+        decoration: TextDecoration.none,
+        letterSpacing: 0,
+      );
+}
+
+class _GlassOverlayTextScope extends StatelessWidget {
+  final Widget child;
+
+  const _GlassOverlayTextScope({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return DefaultTextStyle(
+      style: _glassOverlayTextStyle(context),
+      child: IconTheme(
+        data: IconThemeData(
+          color: scheme.onSurface.withValues(alpha: 0.86),
+          size: 21,
+        ),
+        child: child,
+      ),
+    );
+  }
+}
+
+class GlassDialogAction {
+  final String label;
+  final VoidCallback onPressed;
+  final bool isPrimary;
+  final bool isDestructive;
+
+  const GlassDialogAction({
+    required this.label,
+    required this.onPressed,
+    this.isPrimary = false,
+    this.isDestructive = false,
+  });
+}
+
+class GlassDialog {
+  const GlassDialog._();
+
+  static Future<T?> show<T>({
+    required BuildContext context,
+    required List<GlassDialogAction> actions,
+    String? title,
+    String? message,
+    Widget? content,
+    LiquidGlassSettings? settings,
+    GlassQuality quality = GlassQuality.standard,
+    bool barrierDismissible = false,
+    Color? barrierColor,
+    double maxWidth = 280,
+  }) {
+    return showDialog<T>(
+      context: context,
+      barrierDismissible: barrierDismissible,
+      barrierColor: barrierColor ?? Colors.black.withValues(alpha: 0.35),
+      builder: (dialogContext) => GlassAlertDialog(
+        title: title == null ? null : Text(title),
+        content: SizedBox(
+          width: maxWidth,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (message != null)
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Theme.of(
+                      dialogContext,
+                    ).colorScheme.onSurface.withValues(alpha: 0.72),
+                    height: 1.4,
+                  ),
+                ),
+              if (message != null && content != null)
+                const SizedBox(height: 12),
+              ?content,
+            ],
+          ),
+        ),
+        actions: [
+          for (final action in actions)
+            if (action.isPrimary || action.isDestructive)
+              FilledButton(
+                style: action.isDestructive
+                    ? FilledButton.styleFrom(
+                        backgroundColor: Theme.of(
+                          dialogContext,
+                        ).colorScheme.error,
+                        foregroundColor: Theme.of(
+                          dialogContext,
+                        ).colorScheme.onError,
+                      )
+                    : null,
+                onPressed: action.onPressed,
+                child: Text(action.label),
+              )
+            else
+              TextButton(
+                onPressed: action.onPressed,
+                child: Text(action.label),
+              ),
+        ],
+      ),
+    );
+  }
+}
+
 // ── GlassAlertDialog ─────────────────────────────────────────────────────────
 
 /// iOS 26 glass alert dialog — drop-in replacement for [AlertDialog].
@@ -376,64 +626,72 @@ class GlassAlertDialog extends StatelessWidget {
       backgroundColor: Colors.transparent,
       elevation: 0,
       insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
-      child: GlassContainer(
-        shape: const LiquidRoundedSuperellipse(borderRadius: 28),
-        allowElevation: true,
-        glowIntensity: 0.05,
-        padding: EdgeInsets.zero,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (icon != null)
-              Padding(
-                padding: iconPadding ?? const EdgeInsets.fromLTRB(0, 24, 0, 0),
-                child: IconTheme(
-                  data: IconThemeData(color: scheme.primary, size: 32),
-                  child: Align(alignment: Alignment.center, child: icon!),
-                ),
-              ),
-            if (title != null)
-              Padding(
-                padding:
-                    titlePadding ??
-                    EdgeInsets.fromLTRB(24, icon != null ? 12 : 24, 24, 0),
-                child: DefaultTextStyle(
-                  style: textTheme.headlineSmall!.copyWith(
-                    fontWeight: FontWeight.w700,
+      child: _GlassOverlayTextScope(
+        child: GlassContainer(
+          shape: const LiquidRoundedSuperellipse(borderRadius: 28),
+          allowElevation: true,
+          glowIntensity: 0.05,
+          padding: EdgeInsets.zero,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (icon != null)
+                Padding(
+                  padding:
+                      iconPadding ?? const EdgeInsets.fromLTRB(0, 24, 0, 0),
+                  child: IconTheme(
+                    data: IconThemeData(color: scheme.primary, size: 32),
+                    child: Align(alignment: Alignment.center, child: icon!),
                   ),
-                  textAlign: TextAlign.center,
-                  child: title!,
                 ),
-              ),
-            if (content != null)
-              Padding(
-                padding:
-                    contentPadding ?? const EdgeInsets.fromLTRB(24, 16, 24, 24),
-                child: DefaultTextStyle(
-                  style: textTheme.bodyMedium!.copyWith(
-                    color: scheme.onSurface.withValues(alpha: 0.80),
+              if (title != null)
+                Padding(
+                  padding:
+                      titlePadding ??
+                      EdgeInsets.fromLTRB(24, icon != null ? 12 : 24, 24, 0),
+                  child: DefaultTextStyle(
+                    style: textTheme.headlineSmall!.copyWith(
+                      fontWeight: FontWeight.w700,
+                      decoration: TextDecoration.none,
+                      letterSpacing: 0,
+                    ),
+                    textAlign: TextAlign.center,
+                    child: title!,
                   ),
-                  child: content!,
                 ),
-              ),
-            if (actions != null && actions!.isNotEmpty) ...[
-              Divider(
-                height: 1,
-                thickness: 0.5,
-                color: scheme.outlineVariant.withValues(alpha: 0.40),
-              ),
-              Padding(
-                padding:
-                    actionsPadding ??
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                child: Row(
-                  mainAxisAlignment: actionsAlignment,
-                  children: actions!,
+              if (content != null)
+                Padding(
+                  padding:
+                      contentPadding ??
+                      const EdgeInsets.fromLTRB(24, 16, 24, 24),
+                  child: DefaultTextStyle(
+                    style: textTheme.bodyMedium!.copyWith(
+                      color: scheme.onSurface.withValues(alpha: 0.80),
+                      decoration: TextDecoration.none,
+                      letterSpacing: 0,
+                    ),
+                    child: content!,
+                  ),
                 ),
-              ),
+              if (actions != null && actions!.isNotEmpty) ...[
+                Divider(
+                  height: 1,
+                  thickness: 0.5,
+                  color: scheme.outlineVariant.withValues(alpha: 0.40),
+                ),
+                Padding(
+                  padding:
+                      actionsPadding ??
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  child: Row(
+                    mainAxisAlignment: actionsAlignment,
+                    children: actions!,
+                  ),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
@@ -466,39 +724,42 @@ class GlassSimpleDialog extends StatelessWidget {
       backgroundColor: Colors.transparent,
       elevation: 0,
       insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
-      child: GlassContainer(
-        shape: const LiquidRoundedSuperellipse(borderRadius: 28),
-        allowElevation: true,
-        glowIntensity: 0.05,
-        padding: EdgeInsets.zero,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (title != null)
-              Padding(
-                padding:
-                    titlePadding ?? const EdgeInsets.fromLTRB(24, 20, 24, 8),
-                child: DefaultTextStyle(
-                  style: textTheme.titleMedium!.copyWith(
-                    color: scheme.onSurface.withValues(alpha: 0.55),
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0,
+      child: _GlassOverlayTextScope(
+        child: GlassContainer(
+          shape: const LiquidRoundedSuperellipse(borderRadius: 28),
+          allowElevation: true,
+          glowIntensity: 0.05,
+          padding: EdgeInsets.zero,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (title != null)
+                Padding(
+                  padding:
+                      titlePadding ?? const EdgeInsets.fromLTRB(24, 20, 24, 8),
+                  child: DefaultTextStyle(
+                    style: textTheme.titleMedium!.copyWith(
+                      color: scheme.onSurface.withValues(alpha: 0.55),
+                      fontWeight: FontWeight.w600,
+                      decoration: TextDecoration.none,
+                      letterSpacing: 0,
+                    ),
+                    child: title!,
                   ),
-                  child: title!,
                 ),
-              ),
-            if (children != null)
-              Padding(
-                padding:
-                    contentPadding ?? const EdgeInsets.symmetric(vertical: 8),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: children!,
+              if (children != null)
+                Padding(
+                  padding:
+                      contentPadding ?? const EdgeInsets.symmetric(vertical: 8),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: children!,
+                  ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );

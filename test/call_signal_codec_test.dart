@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openchat/crypto/pgp_service.dart';
@@ -10,6 +11,8 @@ import 'package:openchat/services/mls_service.dart';
 import 'package:openchat/services/secure_storage_service.dart';
 
 void main() {
+  setUpAll(_ensureOpenPgpBridgeForUnitTests);
+
   test(
     'PGP call signal encrypts SDP and hides call details outside ciphertext',
     () async {
@@ -147,6 +150,71 @@ void main() {
       );
     },
   );
+}
+
+Future<void> _ensureOpenPgpBridgeForUnitTests() async {
+  final target = _openPgpBridgeTestTarget();
+  if (target == null || target.existsSync()) return;
+
+  final source = await _bundledOpenPgpBridge();
+  if (source == null || !source.existsSync()) return;
+
+  await target.parent.create(recursive: true);
+  await source.copy(target.path);
+}
+
+File? _openPgpBridgeTestTarget() {
+  if (Platform.isLinux) {
+    final arch = Platform.resolvedExecutable.contains('x64') ? 'x64' : 'arm64';
+    return File('build/linux/$arch/debug/bundle/lib/libopenpgp_bridge.so');
+  }
+  if (Platform.isWindows) {
+    final arch = Platform.resolvedExecutable.contains('x64') ? 'x64' : 'arm64';
+    return File('build/windows/$arch/runner/Debug/libopenpgp_bridge.dll');
+  }
+  if (Platform.isMacOS) {
+    return File(
+      'build/macos/Build/Products/Debug/Contents/Frameworks/'
+      'libopenpgp_bridge.dylib',
+    );
+  }
+  return null;
+}
+
+Future<File?> _bundledOpenPgpBridge() async {
+  final packageRoot = await _packageRoot('openpgp');
+  if (packageRoot == null) return null;
+
+  if (Platform.isLinux) {
+    final arch = Platform.resolvedExecutable.contains('x64')
+        ? 'x86_64'
+        : 'aarch64';
+    return File('${packageRoot.path}/linux/shared/$arch/libopenpgp_bridge.so');
+  }
+  if (Platform.isWindows) {
+    return File('${packageRoot.path}/windows/shared/libopenpgp_bridge.dll');
+  }
+  if (Platform.isMacOS) {
+    return File('${packageRoot.path}/macos/libopenpgp_bridge.dylib');
+  }
+  return null;
+}
+
+Future<Directory?> _packageRoot(String packageName) async {
+  final config = File('.dart_tool/package_config.json');
+  if (!config.existsSync()) return null;
+  final decoded =
+      jsonDecode(await config.readAsString()) as Map<String, dynamic>;
+  final packages = (decoded['packages'] as List<dynamic>? ?? const [])
+      .whereType<Map<String, dynamic>>();
+  final package = packages
+      .where((pkg) => pkg['name'] == packageName)
+      .firstOrNull;
+  if (package == null) return null;
+  final rootUri = package['rootUri'] as String?;
+  if (rootUri == null) return null;
+  final packageConfigUri = config.absolute.parent.uri;
+  return Directory.fromUri(packageConfigUri.resolve(rootUri));
 }
 
 Conversation _conversation({

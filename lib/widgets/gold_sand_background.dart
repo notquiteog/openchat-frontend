@@ -32,23 +32,58 @@ class GoldSandBackground extends StatefulWidget {
 class _GoldSandBackgroundState extends State<GoldSandBackground>
     with SingleTickerProviderStateMixin {
   late final Ticker _ticker;
+  late final bool _isWidgetTest = _detectWidgetTest();
   final ValueNotifier<double> _elapsed = ValueNotifier(0);
   ui.FragmentShader? _shader;
+  bool _shaderLoadStarted = false;
+
+  bool _detectWidgetTest() {
+    var isWidgetTest = false;
+    assert(() {
+      // Widget tests use pumpAndSettle(), which waits for all scheduled frames.
+      // Keep the auth background deterministic under flutter_test so it does
+      // not keep the test binding alive forever.
+      isWidgetTest = WidgetsBinding.instance.runtimeType.toString().contains(
+        'TestWidgetsFlutterBinding',
+      );
+      return true;
+    }());
+    return isWidgetTest;
+  }
 
   @override
   void initState() {
     super.initState();
     _ticker = createTicker((d) => _elapsed.value = d.inMicroseconds / 1e6);
-    _loadShader();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final shouldUseShader =
+        !_isWidgetTest && Theme.of(context).brightness == Brightness.dark;
+    if (!shouldUseShader) {
+      if (_ticker.isActive) _ticker.stop();
+      return;
+    }
+    if (_shader == null && !_shaderLoadStarted) {
+      _shaderLoadStarted = true;
+      _loadShader();
+    } else if (_shader != null && !_ticker.isActive) {
+      _ticker.start();
+    }
   }
 
   Future<void> _loadShader() async {
     try {
-      final program =
-          await ui.FragmentProgram.fromAsset('shaders/gold_sand.frag');
+      final program = await ui.FragmentProgram.fromAsset(
+        'shaders/gold_sand.frag',
+      );
       if (!mounted) return;
       setState(() => _shader = program.fragmentShader());
-      _ticker.start();
+      if (Theme.of(context).brightness == Brightness.dark) {
+        _ticker.start();
+      }
     } catch (e) {
       // Shader compilation or asset-loading failure.
       // The solid fallback colour is already shown; nothing else to do.
@@ -66,7 +101,8 @@ class _GoldSandBackgroundState extends State<GoldSandBackground>
 
   @override
   Widget build(BuildContext context) {
-    final shader = _shader;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final shader = !_isWidgetTest && isDark ? _shader : null;
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -84,12 +120,33 @@ class _GoldSandBackgroundState extends State<GoldSandBackground>
             ),
           )
         else
-          // Fallback: dark colour close to the shader's clearColor
-          const ColoredBox(color: Color(0xFF0F0F0F)),
+          _GoldSandFallback(isDark: isDark),
 
         // Foreground content (login / register form)
         widget.child,
       ],
+    );
+  }
+}
+
+class _GoldSandFallback extends StatelessWidget {
+  final bool isDark;
+
+  const _GoldSandFallback({required this.isDark});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = isDark
+        ? const [Color(0xFF0F0F0F), Color(0xFF171512), Color(0xFF111111)]
+        : const [Color(0xFFEFF5FF), Color(0xFFF8FAFF), Color(0xFFEFFBF5)];
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: colors,
+        ),
+      ),
     );
   }
 }
@@ -113,10 +170,7 @@ class _GoldSandPainter extends CustomPainter {
       ..setFloat(1, size.width)
       ..setFloat(2, size.height);
 
-    canvas.drawRect(
-      Offset.zero & size,
-      Paint()..shader = shader,
-    );
+    canvas.drawRect(Offset.zero & size, Paint()..shader = shader);
   }
 
   @override
