@@ -573,7 +573,7 @@ class _ParticipantGrid extends StatelessWidget {
           _ => width >= 1120 ? 4 : (width >= 760 ? 3 : 2),
         };
         return GridView.count(
-          physics: const NeverScrollableScrollPhysics(),
+          physics: const ClampingScrollPhysics(),
           padding: EdgeInsets.fromLTRB(14, 96, 14, controlsBottomInset),
           crossAxisCount: columns,
           mainAxisSpacing: 10,
