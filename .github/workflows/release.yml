@@ -24,7 +24,6 @@ env:
     --dart-define=OPENCHAT_PORT=443
     --dart-define=OPENCHAT_HTTPS=true
 
-# ── Shared version + release tag resolution ───────────────────────────────────
 jobs:
   version:
     runs-on: ubuntu-latest
@@ -39,7 +38,6 @@ jobs:
             | awk '{print $2}' | tr -d '\r')" >> "$GITHUB_OUTPUT"
           echo "release_tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
-# ── Android ───────────────────────────────────────────────────────────────────
   build-android:
     name: Android (APK)
     needs: version
@@ -104,7 +102,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-# ── Windows ───────────────────────────────────────────────────────────────────
   build-windows:
     name: Windows (x64)
     needs: version
@@ -161,7 +158,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-# ── Linux ─────────────────────────────────────────────────────────────────────
   build-linux:
     name: Linux (x86_64)
     needs: version
@@ -234,10 +230,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-# ── macOS ─────────────────────────────────────────────────────────────────────
   build-macos:
     name: macOS (unsigned)
     needs: version
+    # connectivity_plus 7.1.x references Apple 26 Network.framework symbols, so
+    # this job needs the newer Xcode/macOS SDK available on the macOS 26 image.
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v6.0.2
@@ -247,6 +244,11 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
+
+      - name: Show Apple SDK versions
+        run: |
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
 
       - name: Inject Firebase config
         env:
@@ -275,10 +277,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-# ── iOS ───────────────────────────────────────────────────────────────────────
   build-ios:
     name: iOS (unsigned IPA)
     needs: version
+    # connectivity_plus 7.1.x references Apple 26 Network.framework symbols, so
+    # this job needs the newer Xcode/iPhoneOS SDK available on the macOS 26 image.
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v6.0.2
@@ -288,6 +291,11 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
+
+      - name: Show Apple SDK versions
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
 
       - name: Inject Firebase config
         env:
@@ -326,7 +334,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-# ── Clear binaries from previous releases (free-tier storage) ─────────────────
   cleanup-old-assets:
     name: Clear previous release binaries
     needs: [version, build-android, build-windows, build-linux, build-macos, build-ios]
