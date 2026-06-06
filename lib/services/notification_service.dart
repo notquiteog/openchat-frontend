@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/data/latest_all.dart' as tzdata;
+import 'package:timezone/timezone.dart' as tz;
 import 'package:window_manager/window_manager.dart';
 import '../utils/local_conversation_preferences.dart';
 
@@ -64,6 +66,12 @@ class NotificationService {
       importance: Importance.low,
     ),
     AndroidNotificationChannel(
+      'message_reminders',
+      'Message reminders',
+      description: 'Notifications for message reminders',
+      importance: Importance.high,
+    ),
+    AndroidNotificationChannel(
       'openchat_background',
       'OpenChat background service',
       description: 'Keeps OpenChat connected for background notifications',
@@ -95,6 +103,7 @@ class NotificationService {
   static const String _liveLocationCancelActionId =
       'openchat_live_location_cancel';
   static const String _liveLocationCategory = 'openchat_live_location';
+  static const String _messageReminderCategory = 'openchat_message_reminder';
   static VoidCallback? _activeCallEndHandler;
   static VoidCallback? _activeCallToggleMuteHandler;
   static VoidCallback? _incomingCallAnswerHandler;
@@ -107,6 +116,7 @@ class NotificationService {
   static Future<void> Function(String conversationId, String messageId)?
   _liveLocationCancelHandler;
   static bool _appFocused = true;
+  static bool _timeZonesInitialized = false;
 
   static bool get _supported =>
       !kIsWeb &&
@@ -465,6 +475,7 @@ class NotificationService {
           ),
         ],
       ),
+      DarwinNotificationCategory(_messageReminderCategory, actions: const []),
     ];
     final settings = InitializationSettings(
       android: const AndroidInitializationSettings('@mipmap/launcher_icon'),
@@ -739,7 +750,55 @@ class NotificationService {
   static int _liveLocationNotificationId({
     required String conversationId,
     required String messageId,
-  }) => Object.hash(conversationId, messageId);
+  }) => _stableNotificationId('live_location', <String>[
+    conversationId,
+    messageId,
+  ]);
+
+  static String _liveLocationNotificationTag({
+    required String conversationId,
+    required String messageId,
+  }) => 'openchat_live_location:$conversationId:$messageId';
+
+  static int _messageReminderNotificationId(String reminderId) =>
+      _stableNotificationId('message_reminder', <String>[reminderId]);
+
+  static Future<void> _ensureTimeZonesInitialized() async {
+    if (_timeZonesInitialized) return;
+    tzdata.initializeTimeZones();
+    _timeZonesInitialized = true;
+  }
+
+  static int _stableNotificationId(String namespace, Iterable<String> parts) {
+    var hash = 0x811C9DC5;
+    for (final unit in '$namespace:${parts.join(':')}'.codeUnits) {
+      hash ^= unit;
+      hash = (hash * 0x01000193) & 0x7FFFFFFF;
+    }
+    return hash == 0 ? 1 : hash;
+  }
+
+  @visibleForTesting
+  static int debugLiveLocationNotificationId({
+    required String conversationId,
+    required String messageId,
+  }) => _liveLocationNotificationId(
+    conversationId: conversationId,
+    messageId: messageId,
+  );
+
+  @visibleForTesting
+  static String debugLiveLocationNotificationTag({
+    required String conversationId,
+    required String messageId,
+  }) => _liveLocationNotificationTag(
+    conversationId: conversationId,
+    messageId: messageId,
+  );
+
+  @visibleForTesting
+  static int debugMessageReminderNotificationId(String reminderId) =>
+      _messageReminderNotificationId(reminderId);
 
   static String _liveLocationRemainingLabel(DateTime? endsAt) {
     if (endsAt == null) return 'Live location shared';
@@ -773,7 +832,7 @@ class NotificationService {
     await init();
     if (!_available) return;
     final details = NotificationDetails(
-      android: const AndroidNotificationDetails(
+      android: AndroidNotificationDetails(
         'live_location',
         'Live location sharing',
         channelDescription: 'Ongoing live location sharing updates',
@@ -782,6 +841,11 @@ class NotificationService {
         ongoing: true,
         autoCancel: false,
         onlyAlertOnce: true,
+        category: AndroidNotificationCategory.locationSharing,
+        tag: _liveLocationNotificationTag(
+          conversationId: conversationId,
+          messageId: messageId,
+        ),
         actions: [
           AndroidNotificationAction(
             _liveLocationCancelActionId,
@@ -811,7 +875,7 @@ class NotificationService {
       id: _liveLocationNotificationId(
         conversationId: conversationId,
         messageId: messageId,
-      ).abs(),
+      ),
       title: title,
       body: _liveLocationRemainingLabel(endsAt),
       notificationDetails: details,
@@ -833,7 +897,121 @@ class NotificationService {
       id: _liveLocationNotificationId(
         conversationId: conversationId,
         messageId: messageId,
-      ).abs(),
+      ),
+      tag: _liveLocationNotificationTag(
+        conversationId: conversationId,
+        messageId: messageId,
+      ),
     );
   }
+
+  static Future<void> showMessageReminder({
+    required String reminderId,
+    required String title,
+    required String body,
+    String? conversationId,
+    String? messageId,
+  }) async {
+    if (!_supported) return;
+    final granted = await requestPermission();
+    if (!granted || !_available) return;
+    await _plugin.show(
+      id: _messageReminderNotificationId(reminderId),
+      title: title,
+      body: body,
+      notificationDetails: _messageReminderDetails,
+      payload: _messageReminderPayload(
+        reminderId: reminderId,
+        conversationId: conversationId,
+        messageId: messageId,
+      ),
+    );
+  }
+
+  static Future<void> scheduleMessageReminder({
+    required String reminderId,
+    required String title,
+    required String body,
+    required DateTime remindAt,
+    String? conversationId,
+    String? messageId,
+  }) async {
+    if (!_supported) return;
+    if (!remindAt.isAfter(DateTime.now())) {
+      await showMessageReminder(
+        reminderId: reminderId,
+        title: title,
+        body: body,
+        conversationId: conversationId,
+        messageId: messageId,
+      );
+      return;
+    }
+    final granted = await requestPermission();
+    if (!granted || !_available) return;
+    await _ensureTimeZonesInitialized();
+    try {
+      await _plugin.zonedSchedule(
+        id: _messageReminderNotificationId(reminderId),
+        title: title,
+        body: body,
+        scheduledDate: tz.TZDateTime.from(remindAt.toUtc(), tz.UTC),
+        notificationDetails: _messageReminderDetails,
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        payload: _messageReminderPayload(
+          reminderId: reminderId,
+          conversationId: conversationId,
+          messageId: messageId,
+        ),
+      );
+    } catch (e) {
+      debugPrint('Could not schedule message reminder notification: $e');
+    }
+  }
+
+  static Future<void> cancelMessageReminder(String reminderId) async {
+    if (!_supported) return;
+    await init();
+    if (!_available) return;
+    await _plugin.cancel(id: _messageReminderNotificationId(reminderId));
+  }
+
+  static String _messageReminderPayload({
+    required String reminderId,
+    String? conversationId,
+    String? messageId,
+  }) => jsonEncode({
+    'type': 'message_reminder',
+    'reminder_id': reminderId,
+    if (conversationId != null && conversationId.isNotEmpty)
+      'conversation_id': conversationId,
+    if (messageId != null && messageId.isNotEmpty) 'message_id': messageId,
+  });
+
+  static const NotificationDetails _messageReminderDetails =
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          'message_reminders',
+          'Message reminders',
+          channelDescription: 'Notifications for message reminders',
+          importance: Importance.high,
+          priority: Priority.high,
+          category: AndroidNotificationCategory.reminder,
+          onlyAlertOnce: true,
+        ),
+        iOS: DarwinNotificationDetails(
+          categoryIdentifier: _messageReminderCategory,
+          presentBanner: true,
+          presentList: true,
+          presentSound: true,
+        ),
+        macOS: DarwinNotificationDetails(
+          categoryIdentifier: _messageReminderCategory,
+          presentBanner: true,
+          presentList: true,
+          presentSound: true,
+        ),
+        linux: LinuxNotificationDetails(),
+        windows: WindowsNotificationDetails(),
+      );
 }

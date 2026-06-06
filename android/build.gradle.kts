@@ -15,6 +15,13 @@ subprojects {
     val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
     project.layout.buildDirectory.value(newSubprojectBuildDir)
 
+    tasks.withType<org.gradle.api.tasks.compile.JavaCompile>().configureEach {
+        // JDK 26 warns for plugins that still compile Java 8 sources.
+        if (!options.compilerArgs.contains("-Xlint:-options")) {
+            options.compilerArgs.add("-Xlint:-options")
+        }
+    }
+
     plugins.withId("org.jetbrains.kotlin.android") {
         extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension> {
             compilerOptions {

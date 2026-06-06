@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -8,6 +9,7 @@ import '../models/contact_bundle.dart';
 import '../models/message.dart';
 import '../models/message_reminder.dart';
 import '../services/local_private_state_service.dart';
+import '../services/notification_service.dart';
 import '../utils/local_conversation_preferences.dart';
 import '../utils/smart_inbox_filter.dart';
 
@@ -552,13 +554,33 @@ class SettingsProvider extends ChangeNotifier {
     _messageReminders[id] = reminder;
     notifyListeners();
     await _persistPrivateLocalState();
+    unawaited(
+      NotificationService.scheduleMessageReminder(
+        reminderId: reminder.id,
+        title: reminder.conversationTitle.isEmpty
+            ? 'Message reminder'
+            : reminder.conversationTitle,
+        body: reminder.messagePreview.isEmpty
+            ? 'OpenChat reminder'
+            : reminder.messagePreview,
+        remindAt: reminder.remindAt,
+        conversationId: reminder.conversationId,
+        messageId: reminder.messageId,
+      ),
+    );
     return reminder;
   }
 
-  Future<void> removeMessageReminder(String reminderId) async {
+  Future<void> removeMessageReminder(
+    String reminderId, {
+    bool cancelNotification = true,
+  }) async {
     if (_messageReminders.remove(reminderId) == null) return;
     notifyListeners();
     await _persistPrivateLocalState();
+    if (cancelNotification) {
+      unawaited(NotificationService.cancelMessageReminder(reminderId));
+    }
   }
 
   List<MessageReminder> dueMessageReminders(DateTime now) =>

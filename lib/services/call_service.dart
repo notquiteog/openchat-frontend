@@ -207,6 +207,8 @@ class CallService {
   bool _cameraEnabled = true;
   bool _usingFrontCamera = true;
   String? _selectedAudioOutputId;
+  Future<void> _micMuteQueue = Future<void>.value();
+  int _micMuteGeneration = 0;
   final List<RTCIceCandidate> _pendingRemoteCandidates = [];
 
   final _sessionController = StreamController<CallSession?>.broadcast();
@@ -440,6 +442,7 @@ class CallService {
     }
     s.state = CallState.connected;
     _sessionController.add(s);
+    _reapplyActiveMobileAudioControls();
   }
 
   void rejectCall(CallSession session) {
@@ -469,22 +472,34 @@ class CallService {
 
   void setMicMuted(bool muted) {
     _micMuted = muted;
-    unawaited(_platformControls.setMicrophoneMuted(muted));
     final tracks = _localStream?.getAudioTracks() ?? const <MediaStreamTrack>[];
     for (final track in tracks) {
-      if (_supportsNativeMicrophoneMute) {
-        unawaited(Helper.setMicrophoneMute(muted, track).catchError((_) {}));
-      }
       track.enabled = !muted;
     }
+    final generation = ++_micMuteGeneration;
+    _micMuteQueue = _micMuteQueue
+        .then((_) => _applyMicrophoneMute(muted, tracks, generation))
+        .catchError((_) {});
+    unawaited(_micMuteQueue);
   }
 
-  bool get _supportsNativeMicrophoneMute {
-    if (kIsWeb) return false;
-    // Try native mute on all non-web platforms — the call already wraps the
-    // invocation in catchError so MissingPluginException on unimplemented
-    // platforms is silently swallowed.
-    return true;
+  Future<void> _applyMicrophoneMute(
+    bool muted,
+    List<MediaStreamTrack> tracks,
+    int generation,
+  ) async {
+    if (generation != _micMuteGeneration) return;
+    await _platformControls.setMicrophoneMuted(muted);
+    if (generation != _micMuteGeneration || kIsWeb) return;
+    for (final track in tracks) {
+      try {
+        await Helper.setMicrophoneMute(muted, track);
+      } catch (_) {
+        track.enabled = !muted;
+      }
+      if (generation != _micMuteGeneration) return;
+      track.enabled = !muted;
+    }
   }
 
   void setCameraEnabled(bool enabled) {
@@ -560,7 +575,6 @@ class CallService {
       deviceId,
       isVideo: _session?.isVideo ?? false,
     );
-    if (routedByNative) return;
 
     if (defaultTargetPlatform == TargetPlatform.android) {
       switch (deviceId) {
@@ -568,21 +582,29 @@ class CallService {
           try {
             await Helper.selectAudioOutput('speaker');
           } catch (_) {
-            await Helper.setSpeakerphoneOn(true);
+            try {
+              await Helper.setSpeakerphoneOn(true);
+            } catch (_) {}
           }
           return;
         case 'earpiece':
           try {
             await Helper.setSpeakerphoneOn(false);
           } catch (_) {}
-          await Helper.selectAudioOutput('earpiece');
+          try {
+            await Helper.selectAudioOutput('earpiece');
+          } catch (_) {}
           return;
         case 'bluetooth':
         case 'wired-headset':
-          await Helper.selectAudioOutput(deviceId);
+          try {
+            await Helper.selectAudioOutput(deviceId);
+          } catch (_) {}
           return;
       }
-      await Helper.selectAudioOutput(deviceId);
+      try {
+        await Helper.selectAudioOutput(deviceId);
+      } catch (_) {}
       return;
     }
 
@@ -592,17 +614,38 @@ class CallService {
 
     switch (deviceId) {
       case 'speaker':
-        await Helper.setSpeakerphoneOn(true);
+        try {
+          await Helper.setSpeakerphoneOn(true);
+        } catch (_) {}
         return;
       case 'bluetooth':
-        await Helper.setSpeakerphoneOnButPreferBluetooth();
+        try {
+          await Helper.setSpeakerphoneOnButPreferBluetooth();
+        } catch (_) {}
         return;
       case 'earpiece':
       case 'wired-headset':
-        await Helper.setSpeakerphoneOn(false);
+        try {
+          await Helper.setSpeakerphoneOn(false);
+        } catch (_) {}
         return;
     }
-    await Helper.setSpeakerphoneOn(false);
+    try {
+      await Helper.setSpeakerphoneOn(false);
+    } catch (_) {
+      if (!routedByNative) rethrow;
+    }
+  }
+
+  void _reapplyActiveMobileAudioControls() {
+    if (!_isMobilePlatform) return;
+    final selectedOutputId = _selectedAudioOutputId;
+    if (selectedOutputId != null) {
+      unawaited(_selectMobileAudioOutput(selectedOutputId));
+    }
+    if (_micMuted) {
+      setMicMuted(true);
+    }
   }
 
   String _labelForAudioOutput(String raw) {
@@ -1122,6 +1165,7 @@ class CallService {
     _pendingOfferSdp = null;
     _pendingRemoteCandidates.clear();
     _session = null;
+    _micMuteGeneration++;
     _micMuted = false;
     _cameraEnabled = true;
     _usingFrontCamera = true;

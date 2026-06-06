@@ -192,7 +192,9 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     private fun setMicrophoneMuted(muted: Boolean): Boolean {
-        audioManager().isMicrophoneMute = muted
+        val manager = audioManager()
+        manager.mode = AudioManager.MODE_IN_COMMUNICATION
+        manager.isMicrophoneMute = muted
         return true
     }
 

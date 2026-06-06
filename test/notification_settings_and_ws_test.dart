@@ -149,10 +149,50 @@ void main() {
             'active_calls',
             'bg_messages',
             'bg_calls',
+            'live_location',
+            'message_reminders',
           }),
         );
       },
     );
+
+    test('live location notifications keep a stable update slot', () {
+      final first = NotificationService.debugLiveLocationNotificationId(
+        conversationId: 'conv-1',
+        messageId: 'msg-1',
+      );
+      final second = NotificationService.debugLiveLocationNotificationId(
+        conversationId: 'conv-1',
+        messageId: 'msg-1',
+      );
+      final other = NotificationService.debugLiveLocationNotificationId(
+        conversationId: 'conv-1',
+        messageId: 'msg-2',
+      );
+
+      expect(first, second);
+      expect(first, isNot(other));
+      expect(
+        NotificationService.debugLiveLocationNotificationTag(
+          conversationId: 'conv-1',
+          messageId: 'msg-1',
+        ),
+        'openchat_live_location:conv-1:msg-1',
+      );
+    });
+
+    test('message reminders keep stable local notification ids', () {
+      expect(
+        NotificationService.debugMessageReminderNotificationId('reminder-1'),
+        NotificationService.debugMessageReminderNotificationId('reminder-1'),
+      );
+      expect(
+        NotificationService.debugMessageReminderNotificationId('reminder-1'),
+        isNot(
+          NotificationService.debugMessageReminderNotificationId('reminder-2'),
+        ),
+      );
+    });
 
     test('ios plist declares firebase background delivery modes', () {
       final plist = File('ios/Runner/Info.plist').readAsStringSync();

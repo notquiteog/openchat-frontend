@@ -918,13 +918,24 @@ class _AppRootState extends State<_AppRoot> {
     if (!settings.isLoaded) return;
     final due = settings.dueMessageReminders(DateTime.now());
     for (final reminder in due) {
-      unawaited(settings.removeMessageReminder(reminder.id));
+      unawaited(
+        settings.removeMessageReminder(reminder.id, cancelNotification: false),
+      );
       final title = reminder.conversationTitle.isEmpty
           ? 'Message reminder'
           : reminder.conversationTitle;
       final body = reminder.messagePreview.isEmpty
           ? 'OpenChat reminder'
           : reminder.messagePreview;
+      unawaited(
+        NotificationService.showMessageReminder(
+          reminderId: reminder.id,
+          title: title,
+          body: body,
+          conversationId: reminder.conversationId,
+          messageId: reminder.messageId,
+        ),
+      );
       OpenChatApp.scaffoldMessengerKey.currentState?.showSnackBar(
         SnackBar(
           content: Text('$title: $body', maxLines: 2),

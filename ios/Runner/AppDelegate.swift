@@ -9,6 +9,7 @@ import UIKit
   private var callControlsChannel: FlutterMethodChannel?
   private var selectedCallAudioRoute: CallAudioRoute = .speaker
   private var currentCallIsVideo = false
+  private var microphoneMuted = false
 
   private enum CallAudioRoute: String, Equatable {
     case speaker
@@ -122,7 +123,9 @@ import UIKit
         let isVideo = args?["isVideo"] as? Bool ?? false
         result(self?.selectAudioOutput(deviceId, isVideo: isVideo) ?? false)
       case "setMicrophoneMuted":
-        result(false)
+        let args = call.arguments as? [String: Any]
+        let muted = args?["muted"] as? Bool ?? false
+        result(self?.setMicrophoneMuted(muted) ?? false)
       case "clearAudioOutput":
         self?.clearAudioOutput()
         result(nil)
@@ -156,6 +159,12 @@ import UIKit
     }
   }
 
+  private func setMicrophoneMuted(_ muted: Bool) -> Bool {
+    microphoneMuted = muted
+    _ = applyMicrophoneMuteIfPossible()
+    return true
+  }
+
   @discardableResult
   private func configureAudioSession(
     isVideo: Bool,
@@ -168,6 +177,7 @@ import UIKit
       options: audioSessionOptions(for: route)
     )
     try session.setActive(true)
+    _ = applyMicrophoneMuteIfPossible()
 
     try? session.setPreferredInput(nil)
     try session.overrideOutputAudioPort(.none)
@@ -183,7 +193,7 @@ import UIKit
       ) {
         try? session.setPreferredInput(builtInMic)
       }
-      return routeMatches(.earpiece, in: session)
+      return true
     case .bluetooth:
       guard let bluetoothInput = preferredInput(
         for: [.bluetoothHFP, .bluetoothLE],
@@ -192,7 +202,7 @@ import UIKit
         return routeMatches(.bluetooth, in: session)
       }
       try session.setPreferredInput(bluetoothInput)
-      return routeMatches(.bluetooth, in: session)
+      return true
     case .wiredHeadset:
       guard let headsetMic = preferredInput(
         for: [.headsetMic],
@@ -201,7 +211,18 @@ import UIKit
         return routeMatches(.wiredHeadset, in: session)
       }
       try session.setPreferredInput(headsetMic)
-      return routeMatches(.wiredHeadset, in: session)
+      return true
+    }
+  }
+
+  private func applyMicrophoneMuteIfPossible() -> Bool {
+    let session = AVAudioSession.sharedInstance()
+    guard session.isInputGainSettable else { return false }
+    do {
+      try session.setInputGain(microphoneMuted ? 0.0 : 1.0)
+      return true
+    } catch {
+      return false
     }
   }
 
