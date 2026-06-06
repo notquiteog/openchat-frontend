@@ -2564,7 +2564,17 @@ class ApiService {
   }
 
   Map<String, dynamic> _parse(http.Response response) {
-    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    Map<String, dynamic> body;
+    try {
+      body = jsonDecode(response.body) as Map<String, dynamic>;
+    } on FormatException {
+      throw ApiException(
+        response.statusCode,
+        'SERVER_ERROR',
+        'Server returned an unexpected response (HTTP ${response.statusCode}). '
+            'Check that the server is running and reachable.',
+      );
+    }
     if (response.statusCode >= 400) {
       final error = body['error'] as Map<String, dynamic>? ?? {};
       throw ApiException(
