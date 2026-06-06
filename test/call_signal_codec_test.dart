@@ -25,6 +25,7 @@ void main() {
         username: 'alice',
         publicKey: keyPair.publicKeyArmored,
         fingerprint: keyPair.fingerprint,
+        avatarUrl: 'https://example.test/alice.png',
       );
       final conversation = _conversation(
         encryptionMode: EncryptionMode.pgp,
@@ -56,6 +57,8 @@ void main() {
       final decoded = await codec.decode(encoded);
       expect(decoded?['call_id'], 'call-1');
       expect(decoded?['caller_id'], 'alice-id');
+      expect(decoded?['caller_username'], 'alice');
+      expect(decoded?['caller_avatar'], 'https://example.test/alice.png');
       expect(decoded?['is_video'], isTrue);
       expect(decoded?['sdp'], 'v=0 secret-sdp');
     },
@@ -101,6 +104,7 @@ void main() {
     () async {
       final storage = _FakeSecureStorage(
         userId: 'alice-id',
+        username: 'alice',
         privateKey: 'unlocked-pgp-key',
         publicKey: 'public-key',
         fingerprint: 'fingerprint',
@@ -136,6 +140,7 @@ void main() {
 
       final decoded = await codec.decode(encoded);
       expect(decoded?['call_id'], 'call-2');
+      expect(decoded?['caller_username'], 'alice');
       expect(
         decoded?['candidate'],
         containsPair('candidate', 'candidate:host 10.0.0.5'),
@@ -161,6 +166,7 @@ ConversationMember _member({
   required String username,
   required String publicKey,
   required String fingerprint,
+  String? avatarUrl,
 }) => ConversationMember(
   conversationId: 'conv-1',
   userId: userId,
@@ -171,18 +177,21 @@ ConversationMember _member({
     username: username,
     publicKey: publicKey,
     keyFingerprint: fingerprint,
+    avatarUrl: avatarUrl,
     createdAt: DateTime.utc(2026),
   ),
 );
 
 class _FakeSecureStorage extends SecureStorageService {
   final String userId;
+  final String? username;
   final String privateKey;
   final String publicKey;
   final String fingerprint;
 
   _FakeSecureStorage({
     required this.userId,
+    this.username,
     required this.privateKey,
     required this.publicKey,
     required this.fingerprint,
@@ -190,6 +199,9 @@ class _FakeSecureStorage extends SecureStorageService {
 
   @override
   Future<String?> getUserID() async => userId;
+
+  @override
+  Future<String?> getUsername() async => username;
 
   @override
   Future<String?> getPrivateKeyIfUnlocked() async => privateKey;

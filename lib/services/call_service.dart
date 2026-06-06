@@ -182,6 +182,13 @@ int _videoDeviceScore(MediaDeviceInfo device) {
   return 3;
 }
 
+String? _stringField(Map<String, dynamic> data, String key) {
+  final value = data[key];
+  if (value is! String) return null;
+  final trimmed = value.trim();
+  return trimmed.isEmpty ? null : trimmed;
+}
+
 /// Manages a single WebRTC call. Handles offer/answer, ICE candidates,
 /// and forwards signaling through the WebSocket service.
 class CallService {
@@ -718,8 +725,8 @@ class CallService {
   bool handleIncomingCallPayload(Map<String, dynamic> data) {
     final callId = data['call_id'] as String? ?? '';
     final callerId = data['caller_id'] as String? ?? '';
-    final callerName = data['caller_username'] as String?;
-    final callerAvatar = data['caller_avatar'] as String?;
+    final callerName = _stringField(data, 'caller_username');
+    final callerAvatar = _stringField(data, 'caller_avatar');
     final conversationId = data['conversation_id'] as String?;
     final sdp = data['sdp'] as String? ?? '';
     final isVideo = switch (data['is_video']) {

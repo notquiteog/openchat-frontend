@@ -21,6 +21,8 @@ class CallSignalPayload {
   final String callId;
   final String? conversationId;
   final String? callerId;
+  final String? callerUsername;
+  final String? callerAvatarUrl;
   final bool? isVideo;
   final String? sdp;
   final Map<String, dynamic>? candidate;
@@ -31,6 +33,8 @@ class CallSignalPayload {
     required this.callId,
     this.conversationId,
     this.callerId,
+    this.callerUsername,
+    this.callerAvatarUrl,
     this.isVideo,
     this.sdp,
     this.candidate,
@@ -43,6 +47,8 @@ class CallSignalPayload {
     'sdp': ?sdp,
     'candidate': ?candidate,
     'is_video': ?isVideo,
+    'caller_username': ?callerUsername,
+    'caller_avatar': ?callerAvatarUrl,
   };
 }
 
@@ -92,12 +98,15 @@ class PrivacyCallSignalCodec implements CallSignalCodec {
     }
 
     final callerId = payload.callerId ?? await _currentUserId();
+    final callerProfile = await _currentCallerProfile(conversation, callerId);
     final plaintext = jsonEncode({
       'openchat_call_signal': 1,
       'kind': payload.kind,
       'call_id': payload.callId,
       'conversation_id': conversationId,
       'caller_id': callerId,
+      'caller_username': ?(payload.callerUsername ?? callerProfile.username),
+      'caller_avatar': ?(payload.callerAvatarUrl ?? callerProfile.avatarUrl),
       'is_video': payload.isVideo,
       'sdp': ?payload.sdp,
       'candidate': ?payload.candidate,
@@ -173,11 +182,20 @@ class PrivacyCallSignalCodec implements CallSignalCodec {
       return null;
     }
 
+    final callerId = payload['caller_id']?.toString() ?? '';
+    final callerProfile = _decodedCallerProfile(
+      payload,
+      conversation,
+      callerId,
+    );
+
     final out = <String, dynamic>{
       'call_id': callId,
       'conversation_id':
           payload['conversation_id']?.toString() ?? conversationId,
-      'caller_id': payload['caller_id']?.toString() ?? '',
+      'caller_id': callerId,
+      'caller_username': ?callerProfile.username,
+      'caller_avatar': ?callerProfile.avatarUrl,
       'is_video': payload['is_video'],
       'encryption_mode': mode.apiValue,
     };
@@ -190,9 +208,60 @@ class PrivacyCallSignalCodec implements CallSignalCodec {
     return out;
   }
 
+  Future<_CallCallerProfile> _currentCallerProfile(
+    Conversation conversation,
+    String callerId,
+  ) async {
+    final fromConversation = _callerProfileFromConversation(
+      conversation,
+      callerId,
+    );
+    if (fromConversation.username != null ||
+        fromConversation.avatarUrl != null) {
+      return fromConversation;
+    }
+
+    final username = _trimmedString(await _storage.getUsername());
+    return _CallCallerProfile(username: username);
+  }
+
+  _CallCallerProfile _decodedCallerProfile(
+    Map<String, dynamic> payload,
+    Conversation conversation,
+    String callerId,
+  ) {
+    final fromPayload = _CallCallerProfile(
+      username: _trimmedString(payload['caller_username']),
+      avatarUrl: _trimmedString(payload['caller_avatar']),
+    );
+    if (fromPayload.username != null || fromPayload.avatarUrl != null) {
+      return fromPayload;
+    }
+    return _callerProfileFromConversation(conversation, callerId);
+  }
+
+  _CallCallerProfile _callerProfileFromConversation(
+    Conversation conversation,
+    String userId,
+  ) {
+    if (userId.isEmpty || conversation.members.isEmpty) {
+      return const _CallCallerProfile();
+    }
+    for (final member in conversation.members) {
+      if (member.userId != userId) continue;
+      final user = member.user;
+      if (user == null) return const _CallCallerProfile();
+      return _CallCallerProfile(
+        username: _trimmedString(user.username),
+        avatarUrl: _trimmedString(user.avatarUrl),
+      );
+    }
+    return const _CallCallerProfile();
+  }
+
   Future<Conversation?> _conversationFor(String conversationId) async {
     final cached = _conversationCache[conversationId];
-    if (cached != null && (!cached.usesPgp || cached.members.isNotEmpty)) {
+    if (cached != null && (!cached.isEncrypted || cached.members.isNotEmpty)) {
       return cached;
     }
     try {
@@ -200,6 +269,11 @@ class PrivacyCallSignalCodec implements CallSignalCodec {
       if (conversation.usesPgp) {
         final members = await _api.getConversationMembers(conversationId);
         conversation = conversation.copyWith(members: members);
+      } else if (conversation.isEncrypted && conversation.members.isEmpty) {
+        try {
+          final members = await _api.getConversationMembers(conversationId);
+          conversation = conversation.copyWith(members: members);
+        } catch (_) {}
       }
       _conversationCache[conversationId] = conversation;
       return conversation;
@@ -241,4 +315,16 @@ class PrivacyCallSignalCodec implements CallSignalCodec {
     }
     return userId;
   }
+}
+
+class _CallCallerProfile {
+  final String? username;
+  final String? avatarUrl;
+
+  const _CallCallerProfile({this.username, this.avatarUrl});
+}
+
+String? _trimmedString(Object? value) {
+  final text = value?.toString().trim();
+  return text == null || text.isEmpty ? null : text;
 }

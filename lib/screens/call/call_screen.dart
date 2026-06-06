@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
@@ -77,6 +79,17 @@ class _CallSurface extends StatelessWidget {
 @visibleForTesting
 bool shouldUseCallVideoRenderersForTesting(CallSession? session) {
   return session?.isVideo == true;
+}
+
+bool _isDesktopCallLayout(BuildContext context) {
+  if (MediaQuery.sizeOf(context).width >= 720) return true;
+  if (kIsWeb) return false;
+  return switch (defaultTargetPlatform) {
+    TargetPlatform.linux ||
+    TargetPlatform.macOS ||
+    TargetPlatform.windows => true,
+    _ => false,
+  };
 }
 
 /// Full-screen audio/video call UI in iOS 26 Liquid Glass style.
@@ -250,6 +263,46 @@ class _CallScreenState extends State<CallScreen> {
     final cameraOff = !cp.isCameraEnabled;
     final avatarUrl = session.remoteAvatarUrl;
     final username = session.remoteUsername ?? 'Unknown';
+    final desktopLayout = _isDesktopCallLayout(context);
+    final controlsMaxWidth = desktopLayout
+        ? (isVideo ? 560.0 : 460.0)
+        : double.infinity;
+    final controlsPadding = EdgeInsets.fromLTRB(
+      desktopLayout ? 32 : 24,
+      0,
+      desktopLayout ? 32 : 24,
+      desktopLayout ? 28 : 24,
+    );
+    final controls = [
+      _ControlButton(
+        key: const Key('call-control-mute'),
+        icon: micMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
+        label: micMuted ? 'Unmute' : 'Mute',
+        active: micMuted,
+        onTap: _toggleMic,
+      ),
+      _ControlButton(
+        key: const Key('call-control-audio-output'),
+        icon: Icons.volume_up_rounded,
+        label: 'Audio',
+        onTap: _pickAudioOutput,
+      ),
+      if (isVideo)
+        _ControlButton(
+          key: const Key('call-control-camera'),
+          icon: cameraOff ? Icons.videocam_off_rounded : Icons.videocam_rounded,
+          label: cameraOff ? 'Camera on' : 'Camera off',
+          active: cameraOff,
+          onTap: _toggleCamera,
+        ),
+      _ControlButton(
+        key: const Key('call-control-end'),
+        icon: Icons.call_end_rounded,
+        label: 'End',
+        onTap: _hangup,
+        color: _callEndColor,
+      ),
+    ];
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -366,8 +419,11 @@ class _CallScreenState extends State<CallScreen> {
                       color: Colors.white,
                       fontSize: 28,
                       fontWeight: FontWeight.w700,
-                      letterSpacing: -0.4,
+                      letterSpacing: 0,
                     ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                    textAlign: TextAlign.center,
                   ),
                 ],
               ),
@@ -380,50 +436,27 @@ class _CallScreenState extends State<CallScreen> {
             right: 0,
             child: SafeArea(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                child: _CallSurface(
-                  blur: 56,
-                  borderRadius: const BorderRadius.all(Radius.circular(36)),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 20,
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      _ControlButton(
-                        key: const Key('call-control-mute'),
-                        icon: micMuted
-                            ? Icons.mic_off_rounded
-                            : Icons.mic_rounded,
-                        label: micMuted ? 'Unmute' : 'Mute',
-                        active: micMuted,
-                        onTap: _toggleMic,
+                padding: controlsPadding,
+                child: Center(
+                  child: ConstrainedBox(
+                    key: const Key('call-controls-bar'),
+                    constraints: BoxConstraints(maxWidth: controlsMaxWidth),
+                    child: _CallSurface(
+                      blur: 56,
+                      borderRadius: const BorderRadius.all(Radius.circular(36)),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 20,
                       ),
-                      _ControlButton(
-                        key: const Key('call-control-audio-output'),
-                        icon: Icons.volume_up_rounded,
-                        label: 'Audio',
-                        onTap: _pickAudioOutput,
+                      child: Wrap(
+                        alignment: WrapAlignment.spaceEvenly,
+                        runAlignment: WrapAlignment.center,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: desktopLayout ? 20 : 12,
+                        runSpacing: 14,
+                        children: controls,
                       ),
-                      if (isVideo)
-                        _ControlButton(
-                          key: const Key('call-control-camera'),
-                          icon: cameraOff
-                              ? Icons.videocam_off_rounded
-                              : Icons.videocam_rounded,
-                          label: cameraOff ? 'Camera on' : 'Camera off',
-                          active: cameraOff,
-                          onTap: _toggleCamera,
-                        ),
-                      _ControlButton(
-                        key: const Key('call-control-end'),
-                        icon: Icons.call_end_rounded,
-                        label: 'End',
-                        onTap: _hangup,
-                        color: _callEndColor,
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -665,14 +698,14 @@ class CallOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     final cp = context.watch<CallProvider>();
     if (cp.incomingCall != null) {
-      return const IncomingCallModal();
+      return const SizedBox.expand(child: IncomingCallModal());
     }
     final session = cp.session;
     if (session != null && session.state != CallState.ended) {
       if (cp.isCallMinimized) {
         return const _MinimizedCallOverlay();
       }
-      return const CallScreen();
+      return const SizedBox.expand(child: CallScreen());
     }
     return const SizedBox.shrink();
   }
@@ -830,6 +863,41 @@ class IncomingCallModal extends StatelessWidget {
         ? 'Incoming video call'
         : 'Incoming voice call';
     final avatarUrl = incoming.remoteAvatarUrl;
+    final desktopLayout = _isDesktopCallLayout(context);
+    final panelMaxWidth = desktopLayout ? 480.0 : double.infinity;
+    final panelPadding = EdgeInsets.symmetric(
+      horizontal: desktopLayout ? 24 : 32,
+      vertical: desktopLayout ? 28 : 40,
+    );
+    final actions = [
+      _CallAction(
+        icon: Icons.call_end_rounded,
+        label: 'Decline',
+        color: _callEndColor,
+        onTap: cp.rejectIncomingCall,
+      ),
+      _CallAction(
+        icon: Icons.close_rounded,
+        label: 'Dismiss',
+        color: _callDismissColor,
+        onTap: cp.dismissIncomingCall,
+      ),
+      _CallAction(
+        icon: incoming.isVideo ? Icons.videocam_rounded : Icons.call_rounded,
+        label: 'Answer',
+        color: _callAnswerColor,
+        onTap: () async {
+          try {
+            await cp.acceptIncomingCall();
+          } catch (error) {
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Could not answer call: $error')),
+            );
+          }
+        },
+      ),
+    ];
 
     return Material(
       type: MaterialType.transparency,
@@ -846,95 +914,74 @@ class IncomingCallModal extends StatelessWidget {
             child: Container(color: Colors.black.withValues(alpha: 0.34)),
           ),
           SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 40),
-              child: Column(
-                children: [
-                  const Spacer(),
-                  _GlowAvatar(
-                    avatarUrl: avatarUrl,
-                    username: incoming.remoteUsername ?? '',
-                  ),
-                  const SizedBox(height: 22),
-                  Text(
-                    name,
-                    style: const TextStyle(
-                      fontSize: 26,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.white,
-                      letterSpacing: -0.3,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 8),
-                  _CallSurface.capsule(
-                    blur: 36,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 6,
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          incoming.isVideo
-                              ? Icons.videocam_rounded
-                              : Icons.call_rounded,
-                          color: Colors.white70,
-                          size: 14,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          kind,
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Spacer(),
-                  // Action buttons
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            child: Center(
+              child: ConstrainedBox(
+                key: const Key('incoming-call-panel'),
+                constraints: BoxConstraints(maxWidth: panelMaxWidth),
+                child: SingleChildScrollView(
+                  padding: panelPadding,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      _CallAction(
-                        icon: Icons.call_end_rounded,
-                        label: 'Decline',
-                        color: _callEndColor,
-                        onTap: cp.rejectIncomingCall,
+                      _GlowAvatar(
+                        avatarUrl: avatarUrl,
+                        username: incoming.remoteUsername ?? '',
                       ),
-                      _CallAction(
-                        icon: Icons.close_rounded,
-                        label: 'Dismiss',
-                        color: _callDismissColor,
-                        onTap: cp.dismissIncomingCall,
+                      const SizedBox(height: 22),
+                      Text(
+                        name,
+                        style: const TextStyle(
+                          fontSize: 26,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                          letterSpacing: 0,
+                        ),
+                        textAlign: TextAlign.center,
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
                       ),
-                      _CallAction(
-                        icon: incoming.isVideo
-                            ? Icons.videocam_rounded
-                            : Icons.call_rounded,
-                        label: 'Answer',
-                        color: _callAnswerColor,
-                        onTap: () async {
-                          try {
-                            await cp.acceptIncomingCall();
-                          } catch (error) {
-                            if (!context.mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Could not answer call: $error'),
+                      const SizedBox(height: 8),
+                      _CallSurface.capsule(
+                        blur: 36,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 6,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              incoming.isVideo
+                                  ? Icons.videocam_rounded
+                                  : Icons.call_rounded,
+                              color: Colors.white70,
+                              size: 14,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              kind,
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
                               ),
-                            );
-                          }
-                        },
+                            ),
+                          ],
+                        ),
                       ),
+                      SizedBox(height: desktopLayout ? 46 : 64),
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        runAlignment: WrapAlignment.center,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: desktopLayout ? 34 : 24,
+                        runSpacing: 18,
+                        children: actions,
+                      ),
+                      const SizedBox(height: 20),
                     ],
                   ),
-                  const SizedBox(height: 20),
-                ],
+                ),
               ),
             ),
           ),

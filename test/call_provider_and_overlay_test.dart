@@ -282,6 +282,51 @@ void main() {
       }
     });
 
+    testWidgets('constrains desktop call controls in wide windows', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1200, 800);
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      final service = _FakeCallService();
+      final provider = CallProvider(service, audio: _FakeCallAudio());
+      try {
+        final session = CallSession(
+          callId: 'c-desktop-wide',
+          remoteUserId: 'u-desktop',
+          remoteUsername: 'desktop',
+          isVideo: true,
+          isIncoming: false,
+          state: CallState.connected,
+        )..connectedAt = DateTime.now();
+
+        service.emitSession(session);
+
+        await tester.pumpWidget(
+          ChangeNotifierProvider<CallProvider>.value(
+            value: provider,
+            child: const MaterialApp(home: Scaffold(body: CallOverlay())),
+          ),
+        );
+        await tester.pump();
+
+        final controlsSize = tester.getSize(
+          find.byKey(const Key('call-controls-bar')),
+        );
+        expect(controlsSize.width, lessThanOrEqualTo(560));
+        expect(controlsSize.width, greaterThan(280));
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+        provider.dispose();
+        service.dispose();
+      }
+    });
+
     testWidgets('shows compact affordance and expands back to full', (
       tester,
     ) async {
@@ -367,6 +412,29 @@ void main() {
   });
 
   group('Incoming call lifecycle', () {
+    test('incoming payload carries caller profile into the session', () async {
+      final service = CallService(WebSocketService(SecureStorageService()));
+      final seen = Completer<CallSession>();
+      final sub = service.incomingCalls.listen(seen.complete);
+
+      final handled = service.handleIncomingCallPayload({
+        'call_id': 'c-profile',
+        'caller_id': 'u-profile',
+        'caller_username': ' alice ',
+        'caller_avatar': ' https://example.test/a.png ',
+        'is_video': 'true',
+      });
+
+      expect(handled, isTrue);
+      final incoming = await seen.future;
+      expect(incoming.remoteUsername, 'alice');
+      expect(incoming.remoteAvatarUrl, 'https://example.test/a.png');
+      expect(incoming.isVideo, isTrue);
+
+      await sub.cancel();
+      service.dispose();
+    });
+
     test('rejecting a pending call does not re-emit it as incoming', () async {
       final service = CallService(WebSocketService(SecureStorageService()));
       var emitted = false;
@@ -496,6 +564,52 @@ void main() {
         service.dispose();
       },
     );
+
+    testWidgets('shows incoming caller name in a bounded desktop prompt', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1200, 800);
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      final service = _FakeCallService();
+      final provider = CallProvider(service, audio: _FakeCallAudio());
+      try {
+        await tester.pumpWidget(
+          ChangeNotifierProvider<CallProvider>.value(
+            value: provider,
+            child: const MaterialApp(home: Scaffold(body: CallOverlay())),
+          ),
+        );
+
+        service.emitIncoming(
+          CallSession(
+            callId: 'c-incoming-desktop',
+            remoteUserId: 'u-incoming',
+            remoteUsername: 'alex',
+            isVideo: false,
+            isIncoming: true,
+            state: CallState.ringing,
+          ),
+        );
+        await tester.pump();
+
+        expect(find.text('@alex'), findsOneWidget);
+        expect(find.text('Unknown caller'), findsNothing);
+        final panelSize = tester.getSize(
+          find.byKey(const Key('incoming-call-panel')),
+        );
+        expect(panelSize.width, lessThanOrEqualTo(480));
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+        provider.dispose();
+        service.dispose();
+      }
+    });
   });
 
   group('Audio output controls', () {
