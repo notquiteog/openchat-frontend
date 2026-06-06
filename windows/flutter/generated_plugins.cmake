@@ -10,6 +10,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   flutter_webrtc
   geolocator_windows
   local_auth_windows
+  media_kit_libs_windows_audio
   openpgp
   permission_handler_windows
   record_windows

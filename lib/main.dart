@@ -1,5 +1,6 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:provider/provider.dart';
 import 'app.dart';
@@ -62,6 +63,8 @@ Future<bool> _shouldShowMessageNotification(String conversationId) async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Linux/Windows need a just_audio platform backend for voice notes and tones.
+  JustAudioMediaKit.ensureInitialized();
   // Pre-warm the liquid glass shader pipeline before any UI is painted.
   // On Impeller (iOS/Android) this unlocks real refraction + chromatic
   // aberration; on Skia it primes the lightweight fragment shader.

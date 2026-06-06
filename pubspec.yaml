@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.5.5+82
+version: 0.5.6+83
 publish_to: 'none'
 
 environment:
@@ -57,8 +57,11 @@ dependencies:
   # WebRTC (audio/video calls)
   flutter_webrtc: ^1.4.1
 
-  # Call ringtone / connecting tones
+  # Call ringtone / connecting tones + voice-note playback
   just_audio: ^0.10.5
+  just_audio_media_kit: ^2.1.0
+  media_kit_libs_linux: ^1.2.1
+  media_kit_libs_windows_audio: ^1.0.9
 
   # Location-based features (live sharing)
   geolocator: ^14.0.2

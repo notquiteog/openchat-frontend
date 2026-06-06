@@ -292,7 +292,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           icon: const Icon(Icons.folder_outlined),
           label: 'Folders',
           onPressed: () {
-            Navigator.pop(context);
             _showFolderManager(context);
           },
         ),
@@ -300,7 +299,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           icon: const Icon(Icons.auto_stories_outlined),
           label: 'Stories',
           onPressed: () {
-            Navigator.pop(context);
             _showStoriesSheet(context);
           },
         ),
@@ -308,7 +306,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           icon: const Icon(Icons.settings_outlined),
           label: 'Settings',
           onPressed: () {
-            Navigator.pop(context);
             Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const SettingsScreen()),

@@ -1113,6 +1113,23 @@ class ChatProvider extends ChangeNotifier {
     await _stopLiveLocationShare(messageID, shouldNotify: true);
   }
 
+  /// Re-emit live location notifications for all active shares.
+  /// Called when the app moves to the background so the notification
+  /// appears immediately rather than waiting for the next position update.
+  Future<void> refreshLiveLocationNotifications() async {
+    for (final entry in _liveLocationShares.entries) {
+      final share = entry.value;
+      if (!share.isActive) continue;
+      await NotificationService.showLiveLocationNotification(
+        messageId: entry.key,
+        conversationId: share.conversationId,
+        title: 'Sharing with ${share.sharingWith}',
+        endsAt: share.expiresAt,
+        live: true,
+      );
+    }
+  }
+
   /// Height of the app-wide live-location bar (matches the call bar height).
   static const double liveLocationBarHeight = 48.0;
 
@@ -2227,6 +2244,10 @@ class ChatProvider extends ChangeNotifier {
             notificationText: 'Sharing with $sharingWith',
             enableWakeLock: true,
             setOngoing: true,
+            notificationIcon: const AndroidResource(
+              name: 'launcher_icon',
+              defType: 'mipmap',
+            ),
           ),
         );
       case TargetPlatform.iOS:
@@ -2350,7 +2371,7 @@ class ChatProvider extends ChangeNotifier {
         conversationId: share.conversationId,
         title: 'Sharing with ${share.sharingWith}',
         endsAt: share.expiresAt,
-        live: true,
+        live: false,
       );
     } catch (_) {}
   }

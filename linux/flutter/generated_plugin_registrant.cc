@@ -10,6 +10,7 @@
 #include <flutter_secure_storage_linux/flutter_secure_storage_linux_plugin.h>
 #include <flutter_webrtc/flutter_web_r_t_c_plugin.h>
 #include <gtk/gtk_plugin.h>
+#include <media_kit_libs_linux/media_kit_libs_linux_plugin.h>
 #include <openpgp/openpgp_plugin.h>
 #include <record_linux/record_linux_plugin.h>
 #include <screen_retriever_linux/screen_retriever_linux_plugin.h>
@@ -30,6 +31,9 @@ void fl_register_plugins(FlPluginRegistry* registry) {
   g_autoptr(FlPluginRegistrar) gtk_registrar =
       fl_plugin_registry_get_registrar_for_plugin(registry, "GtkPlugin");
   gtk_plugin_register_with_registrar(gtk_registrar);
+  g_autoptr(FlPluginRegistrar) media_kit_libs_linux_registrar =
+      fl_plugin_registry_get_registrar_for_plugin(registry, "MediaKitLibsLinuxPlugin");
+  media_kit_libs_linux_plugin_register_with_registrar(media_kit_libs_linux_registrar);
   g_autoptr(FlPluginRegistrar) openpgp_registrar =
       fl_plugin_registry_get_registrar_for_plugin(registry, "OpenpgpPlugin");
   openpgp_plugin_register_with_registrar(openpgp_registrar);

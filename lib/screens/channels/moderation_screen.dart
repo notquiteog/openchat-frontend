@@ -154,7 +154,6 @@ class _ModerationScreenState extends State<ModerationScreen> {
           icon: const Icon(Icons.check_circle_outline),
           label: 'Resolve',
           onPressed: () {
-            Navigator.pop(context);
             _resolveReport(report, 'resolved');
           },
         ),
@@ -163,7 +162,6 @@ class _ModerationScreenState extends State<ModerationScreen> {
           label: 'Dismiss',
           style: GlassActionSheetStyle.destructive,
           onPressed: () {
-            Navigator.pop(context);
             _resolveReport(report, 'dismissed');
           },
         ),

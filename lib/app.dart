@@ -617,6 +617,7 @@ class _AppRootState extends State<_AppRoot> {
   void _onBackground() {
     NotificationService.setAppFocused(false);
     context.read<CallProvider>().refreshActiveCallNotification();
+    unawaited(context.read<ChatProvider>().refreshLiveLocationNotifications());
     final storage = context.read<SecureStorageService>();
     storage.getAppLockEnabled().then((enabled) {
       if (!mounted) return;
