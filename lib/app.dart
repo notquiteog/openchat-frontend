@@ -18,12 +18,14 @@ import 'screens/channels/channel_screen.dart';
 import 'screens/chat/chat_screen.dart';
 import 'screens/home/conversations_screen.dart';
 import 'screens/invites/invite_preview_screen.dart';
+import 'screens/onboarding/privacy_onboarding_screen.dart';
 import 'screens/settings/pgp_keys_screen.dart';
 import 'services/api_service.dart';
 import 'services/app_access_gate.dart';
 import 'services/background_ws_service.dart';
 import 'services/call_service.dart';
 import 'services/foreground_ws_notification_router.dart';
+import 'services/mls_service.dart';
 import 'services/notification_service.dart';
 import 'services/push_notification_service.dart';
 import 'services/secure_storage_service.dart';
@@ -439,6 +441,7 @@ class _AppRootState extends State<_AppRoot> {
   AppLifecycleListener? _lifecycleListener;
   StreamSubscription<WsEvent>? _wsForegroundSub;
   StreamSubscription<Uri>? _inviteLinkSub;
+  Timer? _reminderTimer;
   SettingsProvider? _settings;
   String? _pendingInviteToken;
   String? _lastInviteToken;
@@ -488,6 +491,11 @@ class _AppRootState extends State<_AppRoot> {
         onResume: _onForeground,
       );
       NotificationService.setAppFocused(true);
+      _reminderTimer = Timer.periodic(
+        const Duration(minutes: 1),
+        (_) => _surfaceDueReminders(),
+      );
+      _surfaceDueReminders();
     });
   }
 
@@ -627,6 +635,7 @@ class _AppRootState extends State<_AppRoot> {
   void _onForeground() {
     NotificationService.setAppFocused(true);
     context.read<CallProvider>().refreshActiveCallNotification();
+    _surfaceDueReminders();
     if (context.read<AuthProvider>().state == AuthState.authenticated) {
       unawaited(context.read<ChatProvider>().connectWebSocket());
       unawaited(context.read<ChatProvider>().refreshConversationsSilently());
@@ -672,6 +681,7 @@ class _AppRootState extends State<_AppRoot> {
     _lifecycleListener?.dispose();
     _wsForegroundSub?.cancel();
     _inviteLinkSub?.cancel();
+    _reminderTimer?.cancel();
     PushNotificationService.setForegroundIncomingCallHandler(null);
     _settings?.removeListener(_onSettingsChanged);
     context.read<AuthProvider>().removeListener(_onAuthChanged);
@@ -748,7 +758,9 @@ class _AppRootState extends State<_AppRoot> {
       }
       _fetchIceServers();
       context.read<KeyProvider>().load();
+      unawaited(_prepareMlsIdentity());
       context.read<ChatProvider>().connectWebSocket();
+      _surfaceDueReminders();
       _drainPendingInviteLink();
       _drainPendingContactLink();
       // Re-register the FCM/APNs push token on every login so the backend
@@ -797,6 +809,40 @@ class _AppRootState extends State<_AppRoot> {
     await PushNotificationService.initFromSettings(api: api);
   }
 
+  Future<void> _prepareMlsIdentity() async {
+    if (!mounted) return;
+    if (context.read<AuthProvider>().state != AuthState.authenticated) return;
+    try {
+      await context.read<MlsService>().ensureIdentityForCurrentUser();
+    } catch (_) {
+      // Best-effort local bootstrap. Sending to an MLS chat can still surface
+      // a specific key/storage error if preparation was not possible.
+    }
+  }
+
+  void _surfaceDueReminders() {
+    if (!mounted || _appLocked) return;
+    if (context.read<AuthProvider>().state != AuthState.authenticated) return;
+    final settings = context.read<SettingsProvider>();
+    if (!settings.isLoaded) return;
+    final due = settings.dueMessageReminders(DateTime.now());
+    for (final reminder in due) {
+      unawaited(settings.removeMessageReminder(reminder.id));
+      final title = reminder.conversationTitle.isEmpty
+          ? 'Message reminder'
+          : reminder.conversationTitle;
+      final body = reminder.messagePreview.isEmpty
+          ? 'OpenChat reminder'
+          : reminder.messagePreview;
+      OpenChatApp.scaffoldMessengerKey.currentState?.showSnackBar(
+        SnackBar(
+          content: Text('$title: $body', maxLines: 2),
+          duration: const Duration(seconds: 6),
+        ),
+      );
+    }
+  }
+
   Future<void> _fetchIceServers() async {
     try {
       final servers = await context.read<ApiService>().getIceServers();
@@ -831,6 +877,36 @@ class _AppRootState extends State<_AppRoot> {
       });
     }
 
+    if (auth.state == AuthState.authenticated && !_appLocked) {
+      final userId = auth.currentUser?.id ?? '';
+      final settings = context.watch<SettingsProvider>();
+      if (!settings.isLoaded) {
+        return Scaffold(
+          body: LiquidMeshBackground(
+            child: Center(
+              child: GlassContainer(
+                shape: const LiquidRoundedSuperellipse(borderRadius: 32),
+                allowElevation: true,
+                glowIntensity: 0.10,
+                padding: const EdgeInsets.all(36),
+                child: const GlassProgressIndicator.circular(
+                  size: 36,
+                  strokeWidth: 2.5,
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+      if (userId.isNotEmpty && !settings.hasViewedPrivacyOnboarding(userId)) {
+        return PrivacyOnboardingScreen(
+          onComplete: () {
+            unawaited(settings.markPrivacyOnboardingViewed(userId));
+          },
+        );
+      }
+    }
+
     return switch (auth.state) {
       AuthState.unknown => Scaffold(
         body: LiquidMeshBackground(
@@ -840,7 +916,10 @@ class _AppRootState extends State<_AppRoot> {
               allowElevation: true,
               glowIntensity: 0.10,
               padding: const EdgeInsets.all(36),
-              child: const GlassProgressIndicator.circular(size: 36, strokeWidth: 2.5),
+              child: const GlassProgressIndicator.circular(
+                size: 36,
+                strokeWidth: 2.5,
+              ),
             ),
           ),
         ),
@@ -1028,10 +1107,7 @@ class _AppLockScreen extends StatelessWidget {
                       width: double.infinity,
                       child: GlassButtonWidget.icon(
                         onPressed: onUnlock,
-                        icon: const Icon(
-                          Icons.fingerprint_rounded,
-                          size: 20,
-                        ),
+                        icon: const Icon(Icons.fingerprint_rounded, size: 20),
                         label: const Text('Unlock'),
                         padding: const EdgeInsets.symmetric(
                           horizontal: 32,

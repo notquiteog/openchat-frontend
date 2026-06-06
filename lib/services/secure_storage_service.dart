@@ -380,6 +380,14 @@ class SecureStorageService {
     }
   }
 
+  Future<List<String>> getAllSealedMessageControlTokens() {
+    return _allScopedValues(_keySealedMessageControlsPrefix);
+  }
+
+  Future<List<String>> getAllSealedScheduleControlTokens() {
+    return _allScopedValues(_keySealedScheduleControlsPrefix);
+  }
+
   Future<int> getSelfStateLogSequence() async {
     final raw = await _readOrNull(_keySelfStateLogSequence);
     return int.tryParse(raw ?? '') ?? 0;
@@ -467,6 +475,36 @@ class SecureStorageService {
   /// Full wipe — called on logout or account deletion.
   Future<void> clearAll() => _storage.deleteAll();
 
+  Future<Map<String, String>> exportRecoverySecrets() async {
+    final all = await _storage.readAll();
+    final blocked = {
+      _keyAccessToken,
+      _keyRefreshToken,
+      _keyBiometricEnabled,
+      _keyAppLockEnabled,
+      _keyStorageProbe,
+    };
+    return {
+      for (final entry in all.entries)
+        if (!blocked.contains(entry.key) && entry.value.isNotEmpty)
+          entry.key: entry.value,
+    };
+  }
+
+  Future<void> importRecoverySecrets(Map<String, String> values) async {
+    final blocked = {
+      _keyAccessToken,
+      _keyRefreshToken,
+      _keyBiometricEnabled,
+      _keyAppLockEnabled,
+      _keyStorageProbe,
+    };
+    for (final entry in values.entries) {
+      if (blocked.contains(entry.key) || entry.value.isEmpty) continue;
+      await _storage.write(key: entry.key, value: entry.value);
+    }
+  }
+
   static bool isRecoverableReadFailure(PlatformException error) {
     return isLinuxKeyringFailure(error);
   }
@@ -499,6 +537,29 @@ class SecureStorageService {
     } on PlatformException catch (error) {
       if (!isRecoverableReadFailure(error)) rethrow;
       return null;
+    }
+  }
+
+  static Future<List<String>> _allScopedValues(String prefix) async {
+    try {
+      final all = await _storage.readAll();
+      final values = <String>[];
+      for (final entry in all.entries) {
+        if (!entry.key.startsWith('$prefix:')) continue;
+        try {
+          final decoded = jsonDecode(entry.value);
+          if (decoded is! Map) continue;
+          values.addAll(
+            decoded.values
+                .map((value) => value.toString().trim())
+                .where((value) => value.isNotEmpty),
+          );
+        } catch (_) {}
+      }
+      return values.toSet().toList()..sort();
+    } on PlatformException catch (error) {
+      if (!isRecoverableReadFailure(error)) rethrow;
+      return const [];
     }
   }
 }

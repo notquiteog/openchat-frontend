@@ -438,8 +438,10 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
               GlassListTile(
                 leading: const Icon(Icons.notifications_off_outlined),
-                title: const Text('Send silently',
-                    style: TextStyle(fontWeight: FontWeight.w600)),
+                title: const Text(
+                  'Send silently',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
                 trailing: GlassSwitch(
                   value: _sendSilent,
                   onChanged: (v) {
@@ -848,6 +850,11 @@ class _ChatScreenState extends State<ChatScreen> {
               onTap: () => Navigator.pop(context, 'gallery_image'),
             ),
             _AttachTile(
+              icon: Icons.visibility_off_outlined,
+              label: 'View-once photo',
+              onTap: () => Navigator.pop(context, 'view_once_image'),
+            ),
+            _AttachTile(
               icon: Icons.share_location_outlined,
               label: 'Share location',
               onTap: () => Navigator.pop(context, 'location_once'),
@@ -869,9 +876,19 @@ class _ChatScreenState extends State<ChatScreen> {
               onTap: () => Navigator.pop(context, 'gallery_video'),
             ),
             _AttachTile(
+              icon: Icons.hide_image_outlined,
+              label: 'View-once video',
+              onTap: () => Navigator.pop(context, 'view_once_video'),
+            ),
+            _AttachTile(
               icon: Icons.attach_file_rounded,
               label: 'File',
               onTap: () => Navigator.pop(context, 'file'),
+            ),
+            _AttachTile(
+              icon: Icons.no_encryption_gmailerrorred_outlined,
+              label: 'View-once file',
+              onTap: () => Navigator.pop(context, 'view_once_file'),
             ),
             _AttachTile(
               icon: Icons.poll_outlined,
@@ -915,12 +932,16 @@ class _ChatScreenState extends State<ChatScreen> {
     final attachmentService = AttachmentService(context.read<ApiService>());
     final chat = context.read<ChatProvider>();
     final messenger = ScaffoldMessenger.of(context);
+    final viewOnce = choice.startsWith('view_once_');
 
     EncryptedAttachmentUpload? pending;
     VoiceNoteRecording? voiceNote;
     try {
       pending = switch (choice) {
         'gallery_image' => await attachmentService.pickImageForOutbox(
+          onProgress: _setAttachmentUploadProgress,
+        ),
+        'view_once_image' => await attachmentService.pickImageForOutbox(
           onProgress: _setAttachmentUploadProgress,
         ),
         'camera_image' => await attachmentService.pickImageForOutbox(
@@ -930,7 +951,13 @@ class _ChatScreenState extends State<ChatScreen> {
         'gallery_video' => await attachmentService.pickVideoForOutbox(
           onProgress: _setAttachmentUploadProgress,
         ),
+        'view_once_video' => await attachmentService.pickVideoForOutbox(
+          onProgress: _setAttachmentUploadProgress,
+        ),
         'file' => await attachmentService.pickFileForOutbox(
+          onProgress: _setAttachmentUploadProgress,
+        ),
+        'view_once_file' => await attachmentService.pickFileForOutbox(
           onProgress: _setAttachmentUploadProgress,
         ),
         'voice' => await (() async {
@@ -972,6 +999,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final sent = await chat.sendPreparedAttachment(
         convID: conv.id,
         attachment: pending,
+        viewOnce: viewOnce,
         onProgress: _setAttachmentUploadProgress,
       );
       if (sent) {
@@ -1329,7 +1357,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   FilledButton.icon(
                     onPressed: submitting ? null : submit,
                     icon: submitting
-                        ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
+                        ? const GlassProgressIndicator.circular(
+                            size: 16,
+                            strokeWidth: 2,
+                          )
                         : Icon(
                             payMode
                                 ? Icons.send_outlined
@@ -1631,8 +1662,10 @@ class _ChatScreenState extends State<ChatScreen> {
                       ],
                     ),
                     GlassListTile(
-                      title: const Text('Anonymous',
-                          style: TextStyle(fontWeight: FontWeight.w600)),
+                      title: const Text(
+                        'Anonymous',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
                       trailing: GlassSwitch(
                         value: anonymous,
                         onChanged: (v) => setDialog(() => anonymous = v),
@@ -1642,8 +1675,10 @@ class _ChatScreenState extends State<ChatScreen> {
                       onTap: () => setDialog(() => anonymous = !anonymous),
                     ),
                     GlassListTile(
-                      title: const Text('Multiple answers',
-                          style: TextStyle(fontWeight: FontWeight.w600)),
+                      title: const Text(
+                        'Multiple answers',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
                       trailing: GlassSwitch(
                         value: multiple,
                         onChanged: (v) => setDialog(() => multiple = v),
@@ -1811,7 +1846,11 @@ class _ChatScreenState extends State<ChatScreen> {
                                           vertical: 12,
                                         ),
                                         child: Center(
-                                          child: GlassProgressIndicator.circular(size: 20, strokeWidth: 2),
+                                          child:
+                                              GlassProgressIndicator.circular(
+                                                size: 20,
+                                                strokeWidth: 2,
+                                              ),
                                         ),
                                       );
                                     }
@@ -2783,6 +2822,12 @@ class _ChatScreenState extends State<ChatScreen> {
           icon: Icons.link_rounded,
           label: 'Copy message link',
         ),
+        if (!isSystem)
+          const MessageActionSheetItem(
+            value: 'remind',
+            icon: Icons.alarm_add_outlined,
+            label: 'Remind me',
+          ),
         if (canDownloadMessageAttachment(msg))
           MessageActionSheetItem(
             value: 'download',
@@ -2840,6 +2885,8 @@ class _ChatScreenState extends State<ChatScreen> {
         await _copyMessageText(msg);
       case 'copy_link':
         await _copyMessageLink(msg);
+      case 'remind':
+        await _remindAboutMessage(msg);
       case 'download':
         await _downloadMessageAttachment(msg);
       case 'sender':
@@ -2859,6 +2906,98 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'delete':
         this.context.read<ChatProvider>().deleteMessage(conv.id, msg.id);
     }
+  }
+
+  Future<void> _remindAboutMessage(Message msg) async {
+    final now = DateTime.now();
+    final selected = await showDialog<DateTime>(
+      context: context,
+      builder: (ctx) => GlassAlertDialog(
+        title: const Text('Remind me'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _ReminderChoiceTile(
+              label: 'In 15 minutes',
+              onTap: () =>
+                  Navigator.pop(ctx, now.add(const Duration(minutes: 15))),
+            ),
+            _ReminderChoiceTile(
+              label: 'In 1 hour',
+              onTap: () =>
+                  Navigator.pop(ctx, now.add(const Duration(hours: 1))),
+            ),
+            _ReminderChoiceTile(
+              label: 'Tomorrow morning',
+              onTap: () => Navigator.pop(
+                ctx,
+                DateTime(now.year, now.month, now.day + 1, 9),
+              ),
+            ),
+            _ReminderChoiceTile(
+              label: 'Pick date and time',
+              onTap: () async {
+                final date = await showDatePicker(
+                  context: ctx,
+                  initialDate: now.add(const Duration(days: 1)),
+                  firstDate: now,
+                  lastDate: now.add(const Duration(days: 365)),
+                );
+                if (date == null || !ctx.mounted) return;
+                final time = await showTimePicker(
+                  context: ctx,
+                  initialTime: TimeOfDay.fromDateTime(
+                    now.add(const Duration(hours: 1)),
+                  ),
+                );
+                if (time == null || !ctx.mounted) return;
+                Navigator.pop(
+                  ctx,
+                  DateTime(
+                    date.year,
+                    date.month,
+                    date.day,
+                    time.hour,
+                    time.minute,
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+    if (selected == null || !mounted) return;
+    final settings = context.read<SettingsProvider>();
+    final preview = (msg.decryptedContent ?? msg.listPreview).trim();
+    await settings.saveMessageReminder(
+      conversationId: conv.id,
+      messageId: msg.id,
+      conversationTitle: conv.displayName(
+        context.read<AuthProvider>().currentUser?.id ?? '',
+      ),
+      messagePreview: preview.isEmpty ? msg.listPreview : preview,
+      remindAt: selected,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Reminder set for ${_formatReminderTime(selected)}'),
+      ),
+    );
+  }
+
+  String _formatReminderTime(DateTime value) {
+    final local = value.toLocal();
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '${local.month}/${local.day} $hour:$minute';
   }
 
   Future<void> _reportMessage(Message msg) async {
@@ -3500,7 +3639,10 @@ class _ChatScreenState extends State<ChatScreen> {
                         suffixIcon: searching
                             ? const Padding(
                                 padding: EdgeInsets.all(12),
-                                child: GlassProgressIndicator.circular(size: 16, strokeWidth: 2),
+                                child: GlassProgressIndicator.circular(
+                                  size: 16,
+                                  strokeWidth: 2,
+                                ),
                               )
                             : IconButton(
                                 icon: const Icon(Icons.search),
@@ -4130,6 +4272,22 @@ class _AttachTile extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ReminderChoiceTile extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+
+  const _ReminderChoiceTile({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassListTile(
+      leading: const Icon(Icons.alarm_outlined, size: 20),
+      title: Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+      onTap: onTap,
     );
   }
 }

@@ -254,6 +254,83 @@ class CustomEmojiEntity {
   );
 }
 
+class BotInlineKeyboardButton {
+  final String text;
+  final String? url;
+  final String? callbackData;
+
+  const BotInlineKeyboardButton({
+    required this.text,
+    this.url,
+    this.callbackData,
+  });
+
+  bool get isUsable =>
+      text.trim().isNotEmpty &&
+      ((url?.trim().isNotEmpty ?? false) ||
+          (callbackData?.trim().isNotEmpty ?? false));
+
+  factory BotInlineKeyboardButton.fromJson(Map<String, dynamic> json) =>
+      BotInlineKeyboardButton(
+        text: json['text']?.toString() ?? '',
+        url: json['url']?.toString(),
+        callbackData: json['callback_data']?.toString(),
+      );
+
+  Map<String, dynamic> toJson() => {
+    'text': text,
+    if (url != null) 'url': url,
+    if (callbackData != null) 'callback_data': callbackData,
+  };
+}
+
+class BotInlineKeyboardMarkup {
+  final List<List<BotInlineKeyboardButton>> rows;
+
+  const BotInlineKeyboardMarkup({required this.rows});
+
+  bool get isNotEmpty => rows.any((row) => row.isNotEmpty);
+
+  factory BotInlineKeyboardMarkup.fromJson(Map<String, dynamic> json) {
+    final rawRows = json['inline_keyboard'];
+    if (rawRows is! List) return const BotInlineKeyboardMarkup(rows: []);
+    final rows = <List<BotInlineKeyboardButton>>[];
+    for (final rawRow in rawRows.whereType<List>()) {
+      final row = rawRow
+          .whereType<Map>()
+          .map(
+            (item) => BotInlineKeyboardButton.fromJson(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .where((button) => button.isUsable)
+          .toList(growable: false);
+      if (row.isNotEmpty) rows.add(row);
+    }
+    return BotInlineKeyboardMarkup(rows: rows);
+  }
+
+  static BotInlineKeyboardMarkup? tryParse(Object? raw) {
+    if (raw is Map<String, dynamic>) {
+      final markup = BotInlineKeyboardMarkup.fromJson(raw);
+      return markup.isNotEmpty ? markup : null;
+    }
+    if (raw is Map) {
+      final markup = BotInlineKeyboardMarkup.fromJson(
+        raw.map((key, value) => MapEntry(key.toString(), value)),
+      );
+      return markup.isNotEmpty ? markup : null;
+    }
+    return null;
+  }
+
+  Map<String, dynamic> toJson() => {
+    'inline_keyboard': rows
+        .map((row) => row.map((button) => button.toJson()).toList())
+        .toList(),
+  };
+}
+
 /// Parsed content for media messages. Text messages just use [text] directly.
 class MessageContent {
   final String text;
@@ -264,6 +341,8 @@ class MessageContent {
   final String? mimeType;
   final int? durationMs;
   final LinkPreview? linkPreview;
+  final bool viewOnce;
+  final BotInlineKeyboardMarkup? replyMarkup;
   // AES-256-GCM key/nonce — included only inside the PGP-encrypted payload,
   // never stored on the server or exposed in plaintext.
   final String? fileKey;
@@ -278,6 +357,8 @@ class MessageContent {
     this.mimeType,
     this.durationMs,
     this.linkPreview,
+    this.viewOnce = false,
+    this.replyMarkup,
     this.fileKey,
     this.fileNonce,
   });
@@ -302,6 +383,8 @@ class MessageContent {
             Map<String, dynamic>.from(json['link_preview'] as Map),
           )
         : null,
+    viewOnce: json['view_once'] as bool? ?? false,
+    replyMarkup: BotInlineKeyboardMarkup.tryParse(json['reply_markup']),
     fileKey: json['file_key'] as String?,
     fileNonce: json['file_nonce'] as String?,
   );
@@ -334,6 +417,8 @@ class MessageContent {
     if (mimeType != null) 'mime_type': mimeType,
     if (durationMs != null) 'duration_ms': durationMs,
     if (linkPreview != null) 'link_preview': linkPreview!.toJson(),
+    if (viewOnce) 'view_once': true,
+    if (replyMarkup != null) 'reply_markup': replyMarkup!.toJson(),
     if (fileKey != null) 'file_key': fileKey,
     if (fileNonce != null) 'file_nonce': fileNonce,
   };
@@ -349,7 +434,8 @@ class MessageContent {
       final decoded = jsonDecode(raw);
       if (decoded is! Map<String, dynamic>) return null;
       if (!decoded.containsKey('entities') &&
-          !decoded.containsKey('link_preview')) {
+          !decoded.containsKey('link_preview') &&
+          !decoded.containsKey('reply_markup')) {
         return null;
       }
       return MessageContent.fromJson(decoded);

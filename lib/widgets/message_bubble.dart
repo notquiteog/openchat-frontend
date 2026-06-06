@@ -242,6 +242,16 @@ class MessageBubble extends StatelessWidget {
       );
     }
 
+    if (content.hasAttachment && content.viewOnce && !isMe) {
+      return _ViewOnceAttachmentGate(
+        message: message,
+        content: content,
+        bubbleColor: bubbleColor,
+        textColor: textColor,
+        radii: radii,
+      );
+    }
+
     if (content.hasAttachment) {
       return switch (message.type) {
         MessageType.image => _ImageBubble(
@@ -688,6 +698,15 @@ class _TextBubble extends StatelessWidget {
               textColor: textColor,
             ),
           ],
+          if (message.content!.replyMarkup != null) ...[
+            const SizedBox(height: 8),
+            _BotInlineKeyboard(
+              message: message,
+              markup: message.content!.replyMarkup!,
+              textColor: textColor,
+              strictPrivacyMode: strictPrivacyMode,
+            ),
+          ],
           if (message.reactions.isNotEmpty) ...[
             const SizedBox(height: 6),
             _ReactionChips(
@@ -701,6 +720,133 @@ class _TextBubble extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _BotInlineKeyboard extends StatelessWidget {
+  final Message message;
+  final BotInlineKeyboardMarkup markup;
+  final Color textColor;
+  final bool strictPrivacyMode;
+
+  const _BotInlineKeyboard({
+    required this.message,
+    required this.markup,
+    required this.textColor,
+    required this.strictPrivacyMode,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final row in markup.rows)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var index = 0; index < row.length; index++) ...[
+                  if (index > 0) const SizedBox(width: 6),
+                  Flexible(
+                    child: _BotInlineButton(
+                      message: message,
+                      button: row[index],
+                      foreground: textColor,
+                      background: scheme.surface.withValues(alpha: 0.18),
+                      strictPrivacyMode: strictPrivacyMode,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _BotInlineButton extends StatefulWidget {
+  final Message message;
+  final BotInlineKeyboardButton button;
+  final Color foreground;
+  final Color background;
+  final bool strictPrivacyMode;
+
+  const _BotInlineButton({
+    required this.message,
+    required this.button,
+    required this.foreground,
+    required this.background,
+    required this.strictPrivacyMode,
+  });
+
+  @override
+  State<_BotInlineButton> createState() => _BotInlineButtonState();
+}
+
+class _BotInlineButtonState extends State<_BotInlineButton> {
+  bool _busy = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return FilledButton(
+      style: FilledButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        backgroundColor: widget.background,
+        foregroundColor: widget.foreground,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+      onPressed: _busy ? null : _activate,
+      child: _busy
+          ? SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: widget.foreground,
+              ),
+            )
+          : Text(
+              widget.button.text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+    );
+  }
+
+  Future<void> _activate() async {
+    final url = widget.button.url?.trim();
+    if (url != null && url.isNotEmpty) {
+      await _openMessageLink(context, url, widget.strictPrivacyMode);
+      return;
+    }
+    final data = widget.button.callbackData?.trim();
+    if (data == null || data.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      await context.read<ApiService>().sendBotCallback(
+        convID: widget.message.conversationId,
+        msgID: widget.message.id,
+        data: data,
+      );
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(const SnackBar(content: Text('Sent to bot')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(SnackBar(content: Text('Bot action failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 }
 
@@ -1946,7 +2092,10 @@ class _PaymentBubbleState extends State<_PaymentBubble> {
                       vertical: 10,
                     ),
                     icon: _paying
-                        ? const GlassProgressIndicator.circular(size: 14, strokeWidth: 2)
+                        ? const GlassProgressIndicator.circular(
+                            size: 14,
+                            strokeWidth: 2,
+                          )
                         : const Icon(Icons.account_balance_wallet, size: 16),
                     label: const Text('App wallet'),
                   ),
@@ -1965,7 +2114,10 @@ class _PaymentBubbleState extends State<_PaymentBubble> {
                   TextButton.icon(
                     onPressed: isBusy ? null : _decline,
                     icon: _declining
-                        ? const GlassProgressIndicator.circular(size: 14, strokeWidth: 2)
+                        ? const GlassProgressIndicator.circular(
+                            size: 14,
+                            strokeWidth: 2,
+                          )
                         : const Icon(Icons.close_rounded, size: 16),
                     label: const Text('Decline'),
                   ),
@@ -2187,6 +2339,129 @@ class _PollOptionRow extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _ViewOnceAttachmentGate extends StatefulWidget {
+  final Message message;
+  final MessageContent content;
+  final Color bubbleColor;
+  final Color textColor;
+  final BorderRadius radii;
+
+  const _ViewOnceAttachmentGate({
+    required this.message,
+    required this.content,
+    required this.bubbleColor,
+    required this.textColor,
+    required this.radii,
+  });
+
+  @override
+  State<_ViewOnceAttachmentGate> createState() =>
+      _ViewOnceAttachmentGateState();
+}
+
+class _ViewOnceAttachmentGateState extends State<_ViewOnceAttachmentGate> {
+  bool _revealed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final viewed = context.watch<SettingsProvider>().hasViewedOnceMedia(
+      widget.message.id,
+    );
+    if (viewed && !_revealed) return _placeholder(expired: true);
+    if (!_revealed) return _placeholder(expired: false);
+    return switch (widget.message.type) {
+      MessageType.image => _ImageBubble(
+        message: widget.message,
+        content: widget.content,
+        bubbleColor: widget.bubbleColor,
+        textColor: widget.textColor,
+        radii: widget.radii,
+      ),
+      MessageType.video => _VideoBubble(
+        message: widget.message,
+        content: widget.content,
+        bubbleColor: widget.bubbleColor,
+        textColor: widget.textColor,
+        radii: widget.radii,
+      ),
+      MessageType.voice || MessageType.audio => _VoiceBubble(
+        message: widget.message,
+        content: widget.content,
+        bubbleColor: widget.bubbleColor,
+        textColor: widget.textColor,
+        radii: widget.radii,
+      ),
+      _ => _FileBubble(
+        message: widget.message,
+        content: widget.content,
+        bubbleColor: widget.bubbleColor,
+        textColor: widget.textColor,
+        radii: widget.radii,
+      ),
+    };
+  }
+
+  Widget _placeholder({required bool expired}) {
+    final icon = expired ? Icons.visibility_off_outlined : Icons.lock_clock;
+    final title = expired ? 'View-once media opened' : 'View once media';
+    final subtitle = expired
+        ? 'This attachment is hidden on this device'
+        : 'Tap to decrypt and reveal locally';
+    return GestureDetector(
+      onTap: expired ? null : () => unawaited(_open()),
+      child: _BubbleShell(
+        color: widget.bubbleColor,
+        radii: widget.radii,
+        child: SizedBox(
+          width: math.min(MediaQuery.of(context).size.width * 0.64, 320),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: widget.textColor, size: 28),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        color: widget.textColor,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: widget.textColor.withValues(alpha: 0.66),
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    _Timestamp(
+                      message: widget.message,
+                      textColor: widget.textColor,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _open() async {
+    if (_revealed) return;
+    setState(() => _revealed = true);
+    await context.read<SettingsProvider>().markViewOnceMediaViewed(
+      widget.message.id,
     );
   }
 }
@@ -2815,7 +3090,11 @@ class _VoicePlayButton extends StatelessWidget {
           height: 44,
           child: Center(
             child: loading
-                ? GlassProgressIndicator.circular(size: 18, strokeWidth: 2, color: color)
+                ? GlassProgressIndicator.circular(
+                    size: 18,
+                    strokeWidth: 2,
+                    color: color,
+                  )
                 : Icon(
                     error
                         ? Icons.refresh
@@ -3043,7 +3322,11 @@ class _FileBubbleState extends State<_FileBubble> {
           ? _download
           : null,
       child: switch (_state) {
-        _LoadState.loading => GlassProgressIndicator.circular(size: 40, strokeWidth: 2, color: textColor),
+        _LoadState.loading => GlassProgressIndicator.circular(
+          size: 40,
+          strokeWidth: 2,
+          color: textColor,
+        ),
         _LoadState.done => Icon(Icons.check_circle, color: textColor, size: 40),
         _LoadState.error => Icon(
           Icons.error_outline,
@@ -3217,7 +3500,9 @@ class _StickerBubbleState extends State<_StickerBubble> {
         width: 120,
         height: 120,
         child: _loading
-            ? const Center(child: GlassProgressIndicator.circular(strokeWidth: 2))
+            ? const Center(
+                child: GlassProgressIndicator.circular(strokeWidth: 2),
+              )
             : fileUrl != null
             ? ClipRRect(
                 borderRadius: BorderRadius.circular(8),
@@ -3356,7 +3641,10 @@ class _StickerPackSheetState extends State<_StickerPackSheet> {
                       vertical: 10,
                     ),
                     icon: _adding
-                        ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
+                        ? const GlassProgressIndicator.circular(
+                            size: 16,
+                            strokeWidth: 2,
+                          )
                         : const Icon(Icons.add, size: 18),
                     label: const Text('Add'),
                   ),

@@ -89,8 +89,10 @@ Future<Conversation?> showCreateChannelDialog(BuildContext context) async {
               ),
             ),
             GlassListTile(
-              title: const Text('Public',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
+              title: const Text(
+                'Public',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
               subtitle: const Text('Anyone can find and subscribe'),
               trailing: GlassSwitch(
                 value: isPublic,
@@ -1599,8 +1601,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                     ),
                   ),
                 GlassListTile(
-                  title: const Text('Public',
-                      style: TextStyle(fontWeight: FontWeight.w600)),
+                  title: const Text(
+                    'Public',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
                   subtitle: const Text(
                     'Private channels lose their @handle and are hidden from search',
                   ),
@@ -2606,8 +2610,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               ),
               GlassListTile(
                 leading: const Icon(Icons.notifications_off_outlined),
-                title: const Text('Post silently',
-                    style: TextStyle(fontWeight: FontWeight.w600)),
+                title: const Text(
+                  'Post silently',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
                 trailing: GlassSwitch(
                   value: _sendSilent,
                   onChanged: (v) {
@@ -2746,6 +2752,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           icon: Icons.link_rounded,
           label: 'Copy message link',
         ),
+        if (!isSystem)
+          const MessageActionSheetItem(
+            value: 'remind',
+            icon: Icons.alarm_add_outlined,
+            label: 'Remind me',
+          ),
         if (canDownloadMessageAttachment(msg))
           MessageActionSheetItem(
             value: 'download',
@@ -2787,6 +2799,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         await _copyPostText(msg);
       case 'copy_link':
         await _copyPostLink(msg);
+      case 'remind':
+        await _remindAboutPost(msg);
       case 'download':
         await _downloadPostAttachment(msg);
       case 'sender':
@@ -2796,6 +2810,97 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       case 'delete':
         await _deletePost(msg);
     }
+  }
+
+  Future<void> _remindAboutPost(Message msg) async {
+    final now = DateTime.now();
+    final selected = await showDialog<DateTime>(
+      context: context,
+      builder: (ctx) => GlassAlertDialog(
+        title: const Text('Remind me'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _ChannelReminderChoiceTile(
+              label: 'In 15 minutes',
+              onTap: () =>
+                  Navigator.pop(ctx, now.add(const Duration(minutes: 15))),
+            ),
+            _ChannelReminderChoiceTile(
+              label: 'In 1 hour',
+              onTap: () =>
+                  Navigator.pop(ctx, now.add(const Duration(hours: 1))),
+            ),
+            _ChannelReminderChoiceTile(
+              label: 'Tomorrow morning',
+              onTap: () => Navigator.pop(
+                ctx,
+                DateTime(now.year, now.month, now.day + 1, 9),
+              ),
+            ),
+            _ChannelReminderChoiceTile(
+              label: 'Pick date and time',
+              onTap: () async {
+                final date = await showDatePicker(
+                  context: ctx,
+                  initialDate: now.add(const Duration(days: 1)),
+                  firstDate: now,
+                  lastDate: now.add(const Duration(days: 365)),
+                );
+                if (date == null || !ctx.mounted) return;
+                final time = await showTimePicker(
+                  context: ctx,
+                  initialTime: TimeOfDay.fromDateTime(
+                    now.add(const Duration(hours: 1)),
+                  ),
+                );
+                if (time == null || !ctx.mounted) return;
+                Navigator.pop(
+                  ctx,
+                  DateTime(
+                    date.year,
+                    date.month,
+                    date.day,
+                    time.hour,
+                    time.minute,
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+    if (selected == null || !mounted) return;
+    final preview = (msg.decryptedContent ?? msg.listPreview).trim();
+    await context.read<SettingsProvider>().saveMessageReminder(
+      conversationId: channel.id,
+      messageId: msg.id,
+      conversationTitle: channel.displayName(
+        context.read<AuthProvider>().currentUser?.id ?? '',
+      ),
+      messagePreview: preview.isEmpty ? msg.listPreview : preview,
+      remindAt: selected,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Reminder set for ${_formatReminderTime(selected)}'),
+      ),
+    );
+  }
+
+  String _formatReminderTime(DateTime value) {
+    final local = value.toLocal();
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '${local.month}/${local.day} $hour:$minute';
   }
 
   Future<void> _reportPost(Message msg) async {
@@ -3633,8 +3738,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                       ],
                     ),
                     GlassListTile(
-                      title: const Text('Anonymous',
-                          style: TextStyle(fontWeight: FontWeight.w600)),
+                      title: const Text(
+                        'Anonymous',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
                       trailing: GlassSwitch(
                         value: anonymous,
                         onChanged: (v) => setDialog(() => anonymous = v),
@@ -3644,8 +3751,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                       onTap: () => setDialog(() => anonymous = !anonymous),
                     ),
                     GlassListTile(
-                      title: const Text('Multiple answers',
-                          style: TextStyle(fontWeight: FontWeight.w600)),
+                      title: const Text(
+                        'Multiple answers',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
                       trailing: GlassSwitch(
                         value: multiple,
                         onChanged: (v) => setDialog(() => multiple = v),
@@ -4415,6 +4524,22 @@ class _ChanTile extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ChannelReminderChoiceTile extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+
+  const _ChannelReminderChoiceTile({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassListTile(
+      leading: const Icon(Icons.alarm_outlined, size: 20),
+      title: Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+      onTap: onTap,
     );
   }
 }

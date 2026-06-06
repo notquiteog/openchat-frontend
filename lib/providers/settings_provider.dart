@@ -6,6 +6,7 @@ import '../models/channel_pinned_message.dart';
 import '../models/chat_folder.dart';
 import '../models/contact_bundle.dart';
 import '../models/message.dart';
+import '../models/message_reminder.dart';
 import '../services/local_private_state_service.dart';
 import '../utils/local_conversation_preferences.dart';
 import '../utils/smart_inbox_filter.dart';
@@ -208,6 +209,9 @@ class SettingsProvider extends ChangeNotifier {
   final List<ChatFolder> _chatFolders = [];
   final Map<String, ContactBundle> _privateContacts = {};
   final Map<String, String> _unreadMentionMessageIds = {};
+  final Set<String> _privacyOnboardingViewedUserIds = {};
+  final Map<String, MessageReminder> _messageReminders = {};
+  final Set<String> _viewedOnceMediaMessageIds = {};
   final Map<String, ConversationNotificationPreference>
   _conversationNotificationPreferences = {};
 
@@ -235,6 +239,10 @@ class SettingsProvider extends ChangeNotifier {
       Map.unmodifiable(_privateContacts);
   Map<String, String> get unreadMentionMessageIds =>
       Map.unmodifiable(_unreadMentionMessageIds);
+  List<MessageReminder> get messageReminders =>
+      List.unmodifiable(_sortedMessageReminders());
+  bool hasViewedOnceMedia(String messageId) =>
+      _viewedOnceMediaMessageIds.contains(messageId);
   Map<String, ConversationNotificationPreference>
   get conversationNotificationPreferences => Map.unmodifiable(
     _effectiveConversationNotificationPreferences(DateTime.now()),
@@ -269,6 +277,12 @@ class SettingsProvider extends ChangeNotifier {
   Future<void> load() {
     _loadFuture ??= _load();
     return _loadFuture!;
+  }
+
+  Future<void> reload() {
+    _loadFuture = null;
+    _loaded = false;
+    return load();
   }
 
   Future<void> _load() async {
@@ -348,6 +362,27 @@ class SettingsProvider extends ChangeNotifier {
       ..addAll(
         _parsePrivateStringMap(
           privateState[privateStateUnreadMentionMessageIdsKey],
+        ),
+      );
+    _privacyOnboardingViewedUserIds
+      ..clear()
+      ..addAll(
+        _stringListFromPrivateState(
+          privateState[privateStatePrivacyOnboardingViewedUserIdsKey],
+        ),
+      );
+    _messageReminders
+      ..clear()
+      ..addAll(
+        _parsePrivateMessageReminders(
+          privateState[privateStateMessageRemindersKey],
+        ),
+      );
+    _viewedOnceMediaMessageIds
+      ..clear()
+      ..addAll(
+        _stringListFromPrivateState(
+          privateState[privateStateViewedOnceMediaKey],
         ),
       );
     await _removeLegacyLocalStatePlaintext();
@@ -475,6 +510,67 @@ class SettingsProvider extends ChangeNotifier {
 
   Future<void> removePrivateContact(String userId) async {
     if (_privateContacts.remove(userId) == null) return;
+    notifyListeners();
+    await _persistPrivateLocalState();
+  }
+
+  bool hasViewedPrivacyOnboarding(String userId) {
+    final normalized = userId.trim();
+    return normalized.isNotEmpty &&
+        _privacyOnboardingViewedUserIds.contains(normalized);
+  }
+
+  Future<void> markPrivacyOnboardingViewed(String userId) async {
+    final normalized = userId.trim();
+    if (normalized.isEmpty) return;
+    if (!_privacyOnboardingViewedUserIds.add(normalized)) return;
+    notifyListeners();
+    await _persistPrivateLocalState();
+  }
+
+  Future<MessageReminder> saveMessageReminder({
+    required String conversationId,
+    required String messageId,
+    required String conversationTitle,
+    required String messagePreview,
+    required DateTime remindAt,
+  }) async {
+    await load();
+    final id = 'reminder-${const Uuid().v4()}';
+    final reminder = MessageReminder(
+      id: id,
+      conversationId: conversationId.trim(),
+      messageId: messageId.trim(),
+      conversationTitle: conversationTitle.trim(),
+      messagePreview: messagePreview.trim(),
+      remindAt: remindAt,
+      createdAt: DateTime.now(),
+    );
+    if (reminder.conversationId.isEmpty || reminder.messageId.isEmpty) {
+      throw ArgumentError('conversationId and messageId are required');
+    }
+    _messageReminders[id] = reminder;
+    notifyListeners();
+    await _persistPrivateLocalState();
+    return reminder;
+  }
+
+  Future<void> removeMessageReminder(String reminderId) async {
+    if (_messageReminders.remove(reminderId) == null) return;
+    notifyListeners();
+    await _persistPrivateLocalState();
+  }
+
+  List<MessageReminder> dueMessageReminders(DateTime now) =>
+      _sortedMessageReminders()
+          .where((reminder) => !now.isBefore(reminder.remindAt))
+          .toList();
+
+  Future<void> markViewOnceMediaViewed(String messageId) async {
+    final normalized = messageId.trim();
+    if (normalized.isEmpty || !_viewedOnceMediaMessageIds.add(normalized)) {
+      return;
+    }
     notifyListeners();
     await _persistPrivateLocalState();
   }
@@ -674,6 +770,15 @@ class SettingsProvider extends ChangeNotifier {
       ),
       privateStatePrivateContactsKey: encodePrivateContacts(
         _privateContacts.values,
+      ),
+      privateStatePrivacyOnboardingViewedUserIdsKey: _sortedStringList(
+        _privacyOnboardingViewedUserIds,
+      ),
+      privateStateMessageRemindersKey: _encodePrivateMessageReminders(
+        _messageReminders,
+      ),
+      privateStateViewedOnceMediaKey: _sortedStringList(
+        _viewedOnceMediaMessageIds,
       ),
     });
   }
@@ -992,6 +1097,45 @@ class SettingsProvider extends ChangeNotifier {
       if (entry.key.trim().isNotEmpty && entry.value.trim().isNotEmpty)
         entry.key.trim(): entry.value.trim(),
   };
+
+  List<MessageReminder> _sortedMessageReminders() {
+    final reminders = _messageReminders.values.toList()
+      ..sort((a, b) => a.remindAt.compareTo(b.remindAt));
+    return reminders;
+  }
+
+  static Map<String, MessageReminder> _parsePrivateMessageReminders(
+    Object? raw,
+  ) {
+    if (raw is! List) return const {};
+    final reminders = <String, MessageReminder>{};
+    for (final item in raw.whereType<Map>()) {
+      try {
+        final reminder = MessageReminder.fromJson(
+          Map<String, dynamic>.from(item),
+        );
+        if (reminder.id.isEmpty ||
+            reminder.conversationId.isEmpty ||
+            reminder.messageId.isEmpty) {
+          continue;
+        }
+        reminders[reminder.id] = reminder;
+      } catch (_) {}
+    }
+    return reminders;
+  }
+
+  static List<Map<String, dynamic>> _encodePrivateMessageReminders(
+    Map<String, MessageReminder> reminders,
+  ) => reminders.values
+      .where(
+        (reminder) =>
+            reminder.id.isNotEmpty &&
+            reminder.conversationId.isNotEmpty &&
+            reminder.messageId.isNotEmpty,
+      )
+      .map((reminder) => reminder.toJson())
+      .toList();
 
   Future<void> _removeLegacyLocalStatePlaintext() async {
     final prefs = _prefs;

@@ -22,6 +22,10 @@ const privateStatePinnedConversationsKey = 'pinned_conversations';
 const privateStateArchivedConversationsKey = 'archived_conversations';
 const privateStateUnreadMentionMessageIdsKey = 'unread_mention_message_ids';
 const privateStatePrivateContactsKey = 'private_contacts';
+const privateStatePrivacyOnboardingViewedUserIdsKey =
+    'privacy_onboarding_viewed_user_ids';
+const privateStateMessageRemindersKey = 'message_reminders';
+const privateStateViewedOnceMediaKey = 'viewed_once_media_message_ids';
 
 class PrivateNotificationSettings {
   final bool pushEnabled;

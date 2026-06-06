@@ -15,6 +15,7 @@ import '../../providers/chat_provider.dart';
 import '../../providers/key_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
+import '../../services/mls_service.dart';
 import '../../services/secure_storage_service.dart';
 import '../../utils/account_security_duration.dart';
 import '../../utils/device_label.dart';
@@ -171,6 +172,21 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
     }
   }
 
+  Future<void> _prepareMlsIdentity() async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await context.read<MlsService>().ensureIdentityForCurrentUser();
+      await _load();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('MLS device key prepared')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('MLS key preparation failed: $e')),
+      );
+    }
+  }
+
   Future<void> _revokeSession(Map<String, dynamic> session) async {
     final id = session['id'] as String?;
     if (id == null || id.isEmpty) return;
@@ -294,7 +310,10 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                         }
                       },
                 child: submitting
-                    ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
+                    ? const GlassProgressIndicator.circular(
+                        size: 16,
+                        strokeWidth: 2,
+                      )
                     : const Text('Save'),
               ),
             ],
@@ -389,7 +408,10 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                         }
                       },
                 child: submitting
-                    ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
+                    ? const GlassProgressIndicator.circular(
+                        size: 16,
+                        strokeWidth: 2,
+                      )
                     : const Text('Save'),
               ),
             ],
@@ -465,6 +487,11 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
       pushNotificationsEnabled: settings.pushNotificationsEnabled,
       unencryptedConversations: unencrypted.length,
       keyTransparencyWarnings: keyWarnings.length,
+    );
+    final timelineItems = _trustTimelineItems(
+      keyEvents: _keyEvents,
+      keyPins: _keyPins,
+      sessions: _sessions,
     );
 
     return Scaffold(
@@ -572,11 +599,12 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                     title: 'MLS device key',
                     subtitle: mlsSignerSigned
                         ? 'Signed by your PGP identity key'
-                        : 'Created and signed when MLS is first used',
+                        : 'Prepare it now without sending an MLS message',
                     trailing: _StatusPill(
-                      label: mlsSignerSigned ? 'Signed' : 'Pending',
+                      label: mlsSignerSigned ? 'Signed' : 'Prepare',
                       color: mlsSignerSigned ? Colors.green : Colors.orange,
                     ),
+                    onTap: mlsSignerSigned ? null : _prepareMlsIdentity,
                   ),
                   const _TrustDivider(),
                   _TrustRow(
@@ -595,6 +623,33 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
               ),
             ),
             const SizedBox(height: 20),
+            if (timelineItems.isNotEmpty) ...[
+              const _TrustSectionHeader('Trust Timeline'),
+              GlassCard(
+                padding: EdgeInsets.zero,
+                child: Column(
+                  children: [
+                    for (var index = 0; index < timelineItems.length; index++)
+                      _TrustRow(
+                        icon: timelineItems[index].icon,
+                        iconColor: timelineItems[index].color,
+                        title: timelineItems[index].title,
+                        subtitle: timelineItems[index].subtitle,
+                        trailing: Text(
+                          timeago.format(timelineItems[index].createdAt),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: scheme.onSurface.withValues(alpha: 0.46),
+                          ),
+                        ),
+                        isLast: index == timelineItems.length - 1,
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+            ],
             const _TrustSectionHeader('Encryption Health'),
             GlassCard(
               padding: const EdgeInsets.all(16),
@@ -668,7 +723,10 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                           ? 'Loading signed-in devices'
                           : 'No active sessions found',
                       trailing: _loading
-                          ? const GlassProgressIndicator.circular(size: 18, strokeWidth: 2)
+                          ? const GlassProgressIndicator.circular(
+                              size: 18,
+                              strokeWidth: 2,
+                            )
                           : null,
                       isLast: true,
                     )
@@ -1045,7 +1103,7 @@ class _TrustRow extends StatelessWidget {
                 const SizedBox(width: 12),
                 trailing ??
                     Icon(
-                      Icons.arrow_forward_ios_rounded,
+                      CupertinoIcons.chevron_forward,
                       size: 14,
                       color: scheme.onSurface.withValues(alpha: 0.35),
                     ),
@@ -1139,6 +1197,77 @@ IconData _conversationIcon(Conversation conversation) {
   return Icons.person_outline_rounded;
 }
 
+class _TrustTimelineItem {
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String subtitle;
+  final DateTime createdAt;
+
+  const _TrustTimelineItem({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    required this.createdAt,
+  });
+}
+
+List<_TrustTimelineItem> _trustTimelineItems({
+  required List<KeyTransparencyEvent> keyEvents,
+  required Map<String, KeyTrustPin> keyPins,
+  required List<Map<String, dynamic>> sessions,
+}) {
+  final items = <_TrustTimelineItem>[];
+  for (final event in keyEvents) {
+    final rotated = event.eventType == 'rotate';
+    items.add(
+      _TrustTimelineItem(
+        icon: rotated
+            ? Icons.change_circle_outlined
+            : Icons.add_moderator_outlined,
+        color: rotated ? Colors.orange : Colors.green,
+        title: rotated ? 'Account key rotated' : 'Account key registered',
+        subtitle: 'Sequence ${event.sequence} - ${_shortHash(event.eventHash)}',
+        createdAt: event.createdAt,
+      ),
+    );
+  }
+  for (final pin in keyPins.values) {
+    final hasWarning = pin.warning?.trim().isNotEmpty == true;
+    items.add(
+      _TrustTimelineItem(
+        icon: hasWarning
+            ? Icons.report_gmailerrorred_outlined
+            : Icons.verified_outlined,
+        color: hasWarning ? Colors.orange : Colors.green,
+        title: hasWarning ? 'Contact key warning' : 'Contact key verified',
+        subtitle: hasWarning
+            ? pin.warning!.trim()
+            : '${_shortHash(pin.userId)} - ${_shortHash(pin.fingerprint)}',
+        createdAt: pin.pinnedAt,
+      ),
+    );
+  }
+  for (final session in sessions) {
+    final seenAt =
+        _dateFromJson(session['last_seen_at']) ??
+        _dateFromJson(session['created_at']);
+    if (seenAt == null) continue;
+    items.add(
+      _TrustTimelineItem(
+        icon: Icons.devices_outlined,
+        color: Colors.blue,
+        title: 'Session active',
+        subtitle: sessionDeviceDisplayLabel(session),
+        createdAt: seenAt,
+      ),
+    );
+  }
+  items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  return items.take(12).toList(growable: false);
+}
+
 String _sessionSubtitle(Map<String, dynamic> session) {
   final lastSeen = _relativeTime(session['last_seen_at']);
   final created = _relativeTime(session['created_at']);
@@ -1152,10 +1281,15 @@ String _sessionSubtitle(Map<String, dynamic> session) {
 }
 
 String? _relativeTime(Object? value) {
-  if (value is! String || value.trim().isEmpty) return null;
-  final parsed = DateTime.tryParse(value);
-  if (parsed == null) return value;
+  final parsed = _dateFromJson(value);
+  if (parsed == null) return value is String ? value : null;
   return timeago.format(parsed.toLocal());
+}
+
+DateTime? _dateFromJson(Object? value) {
+  if (value is DateTime) return value.toLocal();
+  if (value is! String || value.trim().isEmpty) return null;
+  return DateTime.tryParse(value)?.toLocal();
 }
 
 String _shortHash(String hash) {

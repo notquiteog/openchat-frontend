@@ -776,7 +776,10 @@ class ChatProvider extends ChangeNotifier {
       _api,
     ).uploadEncryptedAttachment(encryptedAttachment);
     final plaintext = jsonEncode(
-      attachment.toPayloadJson(caption: data['caption'] as String? ?? ''),
+      attachment.toPayloadJson(
+        caption: data['caption'] as String? ?? '',
+        viewOnce: data['view_once'] as bool? ?? false,
+      ),
     );
     final sent = await _prepareAndSendOutboxPayload(
       convID: item.conversationId,
@@ -908,8 +911,11 @@ class ChatProvider extends ChangeNotifier {
     required String convID,
     required PendingAttachment attachment,
     String caption = '',
+    bool viewOnce = false,
   }) async {
-    final payloadJson = jsonEncode(attachment.toPayloadJson(caption: caption));
+    final payloadJson = jsonEncode(
+      attachment.toPayloadJson(caption: caption, viewOnce: viewOnce),
+    );
     return _sendEncryptedPayload(
       convID: convID,
       plaintextPayload: payloadJson,
@@ -922,6 +928,7 @@ class ChatProvider extends ChangeNotifier {
     required String convID,
     required EncryptedAttachmentUpload attachment,
     String caption = '',
+    bool viewOnce = false,
     AttachmentUploadProgressCallback? onProgress,
   }) async {
     try {
@@ -930,6 +937,7 @@ class ChatProvider extends ChangeNotifier {
           convID: convID,
           attachment: attachment,
           caption: caption,
+          viewOnce: viewOnce,
         );
         return true;
       }
@@ -940,6 +948,7 @@ class ChatProvider extends ChangeNotifier {
         convID: convID,
         attachment: uploaded,
         caption: caption,
+        viewOnce: viewOnce,
       );
     } catch (e) {
       if (_shouldRetryOutboxError(e)) {
@@ -947,6 +956,7 @@ class ChatProvider extends ChangeNotifier {
           convID: convID,
           attachment: attachment,
           caption: caption,
+          viewOnce: viewOnce,
         );
         return true;
       }
@@ -958,6 +968,7 @@ class ChatProvider extends ChangeNotifier {
     required String convID,
     required EncryptedAttachmentUpload attachment,
     String caption = '',
+    bool viewOnce = false,
   }) async {
     final conv = _conversations[convID];
     if (conv == null) {
@@ -983,6 +994,7 @@ class ChatProvider extends ChangeNotifier {
       attachment.toPayloadJson(
         attachmentId: pendingAttachmentID,
         caption: caption,
+        viewOnce: viewOnce,
       ),
     );
     final now = DateTime.now();
@@ -1022,6 +1034,7 @@ class ChatProvider extends ChangeNotifier {
           'attachment': attachment.toMetadataJson(),
           'ciphertext_path': ciphertextPath,
           'caption': caption,
+          if (viewOnce) 'view_once': true,
           'is_encrypted': conv.isEncrypted,
           'auto_delete_seconds': conv.messageTtlSeconds,
           if (pending.autoDeleteExpiresAt != null)

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -422,7 +423,7 @@ class _PlanCard extends StatelessWidget {
                   ),
                 ),
                 Icon(
-                  Icons.arrow_forward_ios_rounded,
+                  CupertinoIcons.chevron_forward,
                   size: 14,
                   color: scheme.onSurface.withValues(alpha: 0.40),
                 ),

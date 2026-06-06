@@ -36,13 +36,17 @@ class PendingAttachment {
   });
 
   /// Encode as the JSON that goes into the PGP-encrypted message payload.
-  Map<String, dynamic> toPayloadJson({String caption = ''}) => {
+  Map<String, dynamic> toPayloadJson({
+    String caption = '',
+    bool viewOnce = false,
+  }) => {
     'text': caption,
     'attachment_id': attachmentId,
     'file_name': fileName,
     'file_size': fileSize,
     'mime_type': mimeType,
     if (durationMs != null) 'duration_ms': durationMs,
+    if (viewOnce) 'view_once': true,
     'file_key': fileKey,
     'file_nonce': fileNonce,
   };
@@ -106,6 +110,7 @@ class EncryptedAttachmentUpload {
   Map<String, dynamic> toPayloadJson({
     required String attachmentId,
     String caption = '',
+    bool viewOnce = false,
   }) => {
     'text': caption,
     'attachment_id': attachmentId,
@@ -113,6 +118,7 @@ class EncryptedAttachmentUpload {
     'file_size': fileSize,
     'mime_type': mimeType,
     if (durationMs != null) 'duration_ms': durationMs,
+    if (viewOnce) 'view_once': true,
     'file_key': fileKey,
     'file_nonce': fileNonce,
   };
@@ -204,13 +210,24 @@ class AttachmentService {
 
   static const _imageTypeGroup = fs.XTypeGroup(
     label: 'Images',
-    mimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic'],
+    mimeTypes: [
+      'image/jpeg',
+      'image/png',
+      'image/gif',
+      'image/webp',
+      'image/heic',
+    ],
     extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic'],
   );
 
   static const _videoTypeGroup = fs.XTypeGroup(
     label: 'Videos',
-    mimeTypes: ['video/mp4', 'video/quicktime', 'video/x-matroska', 'video/webm'],
+    mimeTypes: [
+      'video/mp4',
+      'video/quicktime',
+      'video/x-matroska',
+      'video/webm',
+    ],
     extensions: ['mp4', 'mov', 'mkv', 'webm'],
   );
 

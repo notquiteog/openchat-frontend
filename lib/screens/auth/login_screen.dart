@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/secure_storage_warning.dart';
+import '../settings/device_pairing_screen.dart';
 import '../settings/pgp_keys_screen.dart';
 import 'register_screen.dart';
 
@@ -24,8 +25,10 @@ class _LoginScreenState extends State<LoginScreen>
     vsync: this,
     duration: const Duration(milliseconds: 720),
   );
-  late final Animation<double> _entranceFade =
-      CurvedAnimation(parent: _entranceCtrl, curve: Curves.easeOutCubic);
+  late final Animation<double> _entranceFade = CurvedAnimation(
+    parent: _entranceCtrl,
+    curve: Curves.easeOutCubic,
+  );
   late final Animation<Offset> _entranceSlide = Tween<Offset>(
     begin: const Offset(0, 0.06),
     end: Offset.zero,
@@ -97,7 +100,9 @@ class _LoginScreenState extends State<LoginScreen>
                                     borderRadius: BorderRadius.circular(22),
                                     boxShadow: [
                                       BoxShadow(
-                                        color: scheme.primary.withValues(alpha: 0.35),
+                                        color: scheme.primary.withValues(
+                                          alpha: 0.35,
+                                        ),
                                         blurRadius: 28,
                                         spreadRadius: -4,
                                         offset: const Offset(0, 10),
@@ -134,12 +139,11 @@ class _LoginScreenState extends State<LoginScreen>
                                 Text(
                                   'Secure · Open · Encrypted',
                                   textAlign: TextAlign.center,
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .bodySmall
+                                  style: Theme.of(context).textTheme.bodySmall
                                       ?.copyWith(
-                                        color: scheme.onSurface
-                                            .withValues(alpha: 0.50),
+                                        color: scheme.onSurface.withValues(
+                                          alpha: 0.50,
+                                        ),
                                         letterSpacing: 1.0,
                                         fontWeight: FontWeight.w500,
                                       ),
@@ -177,9 +181,7 @@ class _LoginScreenState extends State<LoginScreen>
                                     controller: _identifierCtrl,
                                     decoration: const InputDecoration(
                                       labelText: 'Username or account ID',
-                                      prefixIcon: Icon(
-                                        Icons.badge_outlined,
-                                      ),
+                                      prefixIcon: Icon(Icons.badge_outlined),
                                     ),
                                     autocorrect: false,
                                     textInputAction: TextInputAction.next,
@@ -191,8 +193,9 @@ class _LoginScreenState extends State<LoginScreen>
                                     controller: _passwordCtrl,
                                     decoration: InputDecoration(
                                       labelText: 'Password',
-                                      prefixIcon:
-                                          const Icon(Icons.lock_outline_rounded),
+                                      prefixIcon: const Icon(
+                                        Icons.lock_outline_rounded,
+                                      ),
                                       suffixIcon: IconButton(
                                         icon: Icon(
                                           _obscurePassword
@@ -234,7 +237,9 @@ class _LoginScreenState extends State<LoginScreen>
                                   // Errors
                                   if (auth.storageWarning != null)
                                     Padding(
-                                      padding: const EdgeInsets.only(bottom: 14),
+                                      padding: const EdgeInsets.only(
+                                        bottom: 14,
+                                      ),
                                       child: SecureStorageWarning(
                                         message: auth.storageWarning!,
                                       ),
@@ -244,41 +249,48 @@ class _LoginScreenState extends State<LoginScreen>
                                     _ErrorBox(message: auth.error!),
 
                                   // Sign-in button
-                                  Row(children: [
-                                    Expanded(
-                                      child: GlassButtonWidget(
-                                        onPressed:
-                                            auth.isLoading ? null : _login,
-                                        padding: const EdgeInsets.symmetric(
-                                          vertical: 16,
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: GlassButtonWidget(
+                                          onPressed: auth.isLoading
+                                              ? null
+                                              : _login,
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 16,
+                                          ),
+                                          child: auth.isLoading
+                                              ? const GlassProgressIndicator.circular(
+                                                  size: 20,
+                                                  strokeWidth: 2,
+                                                )
+                                              : const Text('Sign in'),
                                         ),
-                                        child: auth.isLoading
-                                            ? const GlassProgressIndicator.circular(
-                                                size: 20,
-                                                strokeWidth: 2,
-                                              )
-                                            : const Text('Sign in'),
                                       ),
-                                    ),
-                                  ]),
+                                    ],
+                                  ),
                                   const SizedBox(height: 10),
-                                  Row(children: [
-                                    Expanded(
-                                      child: GlassButtonWidget(
-                                        onPressed: () => Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder: (_) =>
-                                                const RegisterScreen(),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: GlassButtonWidget(
+                                          onPressed: () => Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (_) =>
+                                                  const RegisterScreen(),
+                                            ),
+                                          ),
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 16,
+                                          ),
+                                          child: const Text(
+                                            'Create your account',
                                           ),
                                         ),
-                                        padding: const EdgeInsets.symmetric(
-                                          vertical: 16,
-                                        ),
-                                        child: const Text('Create your account'),
                                       ),
-                                    ),
-                                  ]),
+                                    ],
+                                  ),
                                   const SizedBox(height: 20),
                                   Divider(
                                     color: Colors.white.withValues(alpha: 0.12),
@@ -290,8 +302,9 @@ class _LoginScreenState extends State<LoginScreen>
                                       Icons.vpn_key_outlined,
                                       size: 16,
                                     ),
-                                    label:
-                                        const Text('Import existing PGP key'),
+                                    label: const Text(
+                                      'Import existing PGP key',
+                                    ),
                                     onPressed: () => Navigator.push(
                                       context,
                                       MaterialPageRoute(
@@ -299,16 +312,33 @@ class _LoginScreenState extends State<LoginScreen>
                                       ),
                                     ),
                                   ),
+                                  TextButton.icon(
+                                    icon: const Icon(
+                                      Icons.qr_code_scanner_rounded,
+                                      size: 16,
+                                    ),
+                                    label: const Text('Scan pairing QR'),
+                                    onPressed: () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) =>
+                                            const DevicePairingScreen(
+                                              initialMode:
+                                                  DevicePairingMode.scan,
+                                            ),
+                                      ),
+                                    ),
+                                  ),
                                   const SizedBox(height: 4),
                                   Text(
                                     'Sign-in requires your private key on this device.',
                                     textAlign: TextAlign.center,
-                                    style:
-                                        Theme.of(context).textTheme.bodySmall
-                                            ?.copyWith(
-                                              color: scheme.onSurface
-                                                  .withValues(alpha: 0.38),
-                                            ),
+                                    style: Theme.of(context).textTheme.bodySmall
+                                        ?.copyWith(
+                                          color: scheme.onSurface.withValues(
+                                            alpha: 0.38,
+                                          ),
+                                        ),
                                   ),
                                 ],
                               ),

@@ -6,6 +6,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
     show GlassButton, GlassModalSheet, SheetState;
 import '../../models/chat_folder.dart';
 import '../../models/conversation.dart';
+import '../../models/message.dart';
 import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
@@ -102,6 +103,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           folder,
           folderSourceConversations,
           archivedConversationIds,
+          currentUserID,
+          unreadMentionMessageIds,
+          settings.conversationNotificationPreferences,
         ),
     };
     final filterCounts = {
@@ -134,6 +138,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
             selectedFolder,
             folderSourceConversations,
             archivedConversationIds,
+            currentUserID,
+            unreadMentionMessageIds,
+            settings.conversationNotificationPreferences,
           );
 
     return Scaffold(
@@ -754,11 +761,17 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     ChatFolder folder,
     List<Conversation> conversations,
     Set<String> archivedConversationIds,
+    String currentUserID,
+    Map<String, String> unreadMentionMessageIds,
+    Map<String, ConversationNotificationPreference> notificationPreferences,
   ) {
     return _folderConversations(
       folder,
       conversations,
       archivedConversationIds,
+      currentUserID,
+      unreadMentionMessageIds,
+      notificationPreferences,
     ).length;
   }
 
@@ -766,7 +779,24 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     ChatFolder folder,
     List<Conversation> conversations,
     Set<String> archivedConversationIds,
+    String currentUserID,
+    Map<String, String> unreadMentionMessageIds,
+    Map<String, ConversationNotificationPreference> notificationPreferences,
   ) {
+    if (folder.isRuleBased) {
+      return conversations
+          .where(
+            (conversation) => _conversationMatchesFolderRules(
+              conversation,
+              folder.rules,
+              currentUserID,
+              archivedConversationIds,
+              unreadMentionMessageIds,
+              notificationPreferences,
+            ),
+          )
+          .toList();
+    }
     final ids = folder.conversationIds.toSet();
     return conversations
         .where(
@@ -776,6 +806,53 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                   !archivedConversationIds.contains(conversation.id)),
         )
         .toList();
+  }
+
+  bool _conversationMatchesFolderRules(
+    Conversation conversation,
+    ChatFolderRules rules,
+    String currentUserID,
+    Set<String> archivedConversationIds,
+    Map<String, String> unreadMentionMessageIds,
+    Map<String, ConversationNotificationPreference> notificationPreferences,
+  ) {
+    final archived =
+        archivedConversationIds.contains(conversation.id) ||
+        conversation.isArchived;
+    if (rules.archivedOnly) {
+      if (!archived) return false;
+    } else if (archived) {
+      return false;
+    }
+    if (rules.unreadOnly && conversation.unreadCount <= 0) return false;
+    if (rules.mentionsOnly &&
+        !unreadMentionMessageIds.containsKey(conversation.id)) {
+      return false;
+    }
+    if (rules.mutedOnly) {
+      final preference = notificationPreferences[conversation.id];
+      if (preference == null || !preference.isMutedAt(DateTime.now())) {
+        return false;
+      }
+    }
+    if (rules.paymentsOnly) {
+      final type = conversation.lastMessage?.type;
+      if (type != MessageType.invoice &&
+          type != MessageType.paymentRequest &&
+          type != MessageType.paymentTransfer) {
+        return false;
+      }
+    }
+    if (rules.hasTypeRule) {
+      final isBot = conversation.isBotDM(currentUserID);
+      final matchesType =
+          (rules.dms && conversation.isDM && !isBot) ||
+          (rules.groups && conversation.isGroup) ||
+          (rules.channels && conversation.isChannel) ||
+          (rules.bots && isBot);
+      if (!matchesType) return false;
+    }
+    return true;
   }
 
   Widget _buildFolderEmpty(BuildContext context, ChatFolder folder) {
@@ -889,6 +966,13 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                           context
                               .read<SettingsProvider>()
                               .archivedConversationIds,
+                          context.read<AuthProvider>().currentUser?.id ?? '',
+                          context
+                              .read<SettingsProvider>()
+                              .unreadMentionMessageIds,
+                          context
+                              .read<SettingsProvider>()
+                              .conversationNotificationPreferences,
                         ),
                         onEdit: () {
                           Navigator.pop(ctx);
@@ -927,6 +1011,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       );
     final selectedIds = {...?existing?.conversationIds};
     var includeArchived = existing?.includeArchived ?? false;
+    var rules = existing?.rules ?? const ChatFolderRules();
     String? errorText;
 
     final draft = await showDialog<_FolderDraft>(
@@ -965,68 +1050,172 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                         : null,
                     size: 20,
                   ),
-                  title: const Text('Include archived chats',
-                      style: TextStyle(fontWeight: FontWeight.w600)),
-                  onTap: () => setDialogState(
-                    () => includeArchived = !includeArchived,
+                  title: const Text(
+                    'Include archived chats',
+                    style: TextStyle(fontWeight: FontWeight.w600),
                   ),
+                  onTap: () =>
+                      setDialogState(() => includeArchived = !includeArchived),
                 ),
                 const SizedBox(height: 8),
-                ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxHeight: MediaQuery.sizeOf(dialogCtx).height * 0.42,
+                GlassListTile(
+                  leading: Icon(
+                    rules.enabled
+                        ? Icons.auto_awesome_rounded
+                        : Icons.rule_folder_outlined,
+                    color: rules.enabled
+                        ? Theme.of(dialogCtx).colorScheme.primary
+                        : null,
+                    size: 20,
                   ),
-                  child: conversations.isEmpty
-                      ? const Center(child: Text('No conversations yet'))
-                      : ListView.builder(
-                          shrinkWrap: true,
-                          itemCount: conversations.length,
-                          itemBuilder: (context, index) {
-                            final conversation = conversations[index];
-                            final userId =
-                                context.read<AuthProvider>().currentUser?.id ??
-                                '';
-                            final name = conversation.displayName(userId);
-                            final selected = selectedIds.contains(
-                              conversation.id,
-                            );
-                            return GlassListTile(
-                              leading: Icon(
-                                selected
-                                    ? Icons.check_box_rounded
-                                    : Icons.check_box_outline_blank_rounded,
-                                color: selected
-                                    ? Theme.of(context).colorScheme.primary
-                                    : null,
-                                size: 20,
-                              ),
-                              title: Text(
-                                name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontWeight: FontWeight.w600),
-                              ),
-                              trailing: Icon(
-                                conversation.isChannel
-                                    ? Icons.campaign_outlined
-                                    : conversation.isGroup
-                                    ? Icons.group_outlined
-                                    : conversation.isBotDM(userId)
-                                    ? Icons.smart_toy_outlined
-                                    : Icons.person_outline_rounded,
-                                size: 18,
-                              ),
-                              onTap: () => setDialogState(() {
-                                if (selected) {
-                                  selectedIds.remove(conversation.id);
-                                } else {
-                                  selectedIds.add(conversation.id);
-                                }
-                              }),
-                            );
-                          },
-                        ),
+                  title: const Text(
+                    'Automatic rules',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    rules.enabled
+                        ? 'Match chats locally from private state'
+                        : 'Pick specific chats manually',
+                  ),
+                  onTap: () => setDialogState(() {
+                    rules = rules.copyWith(enabled: !rules.enabled);
+                  }),
                 ),
+                if (rules.enabled) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _FolderRuleChip(
+                          label: 'Unread',
+                          selected: rules.unreadOnly,
+                          onSelected: (v) => setDialogState(
+                            () => rules = rules.copyWith(unreadOnly: v),
+                          ),
+                        ),
+                        _FolderRuleChip(
+                          label: 'Mentions',
+                          selected: rules.mentionsOnly,
+                          onSelected: (v) => setDialogState(
+                            () => rules = rules.copyWith(mentionsOnly: v),
+                          ),
+                        ),
+                        _FolderRuleChip(
+                          label: 'DMs',
+                          selected: rules.dms,
+                          onSelected: (v) => setDialogState(
+                            () => rules = rules.copyWith(dms: v),
+                          ),
+                        ),
+                        _FolderRuleChip(
+                          label: 'Groups',
+                          selected: rules.groups,
+                          onSelected: (v) => setDialogState(
+                            () => rules = rules.copyWith(groups: v),
+                          ),
+                        ),
+                        _FolderRuleChip(
+                          label: 'Channels',
+                          selected: rules.channels,
+                          onSelected: (v) => setDialogState(
+                            () => rules = rules.copyWith(channels: v),
+                          ),
+                        ),
+                        _FolderRuleChip(
+                          label: 'Bots',
+                          selected: rules.bots,
+                          onSelected: (v) => setDialogState(
+                            () => rules = rules.copyWith(bots: v),
+                          ),
+                        ),
+                        _FolderRuleChip(
+                          label: 'Muted',
+                          selected: rules.mutedOnly,
+                          onSelected: (v) => setDialogState(
+                            () => rules = rules.copyWith(mutedOnly: v),
+                          ),
+                        ),
+                        _FolderRuleChip(
+                          label: 'Archived',
+                          selected: rules.archivedOnly,
+                          onSelected: (v) => setDialogState(
+                            () => rules = rules.copyWith(archivedOnly: v),
+                          ),
+                        ),
+                        _FolderRuleChip(
+                          label: 'Payments',
+                          selected: rules.paymentsOnly,
+                          onSelected: (v) => setDialogState(
+                            () => rules = rules.copyWith(paymentsOnly: v),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ] else
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: MediaQuery.sizeOf(dialogCtx).height * 0.42,
+                    ),
+                    child: conversations.isEmpty
+                        ? const Center(child: Text('No conversations yet'))
+                        : ListView.builder(
+                            shrinkWrap: true,
+                            itemCount: conversations.length,
+                            itemBuilder: (context, index) {
+                              final conversation = conversations[index];
+                              final userId =
+                                  context
+                                      .read<AuthProvider>()
+                                      .currentUser
+                                      ?.id ??
+                                  '';
+                              final name = conversation.displayName(userId);
+                              final selected = selectedIds.contains(
+                                conversation.id,
+                              );
+                              return GlassListTile(
+                                leading: Icon(
+                                  selected
+                                      ? Icons.check_box_rounded
+                                      : Icons.check_box_outline_blank_rounded,
+                                  color: selected
+                                      ? Theme.of(context).colorScheme.primary
+                                      : null,
+                                  size: 20,
+                                ),
+                                title: Text(
+                                  name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                trailing: Icon(
+                                  conversation.isChannel
+                                      ? Icons.campaign_outlined
+                                      : conversation.isGroup
+                                      ? Icons.group_outlined
+                                      : conversation.isBotDM(userId)
+                                      ? Icons.smart_toy_outlined
+                                      : Icons.person_outline_rounded,
+                                  size: 18,
+                                ),
+                                onTap: () => setDialogState(() {
+                                  if (selected) {
+                                    selectedIds.remove(conversation.id);
+                                  } else {
+                                    selectedIds.add(conversation.id);
+                                  }
+                                }),
+                              );
+                            },
+                          ),
+                  ),
               ],
             ),
           ),
@@ -1042,12 +1231,17 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                   setDialogState(() => errorText = 'Required');
                   return;
                 }
+                if (rules.enabled && !rules.hasAnyRule) {
+                  setDialogState(() => errorText = 'Choose at least one rule');
+                  return;
+                }
                 Navigator.pop(
                   dialogCtx,
                   _FolderDraft(
                     name: name,
                     includeArchived: includeArchived,
                     conversationIds: selectedIds.toList(),
+                    rules: rules,
                   ),
                 );
               },
@@ -1070,6 +1264,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           position: existing?.position ?? chat.chatFolders.length,
           includeArchived: draft.includeArchived,
           conversationIds: draft.conversationIds,
+          rules: draft.rules,
           createdAt: existing?.createdAt,
           updatedAt: existing?.updatedAt,
         ),
@@ -1120,12 +1315,36 @@ class _FolderDraft {
   final String name;
   final bool includeArchived;
   final List<String> conversationIds;
+  final ChatFolderRules rules;
 
   const _FolderDraft({
     required this.name,
     required this.includeArchived,
     required this.conversationIds,
+    required this.rules,
   });
+}
+
+class _FolderRuleChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final ValueChanged<bool> onSelected;
+
+  const _FolderRuleChip({
+    required this.label,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return FilterChip(
+      selected: selected,
+      showCheckmark: false,
+      label: Text(label),
+      onSelected: onSelected,
+    );
+  }
 }
 
 class _ChatFolderBar extends StatelessWidget {

@@ -1214,6 +1214,16 @@ class ApiService {
     );
   }
 
+  Future<void> sendBotCallback({
+    required String convID,
+    required String msgID,
+    required String data,
+  }) async {
+    await _post('/api/v1/conversations/$convID/messages/$msgID/callback', {
+      'data': data,
+    });
+  }
+
   Future<Conversation> getSavedMessages() async {
     final resp = await _get('/api/v1/conversations/saved-messages');
     return Conversation.fromJson(resp['data'] as Map<String, dynamic>);
@@ -1660,6 +1670,23 @@ class ApiService {
     });
   }
 
+  Future<void> deleteAccount({
+    required String currentPassword,
+    String? twoFactorPassword,
+  }) async {
+    final sealedMessageTokens = await _storage
+        .getAllSealedMessageControlTokens();
+    final sealedScheduleTokens = await _storage
+        .getAllSealedScheduleControlTokens();
+    await _deleteJson('/api/v1/users/me', {
+      'current_password': currentPassword,
+      if (twoFactorPassword != null && twoFactorPassword.trim().isNotEmpty)
+        'two_factor_password': twoFactorPassword.trim(),
+      'sealed_message_control_tokens': sealedMessageTokens,
+      'sealed_schedule_control_tokens': sealedScheduleTokens,
+    });
+  }
+
   Future<Map<String, dynamic>> getSecuritySettings() async {
     final resp = await _get('/api/v1/me/security');
     return resp['data'] as Map<String, dynamic>;
@@ -1711,6 +1738,38 @@ class ApiService {
       'enabled': enabled,
     });
     return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<List<Map<String, dynamic>>> listMiniApps({String query = ''}) async {
+    final q = query.trim();
+    final path = q.isEmpty
+        ? '/api/v1/mini-apps'
+        : '/api/v1/mini-apps?q=${Uri.encodeQueryComponent(q)}';
+    final resp = await _get(path);
+    return (resp['data'] as List? ?? const [])
+        .map((item) => item as Map<String, dynamic>)
+        .toList(growable: false);
+  }
+
+  Future<DateTime?> createDevicePairingBundle({
+    required String tokenHash,
+    required String encryptedPayload,
+  }) async {
+    final resp = await _post('/api/v1/me/device-pairing-bundles', {
+      'token_hash': tokenHash,
+      'encrypted_payload': encryptedPayload,
+    });
+    final data = resp['data'] as Map<String, dynamic>? ?? const {};
+    final expiresAt = data['expires_at'] as String?;
+    return expiresAt == null ? null : DateTime.tryParse(expiresAt);
+  }
+
+  Future<String> claimDevicePairingBundle({required String tokenHash}) async {
+    final resp = await _post('/api/v1/device-pairing/claim', {
+      'token_hash': tokenHash,
+    }, authenticated: false);
+    final data = resp['data'] as Map<String, dynamic>? ?? const {};
+    return data['encrypted_payload'] as String? ?? '';
   }
 
   Future<void> deleteConversation(String convID) async {
@@ -2420,6 +2479,18 @@ class ApiService {
         headers: _headers(token),
       );
     });
+  }
+
+  Future<void> _deleteJson(String path, Map<String, dynamic> body) async {
+    final response = await _requestWithRetry(() async {
+      final token = await _storage.getAccessToken();
+      return _httpClient.delete(
+        Uri.parse('${ApiConfig.baseUrl}$path'),
+        headers: _headers(token),
+        body: jsonEncode(body),
+      );
+    });
+    _parse(response);
   }
 
   Map<String, String> _headers(String? token) => {

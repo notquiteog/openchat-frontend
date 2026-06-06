@@ -31,6 +31,11 @@ class MlsService {
   MlsGroupConfig get _config =>
       MlsGroupConfig.defaultConfig(ciphersuite: defaultCiphersuite);
 
+  Future<void> ensureIdentityForCurrentUser() async {
+    await _engineForCurrentUser();
+    await _identityForCurrentUser();
+  }
+
   Future<MlsBootstrap> createBootstrapForConversation(
     Conversation conversation,
   ) async {

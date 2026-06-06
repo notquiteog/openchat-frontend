@@ -1,8 +1,12 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -13,6 +17,8 @@ import '../../providers/key_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/background_ws_service.dart';
+import '../../services/encrypted_backup_service.dart';
+import '../../services/local_private_state_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/push_notification_service.dart';
 import '../../services/secure_storage_service.dart';
@@ -21,7 +27,9 @@ import '../../utils/device_label.dart';
 import '../../widgets/glass.dart';
 import '../bots/bot_management_screen.dart';
 import '../custom_emojis/custom_emoji_pack_screen.dart';
+import '../mini_apps/mini_apps_screen.dart';
 import '../stickers/sticker_pack_screen.dart';
+import 'device_pairing_screen.dart';
 import 'pgp_keys_screen.dart';
 import 'premium_screen.dart';
 import 'private_contacts_screen.dart';
@@ -310,7 +318,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               )
                             : null,
                       ),
-                      if (uploading) const GlassProgressIndicator.circular(size: 40),
+                      if (uploading)
+                        const GlassProgressIndicator.circular(size: 40),
                       if (!uploading)
                         Positioned(
                           bottom: 0,
@@ -566,7 +575,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       }
                     },
               child: submitting
-                  ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
+                  ? const GlassProgressIndicator.circular(
+                      size: 16,
+                      strokeWidth: 2,
+                    )
                   : const Text('Change'),
             ),
           ],
@@ -675,7 +687,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         }
                       },
                 child: submitting
-                    ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
+                    ? const GlassProgressIndicator.circular(
+                        size: 16,
+                        strokeWidth: 2,
+                      )
                     : const Text('Save'),
               ),
             ],
@@ -779,7 +794,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         }
                       },
                 child: submitting
-                    ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
+                    ? const GlassProgressIndicator.circular(
+                        size: 16,
+                        strokeWidth: 2,
+                      )
                     : const Text('Save'),
               ),
             ],
@@ -810,9 +828,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   itemBuilder: (_, i) {
                     final session = sessions[i];
                     return GlassListTile(
-                      leading: const Icon(
-                        CupertinoIcons.device_phone_portrait,
-                      ),
+                      leading: const Icon(CupertinoIcons.device_phone_portrait),
                       title: Text(
                         sessionDeviceDisplayLabel(session),
                         maxLines: 1,
@@ -865,6 +881,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final awayCtrl = TextEditingController(
       text: profile['away_message'] as String? ?? '',
     );
+    final quickRepliesCtrl = TextEditingController(
+      text: _businessQuickRepliesText(profile['quick_replies']),
+    );
+    final openingHours = _businessMap(profile['opening_hours']);
+    final weekdayHoursCtrl = TextEditingController(
+      text: openingHours['weekdays']?.toString() ?? '',
+    );
+    final saturdayHoursCtrl = TextEditingController(
+      text: openingHours['saturday']?.toString() ?? '',
+    );
+    final sundayHoursCtrl = TextEditingController(
+      text: openingHours['sunday']?.toString() ?? '',
+    );
     var enabled = profile['enabled'] as bool? ?? false;
     if (!mounted) return;
 
@@ -873,34 +902,68 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDlg) => GlassAlertDialog(
           title: const Text('Business profile'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              GlassListTile(
-                title: const Text('Enabled'),
-                trailing: GlassSwitch(
-                  value: enabled,
-                  onChanged: (v) => setDlg(() => enabled = v),
-                  activeColor: Theme.of(ctx).colorScheme.primary,
-                  enableHaptics: true,
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                GlassListTile(
+                  title: const Text('Enabled'),
+                  trailing: GlassSwitch(
+                    value: enabled,
+                    onChanged: (v) => setDlg(() => enabled = v),
+                    activeColor: Theme.of(ctx).colorScheme.primary,
+                    enableHaptics: true,
+                  ),
+                  onTap: () => setDlg(() => enabled = !enabled),
                 ),
-                onTap: () => setDlg(() => enabled = !enabled),
-              ),
-              TextField(
-                controller: displayCtrl,
-                decoration: const InputDecoration(labelText: 'Display name'),
-              ),
-              TextField(
-                controller: greetingCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Greeting message',
+                TextField(
+                  controller: displayCtrl,
+                  decoration: const InputDecoration(labelText: 'Display name'),
                 ),
-              ),
-              TextField(
-                controller: awayCtrl,
-                decoration: const InputDecoration(labelText: 'Away message'),
-              ),
-            ],
+                TextField(
+                  controller: greetingCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Greeting message',
+                  ),
+                ),
+                TextField(
+                  controller: awayCtrl,
+                  decoration: const InputDecoration(labelText: 'Away message'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: quickRepliesCtrl,
+                  minLines: 2,
+                  maxLines: 5,
+                  decoration: const InputDecoration(
+                    labelText: 'Quick replies',
+                    hintText: '/hours | We are open 9-5 today',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: weekdayHoursCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Weekday hours',
+                    hintText: 'Mon-Fri 09:00-17:00',
+                  ),
+                ),
+                TextField(
+                  controller: saturdayHoursCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Saturday hours',
+                    hintText: 'Closed',
+                  ),
+                ),
+                TextField(
+                  controller: sundayHoursCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Sunday hours',
+                    hintText: 'Closed',
+                  ),
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -919,6 +982,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   awayMessage: awayCtrl.text.trim().isEmpty
                       ? null
                       : awayCtrl.text.trim(),
+                  quickReplies: _parseBusinessQuickReplies(
+                    quickRepliesCtrl.text,
+                  ),
+                  openingHours: {
+                    if (weekdayHoursCtrl.text.trim().isNotEmpty)
+                      'weekdays': weekdayHoursCtrl.text.trim(),
+                    if (saturdayHoursCtrl.text.trim().isNotEmpty)
+                      'saturday': saturdayHoursCtrl.text.trim(),
+                    if (sundayHoursCtrl.text.trim().isNotEmpty)
+                      'sunday': sundayHoursCtrl.text.trim(),
+                  },
                   enabled: enabled,
                 );
                 if (ctx.mounted) Navigator.pop(ctx);
@@ -932,6 +1006,202 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
     );
+  }
+
+  Map<String, dynamic> _businessMap(Object? raw) {
+    final decoded = _decodeBusinessJson(raw);
+    if (decoded is Map) {
+      return decoded.map((key, value) => MapEntry(key.toString(), value));
+    }
+    return const {};
+  }
+
+  List<Map<String, dynamic>> _businessList(Object? raw) {
+    final decoded = _decodeBusinessJson(raw);
+    if (decoded is! List) return const [];
+    return decoded
+        .whereType<Map>()
+        .map(
+          (item) => item.map((key, value) => MapEntry(key.toString(), value)),
+        )
+        .toList(growable: false);
+  }
+
+  Object? _decodeBusinessJson(Object? raw) {
+    if (raw is Map || raw is List) return raw;
+    if (raw is! String || raw.trim().isEmpty) return null;
+    try {
+      return jsonDecode(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _businessQuickRepliesText(Object? raw) {
+    final replies = _businessList(raw);
+    return replies
+        .map((reply) {
+          final shortcut = reply['shortcut']?.toString().trim() ?? '';
+          final text = reply['text']?.toString().trim() ?? '';
+          if (shortcut.isEmpty) return text;
+          if (text.isEmpty) return shortcut;
+          return '$shortcut | $text';
+        })
+        .where((line) => line.trim().isNotEmpty)
+        .join('\n');
+  }
+
+  List<Map<String, dynamic>> _parseBusinessQuickReplies(String text) {
+    final replies = <Map<String, dynamic>>[];
+    for (final line in const LineSplitter().convert(text)) {
+      final trimmed = line.trim();
+      if (trimmed.isEmpty) continue;
+      final separator = trimmed.indexOf('|');
+      if (separator == -1) {
+        replies.add({'text': trimmed});
+        continue;
+      }
+      final shortcut = trimmed.substring(0, separator).trim();
+      final replyText = trimmed.substring(separator + 1).trim();
+      if (shortcut.isEmpty && replyText.isEmpty) continue;
+      replies.add({
+        if (shortcut.isNotEmpty) 'shortcut': shortcut,
+        if (replyText.isNotEmpty) 'text': replyText,
+      });
+    }
+    return replies;
+  }
+
+  Future<void> _exportEncryptedBackup() async {
+    if (kIsWeb) return;
+    final passphrase = await _promptBackupPassphrase(confirm: true);
+    if (passphrase == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final service = EncryptedBackupService(
+        storage: context.read<SecureStorageService>(),
+        privateState: LocalPrivateStateService(
+          storage: context.read<SecureStorageService>(),
+        ),
+      );
+      final encoded = await service.exportBackup(passphrase: passphrase);
+      final now = DateTime.now().toUtc();
+      final name =
+          'openchat-recovery-${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}.ocbackup.json';
+      final location = await getSaveLocation(suggestedName: name);
+      if (location == null) return;
+      await File(location.path).writeAsString(encoded);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Encrypted backup exported')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Export failed: $e')));
+    }
+  }
+
+  Future<void> _importEncryptedBackup() async {
+    if (kIsWeb) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final file = await openFile(
+        acceptedTypeGroups: const [
+          XTypeGroup(
+            label: 'OpenChat backup',
+            extensions: ['json', 'ocbackup'],
+          ),
+        ],
+      );
+      if (file == null || !mounted) return;
+      final passphrase = await _promptBackupPassphrase(confirm: false);
+      if (passphrase == null || !mounted) return;
+      final service = EncryptedBackupService(
+        storage: context.read<SecureStorageService>(),
+        privateState: LocalPrivateStateService(
+          storage: context.read<SecureStorageService>(),
+        ),
+      );
+      final keyProvider = context.read<KeyProvider>();
+      final settingsProvider = context.read<SettingsProvider>();
+      await service.importBackup(
+        encodedBackup: await file.readAsString(),
+        passphrase: passphrase,
+      );
+      await keyProvider.load();
+      await settingsProvider.reload();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Encrypted backup imported')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Import failed: $e')));
+    }
+  }
+
+  Future<String?> _promptBackupPassphrase({required bool confirm}) async {
+    final passCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    String? errorText;
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDlg) => GlassAlertDialog(
+            icon: const Icon(Icons.enhanced_encryption_outlined),
+            title: Text(confirm ? 'Encrypt recovery backup' : 'Decrypt backup'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: passCtrl,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    labelText: 'Backup passphrase',
+                    errorText: errorText,
+                  ),
+                ),
+                if (confirm) ...[
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: confirmCtrl,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Confirm passphrase',
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final passphrase = passCtrl.text.trim();
+                  if (passphrase.length < 12) {
+                    setDlg(() {
+                      errorText = 'Use at least 12 characters';
+                    });
+                    return;
+                  }
+                  if (confirm && passphrase != confirmCtrl.text.trim()) {
+                    setDlg(() {
+                      errorText = 'Passphrases do not match';
+                    });
+                    return;
+                  }
+                  Navigator.pop(ctx, passphrase);
+                },
+                child: Text(confirm ? 'Export' : 'Import'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } finally {
+      passCtrl.dispose();
+      confirmCtrl.dispose();
+    }
   }
 
   Future<void> _clearAllData() async {
@@ -980,6 +1250,118 @@ class _SettingsScreenState extends State<SettingsScreen> {
     messenger.showSnackBar(
       const SnackBar(content: Text('All local data cleared')),
     );
+  }
+
+  Future<void> _deleteAccountEverywhere() async {
+    final api = context.read<ApiService>();
+    final auth = context.read<AuthProvider>();
+    final storage = context.read<SecureStorageService>();
+    final messenger = ScaffoldMessenger.of(context);
+    final passwordCtrl = TextEditingController();
+    final twoFactorCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    var submitting = false;
+    var confirmed = false;
+
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDlg) => GlassAlertDialog(
+            icon: Icon(
+              Icons.delete_forever_outlined,
+              color: Colors.red.shade600,
+            ),
+            title: const Text('Delete account everywhere?'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'This deletes your account, frees your @ username, removes server-side account data, and purges messages linked to you. Locally held sealed-sender control tokens are sent once so those messages can be deleted too.',
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: passwordCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Account password',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: twoFactorCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: '2FA password, if enabled',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: confirmCtrl,
+                  decoration: const InputDecoration(labelText: 'Type DELETE'),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: submitting ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                onPressed: submitting
+                    ? null
+                    : () async {
+                        if (confirmCtrl.text.trim() != 'DELETE') {
+                          messenger.showSnackBar(
+                            const SnackBar(content: Text('Type DELETE')),
+                          );
+                          return;
+                        }
+                        if (passwordCtrl.text.isEmpty) {
+                          messenger.showSnackBar(
+                            const SnackBar(content: Text('Enter password')),
+                          );
+                          return;
+                        }
+                        setDlg(() => submitting = true);
+                        try {
+                          await api.deleteAccount(
+                            currentPassword: passwordCtrl.text,
+                            twoFactorPassword: twoFactorCtrl.text,
+                          );
+                          confirmed = true;
+                          if (ctx.mounted) Navigator.pop(ctx);
+                        } catch (e) {
+                          if (ctx.mounted) setDlg(() => submitting = false);
+                          messenger.showSnackBar(
+                            SnackBar(content: Text('Delete failed: $e')),
+                          );
+                        }
+                      },
+                child: submitting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Delete'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } finally {
+      passwordCtrl.dispose();
+      twoFactorCtrl.dispose();
+      confirmCtrl.dispose();
+    }
+
+    if (!confirmed || !mounted) return;
+    await storage.clearAll();
+    await auth.logout();
+    messenger.showSnackBar(const SnackBar(content: Text('Account deleted')));
   }
 
   @override
@@ -1124,7 +1506,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                     Icon(
-                      Icons.arrow_forward_ios_rounded,
+                      CupertinoIcons.chevron_forward,
                       size: 14,
                       color: scheme.onSurface.withValues(alpha: 0.40),
                     ),
@@ -1165,6 +1547,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     MaterialPageRoute(builder: (_) => const PgpKeysScreen()),
                   ),
                 ),
+                if (!kIsWeb) ...[
+                  _GlassDivider(),
+                  _GlassTile(
+                    icon: Icons.backup_outlined,
+                    title: 'Export encrypted backup',
+                    subtitle: 'Private key, trust pins, drafts, and folders',
+                    onTap: _exportEncryptedBackup,
+                  ),
+                  _GlassDivider(),
+                  _GlassTile(
+                    icon: Icons.restore_outlined,
+                    title: 'Import encrypted backup',
+                    subtitle: 'Restore keys and encrypted local state',
+                    onTap: _importEncryptedBackup,
+                  ),
+                  _GlassDivider(),
+                  _GlassTile(
+                    icon: Icons.phonelink_lock_outlined,
+                    title: 'Link this device',
+                    subtitle: 'Create a one-time encrypted pairing QR',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const DevicePairingScreen(),
+                      ),
+                    ),
+                  ),
+                ],
                 _GlassDivider(),
                 _GlassTile(
                   icon: Icons.contacts_outlined,
@@ -1468,6 +1878,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       builder: (_) => const BotManagementScreen(),
                     ),
                   ),
+                ),
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.widgets_outlined,
+                  title: 'Mini Apps',
+                  subtitle: 'Open bot-owned apps in an isolated browser',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const MiniAppsScreen()),
+                  ),
                   isLast: true,
                 ),
               ],
@@ -1568,6 +1988,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       await context.read<AuthProvider>().logout();
                     }
                   },
+                  isLast: false,
+                ),
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.delete_forever_outlined,
+                  iconColor: scheme.error,
+                  title: 'Delete Account Everywhere',
+                  titleColor: scheme.error,
+                  subtitle: 'Purge account, messages, keys, and username',
+                  onTap: _deleteAccountEverywhere,
                   isLast:
                       !kIsWeb &&
                           (defaultTargetPlatform == TargetPlatform.windows ||
@@ -1612,9 +2042,7 @@ class _SectionHeader extends StatelessWidget {
       style: TextStyle(
         fontSize: 11.5,
         fontWeight: FontWeight.w700,
-        color: Theme.of(
-          context,
-        ).colorScheme.primary.withValues(alpha: 0.90),
+        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.90),
         letterSpacing: 1.4,
       ),
     ),
@@ -1665,7 +2093,13 @@ class _GlassTile extends StatelessWidget {
             : const TextStyle(fontWeight: FontWeight.w600),
       ),
       subtitle: subtitle != null ? Text(subtitle!) : null,
-      trailing: trailing ?? GlassListTile.chevron,
+      trailing:
+          trailing ??
+          Icon(
+            CupertinoIcons.chevron_forward,
+            size: 14,
+            color: scheme.onSurface.withValues(alpha: 0.40),
+          ),
       onTap: onTap,
       isLast: isLast,
       showDivider: false,
