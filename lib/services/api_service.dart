@@ -125,12 +125,6 @@ class SelfStateEvent {
 
 typedef UploadProgressCallback = void Function(int sentBytes, int totalBytes);
 
-class LiveKitTokenResult {
-  final String token;
-  final String url;
-
-  const LiveKitTokenResult({required this.token, required this.url});
-}
 
 class ApiService {
   final SecureStorageService _storage;
@@ -1873,22 +1867,6 @@ class ApiService {
         .toList();
   }
 
-  // ---- Calls ----
-
-  Future<LiveKitTokenResult> getLiveKitToken({
-    required String roomName,
-    required String conversationId,
-  }) async {
-    final resp = await _post('/api/v1/calls/token', {
-      'room_name': roomName,
-      'conversation_id': conversationId,
-    });
-    final data = resp['data'] as Map<String, dynamic>;
-    return LiveKitTokenResult(
-      token: data['token'] as String,
-      url: data['url'] as String,
-    );
-  }
 
   // ---- Stickers ----
 

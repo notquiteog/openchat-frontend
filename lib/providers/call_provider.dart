@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../services/call_audio.dart';
 import '../services/call_foreground_service.dart';
 import '../services/call_media_permissions.dart';
@@ -107,7 +108,10 @@ class CallProvider extends ChangeNotifier {
   }
 
   CallSession? get session => _callService.currentSession;
-  Room? get room => _callService.room;
+  RTCVideoRenderer? get localRenderer => _callService.localRenderer;
+  Map<String, RTCVideoRenderer> get remoteRenderers => _callService.remoteRenderers;
+  bool get isScreenSharing => _callService.isScreenSharing;
+  bool get canScreenShare => _callService.canScreenShare;
   bool get isCallMinimized => _isCallMinimized;
   bool get isMicMuted => _micMuted;
   bool get isCameraEnabled => _cameraEnabled;
@@ -318,6 +322,20 @@ class CallProvider extends ChangeNotifier {
   }
 
   // ---- Controls ----
+
+  Future<void> startScreenShare() async {
+    try {
+      await _callService.startScreenShare();
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  Future<void> stopScreenShare() async {
+    try {
+      await _callService.stopScreenShare();
+    } catch (_) {}
+    notifyListeners();
+  }
 
   void hangup() {
     try {

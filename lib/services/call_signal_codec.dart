@@ -24,7 +24,8 @@ class CallSignalPayload {
   final String? callerUsername;
   final String? callerAvatarUrl;
   final bool? isVideo;
-  final String? roomName;
+  // SDP offer or answer for P2P WebRTC signaling.
+  final String? sdp;
   final List<String> participantUserIds;
 
   const CallSignalPayload({
@@ -36,7 +37,7 @@ class CallSignalPayload {
     this.callerUsername,
     this.callerAvatarUrl,
     this.isVideo,
-    this.roomName,
+    this.sdp,
     this.participantUserIds = const [],
   });
 
@@ -44,7 +45,7 @@ class CallSignalPayload {
     'target_user_id': targetUserId,
     'call_id': callId,
     'conversation_id': ?conversationId,
-    'room_name': ?roomName,
+    'sdp': ?sdp,
     'is_video': ?isVideo,
     'caller_username': ?callerUsername,
     'caller_avatar': ?callerAvatarUrl,
@@ -109,7 +110,7 @@ class PrivacyCallSignalCodec implements CallSignalCodec {
       'caller_username': ?(payload.callerUsername ?? callerProfile.username),
       'caller_avatar': ?(payload.callerAvatarUrl ?? callerProfile.avatarUrl),
       'is_video': payload.isVideo,
-      'room_name': ?payload.roomName,
+      'sdp': ?payload.sdp,
       if (payload.participantUserIds.isNotEmpty)
         'participant_user_ids': payload.participantUserIds,
       'created_at': DateTime.now().toUtc().toIso8601String(),
@@ -201,8 +202,8 @@ class PrivacyCallSignalCodec implements CallSignalCodec {
       'is_video': payload['is_video'],
       'encryption_mode': mode.apiValue,
     };
-    final roomName = payload['room_name'];
-    if (roomName is String && roomName.isNotEmpty) out['room_name'] = roomName;
+    final sdp = payload['sdp'];
+    if (sdp is String && sdp.isNotEmpty) out['sdp'] = sdp;
     final participantUserIds = payload['participant_user_ids'];
     if (participantUserIds is List) {
       out['participant_user_ids'] = participantUserIds

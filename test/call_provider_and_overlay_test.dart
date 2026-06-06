@@ -407,32 +407,20 @@ void main() {
 
   group('Call media capture constraints', () {
     test('audio calls do not request video capture', () {
-      final attempts = buildCallMediaCaptureAttemptsForTesting(
-        isVideo: false,
-        isMobile: false,
-        isWeb: false,
-        isDesktop: true,
-      );
+      final constraints = buildCallMediaConstraintsForTesting(isVideo: false);
 
-      expect(attempts, const [
-        {'audio': true, 'video': false},
-      ]);
+      expect(constraints['video'], isFalse);
+      expect(constraints['audio'], isA<Map>());
     });
 
-    test('video calls use the LiveKit default capture profile', () {
-      final attempts = buildCallMediaCaptureAttemptsForTesting(
-        isVideo: true,
-        isMobile: false,
-        isWeb: false,
-        isDesktop: true,
-      );
+    test('video calls request camera with preferred resolution', () {
+      final constraints = buildCallMediaConstraintsForTesting(isVideo: true);
 
-      expect(attempts, const [
-        {
-          'audio': true,
-          'video': {'width': 640, 'height': 480, 'frameRate': 30},
-        },
-      ]);
+      expect(constraints['audio'], isA<Map>());
+      final video = constraints['video'] as Map;
+      expect(video['width'], isA<Map>());
+      expect(video['height'], isA<Map>());
+      expect(video['frameRate'], isA<Map>());
     });
   });
 

@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.5.19+95
+version: 0.5.20+96
 publish_to: 'none'
 
 environment:
@@ -54,11 +54,8 @@ dependencies:
   mime: ^2.0.0
   image: ^4.8.0
 
-  # WebRTC primitives used by LiveKit and platform audio routing.
+  # P2P WebRTC — handles media, ICE, SDP negotiation.
   flutter_webrtc: 1.4.0
-
-  # LiveKit SFU client — 1:1 and group calls via the LiveKit server.
-  livekit_client: ^2.8.0
 
   # Call ringtone / connecting tones + voice-note playback
   just_audio: ^0.10.5

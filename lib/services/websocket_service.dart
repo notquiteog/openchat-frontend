@@ -242,6 +242,32 @@ class WebSocketService extends ChangeNotifier {
     _send({'type': 'call_offer', 'data': data});
   }
 
+  void sendCallAnswer(Map<String, dynamic> data) {
+    _send({'type': 'call_answer', 'data': data});
+  }
+
+  void sendCallIceCandidate({
+    required String targetUserId,
+    required String conversationId,
+    required String callId,
+    required String candidate,
+    required String sdpMid,
+    required int sdpMLineIndex,
+  }) {
+    if (conversationId.trim().isEmpty) return;
+    _send({
+      'type': 'call_ice_candidate',
+      'data': {
+        'target_user_id': targetUserId,
+        'conversation_id': conversationId,
+        'call_id': callId,
+        'candidate': candidate,
+        'sdp_mid': sdpMid,
+        'sdp_mline_index': sdpMLineIndex,
+      },
+    }, queueIfOffline: false);
+  }
+
   void sendCallHangup({
     required String targetUserId,
     required String conversationId,

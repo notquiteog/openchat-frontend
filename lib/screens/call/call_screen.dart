@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
 import '../../config/api_config.dart';
 import '../../providers/call_provider.dart';
@@ -131,6 +132,15 @@ class _CallScreenState extends State<CallScreen> {
     unawaited(context.read<CallProvider>().switchCamera());
   }
 
+  void _toggleScreenShare() {
+    final cp = context.read<CallProvider>();
+    if (cp.isScreenSharing) {
+      unawaited(cp.stopScreenShare());
+    } else {
+      unawaited(cp.startScreenShare());
+    }
+  }
+
   void _hangup() => context.read<CallProvider>().hangup();
   void _minimize() => context.read<CallProvider>().setCallMinimized(true);
 
@@ -202,12 +212,12 @@ class _CallScreenState extends State<CallScreen> {
     final avatarUrl = session.remoteAvatarUrl;
     final username = session.remoteUsername ?? 'Unknown';
     final participants = _callParticipantsFor(
-      room: cp.room,
+      localRenderer: cp.localRenderer,
+      remoteRenderers: cp.remoteRenderers,
       session: session,
       mirrorLocalVideo: cp.isFrontCamera,
     );
-    final hasLiveVideo =
-        isVideo && participants.any((p) => p.videoTrack != null);
+    final hasLiveVideo = isVideo && participants.any((p) => p.renderer != null);
     final screenWidth = MediaQuery.sizeOf(context).width;
     final desktopLayout = _isDesktopCallLayout(context);
     // Compact mode for narrow phones (e.g. iPhone 16 at 390 pt): 5-button video
@@ -260,6 +270,17 @@ class _CallScreenState extends State<CallScreen> {
           icon: Icons.cameraswitch_rounded,
           label: 'Flip',
           onTap: _switchCamera,
+          size: buttonSize,
+        ),
+      if (isVideo && cp.canScreenShare)
+        _ControlButton(
+          key: const Key('call-control-screenshare'),
+          icon: cp.isScreenSharing
+              ? Icons.stop_screen_share_rounded
+              : Icons.screen_share_rounded,
+          label: cp.isScreenSharing ? 'Stop Share' : 'Share Screen',
+          active: cp.isScreenSharing,
+          onTap: _toggleScreenShare,
           size: buttonSize,
         ),
       _ControlButton(
@@ -374,52 +395,33 @@ class _CallScreenState extends State<CallScreen> {
 }
 
 List<_CallParticipantView> _callParticipantsFor({
-  required Room? room,
+  required RTCVideoRenderer? localRenderer,
+  required Map<String, RTCVideoRenderer> remoteRenderers,
   required CallSession session,
   required bool mirrorLocalVideo,
 }) {
   final views = <_CallParticipantView>[];
-  final remoteParticipants = room?.remoteParticipants.values.toList(
-    growable: false,
-  );
-  remoteParticipants?.sort(_compareRemoteParticipants);
 
-  if (remoteParticipants != null) {
-    for (final participant in remoteParticipants) {
-      final isPrimaryRemote = participant.identity == session.remoteUserId;
-      views.add(
-        _CallParticipantView(
-          id: participant.identity,
-          name: _participantDisplayName(
-            participant,
-            fallback: isPrimaryRemote ? session.remoteUsername : null,
-          ),
-          avatarUrl: isPrimaryRemote ? session.remoteAvatarUrl : null,
-          isLocal: false,
-          audioMuted: participant.isMuted,
-          isSpeaking: participant.isSpeaking,
-          videoTrack: _cameraTrackFor(participant),
-          mirrorVideo: false,
-        ),
-      );
-    }
-  }
-
-  final localParticipant = room?.localParticipant;
-  if (localParticipant != null) {
+  for (final entry in remoteRenderers.entries) {
+    final userId = entry.key;
+    final isPrimaryRemote = userId == session.remoteUserId;
     views.add(
       _CallParticipantView(
-        id: localParticipant.identity,
-        name: 'You',
-        isLocal: true,
-        audioMuted: localParticipant.isMuted,
-        isSpeaking: localParticipant.isSpeaking,
-        videoTrack: _cameraTrackFor(localParticipant),
-        mirrorVideo: mirrorLocalVideo,
+        id: userId,
+        name: isPrimaryRemote
+            ? (session.remoteUsername ?? _shortUserId(userId))
+            : _shortUserId(userId),
+        avatarUrl: isPrimaryRemote ? session.remoteAvatarUrl : null,
+        isLocal: false,
+        audioMuted: false,
+        isSpeaking: false,
+        renderer: entry.value,
+        mirrorVideo: false,
       ),
     );
   }
 
+  // Show a placeholder tile while waiting for remote track
   if (views.isEmpty) {
     views.add(
       _CallParticipantView(
@@ -433,42 +435,29 @@ List<_CallParticipantView> _callParticipantsFor({
       ),
     );
   }
+
+  if (localRenderer != null) {
+    views.add(
+      _CallParticipantView(
+        id: 'local',
+        name: 'You',
+        isLocal: true,
+        audioMuted: false,
+        isSpeaking: false,
+        renderer: localRenderer,
+        mirrorVideo: mirrorLocalVideo,
+      ),
+    );
+  }
+
   return views;
 }
 
-int _compareRemoteParticipants(RemoteParticipant a, RemoteParticipant b) {
-  if (a.isSpeaking != b.isSpeaking) return a.isSpeaking ? -1 : 1;
-  final aSpoke = a.lastSpokeAt?.millisecondsSinceEpoch ?? 0;
-  final bSpoke = b.lastSpokeAt?.millisecondsSinceEpoch ?? 0;
-  if (aSpoke != bSpoke) return bSpoke.compareTo(aSpoke);
-  return a.identity.compareTo(b.identity);
-}
-
-String _participantDisplayName(Participant participant, {String? fallback}) {
-  final name = participant.name.trim();
-  if (name.isNotEmpty) return name;
-  final fallbackName = fallback?.trim();
-  if (fallbackName != null && fallbackName.isNotEmpty) return fallbackName;
-  return _shortParticipantId(participant.identity);
-}
-
-String _shortParticipantId(String identity) {
-  final trimmed = identity.trim();
+String _shortUserId(String userId) {
+  final trimmed = userId.trim();
   if (trimmed.isEmpty) return 'Unknown';
   if (trimmed.length <= 8) return trimmed;
   return trimmed.substring(0, 8);
-}
-
-VideoTrack? _cameraTrackFor(dynamic participant) {
-  final publications = participant.videoTrackPublications as List<dynamic>;
-  for (final publication in publications) {
-    if (publication.isScreenShare == true || publication.muted == true) {
-      continue;
-    }
-    final track = publication.track;
-    if (track is VideoTrack) return track;
-  }
-  return null;
 }
 
 class _CallParticipantView {
@@ -478,7 +467,7 @@ class _CallParticipantView {
   final bool isLocal;
   final bool audioMuted;
   final bool isSpeaking;
-  final VideoTrack? videoTrack;
+  final RTCVideoRenderer? renderer;
   final bool mirrorVideo;
 
   const _CallParticipantView({
@@ -488,7 +477,7 @@ class _CallParticipantView {
     required this.isLocal,
     required this.audioMuted,
     required this.isSpeaking,
-    this.videoTrack,
+    this.renderer,
     required this.mirrorVideo,
   });
 }
@@ -508,7 +497,7 @@ class _ParticipantStage extends StatelessWidget {
   Widget build(BuildContext context) {
     final local = participants.where((p) => p.isLocal).firstOrNull;
     final primaryRemote = participants
-        .where((p) => !p.isLocal && p.videoTrack != null)
+        .where((p) => !p.isLocal && p.renderer != null)
         .firstOrNull;
     final usePiP =
         isVideo &&
@@ -607,16 +596,14 @@ class _ParticipantTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final track = isVideoCall ? participant.videoTrack : null;
+    final renderer = isVideoCall ? participant.renderer : null;
     final radius = fullBleed ? BorderRadius.zero : BorderRadius.circular(8);
-    final content = track != null
+    final content = renderer != null
         ? IgnorePointer(
-            child: VideoTrackRenderer(
-              track,
-              fit: VideoViewFit.cover,
-              mirrorMode: participant.mirrorVideo
-                  ? VideoViewMirrorMode.mirror
-                  : VideoViewMirrorMode.off,
+            child: RTCVideoView(
+              renderer,
+              objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+              mirror: participant.mirrorVideo,
             ),
           )
         : _ParticipantAvatarPanel(participant: participant, compact: compact);
