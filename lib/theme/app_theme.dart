@@ -123,7 +123,7 @@ class AppTheme {
           color: scheme.onSurface,
           fontSize: 20,
           fontWeight: FontWeight.w700,
-          letterSpacing: -0.4,
+          letterSpacing: 0,
         ),
       ),
 
@@ -144,7 +144,7 @@ class AppTheme {
             color: states.contains(WidgetState.selected)
                 ? scheme.primary
                 : scheme.onSurfaceVariant,
-            letterSpacing: -0.1,
+            letterSpacing: 0,
           ),
         ),
         iconTheme: WidgetStateProperty.resolveWith(
@@ -192,7 +192,10 @@ class AppTheme {
         fillColor: scheme.surfaceContainerHighest.withValues(
           alpha: isDark ? rt(0.16, 0.76) : rt(0.20, 0.84),
         ),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 18,
+          vertical: 15,
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(18),
           borderSide: BorderSide(
@@ -221,7 +224,6 @@ class AppTheme {
       // All buttons use a stadium (full-pill) shape. FilledButton gains a thin
       // white specular rim; TextButton becomes a ghost capsule; OutlinedButton
       // gets a refined glass-quality border; FAB picks up a specular ring.
-
       filledButtonTheme: FilledButtonThemeData(
         style: ButtonStyle(
           padding: WidgetStateProperty.all(
@@ -232,7 +234,7 @@ class AppTheme {
             const TextStyle(
               fontWeight: FontWeight.w700,
               fontSize: 15,
-              letterSpacing: -0.2,
+              letterSpacing: 0,
             ),
           ),
           elevation: WidgetStateProperty.all(0),
@@ -240,9 +242,7 @@ class AppTheme {
           side: WidgetStateProperty.resolveWith((states) {
             if (states.contains(WidgetState.disabled)) return BorderSide.none;
             return BorderSide(
-              color: Colors.white.withValues(
-                alpha: isDark ? 0.22 : 0.38,
-              ),
+              color: Colors.white.withValues(alpha: isDark ? 0.22 : 0.38),
               width: 0.5,
             );
           }),
@@ -265,7 +265,7 @@ class AppTheme {
           textStyle: const TextStyle(
             fontWeight: FontWeight.w600,
             fontSize: 14,
-            letterSpacing: -0.1,
+            letterSpacing: 0,
           ),
         ),
       ),
@@ -297,7 +297,7 @@ class AppTheme {
           textStyle: const TextStyle(
             fontWeight: FontWeight.w600,
             fontSize: 15,
-            letterSpacing: -0.1,
+            letterSpacing: 0,
           ),
         ),
       ),
@@ -317,9 +317,140 @@ class AppTheme {
         extendedTextStyle: const TextStyle(
           fontWeight: FontWeight.w700,
           fontSize: 15,
-          letterSpacing: -0.2,
+          letterSpacing: 0,
         ),
         extendedIconLabelSpacing: 10,
+      ),
+
+      iconButtonTheme: IconButtonThemeData(
+        style: ButtonStyle(
+          minimumSize: WidgetStateProperty.all(const Size.square(40)),
+          fixedSize: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.selected)) {
+              return const Size.square(42);
+            }
+            return null;
+          }),
+          shape: WidgetStateProperty.all(const CircleBorder()),
+          foregroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.disabled)) {
+              return scheme.onSurface.withValues(alpha: 0.30);
+            }
+            if (states.contains(WidgetState.selected)) return scheme.primary;
+            return scheme.onSurface.withValues(alpha: 0.82);
+          }),
+          backgroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.selected)) {
+              return scheme.primary.withValues(alpha: isDark ? 0.20 : 0.13);
+            }
+            if (states.contains(WidgetState.pressed)) {
+              return scheme.primary.withValues(alpha: 0.12);
+            }
+            if (states.contains(WidgetState.hovered) ||
+                states.contains(WidgetState.focused)) {
+              return scheme.onSurface.withValues(alpha: isDark ? 0.10 : 0.06);
+            }
+            return Colors.transparent;
+          }),
+          overlayColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.pressed)) {
+              return scheme.primary.withValues(alpha: 0.10);
+            }
+            return Colors.transparent;
+          }),
+        ),
+      ),
+
+      segmentedButtonTheme: SegmentedButtonThemeData(
+        style: ButtonStyle(
+          visualDensity: VisualDensity.compact,
+          shape: WidgetStateProperty.all(const StadiumBorder()),
+          side: WidgetStateProperty.resolveWith((states) {
+            final active = states.contains(WidgetState.selected);
+            return BorderSide(
+              color: active
+                  ? scheme.primary.withValues(alpha: 0.62)
+                  : Colors.white.withValues(alpha: isDark ? 0.12 : 0.30),
+              width: active ? 1.0 : 0.6,
+            );
+          }),
+          backgroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.selected)) {
+              return scheme.primary.withValues(alpha: isDark ? 0.24 : 0.14);
+            }
+            return scheme.surfaceContainerHighest.withValues(
+              alpha: isDark ? rt(0.14, 0.68) : rt(0.18, 0.76),
+            );
+          }),
+          foregroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.selected)) return scheme.primary;
+            return scheme.onSurface.withValues(alpha: 0.76);
+          }),
+          textStyle: WidgetStateProperty.all(
+            const TextStyle(fontWeight: FontWeight.w700, letterSpacing: 0),
+          ),
+        ),
+      ),
+
+      switchTheme: SwitchThemeData(
+        thumbColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) return Colors.white;
+          return scheme.onSurface.withValues(alpha: isDark ? 0.78 : 0.70);
+        }),
+        trackColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return scheme.primary.withValues(alpha: 0.88);
+          }
+          return scheme.onSurface.withValues(alpha: isDark ? 0.22 : 0.16);
+        }),
+        trackOutlineColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return scheme.primary.withValues(alpha: 0.38);
+          }
+          return Colors.white.withValues(alpha: isDark ? 0.10 : 0.28);
+        }),
+      ),
+
+      checkboxTheme: CheckboxThemeData(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
+        fillColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) return scheme.primary;
+          return scheme.surfaceContainerHighest.withValues(
+            alpha: isDark ? 0.28 : 0.44,
+          );
+        }),
+        side: BorderSide(
+          color: Colors.white.withValues(alpha: isDark ? 0.14 : 0.34),
+          width: 0.8,
+        ),
+      ),
+
+      radioTheme: RadioThemeData(
+        fillColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) return scheme.primary;
+          return scheme.onSurface.withValues(alpha: 0.48);
+        }),
+      ),
+
+      textSelectionTheme: TextSelectionThemeData(
+        cursorColor: scheme.primary,
+        selectionColor: scheme.primary.withValues(alpha: isDark ? 0.30 : 0.22),
+        selectionHandleColor: scheme.primary,
+      ),
+
+      tooltipTheme: TooltipThemeData(
+        waitDuration: const Duration(milliseconds: 450),
+        showDuration: const Duration(milliseconds: 2600),
+        decoration: BoxDecoration(
+          color: scheme.inverseSurface.withValues(alpha: 0.94),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        textStyle: TextStyle(
+          color: scheme.onInverseSurface,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0,
+        ),
       ),
 
       // Dialogs use GlassAlertDialog which manages its own surface — set the
@@ -337,7 +468,7 @@ class AppTheme {
           color: scheme.onSurface,
           fontSize: 19,
           fontWeight: FontWeight.w700,
-          letterSpacing: -0.3,
+          letterSpacing: 0,
         ),
       ),
 
@@ -372,9 +503,7 @@ class AppTheme {
         elevation: 0,
       ),
 
-      progressIndicatorTheme: ProgressIndicatorThemeData(
-        color: scheme.primary,
-      ),
+      progressIndicatorTheme: ProgressIndicatorThemeData(color: scheme.primary),
 
       // PopupMenus follow the glass card treatment.
       popupMenuTheme: PopupMenuThemeData(
@@ -393,43 +522,43 @@ class AppTheme {
   }
 
   static TextTheme _textTheme(TextTheme base) => base.copyWith(
-        displayLarge: base.displayLarge?.copyWith(
-          fontWeight: FontWeight.w800,
-          letterSpacing: -1.0,
-        ),
-        displayMedium: base.displayMedium?.copyWith(
-          fontWeight: FontWeight.w800,
-          letterSpacing: -0.8,
-        ),
-        displaySmall: base.displaySmall?.copyWith(
-          fontWeight: FontWeight.w700,
-          letterSpacing: -0.6,
-        ),
-        headlineLarge: base.headlineLarge?.copyWith(
-          fontWeight: FontWeight.w700,
-          letterSpacing: -0.5,
-        ),
-        headlineMedium: base.headlineMedium?.copyWith(
-          fontWeight: FontWeight.w700,
-          letterSpacing: -0.4,
-        ),
-        headlineSmall: base.headlineSmall?.copyWith(
-          fontWeight: FontWeight.w700,
-          letterSpacing: -0.4,
-        ),
-        titleLarge: base.titleLarge?.copyWith(
-          fontWeight: FontWeight.w700,
-          letterSpacing: -0.3,
-        ),
-        titleMedium: base.titleMedium?.copyWith(
-          fontWeight: FontWeight.w600,
-          letterSpacing: -0.1,
-        ),
-        labelLarge: base.labelLarge?.copyWith(
-          fontWeight: FontWeight.w600,
-          letterSpacing: -0.1,
-        ),
-        bodyLarge: base.bodyLarge?.copyWith(letterSpacing: -0.1),
-        bodyMedium: base.bodyMedium?.copyWith(letterSpacing: -0.1),
-      );
+    displayLarge: base.displayLarge?.copyWith(
+      fontWeight: FontWeight.w800,
+      letterSpacing: 0,
+    ),
+    displayMedium: base.displayMedium?.copyWith(
+      fontWeight: FontWeight.w800,
+      letterSpacing: 0,
+    ),
+    displaySmall: base.displaySmall?.copyWith(
+      fontWeight: FontWeight.w700,
+      letterSpacing: 0,
+    ),
+    headlineLarge: base.headlineLarge?.copyWith(
+      fontWeight: FontWeight.w700,
+      letterSpacing: 0,
+    ),
+    headlineMedium: base.headlineMedium?.copyWith(
+      fontWeight: FontWeight.w700,
+      letterSpacing: 0,
+    ),
+    headlineSmall: base.headlineSmall?.copyWith(
+      fontWeight: FontWeight.w700,
+      letterSpacing: 0,
+    ),
+    titleLarge: base.titleLarge?.copyWith(
+      fontWeight: FontWeight.w700,
+      letterSpacing: 0,
+    ),
+    titleMedium: base.titleMedium?.copyWith(
+      fontWeight: FontWeight.w600,
+      letterSpacing: 0,
+    ),
+    labelLarge: base.labelLarge?.copyWith(
+      fontWeight: FontWeight.w600,
+      letterSpacing: 0,
+    ),
+    bodyLarge: base.bodyLarge?.copyWith(letterSpacing: 0),
+    bodyMedium: base.bodyMedium?.copyWith(letterSpacing: 0),
+  );
 }

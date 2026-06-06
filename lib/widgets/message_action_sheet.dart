@@ -30,34 +30,15 @@ Future<T?> showMessageActionSheet<T>({
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (ctx) => GlassBottomSheetFrame(
+    builder: (_) => GlassBottomSheetFrame(
       child: SafeArea(
         top: false,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(height: 10),
-            Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Theme.of(
-                  ctx,
-                ).colorScheme.onSurface.withValues(alpha: 0.22),
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
+            const GlassSheetGrabber(),
             _MessageActionHeader(message: message),
             for (final action in actions) ...[
-              if (action.dividerBefore)
-                Divider(
-                  height: 1,
-                  indent: 70,
-                  endIndent: 16,
-                  color: Theme.of(
-                    ctx,
-                  ).colorScheme.outline.withValues(alpha: 0.14),
-                ),
               _MessageActionTile<T>(action: action),
             ],
             const SizedBox(height: 10),
@@ -75,55 +56,14 @@ class _MessageActionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final sender = message.sender?.username;
     final title = sender == null || sender.isEmpty ? 'Message' : '@$sender';
     final preview = _previewFor(message);
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: scheme.primary.withValues(alpha: 0.12),
-            ),
-            child: Icon(_iconFor(message), color: scheme.primary, size: 21),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 15,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  preview,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: scheme.onSurface.withValues(alpha: 0.58),
-                    fontSize: 13,
-                    height: 1.25,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+    return GlassSheetHeader(
+      icon: _iconFor(message),
+      title: title,
+      subtitle: preview,
     );
   }
 
@@ -166,58 +106,13 @@ class _MessageActionTile<T> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final tint = action.color ?? scheme.primary;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () => Navigator.pop(context, action.value),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-          child: Row(
-            children: [
-              Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: tint.withValues(alpha: 0.12),
-                ),
-                child: Icon(action.icon, color: tint, size: 19),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      action.label,
-                      style: TextStyle(
-                        color: action.color,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 15,
-                      ),
-                    ),
-                    if (action.subtitle != null) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        action.subtitle!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: scheme.onSurface.withValues(alpha: 0.48),
-                          fontSize: 12.5,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+    return GlassActionTile(
+      icon: action.icon,
+      label: action.label,
+      subtitle: action.subtitle,
+      color: action.color,
+      dividerBefore: action.dividerBefore,
+      onTap: () => Navigator.pop(context, action.value),
     );
   }
 }

@@ -422,19 +422,12 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // drag handle
-              Padding(
-                padding: const EdgeInsets.only(top: 12, bottom: 4),
-                child: Container(
-                  width: 36,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.onSurface.withValues(alpha: 0.24),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
+              const GlassSheetGrabber(),
+              GlassSheetHeader(
+                icon: Icons.schedule_send_outlined,
+                title: 'Delivery options',
+                subtitle: 'Send quietly or schedule this message.',
+                onClose: () => Navigator.pop(ctx),
               ),
               GlassListTile(
                 leading: const Icon(Icons.notifications_off_outlined),
@@ -839,71 +832,77 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => GlassBottomSheetFrame(
+      builder: (sheetCtx) => GlassBottomSheetFrame(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(height: 8),
+            const GlassSheetGrabber(),
+            GlassSheetHeader(
+              icon: Icons.add_rounded,
+              title: 'Add to message',
+              subtitle: 'Send media, files, location, polls, or payments.',
+              onClose: () => Navigator.pop(sheetCtx),
+            ),
             _AttachTile(
               icon: Icons.photo_library_outlined,
               label: 'Photo from gallery',
-              onTap: () => Navigator.pop(context, 'gallery_image'),
+              onTap: () => Navigator.pop(sheetCtx, 'gallery_image'),
             ),
             _AttachTile(
               icon: Icons.visibility_off_outlined,
               label: 'View-once photo',
-              onTap: () => Navigator.pop(context, 'view_once_image'),
+              onTap: () => Navigator.pop(sheetCtx, 'view_once_image'),
             ),
             _AttachTile(
               icon: Icons.share_location_outlined,
               label: 'Share location',
-              onTap: () => Navigator.pop(context, 'location_once'),
+              onTap: () => Navigator.pop(sheetCtx, 'location_once'),
             ),
             _AttachTile(
               icon: Icons.location_on_outlined,
               label: 'Share live location',
-              onTap: () => Navigator.pop(context, 'location_live'),
+              onTap: () => Navigator.pop(sheetCtx, 'location_live'),
             ),
             if (cameraSupported)
               _AttachTile(
                 icon: Icons.camera_alt_outlined,
                 label: 'Take photo',
-                onTap: () => Navigator.pop(context, 'camera_image'),
+                onTap: () => Navigator.pop(sheetCtx, 'camera_image'),
               ),
             _AttachTile(
               icon: Icons.videocam_outlined,
               label: 'Video from gallery',
-              onTap: () => Navigator.pop(context, 'gallery_video'),
+              onTap: () => Navigator.pop(sheetCtx, 'gallery_video'),
             ),
             _AttachTile(
               icon: Icons.hide_image_outlined,
               label: 'View-once video',
-              onTap: () => Navigator.pop(context, 'view_once_video'),
+              onTap: () => Navigator.pop(sheetCtx, 'view_once_video'),
             ),
             _AttachTile(
               icon: Icons.attach_file_rounded,
               label: 'File',
-              onTap: () => Navigator.pop(context, 'file'),
+              onTap: () => Navigator.pop(sheetCtx, 'file'),
             ),
             _AttachTile(
               icon: Icons.no_encryption_gmailerrorred_outlined,
               label: 'View-once file',
-              onTap: () => Navigator.pop(context, 'view_once_file'),
+              onTap: () => Navigator.pop(sheetCtx, 'view_once_file'),
             ),
             _AttachTile(
               icon: Icons.poll_outlined,
               label: 'Poll',
-              onTap: () => Navigator.pop(context, 'poll'),
+              onTap: () => Navigator.pop(sheetCtx, 'poll'),
             ),
             _AttachTile(
               icon: Icons.mic_none_outlined,
               label: 'Voice note',
-              onTap: () => Navigator.pop(context, 'voice'),
+              onTap: () => Navigator.pop(sheetCtx, 'voice'),
             ),
             _AttachTile(
               icon: Icons.payments_outlined,
               label: 'Pay or request',
-              onTap: () => Navigator.pop(context, 'payment'),
+              onTap: () => Navigator.pop(sheetCtx, 'payment'),
             ),
             const SizedBox(height: 8),
           ],
@@ -1208,36 +1207,59 @@ class _ChatScreenState extends State<ChatScreen> {
                 amount <= 0 ||
                 available >= amount;
             return GlassBottomSheetFrame(
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    children: [
-                      SegmentedButton<bool>(
-                        segments: const [
-                          ButtonSegment(
-                            value: true,
-                            label: Text('Pay'),
-                            icon: Icon(Icons.arrow_upward),
+                  const GlassSheetGrabber(),
+                  GlassSheetHeader(
+                    icon: Icons.payments_outlined,
+                    title: payMode ? 'Send payment' : 'Request payment',
+                    subtitle:
+                        'Use the app wallet or create an external invoice.',
+                    onClose: () => Navigator.pop(sheetCtx),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Row(
+                      children: [
+                        SegmentedButton<bool>(
+                          segments: const [
+                            ButtonSegment(
+                              value: true,
+                              label: Text('Pay'),
+                              icon: Icon(Icons.arrow_upward),
+                            ),
+                            ButtonSegment(
+                              value: false,
+                              label: Text('Request'),
+                              icon: Icon(Icons.arrow_downward),
+                            ),
+                          ],
+                          selected: {payMode},
+                          onSelectionChanged: (next) =>
+                              setSheet(() => payMode = next.first),
+                        ),
+                        const Spacer(),
+                        GlassContainer(
+                          shape: const LiquidRoundedSuperellipse(
+                            borderRadius: 999,
                           ),
-                          ButtonSegment(
-                            value: false,
-                            label: Text('Request'),
-                            icon: Icon(Icons.arrow_downward),
+                          allowElevation: false,
+                          glowIntensity: 0.02,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 7,
                           ),
-                        ],
-                        selected: {payMode},
-                        onSelectionChanged: (next) =>
-                            setSheet(() => payMode = next.first),
-                      ),
-                      const Spacer(),
-                      Text(
-                        '${available.toStringAsFixed(provider == 'btc' ? 8 : 12)} ${provider.toUpperCase()}',
-                        style: Theme.of(context).textTheme.labelMedium,
-                      ),
-                    ],
+                          child: Text(
+                            '${available.toStringAsFixed(provider == 'btc' ? 8 : 12)} ${provider.toUpperCase()}',
+                            style: Theme.of(context).textTheme.labelMedium
+                                ?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 14),
                   DropdownButtonFormField<String>(
@@ -2098,22 +2120,25 @@ class _ChatScreenState extends State<ChatScreen> {
           }
 
           return GlassBottomSheetFrame(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Text(
-                      'Chat appearance',
-                      style: Theme.of(sheetCtx).textTheme.titleMedium,
-                    ),
-                    const Spacer(),
-                    TextButton(
-                      onPressed: () =>
-                          apply(const ChatStyle(), publishBubble: true),
-                      child: const Text('Reset'),
+                const GlassSheetGrabber(),
+                GlassSheetHeader(
+                  icon: Icons.palette_outlined,
+                  title: 'Chat appearance',
+                  subtitle: 'Tune the background, bubble color, and shape.',
+                  actions: [
+                    GlassCircleIconButton(
+                      tooltip: 'Reset appearance',
+                      size: 36,
+                      glowIntensity: 0.04,
+                      icon: const Icon(Icons.restart_alt_rounded, size: 18),
+                      onPressed: () => unawaited(
+                        apply(const ChatStyle(), publishBubble: true),
+                      ),
                     ),
                   ],
                 ),
@@ -2231,22 +2256,28 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => GlassBottomSheetFrame(
+      builder: (sheetCtx) => GlassBottomSheetFrame(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(height: 8),
+            const GlassSheetGrabber(),
+            GlassSheetHeader(
+              icon: Icons.wallpaper_rounded,
+              title: 'Chat background',
+              subtitle: 'Choose the shared image behind this conversation.',
+              onClose: () => Navigator.pop(sheetCtx),
+            ),
             _MenuTile(
               icon: Icons.image_outlined,
               label: 'Choose background image',
-              onTap: () => Navigator.pop(context, 'pick'),
+              onTap: () => Navigator.pop(sheetCtx, 'pick'),
             ),
             if (conv.backgroundUrl != null)
               _MenuTile(
                 icon: Icons.delete_outline,
                 label: 'Remove background',
                 color: Colors.red,
-                onTap: () => Navigator.pop(context, 'remove'),
+                onTap: () => Navigator.pop(sheetCtx, 'remove'),
               ),
             const SizedBox(height: 8),
           ],
@@ -2401,138 +2432,138 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => GlassBottomSheetFrame(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            _MenuTile(
-              icon: Icons.info_outline_rounded,
-              label: 'Conversation info',
-              onTap: () {
-                Navigator.pop(context);
-                _showConversationInfo(context, currentUserID);
-              },
-            ),
-            _MenuTile(
-              icon: _notificationPreferenceIcon(notificationPreference),
-              label: 'Notifications: $notificationLabel',
-              onTap: () {
-                Navigator.pop(context);
-                showConversationNotificationControlsSheet(
-                  context,
-                  conversationId: conv.id,
-                );
-              },
-            ),
-            _MenuTile(
-              icon: Icons.schedule_send_outlined,
-              label: 'Scheduled messages',
-              onTap: () {
-                Navigator.pop(context);
-                showScheduledMessagesSheet(
-                  context,
-                  conversation: conv,
-                  channel: false,
-                );
-              },
-            ),
-            if (conv.isDM || canManageSettings)
-              _MenuTile(
-                icon: Icons.timer_outlined,
-                label: 'Disappearing messages',
-                onTap: () {
-                  Navigator.pop(context);
-                  _setDisappearing(context);
-                },
+      builder: (sheetCtx) {
+        void runAfterClose(FutureOr<void> Function() action) {
+          Navigator.of(sheetCtx).pop();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            unawaited(Future<void>.sync(action));
+          });
+        }
+
+        final title = conv.isDM
+            ? 'Chat options'
+            : conv.isGroup
+            ? 'Group options'
+            : 'Channel options';
+        return GlassBottomSheetFrame(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const GlassSheetGrabber(),
+              GlassSheetHeader(
+                icon: Icons.more_horiz_rounded,
+                title: title,
+                subtitle: conv.displayName(currentUserID),
+                onClose: () => Navigator.of(sheetCtx).pop(),
               ),
-            if (!conv.isDM && canManageSettings)
               _MenuTile(
-                icon: Icons.hourglass_empty_rounded,
-                label: 'Slow mode',
-                onTap: () {
-                  Navigator.pop(context);
-                  _setSlowMode(context);
-                },
+                icon: Icons.info_outline_rounded,
+                label: 'Conversation info',
+                onTap: () => runAfterClose(
+                  () => _showConversationInfo(context, currentUserID),
+                ),
               ),
-            if (!conv.isDM && canManageEncryption)
               _MenuTile(
-                icon: Icons.lock_outline_rounded,
-                label: 'Encryption mode',
-                onTap: () {
-                  Navigator.pop(context);
-                  _setEncryption(context);
-                },
+                icon: _notificationPreferenceIcon(notificationPreference),
+                label: 'Notifications: $notificationLabel',
+                onTap: () => runAfterClose(
+                  () => unawaited(
+                    showConversationNotificationControlsSheet(
+                      context,
+                      conversationId: conv.id,
+                    ),
+                  ),
+                ),
               ),
-            if (conv.isGroup && canManageInfo)
               _MenuTile(
-                icon: Icons.edit_outlined,
-                label: 'Edit group',
-                onTap: () {
-                  Navigator.pop(context);
-                  _editGroup(context, currentUserID);
-                },
+                icon: Icons.schedule_send_outlined,
+                label: 'Scheduled messages',
+                onTap: () => runAfterClose(
+                  () => showScheduledMessagesSheet(
+                    context,
+                    conversation: conv,
+                    channel: false,
+                  ),
+                ),
               ),
-            if (conv.isGroup)
+              if (conv.isDM || canManageSettings)
+                _MenuTile(
+                  icon: Icons.timer_outlined,
+                  label: 'Disappearing messages',
+                  onTap: () => runAfterClose(() => _setDisappearing(context)),
+                ),
+              if (!conv.isDM && canManageSettings)
+                _MenuTile(
+                  icon: Icons.hourglass_empty_rounded,
+                  label: 'Slow mode',
+                  onTap: () => runAfterClose(() => _setSlowMode(context)),
+                ),
+              if (!conv.isDM && canManageEncryption)
+                _MenuTile(
+                  icon: Icons.lock_outline_rounded,
+                  label: 'Encryption mode',
+                  onTap: () => runAfterClose(() => _setEncryption(context)),
+                ),
+              if (conv.isGroup && canManageInfo)
+                _MenuTile(
+                  icon: Icons.edit_outlined,
+                  label: 'Edit group',
+                  dividerBefore: true,
+                  onTap: () =>
+                      runAfterClose(() => _editGroup(context, currentUserID)),
+                ),
+              if (conv.isGroup)
+                _MenuTile(
+                  icon: Icons.group_outlined,
+                  label: 'Members',
+                  onTap: () =>
+                      runAfterClose(() => _showMembers(context, currentUserID)),
+                ),
+              if (conv.isGroup && canManageInvites)
+                _MenuTile(
+                  icon: Icons.link_rounded,
+                  label: 'Invite links',
+                  onTap: () =>
+                      runAfterClose(() => _showInviteLinks(context, conv)),
+                ),
               _MenuTile(
-                icon: Icons.group_outlined,
-                label: 'Members',
-                onTap: () {
-                  Navigator.pop(context);
-                  _showMembers(context, currentUserID);
-                },
+                icon: Icons.palette_outlined,
+                label: 'Chat appearance',
+                dividerBefore: true,
+                onTap: () => runAfterClose(() => _showChatAppearance(context)),
               ),
-            if (conv.isGroup && canManageInvites)
+              if (_canSetConversationBackground(currentUserID))
+                _MenuTile(
+                  icon: Icons.wallpaper_rounded,
+                  label: 'Set chat background',
+                  onTap: () =>
+                      runAfterClose(() => _setConversationBackground(context)),
+                ),
+              if (conv.isGroup)
+                _MenuTile(
+                  icon: Icons.delete_sweep_outlined,
+                  label: 'Delete messages',
+                  color: Colors.red,
+                  dividerBefore: true,
+                  onTap: () => runAfterClose(
+                    () => _deleteGroupMessages(context, currentUserID),
+                  ),
+                ),
               _MenuTile(
-                icon: Icons.link_rounded,
-                label: 'Invite links',
-                onTap: () {
-                  Navigator.pop(context);
-                  _showInviteLinks(context, conv);
-                },
-              ),
-            _MenuTile(
-              icon: Icons.palette_outlined,
-              label: 'Chat appearance',
-              onTap: () {
-                Navigator.pop(context);
-                _showChatAppearance(context);
-              },
-            ),
-            if (_canSetConversationBackground(currentUserID))
-              _MenuTile(
-                icon: Icons.wallpaper_rounded,
-                label: 'Set chat background',
-                onTap: () {
-                  Navigator.pop(context);
-                  _setConversationBackground(context);
-                },
-              ),
-            if (conv.isGroup)
-              _MenuTile(
-                icon: Icons.delete_sweep_outlined,
-                label: 'Delete messages',
+                icon: conv.isDM
+                    ? Icons.delete_outline_rounded
+                    : Icons.exit_to_app_rounded,
+                label: exitLabel,
                 color: Colors.red,
-                onTap: () {
-                  Navigator.pop(context);
-                  _deleteGroupMessages(context, currentUserID);
-                },
+                dividerBefore: !conv.isGroup,
+                onTap: () => runAfterClose(() => _deleteConversation(context)),
               ),
-            _MenuTile(
-              icon: conv.isDM
-                  ? Icons.delete_outline_rounded
-                  : Icons.exit_to_app_rounded,
-              label: exitLabel,
-              color: Colors.red,
-              onTap: () {
-                Navigator.pop(context);
-                _deleteConversation(context);
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -2760,21 +2791,28 @@ class _ChatScreenState extends State<ChatScreen> {
             .clamp(viewPadding.top + 8, maxTop)
             .toDouble();
 
-        return Stack(
-          children: [
-            Positioned(
-              left: left,
-              top: top,
-              width: popupWidth,
-              child: _ReactionPopup(
-                emojis: emojis,
-                onSelected: (emoji) {
-                  Navigator.pop(ctx);
-                  _toggleReaction(msg, emoji);
-                },
-              ),
+        return DefaultTextStyle(
+          style: (Theme.of(ctx).textTheme.bodyMedium ?? const TextStyle())
+              .copyWith(decoration: TextDecoration.none, letterSpacing: 0),
+          child: IconTheme(
+            data: IconThemeData(color: Theme.of(ctx).colorScheme.onSurface),
+            child: Stack(
+              children: [
+                Positioned(
+                  left: left,
+                  top: top,
+                  width: popupWidth,
+                  child: _ReactionPopup(
+                    emojis: emojis,
+                    onSelected: (emoji) {
+                      Navigator.pop(ctx);
+                      _toggleReaction(msg, emoji);
+                    },
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         );
       },
     );
@@ -4177,54 +4215,24 @@ class _MenuTile extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
   final Color? color;
+  final bool dividerBefore;
 
   const _MenuTile({
     required this.icon,
     required this.label,
     required this.onTap,
     this.color,
+    this.dividerBefore = false,
   });
 
   @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final tint = color ?? scheme.primary;
-    return ClipRRect(
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: tint.withValues(alpha: 0.12),
-                  ),
-                  child: Icon(icon, size: 18, color: tint),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Text(
-                    label,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 15,
-                      color: color,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => GlassActionTile(
+    icon: icon,
+    label: label,
+    onTap: onTap,
+    color: color,
+    dividerBefore: dividerBefore,
+  );
 }
 
 class _AttachTile extends StatelessWidget {
@@ -4239,41 +4247,8 @@ class _AttachTile extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return ClipRRect(
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: scheme.primary.withValues(alpha: 0.12),
-                  ),
-                  child: Icon(icon, size: 18, color: scheme.primary),
-                ),
-                const SizedBox(width: 14),
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 15,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      GlassActionTile(icon: icon, label: label, onTap: onTap);
 }
 
 class _ReminderChoiceTile extends StatelessWidget {

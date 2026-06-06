@@ -160,7 +160,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                                             .titleLarge
                                             ?.copyWith(
                                               fontWeight: FontWeight.w800,
-                                              letterSpacing: -0.3,
+                                              letterSpacing: 0,
                                             ),
                                       ),
                                       Text(

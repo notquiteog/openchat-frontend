@@ -132,7 +132,7 @@ class _LoginScreenState extends State<LoginScreen>
                                       .headlineMedium
                                       ?.copyWith(
                                         fontWeight: FontWeight.w800,
-                                        letterSpacing: -0.5,
+                                        letterSpacing: 0,
                                       ),
                                   textAlign: TextAlign.center,
                                 ),

@@ -483,7 +483,7 @@ class GlassSimpleDialog extends StatelessWidget {
                   style: textTheme.titleMedium!.copyWith(
                     color: scheme.onSurface.withValues(alpha: 0.55),
                     fontWeight: FontWeight.w600,
-                    letterSpacing: 0.4,
+                    letterSpacing: 0,
                   ),
                   child: title!,
                 ),
@@ -508,8 +508,8 @@ class GlassSimpleDialog extends StatelessWidget {
 // ── LiquidMeshBackground ─────────────────────────────────────────────────────
 
 /// A rich gradient background used behind glass surfaces on auth and lock
-/// screens. Simulates the "dynamic wallpaper" aesthetic of iOS 26: deep
-/// midnight layers with soft radial light pools in indigo, blue and teal.
+/// screens. Simulates the "dynamic wallpaper" aesthetic of iOS 26 with layered
+/// color fields that keep the chrome readable without obvious decorative blobs.
 class LiquidMeshBackground extends StatelessWidget {
   final Widget child;
   final List<Color>? colors;
@@ -522,14 +522,14 @@ class LiquidMeshBackground extends StatelessWidget {
     final seed = Theme.of(context).colorScheme.primary;
 
     final defaultDark = [
-      const Color(0xFF060D1C),
-      const Color(0xFF0B1527),
-      const Color(0xFF0F1A32),
+      const Color(0xFF07080B),
+      const Color(0xFF10161A),
+      const Color(0xFF17121A),
     ];
     final defaultLight = [
-      const Color(0xFFE8F0FE),
-      const Color(0xFFF0F4FF),
-      const Color(0xFFFAFBFF),
+      const Color(0xFFF8FAFC),
+      const Color(0xFFEFF7F2),
+      const Color(0xFFF7F2FA),
     ];
 
     final bg = colors ?? (isDark ? defaultDark : defaultLight);
@@ -547,58 +547,38 @@ class LiquidMeshBackground extends StatelessWidget {
             ),
           ),
         ),
-        // Radial accent pools
-        Positioned(
-          top: -120,
-          left: -80,
-          width: 420,
-          height: 420,
+        Positioned.fill(
           child: DecoratedBox(
             decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: RadialGradient(
+              gradient: LinearGradient(
+                begin: Alignment.topRight,
+                end: Alignment.bottomLeft,
                 colors: [
-                  seed.withValues(alpha: isDark ? 0.28 : 0.14),
+                  seed.withValues(alpha: isDark ? 0.20 : 0.08),
                   Colors.transparent,
+                  const Color(
+                    0xFF0FAF8F,
+                  ).withValues(alpha: isDark ? 0.14 : 0.07),
                 ],
+                stops: const [0, 0.44, 1],
               ),
             ),
           ),
         ),
-        Positioned(
-          bottom: -100,
-          right: -60,
-          width: 380,
-          height: 380,
+        Positioned.fill(
           child: DecoratedBox(
             decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: RadialGradient(
+              gradient: LinearGradient(
+                begin: Alignment.bottomRight,
+                end: Alignment.topLeft,
                 colors: [
                   const Color(
-                    0xFF00B4D8,
-                  ).withValues(alpha: isDark ? 0.22 : 0.10),
+                    0xFF9B5DE5,
+                  ).withValues(alpha: isDark ? 0.10 : 0.05),
                   Colors.transparent,
+                  Colors.white.withValues(alpha: isDark ? 0.02 : 0.36),
                 ],
-              ),
-            ),
-          ),
-        ),
-        Positioned(
-          top: 220,
-          right: -40,
-          width: 260,
-          height: 260,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: RadialGradient(
-                colors: [
-                  const Color(
-                    0xFF7B2FFF,
-                  ).withValues(alpha: isDark ? 0.16 : 0.08),
-                  Colors.transparent,
-                ],
+                stops: const [0, 0.52, 1],
               ),
             ),
           ),
@@ -685,7 +665,7 @@ class GlassButtonWidget extends StatelessWidget {
             color: fg,
             fontWeight: FontWeight.w700,
             fontSize: 15,
-            letterSpacing: -0.2,
+            letterSpacing: 0,
           ),
           child: IconTheme(
             data: IconThemeData(color: fg, size: 18),
@@ -777,6 +757,7 @@ class GlassBottomSheetFrame extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
+    final scheme = Theme.of(context).colorScheme;
     final keyboardInset = includeKeyboardInset ? media.viewInsets.bottom : 0.0;
     final reservedHeight =
         media.padding.top +
@@ -789,7 +770,23 @@ class GlassBottomSheetFrame extends StatelessWidget {
       0.0,
       (media.size.height - reservedHeight) * maxHeightFactor,
     );
-    final content = scrollable ? SingleChildScrollView(child: child) : child;
+    final sheetBodyStyle =
+        Theme.of(context).textTheme.bodyMedium ??
+        TextStyle(color: scheme.onSurface, fontSize: 14);
+    final content = DefaultTextStyle(
+      style: sheetBodyStyle.copyWith(
+        color: scheme.onSurface,
+        decoration: TextDecoration.none,
+        letterSpacing: 0,
+      ),
+      child: IconTheme(
+        data: IconThemeData(
+          color: scheme.onSurface.withValues(alpha: 0.86),
+          size: 21,
+        ),
+        child: scrollable ? SingleChildScrollView(child: child) : child,
+      ),
+    );
 
     return SafeArea(
       top: false,
@@ -815,3 +812,224 @@ class GlassBottomSheetFrame extends StatelessWidget {
   }
 }
 
+class GlassSheetGrabber extends StatelessWidget {
+  const GlassSheetGrabber({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Container(
+        width: 38,
+        height: 4,
+        margin: const EdgeInsets.only(top: 12, bottom: 8),
+        decoration: BoxDecoration(
+          color: Theme.of(
+            context,
+          ).colorScheme.onSurface.withValues(alpha: 0.22),
+          borderRadius: BorderRadius.circular(999),
+        ),
+      ),
+    );
+  }
+}
+
+class GlassSheetHeader extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final List<Widget> actions;
+  final VoidCallback? onClose;
+
+  const GlassSheetHeader({
+    super.key,
+    required this.icon,
+    required this.title,
+    this.subtitle,
+    this.actions = const [],
+    this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 4, 12, 10),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: scheme.primary.withValues(alpha: 0.13),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.16),
+                width: 0.5,
+              ),
+            ),
+            child: Icon(icon, color: scheme.primary, size: 21),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0,
+                  ),
+                ),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurface.withValues(alpha: 0.56),
+                      height: 1.25,
+                      letterSpacing: 0,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          for (final action in actions) action,
+          if (onClose != null) ...[
+            const SizedBox(width: 4),
+            GlassCircleIconButton(
+              tooltip: 'Close',
+              size: 36,
+              glowIntensity: 0.04,
+              onPressed: onClose,
+              icon: const Icon(Icons.close_rounded, size: 18),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class GlassActionTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String? subtitle;
+  final VoidCallback? onTap;
+  final Color? color;
+  final Widget? trailing;
+  final bool selected;
+  final bool dividerBefore;
+
+  const GlassActionTile({
+    super.key,
+    required this.icon,
+    required this.label,
+    this.subtitle,
+    this.onTap,
+    this.color,
+    this.trailing,
+    this.selected = false,
+    this.dividerBefore = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final tint = color ?? (selected ? scheme.primary : scheme.primary);
+    final textColor = color ?? scheme.onSurface;
+    final radius = BorderRadius.circular(18);
+    final tile = ClipRRect(
+      borderRadius: radius,
+      child: Material(
+        color: selected
+            ? scheme.primary.withValues(alpha: 0.08)
+            : Colors.transparent,
+        child: InkWell(
+          borderRadius: radius,
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+            child: Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: tint.withValues(alpha: selected ? 0.18 : 0.12),
+                    border: Border.all(
+                      color: tint.withValues(alpha: selected ? 0.28 : 0.10),
+                      width: 0.5,
+                    ),
+                  ),
+                  child: Icon(icon, size: 19, color: tint),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: textColor,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                          letterSpacing: 0,
+                        ),
+                      ),
+                      if (subtitle != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: scheme.onSurface.withValues(alpha: 0.52),
+                            fontSize: 12.5,
+                            height: 1.25,
+                            letterSpacing: 0,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                if (trailing != null) ...[const SizedBox(width: 10), trailing!],
+                if (selected && trailing == null)
+                  Icon(Icons.check_circle_rounded, color: scheme.primary),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (dividerBefore)
+          Divider(
+            height: 1,
+            indent: 68,
+            endIndent: 16,
+            color: scheme.outlineVariant.withValues(alpha: 0.22),
+          ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+          child: tile,
+        ),
+      ],
+    );
+  }
+}

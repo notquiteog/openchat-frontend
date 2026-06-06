@@ -285,34 +285,60 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   Future<void> _showOverflowSheet(BuildContext context) async {
-    await showGlassActionSheet<void>(
+    await GlassModalSheet.show<void>(
       context: context,
-      actions: [
-        GlassActionSheetAction(
-          icon: const Icon(Icons.folder_outlined),
-          label: 'Folders',
-          onPressed: () {
-            _showFolderManager(context);
-          },
-        ),
-        GlassActionSheetAction(
-          icon: const Icon(Icons.auto_stories_outlined),
-          label: 'Stories',
-          onPressed: () {
-            _showStoriesSheet(context);
-          },
-        ),
-        GlassActionSheetAction(
-          icon: const Icon(Icons.settings_outlined),
-          label: 'Settings',
-          onPressed: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const SettingsScreen()),
-            );
-          },
-        ),
-      ],
+      initialState: SheetState.half,
+      halfSize: 0.36,
+      enableInteractionGlow: true,
+      builder: (sheetContext) {
+        void runAfterClose(VoidCallback action) {
+          Navigator.of(sheetContext).pop();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            action();
+          });
+        }
+
+        return SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const GlassSheetGrabber(),
+              GlassSheetHeader(
+                icon: Icons.more_horiz_rounded,
+                title: 'Chats menu',
+                subtitle: 'Organize, browse stories, or tune OpenChat.',
+                onClose: () => Navigator.of(sheetContext).pop(),
+              ),
+              GlassActionTile(
+                icon: Icons.folder_outlined,
+                label: 'Folders',
+                subtitle: 'Create focused inboxes and automatic rules',
+                onTap: () => runAfterClose(() => _showFolderManager(context)),
+              ),
+              GlassActionTile(
+                icon: Icons.auto_stories_outlined,
+                label: 'Stories',
+                subtitle: 'View recent updates from your contacts',
+                onTap: () => runAfterClose(() => _showStoriesSheet(context)),
+              ),
+              GlassActionTile(
+                icon: Icons.settings_outlined,
+                label: 'Settings',
+                subtitle: 'Privacy, appearance, devices, and account tools',
+                onTap: () => runAfterClose(
+                  () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -1596,32 +1622,10 @@ class _InboxViewOptionTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return GlassListTile(
-      leading: Container(
-        width: 34,
-        height: 34,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: (selected ? scheme.primary : scheme.onSurface).withValues(
-            alpha: selected ? 0.14 : 0.06,
-          ),
-        ),
-        child: Icon(
-          icon,
-          size: 18,
-          color: selected
-              ? scheme.primary
-              : scheme.onSurface.withValues(alpha: 0.62),
-        ),
-      ),
-      title: Text(
-        label,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-        ),
-      ),
+    return GlassActionTile(
+      icon: icon,
+      label: label,
+      selected: selected,
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1692,10 +1696,11 @@ class _FolderManagerTile extends StatelessWidget {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
-      trailing: IconButton(
+      trailing: GlassCircleIconButton(
         tooltip: 'Delete folder',
-        icon: const Icon(Icons.delete_outline_rounded),
-        color: scheme.error,
+        icon: Icon(Icons.delete_outline_rounded, color: scheme.error, size: 18),
+        size: 36,
+        glowIntensity: 0.04,
         onPressed: onDelete,
       ),
       onTap: onEdit,
@@ -1869,238 +1874,272 @@ class _ConversationTile extends StatelessWidget {
         notificationPreference.mode ==
         ConversationNotificationMode.mentionsOnly;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        onLongPress: onLongPress,
-        borderRadius: BorderRadius.circular(18),
-        splashColor: scheme.primary.withValues(alpha: 0.08),
-        highlightColor: scheme.primary.withValues(alpha: 0.04),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          child: Row(
-            children: [
-              // Hero wraps the avatar so it morphs smoothly into the chat
-              // header avatar when the conversation is opened.
-              Hero(
-                tag: 'avatar_${conversation.id}',
-                child: _ConvAvatar(
-                  avatarUrl: avatar,
-                  name: name,
-                  isGroup: conversation.isGroup,
-                  isChannel: conversation.isChannel,
-                  hasUnread: hasUnread,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: GlassContainer(
+        shape: const LiquidRoundedSuperellipse(borderRadius: 24),
+        allowElevation: hasUnread || isPinned,
+        glowIntensity: hasUnread ? 0.07 : 0.025,
+        padding: EdgeInsets.zero,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(24),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onTap,
+              onLongPress: onLongPress,
+              borderRadius: BorderRadius.circular(24),
+              splashColor: scheme.primary.withValues(alpha: 0.08),
+              highlightColor: scheme.primary.withValues(alpha: 0.04),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
                 ),
-              ),
-              const SizedBox(width: 14),
-              // Content
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
+                child: Row(
                   children: [
-                    Row(
-                      children: [
-                        if (conversation.isChannel)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 4),
-                            child: Icon(
-                              Icons.campaign_rounded,
-                              size: 14,
-                              color: scheme.onSurface.withValues(alpha: 0.44),
-                            ),
-                          ),
-                        if (isBot)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 4),
-                            child: Icon(
-                              Icons.smart_toy_outlined,
-                              size: 13,
-                              color: scheme.onSurface.withValues(alpha: 0.44),
-                            ),
-                          ),
-                        if (isPinned)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 4),
-                            child: Icon(
-                              Icons.push_pin_rounded,
-                              size: 13,
-                              color: scheme.primary.withValues(alpha: 0.72),
-                            ),
-                          ),
-                        if (isMuted)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 4),
-                            child: Icon(
-                              Icons.notifications_off_outlined,
-                              size: 13,
-                              color: scheme.onSurface.withValues(alpha: 0.38),
-                            ),
-                          ),
-                        if (isPriority)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 4),
-                            child: Icon(
-                              Icons.star_outline_rounded,
-                              size: 13,
-                              color: scheme.primary.withValues(alpha: 0.70),
-                            ),
-                          ),
-                        if (isMentionsOnly)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 4),
-                            child: Icon(
-                              Icons.notification_important_outlined,
-                              size: 13,
-                              color: scheme.primary.withValues(alpha: 0.70),
-                            ),
-                          ),
-                        if (hasUnreadMention)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 4),
-                            child: Tooltip(
-                              message: 'Jump to mention',
-                              child: Semantics(
-                                button: true,
-                                label: 'Jump to unread mention',
-                                child: GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  onTap: onUnreadMentionTap == null
-                                      ? null
-                                      : () => onUnreadMentionTap!(
-                                          unreadMentionMessageId!,
+                    // Hero wraps the avatar so it morphs smoothly into the chat
+                    // header avatar when the conversation is opened.
+                    Hero(
+                      tag: 'avatar_${conversation.id}',
+                      child: _ConvAvatar(
+                        avatarUrl: avatar,
+                        name: name,
+                        isGroup: conversation.isGroup,
+                        isChannel: conversation.isChannel,
+                        hasUnread: hasUnread,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    // Content
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            children: [
+                              if (conversation.isChannel)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 4),
+                                  child: Icon(
+                                    Icons.campaign_rounded,
+                                    size: 14,
+                                    color: scheme.onSurface.withValues(
+                                      alpha: 0.44,
+                                    ),
+                                  ),
+                                ),
+                              if (isBot)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 4),
+                                  child: Icon(
+                                    Icons.smart_toy_outlined,
+                                    size: 13,
+                                    color: scheme.onSurface.withValues(
+                                      alpha: 0.44,
+                                    ),
+                                  ),
+                                ),
+                              if (isPinned)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 4),
+                                  child: Icon(
+                                    Icons.push_pin_rounded,
+                                    size: 13,
+                                    color: scheme.primary.withValues(
+                                      alpha: 0.72,
+                                    ),
+                                  ),
+                                ),
+                              if (isMuted)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 4),
+                                  child: Icon(
+                                    Icons.notifications_off_outlined,
+                                    size: 13,
+                                    color: scheme.onSurface.withValues(
+                                      alpha: 0.38,
+                                    ),
+                                  ),
+                                ),
+                              if (isPriority)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 4),
+                                  child: Icon(
+                                    Icons.star_outline_rounded,
+                                    size: 13,
+                                    color: scheme.primary.withValues(
+                                      alpha: 0.70,
+                                    ),
+                                  ),
+                                ),
+                              if (isMentionsOnly)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 4),
+                                  child: Icon(
+                                    Icons.notification_important_outlined,
+                                    size: 13,
+                                    color: scheme.primary.withValues(
+                                      alpha: 0.70,
+                                    ),
+                                  ),
+                                ),
+                              if (hasUnreadMention)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 4),
+                                  child: Tooltip(
+                                    message: 'Jump to mention',
+                                    child: Semantics(
+                                      button: true,
+                                      label: 'Jump to unread mention',
+                                      child: GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
+                                        onTap: onUnreadMentionTap == null
+                                            ? null
+                                            : () => onUnreadMentionTap!(
+                                                unreadMentionMessageId!,
+                                              ),
+                                        child: SizedBox.square(
+                                          dimension: 22,
+                                          child: Center(
+                                            child: Icon(
+                                              Icons.alternate_email_rounded,
+                                              size: 14,
+                                              color: scheme.primary,
+                                            ),
+                                          ),
                                         ),
-                                  child: SizedBox.square(
-                                    dimension: 22,
-                                    child: Center(
-                                      child: Icon(
-                                        Icons.alternate_email_rounded,
-                                        size: 14,
-                                        color: scheme.primary,
                                       ),
                                     ),
                                   ),
                                 ),
-                              ),
-                            ),
-                          ),
-                        Flexible(
-                          child: Text(
-                            name,
-                            style: TextStyle(
-                              fontWeight: hasUnread
-                                  ? FontWeight.w700
-                                  : FontWeight.w600,
-                              fontSize: 15,
-                              letterSpacing: -0.2,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (hasDraft || last != null) ...[
-                      const SizedBox(height: 2),
-                      Text.rich(
-                        TextSpan(
-                          children: [
-                            if (hasDraft)
-                              TextSpan(
-                                text: 'Draft: ',
-                                style: TextStyle(
-                                  color: scheme.error.withValues(alpha: 0.82),
-                                  fontWeight: FontWeight.w700,
+                              Flexible(
+                                child: Text(
+                                  name,
+                                  style: TextStyle(
+                                    fontWeight: hasUnread
+                                        ? FontWeight.w700
+                                        : FontWeight.w600,
+                                    fontSize: 15,
+                                    letterSpacing: 0,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ),
-                            TextSpan(
-                              text: hasDraft
-                                  ? draftPreview
-                                  : last?.listPreview ?? '',
+                            ],
+                          ),
+                          if (hasDraft || last != null) ...[
+                            const SizedBox(height: 2),
+                            Text.rich(
+                              TextSpan(
+                                children: [
+                                  if (hasDraft)
+                                    TextSpan(
+                                      text: 'Draft: ',
+                                      style: TextStyle(
+                                        color: scheme.error.withValues(
+                                          alpha: 0.82,
+                                        ),
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  TextSpan(
+                                    text: hasDraft
+                                        ? draftPreview
+                                        : last?.listPreview ?? '',
+                                  ),
+                                ],
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: hasDraft
+                                    ? scheme.onSurface.withValues(alpha: 0.65)
+                                    : hasUnread
+                                    ? scheme.onSurface.withValues(alpha: 0.75)
+                                    : scheme.onSurface.withValues(alpha: 0.45),
+                                fontSize: 13,
+                                fontWeight: hasUnread && !hasDraft
+                                    ? FontWeight.w500
+                                    : FontWeight.w400,
+                              ),
                             ),
                           ],
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: hasDraft
-                              ? scheme.onSurface.withValues(alpha: 0.65)
-                              : hasUnread
-                              ? scheme.onSurface.withValues(alpha: 0.75)
-                              : scheme.onSurface.withValues(alpha: 0.45),
-                          fontSize: 13,
-                          fontWeight: hasUnread && !hasDraft
-                              ? FontWeight.w500
-                              : FontWeight.w400,
-                        ),
+                        ],
                       ),
-                    ],
+                    ),
+                    // Trailing: time + unread badge
+                    const SizedBox(width: 10),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (hasDraft || last != null)
+                          Text(
+                            timeago.format(
+                              hasDraft ? draft!.updatedAt : last!.createdAt,
+                              locale: 'en_short',
+                            ),
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: hasDraft
+                                  ? scheme.error.withValues(alpha: 0.74)
+                                  : isMuted
+                                  ? scheme.onSurface.withValues(alpha: 0.36)
+                                  : hasUnread
+                                  ? scheme.primary
+                                  : scheme.onSurface.withValues(alpha: 0.38),
+                              fontWeight: hasUnread
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
+                            ),
+                          ),
+                        if (hasUnread) ...[
+                          const SizedBox(height: 5),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isMuted
+                                  ? scheme.onSurface.withValues(alpha: 0.24)
+                                  : scheme.primary,
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: [
+                                BoxShadow(
+                                  color:
+                                      (isMuted
+                                              ? scheme.onSurface
+                                              : scheme.primary)
+                                          .withValues(
+                                            alpha: isMuted ? 0.12 : 0.40,
+                                          ),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 3),
+                                ),
+                              ],
+                            ),
+                            child: Text(
+                              conversation.unreadCount > 99
+                                  ? '99+'
+                                  : '${conversation.unreadCount}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ],
                 ),
               ),
-              // Trailing: time + unread badge
-              const SizedBox(width: 10),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (hasDraft || last != null)
-                    Text(
-                      timeago.format(
-                        hasDraft ? draft!.updatedAt : last!.createdAt,
-                        locale: 'en_short',
-                      ),
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        color: hasDraft
-                            ? scheme.error.withValues(alpha: 0.74)
-                            : isMuted
-                            ? scheme.onSurface.withValues(alpha: 0.36)
-                            : hasUnread
-                            ? scheme.primary
-                            : scheme.onSurface.withValues(alpha: 0.38),
-                        fontWeight: hasUnread
-                            ? FontWeight.w600
-                            : FontWeight.w400,
-                      ),
-                    ),
-                  if (hasUnread) ...[
-                    const SizedBox(height: 5),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 7,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isMuted
-                            ? scheme.onSurface.withValues(alpha: 0.24)
-                            : scheme.primary,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: [
-                          BoxShadow(
-                            color: (isMuted ? scheme.onSurface : scheme.primary)
-                                .withValues(alpha: isMuted ? 0.12 : 0.40),
-                            blurRadius: 8,
-                            offset: const Offset(0, 3),
-                          ),
-                        ],
-                      ),
-                      child: Text(
-                        conversation.unreadCount > 99
-                            ? '99+'
-                            : '${conversation.unreadCount}',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: -0.1,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -2493,24 +2532,6 @@ class _SheetTile extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final effectiveColor = scheme.primary;
-    return GlassListTile(
-      leading: Container(
-        width: 32,
-        height: 32,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: effectiveColor.withValues(alpha: 0.14),
-        ),
-        child: Icon(icon, size: 17, color: effectiveColor),
-      ),
-      title: Text(
-        label,
-        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
-      ),
-      onTap: onTap,
-    );
-  }
+  Widget build(BuildContext context) =>
+      GlassActionTile(icon: icon, label: label, onTap: onTap);
 }
