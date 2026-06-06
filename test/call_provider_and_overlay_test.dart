@@ -376,7 +376,7 @@ void main() {
       ]);
     });
 
-    test('desktop video calls prefer Razer cameras and retry safe modes', () {
+    test('desktop video calls try generic safe modes before camera pins', () {
       final attempts = buildCallMediaCaptureAttemptsForTesting(
         isVideo: true,
         isMobile: false,
@@ -399,15 +399,18 @@ void main() {
       final videos = attempts
           .map((attempt) => attempt['video']! as Map<String, dynamic>)
           .toList();
-      final firstOptional = videos.first['optional']! as List<Object?>;
 
-      expect(firstOptional.single, {'sourceId': 'razer-kiyo'});
+      expect(videos.first.containsKey('optional'), isFalse);
       expect(videos.take(3).map((video) => [video['width'], video['height']]), [
-        [1280, 720],
         [640, 480],
         [320, 240],
+        [1280, 720],
       ]);
-      expect(videos.any((video) => !video.containsKey('optional')), isTrue);
+      final firstPinned = videos.firstWhere(
+        (video) => video.containsKey('optional'),
+      );
+      final firstOptional = firstPinned['optional']! as List<Object?>;
+      expect(firstOptional.single, {'sourceId': 'razer-kiyo'});
     });
   });
 

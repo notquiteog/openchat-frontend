@@ -105,13 +105,13 @@ class _CallScreenState extends State<CallScreen> {
   final _remoteRenderer = RTCVideoRenderer();
   bool _renderersReady = false;
   bool _renderersInitialized = false;
+  bool _renderersInitializing = false;
+  String? _boundLocalVideoTrackId;
+  String? _boundRemoteVideoTrackId;
 
   @override
   void initState() {
     super.initState();
-    if (_shouldUseVideoRenderers(context.read<CallProvider>().session)) {
-      _initRenderers();
-    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       context.read<CallProvider>().refreshAudioOutputs();
@@ -119,11 +119,14 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _initRenderers() async {
+    if (_renderersInitialized || _renderersInitializing) return;
+    _renderersInitializing = true;
     try {
       await _localRenderer.initialize();
       await _remoteRenderer.initialize();
       _renderersInitialized = true;
     } catch (_) {
+      _renderersInitializing = false;
       await _disposeRenderer(_localRenderer);
       await _disposeRenderer(_remoteRenderer);
       if (mounted) setState(() => _renderersReady = false);
@@ -133,12 +136,11 @@ class _CallScreenState extends State<CallScreen> {
       await _disposeRenderers();
       return;
     }
+    _renderersInitializing = false;
     final ready =
         _localRenderer.textureId != null && _remoteRenderer.textureId != null;
     if (ready) {
-      final cp = context.read<CallProvider>();
-      if (cp.localStream != null) _localRenderer.srcObject = cp.localStream;
-      if (cp.remoteStream != null) _remoteRenderer.srcObject = cp.remoteStream;
+      _syncRendererStreams(context.read<CallProvider>());
     }
     setState(() => _renderersReady = ready);
   }
@@ -156,9 +158,12 @@ class _CallScreenState extends State<CallScreen> {
   Future<void> _disposeRenderers() async {
     if (!_renderersInitialized) return;
     _renderersInitialized = false;
+    _renderersInitializing = false;
     _renderersReady = false;
     await _clearRenderer(_localRenderer);
     await _clearRenderer(_remoteRenderer);
+    _boundLocalVideoTrackId = null;
+    _boundRemoteVideoTrackId = null;
     await _disposeRenderer(_localRenderer);
     await _disposeRenderer(_remoteRenderer);
   }
@@ -168,6 +173,58 @@ class _CallScreenState extends State<CallScreen> {
     try {
       await renderer.setSrcObject(stream: null);
     } catch (_) {}
+  }
+
+  bool _hasVideoTrack(MediaStream? stream) {
+    return stream != null && stream.getVideoTracks().isNotEmpty;
+  }
+
+  bool _hasAnyVideoTrack(CallProvider cp) {
+    return _hasVideoTrack(cp.localStream) || _hasVideoTrack(cp.remoteStream);
+  }
+
+  void _maybeInitRenderers(CallProvider cp, bool useVideoRenderers) {
+    if (!useVideoRenderers || !_hasAnyVideoTrack(cp)) return;
+    if (_renderersInitialized || _renderersInitializing) return;
+    unawaited(_initRenderers());
+  }
+
+  void _syncRendererStreams(CallProvider cp) {
+    if (!_renderersReady) return;
+    _syncRendererStream(
+      renderer: _localRenderer,
+      stream: cp.localStream,
+      currentTrackId: _boundLocalVideoTrackId,
+      setCurrentTrackId: (trackId) => _boundLocalVideoTrackId = trackId,
+    );
+    _syncRendererStream(
+      renderer: _remoteRenderer,
+      stream: cp.remoteStream,
+      currentTrackId: _boundRemoteVideoTrackId,
+      setCurrentTrackId: (trackId) => _boundRemoteVideoTrackId = trackId,
+    );
+  }
+
+  void _syncRendererStream({
+    required RTCVideoRenderer renderer,
+    required MediaStream? stream,
+    required String? currentTrackId,
+    required ValueChanged<String?> setCurrentTrackId,
+  }) {
+    if (renderer.textureId == null) return;
+    final tracks = stream?.getVideoTracks() ?? const <MediaStreamTrack>[];
+    final nextTrackId = tracks.isEmpty ? null : tracks.first.id;
+    final nextStream = nextTrackId == null ? null : stream;
+    if (currentTrackId == nextTrackId &&
+        renderer.srcObject?.id == nextStream?.id) {
+      return;
+    }
+    setCurrentTrackId(nextTrackId);
+    unawaited(
+      renderer
+          .setSrcObject(stream: nextStream, trackId: nextTrackId)
+          .catchError((_) {}),
+    );
   }
 
   Future<void> _disposeRenderer(RTCVideoRenderer renderer) async {
@@ -253,9 +310,9 @@ class _CallScreenState extends State<CallScreen> {
     final isVideo = session.isVideo;
     final useVideoRenderers = _shouldUseVideoRenderers(session);
 
-    if (_renderersReady && useVideoRenderers) {
-      if (cp.localStream != null) _localRenderer.srcObject = cp.localStream;
-      if (cp.remoteStream != null) _remoteRenderer.srcObject = cp.remoteStream;
+    _maybeInitRenderers(cp, useVideoRenderers);
+    if (useVideoRenderers) {
+      _syncRendererStreams(cp);
     }
 
     final statusText = cp.callStatusText;

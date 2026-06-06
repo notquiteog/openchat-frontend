@@ -86,21 +86,23 @@ List<Map<String, dynamic>> buildCallMediaCaptureAttemptsForTesting({
 
   final profiles = isDesktop
       ? const [
-          _VideoProfile(width: 1280, height: 720, frameRate: 30),
           _VideoProfile(width: 640, height: 480, frameRate: 30),
           _VideoProfile(width: 320, height: 240, frameRate: 15),
+          _VideoProfile(width: 1280, height: 720, frameRate: 30),
         ]
       : isMobile
       ? const [_VideoProfile(width: 640, height: 480, frameRate: 30)]
       : const [_VideoProfile(width: 1280, height: 720, frameRate: 30)];
 
+  final preferredDeviceIds = [
+    for (final device in _preferredVideoInputs(videoInputs))
+      if (device.deviceId.isNotEmpty) device.deviceId,
+  ];
   final videoDeviceIds = isMobile
       ? const <String?>[null]
-      : [
-          for (final device in _preferredVideoInputs(videoInputs))
-            if (device.deviceId.isNotEmpty) device.deviceId,
-          null,
-        ];
+      : isDesktop
+      ? <String?>[null, ...preferredDeviceIds]
+      : <String?>[...preferredDeviceIds, null];
   final effectiveDeviceIds = videoDeviceIds.isEmpty
       ? const <String?>[null]
       : videoDeviceIds;
@@ -979,7 +981,7 @@ class CallService {
         (defaultTargetPlatform == TargetPlatform.linux ||
             defaultTargetPlatform == TargetPlatform.macOS ||
             defaultTargetPlatform == TargetPlatform.windows);
-    final videoInputs = isVideo && !isMobile
+    final videoInputs = isVideo && !isMobile && !_isLinuxDesktop
         ? await _safeVideoInputs()
         : const <MediaDeviceInfo>[];
     return buildCallMediaCaptureAttemptsForTesting(
@@ -990,6 +992,9 @@ class CallService {
       videoInputs: videoInputs,
     );
   }
+
+  bool get _isLinuxDesktop =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.linux;
 
   Future<List<MediaDeviceInfo>> _safeVideoInputs() async {
     try {
