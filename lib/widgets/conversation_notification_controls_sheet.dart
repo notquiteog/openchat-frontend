@@ -370,7 +370,6 @@ class _MinuteDropdown extends StatelessWidget {
         labelText: label,
         isDense: true,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<int>(
@@ -409,14 +408,13 @@ class _NotificationTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return ListTile(
+    return GlassListTile(
       leading: Icon(icon, color: selected ? scheme.primary : null),
       title: Text(label),
       trailing: selected
           ? Icon(Icons.check_rounded, color: scheme.primary)
           : null,
       onTap: onTap,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     );
   }
 }
@@ -436,12 +434,16 @@ class _SwitchTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SwitchListTile.adaptive(
-      secondary: Icon(icon),
-      title: Text(label),
-      value: value,
-      onChanged: onChanged,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    return GlassListTile(
+      leading: Icon(icon),
+      title: Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+      trailing: GlassSwitch(
+        value: value,
+        onChanged: onChanged,
+        activeColor: Theme.of(context).colorScheme.primary,
+        enableHaptics: true,
+      ),
+      onTap: () => onChanged(!value),
     );
   }
 }

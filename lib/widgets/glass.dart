@@ -11,17 +11,45 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 // the MediaQuery-inflation architecture for the call/location overlays).
 export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
     show
+        // Containers
         GlassContainer,
-        GlassPanel,
+        GlassListTile,
+        GlassGroupedSection,
+        GlassDivider,
+        // Interactive
         GlassButton,
+        GlassButtonStyle,
         GlassSwitch,
         GlassSlider,
+        GlassIconButton,
+        GlassChip,
+        GlassBadge,
+        GlassSegmentedControl,
+        GlassPicker,
+        GlassPageControl,
+        // Input
+        GlassTextField,
+        GlassPasswordField,
+        GlassSearchBar,
+        // Feedback
+        GlassProgressIndicator,
+        GlassToast,
+        // Overlays
         GlassSheet,
         GlassDialog,
         GlassDialogAction,
         GlassModalSheet,
+        showGlassActionSheet,
+        GlassActionSheetAction,
+        GlassActionSheetStyle,
+        GlassPopover,
+        // Surfaces
         GlassBottomBar,
         GlassBottomBarTab,
+        GlassPage,
+        GlassStatusBarStyle,
+        GlassScrollEdgeEffect,
+        // Config & types
         GlassQuality,
         LiquidGlassSettings,
         LiquidShape,

@@ -281,7 +281,7 @@ class _ConversationInviteLinksSheetState
           if (_loading)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 28),
-              child: Center(child: CircularProgressIndicator()),
+              child: Center(child: GlassProgressIndicator.circular()),
             )
           else ...[
             _ApprovalSection(

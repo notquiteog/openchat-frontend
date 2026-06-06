@@ -87,7 +87,7 @@ class _BotChatsScreenState extends State<BotChatsScreen> {
               ),
             ),
           ),
-          if (_searching) const LinearProgressIndicator(),
+          if (_searching) const GlassProgressIndicator.linear(),
           Expanded(
             child: _searchCtrl.text.isNotEmpty
                 ? _buildSearchResults()
@@ -111,7 +111,7 @@ class _BotChatsScreenState extends State<BotChatsScreen> {
       itemCount: _results.length,
       itemBuilder: (context, i) {
         final bot = _results[i];
-        return ListTile(
+        return GlassListTile(
           leading: CircleAvatar(
             backgroundImage: bot.avatarUrl != null
                 ? CachedNetworkImageProvider(
@@ -149,7 +149,7 @@ class _BotChatsScreenState extends State<BotChatsScreen> {
         final conv = chats[i];
         final name = conv.displayName(currentUserID);
         final avatar = conv.displayAvatar(currentUserID);
-        return ListTile(
+        return GlassListTile(
           leading: CircleAvatar(
             backgroundImage: avatar != null
                 ? CachedNetworkImageProvider(ApiConfig.resolveMedia(avatar))

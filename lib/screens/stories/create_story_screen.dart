@@ -176,11 +176,7 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
             GlassButtonWidget.icon(
               onPressed: pending == null || _posting ? null : _publish,
               icon: _posting
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
+                  ? const GlassProgressIndicator.circular(size: 18, strokeWidth: 2)
                   : const Icon(Icons.send_outlined),
               label: Text(_posting ? 'Publishing' : 'Publish story'),
             ),

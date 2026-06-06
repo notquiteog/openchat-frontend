@@ -436,12 +436,22 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
               ),
-              SwitchListTile(
-                secondary: const Icon(Icons.notifications_off_outlined),
-                title: const Text('Send silently'),
-                value: _sendSilent,
-                onChanged: (v) {
-                  setState(() => _sendSilent = v);
+              GlassListTile(
+                leading: const Icon(Icons.notifications_off_outlined),
+                title: const Text('Send silently',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+                trailing: GlassSwitch(
+                  value: _sendSilent,
+                  onChanged: (v) {
+                    setState(() => _sendSilent = v);
+                    _scheduleDraftSave(_inputCtrl.text);
+                    setSheetState(() {});
+                  },
+                  activeColor: Theme.of(context).colorScheme.primary,
+                  enableHaptics: true,
+                ),
+                onTap: () {
+                  setState(() => _sendSilent = !_sendSilent);
                   _scheduleDraftSave(_inputCtrl.text);
                   setSheetState(() {});
                 },
@@ -1246,7 +1256,6 @@ class _ChatScreenState extends State<ChatScreen> {
                           value: 'wallet',
                           label: const Text('App wallet'),
                           icon: const Icon(Icons.account_balance_wallet),
-                          enabled: canUseWallet,
                         ),
                         const ButtonSegment(
                           value: 'external',
@@ -1320,11 +1329,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   FilledButton.icon(
                     onPressed: submitting ? null : submit,
                     icon: submitting
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
+                        ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
                         : Icon(
                             payMode
                                 ? Icons.send_outlined
@@ -1625,17 +1630,27 @@ class _ChatScreenState extends State<ChatScreen> {
                           ),
                       ],
                     ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Anonymous'),
-                      value: anonymous,
-                      onChanged: (v) => setDialog(() => anonymous = v),
+                    GlassListTile(
+                      title: const Text('Anonymous',
+                          style: TextStyle(fontWeight: FontWeight.w600)),
+                      trailing: GlassSwitch(
+                        value: anonymous,
+                        onChanged: (v) => setDialog(() => anonymous = v),
+                        activeColor: Theme.of(context).colorScheme.primary,
+                        enableHaptics: true,
+                      ),
+                      onTap: () => setDialog(() => anonymous = !anonymous),
                     ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Multiple answers'),
-                      value: multiple,
-                      onChanged: (v) => setDialog(() => multiple = v),
+                    GlassListTile(
+                      title: const Text('Multiple answers',
+                          style: TextStyle(fontWeight: FontWeight.w600)),
+                      trailing: GlassSwitch(
+                        value: multiple,
+                        onChanged: (v) => setDialog(() => multiple = v),
+                        activeColor: Theme.of(context).colorScheme.primary,
+                        enableHaptics: true,
+                      ),
+                      onTap: () => setDialog(() => multiple = !multiple),
                     ),
                   ],
                 ),
@@ -1796,13 +1811,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                           vertical: 12,
                                         ),
                                         child: Center(
-                                          child: SizedBox(
-                                            width: 20,
-                                            height: 20,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                            ),
-                                          ),
+                                          child: GlassProgressIndicator.circular(size: 20, strokeWidth: 2),
                                         ),
                                       );
                                     }
@@ -3050,15 +3059,13 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
               const SizedBox(height: 12),
               for (final mode in EncryptionMode.values)
-                ListTile(
+                GlassListTile(
                   leading: Icon(
                     mode == conv.encryptionMode
                         ? Icons.radio_button_checked
                         : Icons.radio_button_unchecked,
                   ),
                   title: Text(mode.shortLabel),
-                  dense: true,
-                  enabled: mode != conv.encryptionMode,
                   onTap: mode == conv.encryptionMode
                       ? null
                       : () => Navigator.pop(ctx, mode),
@@ -3245,7 +3252,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             ? const Icon(Icons.group, size: 32)
                             : null,
                       ),
-                      if (uploading) const CircularProgressIndicator(),
+                      if (uploading) const GlassProgressIndicator.circular(),
                       if (!uploading)
                         Positioned(
                           bottom: 0,
@@ -3365,7 +3372,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     children: conv.members.map((m) {
                       final username = m.user?.username ?? m.userId;
                       final isSelf = m.userId == currentUserID;
-                      return ListTile(
+                      return GlassListTile(
                         leading: CircleAvatar(
                           backgroundImage: m.user?.avatarUrl != null
                               ? CachedNetworkImageProvider(
@@ -3493,13 +3500,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         suffixIcon: searching
                             ? const Padding(
                                 padding: EdgeInsets.all(12),
-                                child: SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                ),
+                                child: GlassProgressIndicator.circular(size: 16, strokeWidth: 2),
                               )
                             : IconButton(
                                 icon: const Icon(Icons.search),
@@ -3520,8 +3521,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             final alreadyIn = conv.members.any(
                               (m) => m.userId == u.id,
                             );
-                            return ListTile(
-                              dense: true,
+                            return GlassListTile(
                               leading: CircleAvatar(
                                 radius: 16,
                                 child: Text(username[0].toUpperCase()),

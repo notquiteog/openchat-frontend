@@ -725,9 +725,11 @@ class CallService {
       _ => false,
     };
 
-    if (callId.isEmpty || callerId.isEmpty || sdp.isEmpty) return false;
+    if (callId.isEmpty) return false;
     if (_session != null || _pendingIncoming != null) {
-      _ws.sendCallReject(targetUserId: callerId, callId: callId);
+      if (callerId.isNotEmpty) {
+        _ws.sendCallReject(targetUserId: callerId, callId: callId);
+      }
       return false;
     }
 
@@ -742,7 +744,9 @@ class CallService {
       state: CallState.ringing,
     );
     _pendingRemoteCandidates.clear();
-    _pendingOfferSdp = sdp;
+    // sdp may be absent when the recipient's key was locked at arrival time;
+    // the call still rings but cannot be answered without the decrypted offer.
+    _pendingOfferSdp = sdp.isEmpty ? null : sdp;
     _pendingIncoming = incoming;
     _incomingCallController.add(incoming);
 

@@ -1258,18 +1258,22 @@ Future<void> _openMessageLink(
   if (strictPrivacyMode) {
     final allowed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => GlassAlertDialog(
         title: const Text('Open link?'),
         content: Text(
           'Opening this link can reveal your IP address, browser details, and that you viewed it.\n\n$url',
         ),
         actions: [
-          TextButton(
+          GlassButtonWidget(
             onPressed: () => Navigator.pop(dialogContext, false),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
             child: const Text('Cancel'),
           ),
-          FilledButton(
+          GlassButtonWidget(
             onPressed: () => Navigator.pop(dialogContext, true),
+            color: Theme.of(dialogContext).colorScheme.primary,
+            foregroundColor: Theme.of(dialogContext).colorScheme.onPrimary,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
             child: const Text('Open'),
           ),
         ],
@@ -1942,11 +1946,7 @@ class _PaymentBubbleState extends State<_PaymentBubble> {
                       vertical: 10,
                     ),
                     icon: _paying
-                        ? const SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
+                        ? const GlassProgressIndicator.circular(size: 14, strokeWidth: 2)
                         : const Icon(Icons.account_balance_wallet, size: 16),
                     label: const Text('App wallet'),
                   ),
@@ -1965,11 +1965,7 @@ class _PaymentBubbleState extends State<_PaymentBubble> {
                   TextButton.icon(
                     onPressed: isBusy ? null : _decline,
                     icon: _declining
-                        ? const SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
+                        ? const GlassProgressIndicator.circular(size: 14, strokeWidth: 2)
                         : const Icon(Icons.close_rounded, size: 16),
                     label: const Text('Decline'),
                   ),
@@ -2335,7 +2331,7 @@ class _ImageBubbleState extends State<_ImageBubble> {
       _LoadState.loading => Container(
         height: layout.reservedImageHeight,
         color: Colors.black12,
-        child: const Center(child: CircularProgressIndicator()),
+        child: const Center(child: GlassProgressIndicator.circular()),
       ),
       _LoadState.error => Container(
         height: layout.reservedImageHeight,
@@ -2476,7 +2472,7 @@ class _VideoBubbleState extends State<_VideoBubble> {
       _LoadState.loading => Container(
         height: 160,
         color: Colors.black26,
-        child: const Center(child: CircularProgressIndicator()),
+        child: const Center(child: GlassProgressIndicator.circular()),
       ),
       _LoadState.error => Container(
         height: 100,
@@ -2819,14 +2815,7 @@ class _VoicePlayButton extends StatelessWidget {
           height: 44,
           child: Center(
             child: loading
-                ? SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: color,
-                    ),
-                  )
+                ? GlassProgressIndicator.circular(size: 18, strokeWidth: 2, color: color)
                 : Icon(
                     error
                         ? Icons.refresh
@@ -3054,11 +3043,7 @@ class _FileBubbleState extends State<_FileBubble> {
           ? _download
           : null,
       child: switch (_state) {
-        _LoadState.loading => SizedBox(
-          width: 40,
-          height: 40,
-          child: CircularProgressIndicator(strokeWidth: 2, color: textColor),
-        ),
+        _LoadState.loading => GlassProgressIndicator.circular(size: 40, strokeWidth: 2, color: textColor),
         _LoadState.done => Icon(Icons.check_circle, color: textColor, size: 40),
         _LoadState.error => Icon(
           Icons.error_outline,
@@ -3232,7 +3217,7 @@ class _StickerBubbleState extends State<_StickerBubble> {
         width: 120,
         height: 120,
         child: _loading
-            ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+            ? const Center(child: GlassProgressIndicator.circular(strokeWidth: 2))
             : fileUrl != null
             ? ClipRRect(
                 borderRadius: BorderRadius.circular(8),
@@ -3240,7 +3225,7 @@ class _StickerBubbleState extends State<_StickerBubble> {
                   imageUrl: ApiConfig.resolveMedia(fileUrl),
                   fit: BoxFit.contain,
                   placeholder: (_, _) => const Center(
-                    child: CircularProgressIndicator(strokeWidth: 2),
+                    child: GlassProgressIndicator.circular(strokeWidth: 2),
                   ),
                   errorWidget: (_, _, _) => const Center(
                     child: Icon(Icons.broken_image_outlined, size: 44),
@@ -3371,11 +3356,7 @@ class _StickerPackSheetState extends State<_StickerPackSheet> {
                       vertical: 10,
                     ),
                     icon: _adding
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
+                        ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
                         : const Icon(Icons.add, size: 18),
                     label: const Text('Add'),
                   ),
@@ -3385,7 +3366,7 @@ class _StickerPackSheetState extends State<_StickerPackSheet> {
             const Divider(height: 1),
             Expanded(
               child: _loading
-                  ? const Center(child: CircularProgressIndicator())
+                  ? const Center(child: GlassProgressIndicator.circular())
                   : stickers.isEmpty
                   ? const Center(child: Text('No stickers in this pack'))
                   : GridView.builder(

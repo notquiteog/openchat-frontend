@@ -225,7 +225,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
           style: const TextStyle(color: Colors.white70),
         ),
       ),
-      _ => const Center(child: CircularProgressIndicator(color: Colors.white)),
+      _ => Center(child: GlassProgressIndicator.circular(color: Colors.white)),
     };
   }
 }

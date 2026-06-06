@@ -61,7 +61,7 @@ class _ChannelAnalyticsScreenState extends State<ChannelAnalyticsScreen> {
         ],
       ),
       body: _loading && analytics == null
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: GlassProgressIndicator.circular())
           : analytics == null
           ? _AnalyticsError(error: _error, onRetry: _load)
           : RefreshIndicator(

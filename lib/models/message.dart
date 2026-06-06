@@ -716,6 +716,7 @@ class Message {
             ? sender['key_fingerprint'] as String?
             : null,
         senderSignature: sender is Map ? sender['signature'] as String? : null,
+        senderCreatedAt: sender is Map ? sender['created_at'] as String? : null,
       );
     } catch (_) {
       return null;
@@ -736,6 +737,7 @@ class Message {
       senderId: wrapped.senderId!,
       keyFingerprint: wrapped.senderFingerprint!,
       signature: wrapped.senderSignature!,
+      createdAt: wrapped.senderCreatedAt,
     );
   }
 
@@ -794,6 +796,7 @@ class _OpenChatMessagePayload {
   final String? senderId;
   final String? senderFingerprint;
   final String? senderSignature;
+  final String? senderCreatedAt;
 
   const _OpenChatMessagePayload({
     required this.type,
@@ -801,6 +804,7 @@ class _OpenChatMessagePayload {
     this.senderId,
     this.senderFingerprint,
     this.senderSignature,
+    this.senderCreatedAt,
   });
 }
 
@@ -810,6 +814,8 @@ class OpenChatSenderProof {
   final String senderId;
   final String keyFingerprint;
   final String signature;
+  // Non-null for messages signed with the v2 sender-proof scheme.
+  final String? createdAt;
 
   const OpenChatSenderProof({
     required this.type,
@@ -817,6 +823,7 @@ class OpenChatSenderProof {
     required this.senderId,
     required this.keyFingerprint,
     required this.signature,
+    this.createdAt,
   });
 }
 

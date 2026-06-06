@@ -84,7 +84,7 @@ class _AdminAuditLogScreenState extends State<AdminAuditLogScreen> {
         ],
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: GlassProgressIndicator.circular())
           : Column(
               children: [
                 SizedBox(
@@ -152,7 +152,7 @@ class _AuditLogTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final filter = _filterForAction(event.action);
     final tint = _auditColor(scheme, filter);
-    return ListTile(
+    return GlassListTile(
       leading: Container(
         width: 40,
         height: 40,

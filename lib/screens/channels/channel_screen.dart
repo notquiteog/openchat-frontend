@@ -88,11 +88,17 @@ Future<Conversation?> showCreateChannelDialog(BuildContext context) async {
                 labelText: 'Description (optional)',
               ),
             ),
-            SwitchListTile(
-              title: const Text('Public'),
+            GlassListTile(
+              title: const Text('Public',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
               subtitle: const Text('Anyone can find and subscribe'),
-              value: isPublic,
-              onChanged: (v) => setDlgState(() => isPublic = v),
+              trailing: GlassSwitch(
+                value: isPublic,
+                onChanged: (v) => setDlgState(() => isPublic = v),
+                activeColor: Theme.of(context).colorScheme.primary,
+                enableHaptics: true,
+              ),
+              onTap: () => setDlgState(() => isPublic = !isPublic),
             ),
           ],
         ),
@@ -226,7 +232,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
               ),
             ),
           ),
-          if (_searching) const LinearProgressIndicator(),
+          if (_searching) const GlassProgressIndicator.linear(),
           Expanded(
             child: searching
                 ? _buildList(_results, emptyText: 'No channels found')
@@ -1592,14 +1598,19 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                       hintText: 'lowercase, letters/numbers/underscores',
                     ),
                   ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Public'),
+                GlassListTile(
+                  title: const Text('Public',
+                      style: TextStyle(fontWeight: FontWeight.w600)),
                   subtitle: const Text(
                     'Private channels lose their @handle and are hidden from search',
                   ),
-                  value: isPublic,
-                  onChanged: (v) => setDlgState(() => isPublic = v),
+                  trailing: GlassSwitch(
+                    value: isPublic,
+                    onChanged: (v) => setDlgState(() => isPublic = v),
+                    activeColor: Theme.of(context).colorScheme.primary,
+                    enableHaptics: true,
+                  ),
+                  onTap: () => setDlgState(() => isPublic = !isPublic),
                 ),
               ],
             ),
@@ -1771,15 +1782,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               ),
               const SizedBox(height: 12),
               for (final mode in EncryptionMode.values)
-                ListTile(
+                GlassListTile(
                   leading: Icon(
                     mode == channel.encryptionMode
                         ? Icons.radio_button_checked
                         : Icons.radio_button_unchecked,
                   ),
                   title: Text(mode.shortLabel),
-                  dense: true,
-                  enabled: mode != channel.encryptionMode,
                   onTap: mode == channel.encryptionMode
                       ? null
                       : () => Navigator.pop(ctx, mode),
@@ -2595,12 +2604,22 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
-              SwitchListTile(
-                secondary: const Icon(Icons.notifications_off_outlined),
-                title: const Text('Post silently'),
-                value: _sendSilent,
-                onChanged: (v) {
-                  setState(() => _sendSilent = v);
+              GlassListTile(
+                leading: const Icon(Icons.notifications_off_outlined),
+                title: const Text('Post silently',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+                trailing: GlassSwitch(
+                  value: _sendSilent,
+                  onChanged: (v) {
+                    setState(() => _sendSilent = v);
+                    _scheduleDraftSave(_inputCtrl.text);
+                    setSheetState(() {});
+                  },
+                  activeColor: Theme.of(context).colorScheme.primary,
+                  enableHaptics: true,
+                ),
+                onTap: () {
+                  setState(() => _sendSilent = !_sendSilent);
                   _scheduleDraftSave(_inputCtrl.text);
                   setSheetState(() {});
                 },
@@ -3613,17 +3632,27 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                           ),
                       ],
                     ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Anonymous'),
-                      value: anonymous,
-                      onChanged: (v) => setDialog(() => anonymous = v),
+                    GlassListTile(
+                      title: const Text('Anonymous',
+                          style: TextStyle(fontWeight: FontWeight.w600)),
+                      trailing: GlassSwitch(
+                        value: anonymous,
+                        onChanged: (v) => setDialog(() => anonymous = v),
+                        activeColor: Theme.of(context).colorScheme.primary,
+                        enableHaptics: true,
+                      ),
+                      onTap: () => setDialog(() => anonymous = !anonymous),
                     ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Multiple answers'),
-                      value: multiple,
-                      onChanged: (v) => setDialog(() => multiple = v),
+                    GlassListTile(
+                      title: const Text('Multiple answers',
+                          style: TextStyle(fontWeight: FontWeight.w600)),
+                      trailing: GlassSwitch(
+                        value: multiple,
+                        onChanged: (v) => setDialog(() => multiple = v),
+                        activeColor: Theme.of(context).colorScheme.primary,
+                        enableHaptics: true,
+                      ),
+                      onTap: () => setDialog(() => multiple = !multiple),
                     ),
                   ],
                 ),
@@ -3861,7 +3890,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             child: DecoratedBox(
               decoration: _channelBackground(),
               child: _loading
-                  ? const Center(child: CircularProgressIndicator())
+                  ? const Center(child: GlassProgressIndicator.circular())
                   : _posts.isEmpty
                   ? Center(
                       child: GlassContainer(
@@ -4068,7 +4097,7 @@ class _PinnedMessageSheetTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return ListTile(
+    return GlassListTile(
       leading: CircleAvatar(
         radius: 18,
         backgroundColor: scheme.primary.withValues(alpha: 0.12),

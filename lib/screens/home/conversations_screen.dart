@@ -170,7 +170,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
         ],
       ),
       body: chat.isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: GlassProgressIndicator.circular())
           : RefreshIndicator(
               onRefresh: () async {
                 await chat.loadConversations();
@@ -939,7 +939,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 : Icons.folder_outlined,
           ),
           title: Text(existing == null ? 'New folder' : 'Edit folder'),
-          contentPadding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
           content: SizedBox(
             width: 420,
             child: Column(
@@ -956,13 +955,21 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                CheckboxListTile(
-                  value: includeArchived,
-                  onChanged: (value) =>
-                      setDialogState(() => includeArchived = value ?? false),
-                  controlAffinity: ListTileControlAffinity.leading,
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Include archived chats'),
+                GlassListTile(
+                  leading: Icon(
+                    includeArchived
+                        ? Icons.check_box_rounded
+                        : Icons.check_box_outline_blank_rounded,
+                    color: includeArchived
+                        ? Theme.of(dialogCtx).colorScheme.primary
+                        : null,
+                    size: 20,
+                  ),
+                  title: const Text('Include archived chats',
+                      style: TextStyle(fontWeight: FontWeight.w600)),
+                  onTap: () => setDialogState(
+                    () => includeArchived = !includeArchived,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 ConstrainedBox(
@@ -983,20 +990,23 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                             final selected = selectedIds.contains(
                               conversation.id,
                             );
-                            return CheckboxListTile(
-                              value: selected,
-                              onChanged: (value) {
-                                setDialogState(() {
-                                  if (value == true) {
-                                    selectedIds.add(conversation.id);
-                                  } else {
-                                    selectedIds.remove(conversation.id);
-                                  }
-                                });
-                              },
-                              controlAffinity: ListTileControlAffinity.leading,
-                              contentPadding: EdgeInsets.zero,
-                              secondary: Icon(
+                            return GlassListTile(
+                              leading: Icon(
+                                selected
+                                    ? Icons.check_box_rounded
+                                    : Icons.check_box_outline_blank_rounded,
+                                color: selected
+                                    ? Theme.of(context).colorScheme.primary
+                                    : null,
+                                size: 20,
+                              ),
+                              title: Text(
+                                name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontWeight: FontWeight.w600),
+                              ),
+                              trailing: Icon(
                                 conversation.isChannel
                                     ? Icons.campaign_outlined
                                     : conversation.isGroup
@@ -1004,12 +1014,15 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                                     : conversation.isBotDM(userId)
                                     ? Icons.smart_toy_outlined
                                     : Icons.person_outline_rounded,
+                                size: 18,
                               ),
-                              title: Text(
-                                name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
+                              onTap: () => setDialogState(() {
+                                if (selected) {
+                                  selectedIds.remove(conversation.id);
+                                } else {
+                                  selectedIds.add(conversation.id);
+                                }
+                              }),
                             );
                           },
                         ),
@@ -1260,7 +1273,7 @@ class _FolderManagerTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return ListTile(
+    return GlassListTile(
       leading: CircleAvatar(
         radius: 18,
         backgroundColor: scheme.primary.withValues(alpha: 0.12),
@@ -1889,7 +1902,7 @@ class _ChatSearchDelegate extends SearchDelegate<_ChatSearchSelection?> {
       future: _search(term),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
+          return const Center(child: GlassProgressIndicator.circular());
         }
         final results = snapshot.data;
         if (results == null ||
@@ -1914,7 +1927,7 @@ class _ChatSearchDelegate extends SearchDelegate<_ChatSearchSelection?> {
                     : '${_messageCategoryLabel(_messageCategory!)} on this device',
               ),
               for (final message in results.messages)
-                ListTile(
+                GlassListTile(
                   leading: CircleAvatar(
                     child: Icon(_messageCategoryIcon(message.category)),
                   ),
@@ -1938,7 +1951,7 @@ class _ChatSearchDelegate extends SearchDelegate<_ChatSearchSelection?> {
             if (results.users.isNotEmpty)
               const _SearchSectionHeader(label: 'People and bots'),
             for (final u in results.users)
-              ListTile(
+              GlassListTile(
                 leading: CircleAvatar(
                   backgroundImage: u.avatarUrl != null
                       ? CachedNetworkImageProvider(
@@ -1979,7 +1992,7 @@ class _ChatSearchDelegate extends SearchDelegate<_ChatSearchSelection?> {
             if (results.channels.isNotEmpty)
               const _SearchSectionHeader(label: 'Channels'),
             for (final ch in results.channels)
-              ListTile(
+              GlassListTile(
                 leading: CircleAvatar(
                   backgroundImage: ch.avatarUrl != null
                       ? CachedNetworkImageProvider(
@@ -2147,37 +2160,22 @@ class _SheetTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return ClipRRect(
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: scheme.primary.withValues(alpha: 0.12),
-                  ),
-                  child: Icon(icon, size: 18, color: scheme.primary),
-                ),
-                const SizedBox(width: 14),
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 15,
-                  ),
-                ),
-              ],
-            ),
-          ),
+    final effectiveColor = scheme.primary;
+    return GlassListTile(
+      leading: Container(
+        width: 32,
+        height: 32,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: effectiveColor.withValues(alpha: 0.14),
         ),
+        child: Icon(icon, size: 17, color: effectiveColor),
       ),
+      title: Text(
+        label,
+        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+      ),
+      onTap: onTap,
     );
   }
 }

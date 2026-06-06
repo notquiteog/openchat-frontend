@@ -84,7 +84,7 @@ class _CustomEmojiPickerState extends State<CustomEmojiPicker>
         child: SizedBox(
           height: 268,
           child: _loading
-              ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+              ? const Center(child: GlassProgressIndicator.circular(strokeWidth: 2))
               : _packs.isEmpty
               ? Center(
                   child: Column(

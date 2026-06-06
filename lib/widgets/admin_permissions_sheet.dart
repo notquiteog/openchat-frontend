@@ -146,15 +146,25 @@ class _AdminPermissionsSheetState extends State<_AdminPermissionsSheet> {
                     shrinkWrap: true,
                     children: [
                       for (final permission in AdminPermission.values)
-                        SwitchListTile.adaptive(
-                          secondary: Icon(_iconFor(permission)),
-                          title: Text(_permissionLabels[permission]!),
-                          value: _permissions[permission] ?? false,
-                          onChanged: _saving || _role == MemberRole.member
+                        GlassListTile(
+                          leading: Icon(_iconFor(permission)),
+                          title: Text(_permissionLabels[permission]!,
+                              style: const TextStyle(fontWeight: FontWeight.w600)),
+                          trailing: GlassSwitch(
+                            value: _permissions[permission] ?? false,
+                            onChanged: (value) {
+                              if (!_saving && _role != MemberRole.member) {
+                                setState(() => _permissions[permission] = value);
+                              }
+                            },
+                            activeColor: Theme.of(context).colorScheme.primary,
+                            enableHaptics: true,
+                          ),
+                          onTap: _saving || _role == MemberRole.member
                               ? null
-                              : (value) => setState(
-                                  () => _permissions[permission] = value,
-                                ),
+                              : () => setState(() =>
+                                  _permissions[permission] =
+                                      !(_permissions[permission] ?? false)),
                         ),
                     ],
                   ),
@@ -173,13 +183,7 @@ class _AdminPermissionsSheetState extends State<_AdminPermissionsSheet> {
                       FilledButton.icon(
                         onPressed: _saving ? null : _save,
                         icon: _saving
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
+                            ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
                             : const Icon(Icons.check_rounded),
                         label: const Text('Save'),
                       ),

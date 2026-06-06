@@ -310,7 +310,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               )
                             : null,
                       ),
-                      if (uploading) const CircularProgressIndicator(),
+                      if (uploading) const GlassProgressIndicator.circular(size: 40),
                       if (!uploading)
                         Positioned(
                           bottom: 0,
@@ -566,11 +566,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       }
                     },
               child: submitting
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
+                  ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
                   : const Text('Change'),
             ),
           ],
@@ -679,11 +675,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         }
                       },
                 child: submitting
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
+                    ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
                     : const Text('Save'),
               ),
             ],
@@ -787,11 +779,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         }
                       },
                 child: submitting
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
+                    ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
                     : const Text('Save'),
               ),
             ],
@@ -816,35 +804,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
           width: double.maxFinite,
           child: sessions.isEmpty
               ? const Text('No active sessions found')
-              : ListView(
+              : ListView.builder(
                   shrinkWrap: true,
-                  children: [
-                    for (final session in sessions)
-                      ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: const Icon(Icons.devices_outlined),
-                        title: Text(
-                          sessionDeviceDisplayLabel(session),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          session['last_seen_at'] as String? ?? '',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.logout_outlined),
-                          onPressed: () async {
-                            await api.revokeSession(session['id'] as String);
-                            if (ctx.mounted) Navigator.pop(ctx);
-                            messenger.showSnackBar(
-                              const SnackBar(content: Text('Session revoked')),
-                            );
-                          },
+                  itemCount: sessions.length,
+                  itemBuilder: (_, i) {
+                    final session = sessions[i];
+                    return GlassListTile(
+                      leading: const Icon(
+                        CupertinoIcons.device_phone_portrait,
+                      ),
+                      title: Text(
+                        sessionDeviceDisplayLabel(session),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        session['last_seen_at'] as String? ?? '',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      trailing: GestureDetector(
+                        onTap: () async {
+                          await api.revokeSession(session['id'] as String);
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          messenger.showSnackBar(
+                            const SnackBar(content: Text('Session revoked')),
+                          );
+                        },
+                        child: const Icon(
+                          CupertinoIcons.power,
+                          color: CupertinoColors.destructiveRed,
+                          size: 20,
                         ),
                       ),
-                  ],
+                      isLast: i == sessions.length - 1,
+                    );
+                  },
                 ),
         ),
         actions: [
@@ -881,11 +876,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
+              GlassListTile(
                 title: const Text('Enabled'),
-                value: enabled,
-                onChanged: (v) => setDlg(() => enabled = v),
+                trailing: GlassSwitch(
+                  value: enabled,
+                  onChanged: (v) => setDlg(() => enabled = v),
+                  activeColor: Theme.of(ctx).colorScheme.primary,
+                  enableHaptics: true,
+                ),
+                onTap: () => setDlg(() => enabled = !enabled),
               ),
               TextField(
                 controller: displayCtrl,
@@ -1607,20 +1606,23 @@ class _SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
+    padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
     child: Text(
       title.toUpperCase(),
       style: TextStyle(
-        fontSize: 11,
+        fontSize: 11.5,
         fontWeight: FontWeight.w700,
-        color: Theme.of(context).colorScheme.primary,
-        letterSpacing: 1.2,
+        color: Theme.of(
+          context,
+        ).colorScheme.primary.withValues(alpha: 0.90),
+        letterSpacing: 1.4,
       ),
     ),
   );
 }
 
-/// A row inside a glass card that acts like a ListTile.
+/// A row inside a glass card — backed by [GlassListTile] for native iOS 26
+/// tap feedback and Cupertino-adaptive text colours.
 class _GlassTile extends StatelessWidget {
   final IconData icon;
   final Color? iconColor;
@@ -1645,75 +1647,33 @@ class _GlassTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return ClipRRect(
-      borderRadius: BorderRadius.vertical(
-        bottom: isLast ? const Radius.circular(22) : Radius.zero,
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: (iconColor ?? scheme.primary).withValues(
-                      alpha: 0.12,
-                    ),
-                  ),
-                  child: Icon(
-                    icon,
-                    size: 18,
-                    color: iconColor ?? scheme.primary,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        title,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 15,
-                          color: titleColor,
-                        ),
-                      ),
-                      if (subtitle != null)
-                        Text(
-                          subtitle!,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: scheme.onSurface.withValues(alpha: 0.55),
-                            height: 1.3,
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                trailing ??
-                    Icon(
-                      Icons.arrow_forward_ios_rounded,
-                      size: 14,
-                      color: scheme.onSurface.withValues(alpha: 0.35),
-                    ),
-              ],
-            ),
-          ),
+    final effectiveColor = iconColor ?? scheme.primary;
+    return GlassListTile(
+      leading: Container(
+        width: 32,
+        height: 32,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: effectiveColor.withValues(alpha: 0.14),
         ),
+        child: Icon(icon, size: 17, color: effectiveColor),
       ),
+      title: Text(
+        title,
+        style: titleColor != null
+            ? TextStyle(color: titleColor, fontWeight: FontWeight.w600)
+            : const TextStyle(fontWeight: FontWeight.w600),
+      ),
+      subtitle: subtitle != null ? Text(subtitle!) : null,
+      trailing: trailing ?? GlassListTile.chevron,
+      onTap: onTap,
+      isLast: isLast,
+      showDivider: false,
     );
   }
 }
 
-/// A switch row inside a glass card.
+/// A switch row inside a glass card — backed by [GlassListTile] + [GlassSwitch].
 class _GlassSwitchTile extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -1734,63 +1694,27 @@ class _GlassSwitchTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return ClipRRect(
-      borderRadius: BorderRadius.vertical(
-        bottom: isLast ? const Radius.circular(22) : Radius.zero,
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () => onChanged(!value),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: scheme.primary.withValues(alpha: 0.12),
-                  ),
-                  child: Icon(icon, size: 18, color: scheme.primary),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        title,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 15,
-                        ),
-                      ),
-                      if (subtitle != null)
-                        Text(
-                          subtitle!,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: scheme.onSurface.withValues(alpha: 0.55),
-                            height: 1.3,
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                GlassSwitch(
-                  value: value,
-                  onChanged: onChanged,
-                  activeColor: scheme.primary,
-                  enableHaptics: true,
-                ),
-              ],
-            ),
-          ),
+    return GlassListTile(
+      leading: Container(
+        width: 32,
+        height: 32,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: scheme.primary.withValues(alpha: 0.14),
         ),
+        child: Icon(icon, size: 17, color: scheme.primary),
       ),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+      subtitle: subtitle != null ? Text(subtitle!) : null,
+      trailing: GlassSwitch(
+        value: value,
+        onChanged: onChanged,
+        activeColor: scheme.primary,
+        enableHaptics: true,
+      ),
+      onTap: () => onChanged(!value),
+      isLast: isLast,
+      showDivider: false,
     );
   }
 }
@@ -1825,7 +1749,7 @@ class _CustomAccentColorDialogState extends State<_CustomAccentColorDialog> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return AlertDialog(
+    return GlassAlertDialog(
       title: const Text('Custom accent color'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1836,12 +1760,13 @@ class _CustomAccentColorDialogState extends State<_CustomAccentColorDialog> {
             height: 52,
             decoration: BoxDecoration(
               color: _current,
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(18),
               boxShadow: [
                 BoxShadow(
-                  color: _current.withValues(alpha: 0.45),
-                  blurRadius: 14,
+                  color: _current.withValues(alpha: 0.55),
+                  blurRadius: 20,
                   spreadRadius: -2,
+                  offset: const Offset(0, 4),
                 ),
               ],
             ),
@@ -1876,13 +1801,13 @@ class _CustomAccentColorDialogState extends State<_CustomAccentColorDialog> {
             right: HSVColor.fromAHSV(1, _hue, _sat, 1).toColor(),
             onChanged: (v) => setState(() => _val = v),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           Row(
             children: [
               Icon(
-                Icons.tag,
-                size: 15,
-                color: scheme.onSurface.withValues(alpha: 0.6),
+                CupertinoIcons.number,
+                size: 14,
+                color: scheme.onSurface.withValues(alpha: 0.55),
               ),
               const SizedBox(width: 4),
               Text(
@@ -1896,8 +1821,8 @@ class _CustomAccentColorDialogState extends State<_CustomAccentColorDialog> {
                   fontFamily: 'monospace',
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
-                  letterSpacing: 1.2,
-                  color: scheme.onSurface.withValues(alpha: 0.8),
+                  letterSpacing: 1.4,
+                  color: scheme.onSurface.withValues(alpha: 0.75),
                 ),
               ),
             ],

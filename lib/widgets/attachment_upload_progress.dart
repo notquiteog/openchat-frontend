@@ -64,15 +64,12 @@ class AttachmentUploadProgressChip extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 8),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(999),
-                    child: LinearProgressIndicator(
-                      value: fraction,
-                      minHeight: 5,
-                      backgroundColor: scheme.surfaceContainerHighest
-                          .withValues(alpha: 0.42),
-                      color: scheme.primary,
-                    ),
+                  GlassProgressIndicator.linear(
+                    value: fraction,
+                    height: 5,
+                    backgroundColor: scheme.surfaceContainerHighest
+                        .withValues(alpha: 0.42),
+                    color: scheme.primary,
                   ),
                 ],
               ),

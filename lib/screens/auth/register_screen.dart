@@ -225,15 +225,22 @@ class _RegisterScreenState extends State<RegisterScreen>
                                     },
                                   ),
                                   const SizedBox(height: 12),
-                                  SwitchListTile(
-                                    contentPadding: EdgeInsets.zero,
-                                    value: _publicDiscovery,
-                                    onChanged: (value) => setState(
-                                      () => _publicDiscovery = value,
-                                    ),
-                                    title: const Text('Public discovery'),
+                                  GlassListTile(
+                                    title: const Text('Public discovery',
+                                        style: TextStyle(fontWeight: FontWeight.w600)),
                                     subtitle: const Text(
                                       'Allow username search for this account',
+                                    ),
+                                    trailing: GlassSwitch(
+                                      value: _publicDiscovery,
+                                      onChanged: (value) => setState(
+                                        () => _publicDiscovery = value,
+                                      ),
+                                      activeColor: Theme.of(context).colorScheme.primary,
+                                      enableHaptics: true,
+                                    ),
+                                    onTap: () => setState(
+                                      () => _publicDiscovery = !_publicDiscovery,
                                     ),
                                   ),
                                   const SizedBox(height: 12),
@@ -333,22 +340,26 @@ class _RegisterScreenState extends State<RegisterScreen>
                                       ),
                                     ),
                                     const SizedBox(height: 8),
-                                    RadioGroup<KeyType>(
-                                      groupValue: _keyType,
-                                      onChanged: (v) =>
-                                          setState(() => _keyType = v!),
-                                      child: Column(
-                                        children: [
-                                          for (final keyType
-                                              in KeyType.accountCreationOptions)
-                                            RadioListTile<KeyType>(
-                                              value: keyType,
-                                              title: Text(keyType.title),
-                                              subtitle: Text(keyType.subtitle),
-                                              contentPadding: EdgeInsets.zero,
+                                    Column(
+                                      children: [
+                                        for (final keyType
+                                            in KeyType.accountCreationOptions)
+                                          GlassListTile(
+                                            leading: Icon(
+                                              keyType == _keyType
+                                                  ? Icons.radio_button_checked
+                                                  : Icons.radio_button_unchecked,
+                                              color: keyType == _keyType
+                                                  ? Theme.of(context).colorScheme.primary
+                                                  : null,
+                                              size: 20,
                                             ),
-                                        ],
-                                      ),
+                                            title: Text(keyType.title,
+                                                style: const TextStyle(fontWeight: FontWeight.w600)),
+                                            subtitle: Text(keyType.subtitle),
+                                            onTap: () => setState(() => _keyType = keyType),
+                                          ),
+                                      ],
                                     ),
                                   ],
 
@@ -385,14 +396,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                                             vertical: 16,
                                           ),
                                           child: auth.isLoading
-                                              ? const SizedBox(
-                                                  height: 20,
-                                                  width: 20,
-                                                  child:
-                                                      CircularProgressIndicator(
-                                                        strokeWidth: 2,
-                                                      ),
-                                                )
+                                              ? const GlassProgressIndicator.circular(size: 20, strokeWidth: 2)
                                               : const Text('Create account'),
                                         ),
                                       ),

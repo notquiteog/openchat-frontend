@@ -155,23 +155,25 @@ class _PrivateContactsScreenState extends State<PrivateContactsScreen> {
                     autocorrect: false,
                   ),
                   const SizedBox(height: 8),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    value: _publicDiscovery,
-                    onChanged: (value) =>
-                        setState(() => _publicDiscovery = value),
-                    title: const Text('Public discovery'),
+                  GlassListTile(
+                    title: const Text('Public discovery',
+                        style: TextStyle(fontWeight: FontWeight.w600)),
                     subtitle: const Text('Allow username search'),
+                    trailing: GlassSwitch(
+                      value: _publicDiscovery,
+                      onChanged: (value) =>
+                          setState(() => _publicDiscovery = value),
+                      activeColor: Theme.of(context).colorScheme.primary,
+                      enableHaptics: true,
+                    ),
+                    onTap: () =>
+                        setState(() => _publicDiscovery = !_publicDiscovery),
                   ),
                   const SizedBox(height: 8),
                   FilledButton.icon(
                     onPressed: _savingDiscovery ? null : _saveDiscovery,
                     icon: _savingDiscovery
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
+                        ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
                         : const Icon(Icons.save_outlined),
                     label: const Text('Save'),
                   ),
@@ -220,13 +222,7 @@ class _PrivateContactsScreenState extends State<PrivateContactsScreen> {
                         child: FilledButton.icon(
                           onPressed: _creatingLink ? null : _createOneTimeLink,
                           icon: _creatingLink
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
+                              ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
                               : const Icon(Icons.link_rounded),
                           label: const Text('Link'),
                         ),
@@ -272,7 +268,7 @@ class _ContactTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final settings = context.read<SettingsProvider>();
-    return ListTile(
+    return GlassListTile(
       leading: const CircleAvatar(child: Icon(Icons.person_outline)),
       title: Text(contact.title),
       subtitle: Text(

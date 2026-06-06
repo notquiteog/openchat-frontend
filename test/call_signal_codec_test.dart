@@ -62,6 +62,41 @@ void main() {
   );
 
   test(
+    'locked key returns partial result so a ring notification still fires',
+    () async {
+      final storage = _FakeSecureStorage(
+        userId: 'bob-id',
+        privateKey: '', // locked
+        publicKey: 'public-key',
+        fingerprint: 'fingerprint',
+      );
+      final conversation = _conversation(encryptionMode: EncryptionMode.pgp);
+      final codec = PrivacyCallSignalCodec(
+        _FakeApiService(storage, conversation: conversation),
+        storage,
+        _FakeMlsService(storage),
+      );
+
+      // Simulate an encrypted call offer arriving while the key is locked.
+      final incomingEnvelope = {
+        'call_id': 'call-99',
+        'conversation_id': conversation.id,
+        'encrypted_signal': 'opaque-ciphertext',
+        'encryption_mode': 'pgp',
+      };
+
+      final decoded = await codec.decode(incomingEnvelope);
+      // Must be non-null so handleIncomingCallPayload fires a notification.
+      expect(decoded, isNotNull);
+      expect(decoded!['call_id'], 'call-99');
+      // Privacy: caller identity and SDP must stay hidden (they're ciphertext).
+      expect(decoded.containsKey('caller_id'), isFalse);
+      expect(decoded.containsKey('sdp'), isFalse);
+      expect(decoded.containsKey('is_video'), isFalse);
+    },
+  );
+
+  test(
     'MLS call signal encrypts ICE candidate and keeps outer payload generic',
     () async {
       final storage = _FakeSecureStorage(

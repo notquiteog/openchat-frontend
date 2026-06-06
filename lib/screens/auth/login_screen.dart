@@ -253,13 +253,9 @@ class _LoginScreenState extends State<LoginScreen>
                                           vertical: 16,
                                         ),
                                         child: auth.isLoading
-                                            ? const SizedBox(
-                                                height: 20,
-                                                width: 20,
-                                                child:
-                                                    CircularProgressIndicator(
-                                                  strokeWidth: 2,
-                                                ),
+                                            ? const GlassProgressIndicator.circular(
+                                                size: 20,
+                                                strokeWidth: 2,
                                               )
                                             : const Text('Sign in'),
                                       ),
@@ -341,16 +337,9 @@ class _ErrorBox extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
-      child: Container(
+      child: GlassCard(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-        decoration: BoxDecoration(
-          color: scheme.error.withValues(alpha: 0.10),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: scheme.error.withValues(alpha: 0.26),
-            width: 0.7,
-          ),
-        ),
+        tint: scheme.error,
         child: Row(
           children: [
             Icon(Icons.error_outline_rounded, color: scheme.error, size: 17),
@@ -358,7 +347,11 @@ class _ErrorBox extends StatelessWidget {
             Expanded(
               child: Text(
                 message,
-                style: TextStyle(color: scheme.error, fontSize: 13),
+                style: TextStyle(
+                  color: scheme.error,
+                  fontSize: 13,
+                  height: 1.35,
+                ),
               ),
             ),
           ],

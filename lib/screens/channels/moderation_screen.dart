@@ -306,25 +306,31 @@ class _ModerationScreenState extends State<ModerationScreen> {
     return Scaffold(
       appBar: const GlassAppBar(title: Text('Moderation')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: GlassProgressIndicator.circular())
           : ListView(
               children: [
                 if (_canManageModeration || _canManageRoles)
-                  ListTile(
+                  GlassListTile(
                     leading: const Icon(Icons.history_rounded),
                     title: const Text('Audit log'),
                     trailing: const Icon(Icons.chevron_right_rounded),
                     onTap: _showAuditHistory,
                   ),
                 if (_canManageModeration)
-                  SwitchListTile(
-                    secondary: const Icon(Icons.campaign_outlined),
-                    title: const Text('Admins-only posting'),
+                  GlassListTile(
+                    leading: const Icon(Icons.campaign_outlined),
+                    title: const Text('Admins-only posting',
+                        style: TextStyle(fontWeight: FontWeight.w600)),
                     subtitle: const Text(
                       'When on, regular members can\'t send messages.',
                     ),
-                    value: _ownerOnly,
-                    onChanged: _toggleOwnerOnly,
+                    trailing: GlassSwitch(
+                      value: _ownerOnly,
+                      onChanged: _toggleOwnerOnly,
+                      activeColor: Theme.of(context).colorScheme.primary,
+                      enableHaptics: true,
+                    ),
+                    onTap: () => _toggleOwnerOnly(!_ownerOnly),
                   ),
                 if (_canManageModeration) ...[
                   const Divider(),
@@ -335,7 +341,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
                       style: Theme.of(context).textTheme.titleSmall,
                     ),
                   ),
-                  ListTile(
+                  GlassListTile(
                     leading: const Icon(Icons.hourglass_bottom_rounded),
                     title: const Text('New-user cooldown'),
                     trailing: DropdownButton<int>(
@@ -355,23 +361,39 @@ class _ModerationScreenState extends State<ModerationScreen> {
                             ),
                     ),
                   ),
-                  SwitchListTile(
-                    secondary: const Icon(Icons.perm_media_outlined),
-                    title: const Text('Block media'),
-                    value: _blockMedia,
-                    onChanged: _savingAntiSpam
+                  GlassListTile(
+                    leading: const Icon(Icons.perm_media_outlined),
+                    title: const Text('Block media',
+                        style: TextStyle(fontWeight: FontWeight.w600)),
+                    trailing: GlassSwitch(
+                      value: _blockMedia,
+                      onChanged: (value) {
+                        if (!_savingAntiSpam) _saveAntiSpamControls(blockMedia: value);
+                      },
+                      activeColor: Theme.of(context).colorScheme.primary,
+                      enableHaptics: true,
+                    ),
+                    onTap: _savingAntiSpam
                         ? null
-                        : (value) => _saveAntiSpamControls(blockMedia: value),
+                        : () => _saveAntiSpamControls(blockMedia: !_blockMedia),
                   ),
-                  SwitchListTile(
-                    secondary: const Icon(Icons.link_off_rounded),
-                    title: const Text('Block links'),
-                    value: _blockLinks,
-                    onChanged: _savingAntiSpam
+                  GlassListTile(
+                    leading: const Icon(Icons.link_off_rounded),
+                    title: const Text('Block links',
+                        style: TextStyle(fontWeight: FontWeight.w600)),
+                    trailing: GlassSwitch(
+                      value: _blockLinks,
+                      onChanged: (value) {
+                        if (!_savingAntiSpam) _saveAntiSpamControls(blockLinks: value);
+                      },
+                      activeColor: Theme.of(context).colorScheme.primary,
+                      enableHaptics: true,
+                    ),
+                    onTap: _savingAntiSpam
                         ? null
-                        : (value) => _saveAntiSpamControls(blockLinks: value),
+                        : () => _saveAntiSpamControls(blockLinks: !_blockLinks),
                   ),
-                  ListTile(
+                  GlassListTile(
                     leading: const Icon(Icons.alternate_email_rounded),
                     title: const Text('Mention limit'),
                     trailing: DropdownButton<int>(
@@ -411,7 +433,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
                       ),
                     ),
                   for (final report in _reports)
-                    ListTile(
+                    GlassListTile(
                       leading: const Icon(Icons.report_problem_outlined),
                       title: Text(_reportTitle(report)),
                       subtitle: Text(_reportSubtitle(report)),
@@ -450,7 +472,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
                       ),
                     ),
                   for (final mute in _mutes)
-                    ListTile(
+                    GlassListTile(
                       leading: const Icon(Icons.volume_off_outlined),
                       title: Text(_displayNameFor(mute['user_id'] as String)),
                       subtitle: Text(_muteSubtitle(mute)),
@@ -469,7 +491,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
                       ),
                     ),
                     for (final m in mutableMembers)
-                      ListTile(
+                      GlassListTile(
                         leading: const Icon(Icons.person_outline),
                         title: Text('@${m.user?.username ?? "user"}'),
                         trailing: const Icon(Icons.volume_off),
@@ -487,7 +509,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
                     ),
                   ),
                   for (final m in manageableMembers)
-                    ListTile(
+                    GlassListTile(
                       leading: const Icon(Icons.person_outline),
                       title: Text('@${m.user?.username ?? "user"}'),
                       subtitle: Text(_roleLabel(m.role)),

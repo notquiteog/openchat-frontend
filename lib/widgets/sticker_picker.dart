@@ -81,7 +81,7 @@ class _StickerPickerState extends State<StickerPicker>
         child: SizedBox(
           height: 268,
           child: _loading
-              ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+              ? const Center(child: GlassProgressIndicator.circular(strokeWidth: 2))
               : _packs.isEmpty
               ? Center(
                   child: Column(
@@ -199,10 +199,7 @@ class _StickerPickerState extends State<StickerPicker>
                                             fit: BoxFit.cover,
                                             placeholder: (_, _) =>
                                                 const Center(
-                                                  child:
-                                                      CircularProgressIndicator(
-                                                    strokeWidth: 2,
-                                                  ),
+                                                  child: GlassProgressIndicator.circular(strokeWidth: 2),
                                                 ),
                                             errorWidget: (_, _, _) => const Icon(
                                               Icons.broken_image_outlined,

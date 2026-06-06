@@ -876,6 +876,12 @@ class _FakeCallService extends CallService {
   final List<bool> startCallIsVideo = [];
   final List<bool> micMuteValues = [];
   final List<bool> cameraEnabledValues = [];
+  // Non-null by default so normal test scenarios bypass the locked-key guard.
+  // Set to null to simulate an offer that arrived while the PGP key was locked.
+  String? pendingOfferSdpValue = 'fake-sdp';
+
+  @override
+  String? get pendingOfferSdp => pendingOfferSdpValue;
 
   void emitSession(CallSession? session) {
     _session = session;

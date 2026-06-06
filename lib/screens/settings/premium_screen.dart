@@ -151,7 +151,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
     return Scaffold(
       appBar: const GlassAppBar(title: Text('OpenChat Premium')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: GlassProgressIndicator.circular())
           : _loadError != null
           ? Center(child: Text('Failed to load: $_loadError'))
           : RefreshIndicator(

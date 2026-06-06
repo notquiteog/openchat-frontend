@@ -402,12 +402,22 @@ class PgpService {
     }
   }
 
+  /// Build the canonical string that is signed (and later verified) as the
+  /// sender proof for a sealed message.
+  ///
+  /// Pass [createdAt] (ISO-8601 UTC) to use the v2 scheme, which binds the
+  /// signature to a timestamp and makes identical-content replays detectable.
+  /// Omit it only when verifying legacy v1 messages that predate this field.
   static String senderProofData({
     required String conversationId,
     required String messageType,
     required String payload,
+    String? createdAt,
   }) {
     final encodedPayload = base64Url.encode(utf8.encode(payload));
+    if (createdAt != null && createdAt.isNotEmpty) {
+      return 'openchat-pgp-sender-v2:$conversationId:$messageType:$encodedPayload:$createdAt';
+    }
     return 'openchat-pgp-sender-v1:$conversationId:$messageType:$encodedPayload';
   }
 

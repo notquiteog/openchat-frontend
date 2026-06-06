@@ -155,7 +155,7 @@ class _InviteLoadingView extends StatelessWidget {
     return const SizedBox(
       key: ValueKey('invite-loading'),
       height: 220,
-      child: Center(child: CircularProgressIndicator()),
+      child: Center(child: GlassProgressIndicator.circular()),
     );
   }
 }
@@ -326,11 +326,7 @@ class _InviteReadyView extends StatelessWidget {
         GlassButtonWidget.icon(
           onPressed: joining || requestSent ? null : onJoin,
           icon: joining
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
+              ? const GlassProgressIndicator.circular(size: 18, strokeWidth: 2)
               : Icon(
                   requestSent
                       ? Icons.hourglass_top_rounded

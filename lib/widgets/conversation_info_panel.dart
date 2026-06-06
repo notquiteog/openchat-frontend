@@ -909,7 +909,7 @@ class _SharedContentSheetState extends State<_SharedContentSheet>
     final state = _stateFor(section);
     final items = _sharedItemsForSection(section, state.messages);
     if (state.loading && !state.initialized) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(child: GlassProgressIndicator.circular());
     }
     if (state.error != null && items.isEmpty) {
       return _SharedStateMessage(
@@ -941,11 +941,7 @@ class _SharedContentSheetState extends State<_SharedContentSheet>
                 ? null
                 : () => unawaited(_loadMore(section)),
             icon: state.loadingMore
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
+                ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
                 : const Icon(Icons.expand_more_rounded),
             label: Text(state.loadingMore ? 'Loading' : 'Load more'),
           ),

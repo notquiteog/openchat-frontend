@@ -294,11 +294,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                         }
                       },
                 child: submitting
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
+                    ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
                     : const Text('Save'),
               ),
             ],
@@ -393,11 +389,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                         }
                       },
                 child: submitting
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
+                    ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
                     : const Text('Save'),
               ),
             ],
@@ -676,11 +668,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                           ? 'Loading signed-in devices'
                           : 'No active sessions found',
                       trailing: _loading
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
+                          ? const GlassProgressIndicator.circular(size: 18, strokeWidth: 2)
                           : null,
                       isLast: true,
                     )
@@ -873,11 +861,7 @@ class _TrustHero extends StatelessWidget {
             ),
           ),
           if (loading)
-            const SizedBox(
-              width: 22,
-              height: 22,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
+            const GlassProgressIndicator.circular(size: 22, strokeWidth: 2),
         ],
       ),
     );
@@ -1095,7 +1079,12 @@ class _TrustSwitchRow extends StatelessWidget {
       icon: icon,
       title: title,
       subtitle: subtitle,
-      trailing: Switch(value: value, onChanged: onChanged),
+      trailing: GlassSwitch(
+        value: value,
+        onChanged: onChanged,
+        activeColor: Theme.of(context).colorScheme.primary,
+        enableHaptics: true,
+      ),
       onTap: () => onChanged(!value),
     );
   }

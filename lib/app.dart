@@ -396,13 +396,10 @@ class _LiveConnectionBanner extends StatelessWidget {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              SizedBox(
-                                width: 12,
-                                height: 12,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 1.8,
-                                  color: scheme.primary,
-                                ),
+                              GlassProgressIndicator.circular(
+                                size: 14,
+                                strokeWidth: 2.0,
+                                color: scheme.primary,
                               ),
                               const SizedBox(width: 8),
                               Text(
@@ -411,7 +408,7 @@ class _LiveConnectionBanner extends StatelessWidget {
                                   color: scheme.primary,
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
-                                  letterSpacing: 0.2,
+                                  letterSpacing: 0.1,
                                 ),
                               ),
                             ],
@@ -843,11 +840,7 @@ class _AppRootState extends State<_AppRoot> {
               allowElevation: true,
               glowIntensity: 0.10,
               padding: const EdgeInsets.all(36),
-              child: const SizedBox(
-                width: 36,
-                height: 36,
-                child: CircularProgressIndicator(strokeWidth: 2.5),
-              ),
+              child: const GlassProgressIndicator.circular(size: 36, strokeWidth: 2.5),
             ),
           ),
         ),
@@ -1032,18 +1025,17 @@ class _AppLockScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 32),
                     SizedBox(
-                      height: 52,
                       width: double.infinity,
-                      child: FilledButton.icon(
+                      child: GlassButtonWidget.icon(
                         onPressed: onUnlock,
-                        icon: const Icon(Icons.fingerprint_rounded),
+                        icon: const Icon(
+                          Icons.fingerprint_rounded,
+                          size: 20,
+                        ),
                         label: const Text('Unlock'),
-                        style: FilledButton.styleFrom(
-                          shape: const StadiumBorder(),
-                          textStyle: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                          ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 32,
+                          vertical: 16,
                         ),
                       ),
                     ),
@@ -1074,37 +1066,23 @@ class _ExpiredKeyBanner extends StatelessWidget {
         context,
         MaterialPageRoute(builder: (_) => const PgpKeysScreen()),
       ),
-      child: Container(
+      child: GlassCard(
         margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(
-          color: scheme.error.withValues(alpha: 0.14),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: scheme.error.withValues(alpha: 0.32),
-            width: 0.8,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: scheme.error.withValues(alpha: 0.12),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
+        tint: scheme.error,
         child: Row(
           children: [
             Container(
-              width: 36,
-              height: 36,
+              width: 34,
+              height: 34,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: scheme.error.withValues(alpha: 0.20),
+                color: scheme.error.withValues(alpha: 0.22),
               ),
               child: Icon(
                 Icons.lock_clock_outlined,
                 color: scheme.error,
-                size: 18,
+                size: 17,
               ),
             ),
             const SizedBox(width: 12),

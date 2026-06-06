@@ -288,6 +288,15 @@ class CallProvider extends ChangeNotifier {
     final incoming = _incomingCall;
     final sdp = _pendingOfferSdp;
     if (incoming == null) return;
+    if (sdp == null) {
+      // The offer arrived while the PGP key was locked and could not be
+      // decrypted. Reject cleanly so the caller isn't left hanging.
+      rejectIncomingCall();
+      throw Exception(
+        'Your PGP key was locked when this call arrived. '
+        'Unlock it in Settings → PGP Keys, then ask the caller to try again.',
+      );
+    }
     await _mediaPermissionGate(isVideo: incoming.isVideo);
 
     _incomingCall = null;
@@ -297,9 +306,7 @@ class CallProvider extends ChangeNotifier {
     notifyListeners();
 
     await _callService.acceptIncomingCall(incoming);
-    if (sdp != null) {
-      await _callService.answerCall(sdpOffer: sdp);
-    }
+    await _callService.answerCall(sdpOffer: sdp);
     notifyListeners();
   }
 

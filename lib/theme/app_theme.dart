@@ -19,27 +19,30 @@ class _GlassPageTransitionsBuilder extends PageTransitionsBuilder {
   ) {
     final curved = CurvedAnimation(
       parent: animation,
-      curve: Curves.easeOutCubic,
-      reverseCurve: Curves.easeInCubic,
+      curve: const Cubic(0.25, 0.46, 0.45, 0.94),
+      reverseCurve: Curves.easeInQuart,
     );
     final secondaryCurved = CurvedAnimation(
       parent: secondaryAnimation,
       curve: Curves.easeInCubic,
     );
+    // Outgoing page: shrinks slightly and fades — simulates depth through glass.
     return FadeTransition(
-      opacity: Tween<double>(begin: 0.88, end: 1.0).animate(secondaryCurved)
-          ..drive(Tween<double>(begin: 1.0, end: 0.88)),
-      child: SlideTransition(
-        position: Tween<Offset>(
-          begin: const Offset(0.05, 0),
-          end: Offset.zero,
-        ).animate(curved),
-        child: FadeTransition(
-          opacity: CurvedAnimation(
-            parent: animation,
-            curve: const Interval(0.0, 0.6, curve: Curves.easeOut),
+      opacity: Tween<double>(begin: 1.0, end: 0.85).animate(secondaryCurved),
+      child: ScaleTransition(
+        scale: Tween<double>(begin: 1.0, end: 0.96).animate(secondaryCurved),
+        child: SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0.06, 0),
+            end: Offset.zero,
+          ).animate(curved),
+          child: FadeTransition(
+            opacity: CurvedAnimation(
+              parent: animation,
+              curve: const Interval(0.0, 0.55, curve: Curves.easeOut),
+            ),
+            child: child,
           ),
-          child: child,
         ),
       ),
     );

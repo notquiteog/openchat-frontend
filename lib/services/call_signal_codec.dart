@@ -138,7 +138,14 @@ class PrivacyCallSignalCodec implements CallSignalCodec {
     if (conversation == null || !conversation.isEncrypted) return null;
 
     final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
-    if (privateKey.trim().isEmpty) return null;
+    if (privateKey.trim().isEmpty) {
+      // Key is locked; return a minimal result so a ring notification fires.
+      // Caller identity and SDP are inside the ciphertext and stay hidden —
+      // the call rings but cannot be answered until the key is unlocked.
+      final outerCallId = data['call_id']?.toString() ?? '';
+      if (outerCallId.isEmpty) return null;
+      return {'call_id': outerCallId, 'conversation_id': conversationId};
+    }
 
     final mode = encryptionModeFromJson(
       data['encryption_mode'] ?? conversation.encryptionMode.apiValue,

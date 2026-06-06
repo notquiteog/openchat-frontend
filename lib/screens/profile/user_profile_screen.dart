@@ -492,11 +492,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                   GlassButtonWidget.icon(
                     onPressed: submitting ? null : submit,
                     icon: submitting
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
+                        ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
                         : const Icon(Icons.payments_outlined),
                     label: Text(
                       payMode
@@ -662,7 +658,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         ],
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: GlassProgressIndicator.circular())
           : ListView(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
               children: [
@@ -1063,13 +1059,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                           return const Padding(
                             padding: EdgeInsets.all(20),
                             child: Center(
-                              child: SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              ),
+                              child: GlassProgressIndicator.circular(size: 20, strokeWidth: 2),
                             ),
                           );
                         }

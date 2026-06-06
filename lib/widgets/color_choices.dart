@@ -1,4 +1,6 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'glass.dart';
 
 /// A compact swatch picker: "default" chip, preset palette, and a custom
 /// color button that opens an HSV color wheel dialog.
@@ -166,7 +168,7 @@ class _CustomColorDialogState extends State<_CustomColorDialog> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return AlertDialog(
+    return GlassAlertDialog(
       title: const Text('Custom color'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -211,7 +213,7 @@ class _CustomColorDialogState extends State<_CustomColorDialog> {
           // Hex display
           Row(
             children: [
-              const Icon(Icons.tag, size: 16),
+              const Icon(CupertinoIcons.number, size: 16),
               const SizedBox(width: 4),
               Text(
                 _current.toARGB32().toRadixString(16).toUpperCase().padLeft(8, '0').substring(2),
@@ -236,12 +238,16 @@ class _CustomColorDialogState extends State<_CustomColorDialog> {
         ],
       ),
       actions: [
-        TextButton(
+        GlassButtonWidget(
           onPressed: () => Navigator.pop(context),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
           child: const Text('Cancel'),
         ),
-        FilledButton(
+        GlassButtonWidget(
           onPressed: () => Navigator.pop(context, _current),
+          color: Theme.of(context).colorScheme.primary,
+          foregroundColor: Theme.of(context).colorScheme.onPrimary,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
           child: const Text('Select'),
         ),
       ],

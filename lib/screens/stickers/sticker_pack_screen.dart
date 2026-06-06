@@ -128,7 +128,7 @@ class _StickerPackScreenState extends State<StickerPackScreen> {
         ],
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: GlassProgressIndicator.circular())
           : _packs.isEmpty
           ? Center(
               child: Column(
@@ -557,7 +557,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
               ],
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: GlassProgressIndicator.circular())
           : Column(
               children: [
                 if (coverUrl != null)
@@ -588,7 +588,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                             ),
                             const SizedBox(width: 12),
                             Expanded(
-                              child: LinearProgressIndicator(
+                              child: GlassProgressIndicator.linear(
                                 value: count / 50,
                                 color: count >= 50
                                     ? Colors.red

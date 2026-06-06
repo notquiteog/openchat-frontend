@@ -275,7 +275,7 @@ class _WalletScreenState extends State<WalletScreen> {
     return Scaffold(
       appBar: const GlassAppBar(title: Text('Wallet')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: GlassProgressIndicator.circular())
           : _error != null
           ? Center(child: Text('Failed to load wallet: $_error'))
           : RefreshIndicator(

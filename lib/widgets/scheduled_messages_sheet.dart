@@ -379,7 +379,7 @@ class _ScheduledMessagesSheetState extends State<ScheduledMessagesSheet> {
           if (_loading)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 34),
-              child: Center(child: CircularProgressIndicator()),
+              child: Center(child: GlassProgressIndicator.circular()),
             )
           else if (_error != null)
             _ScheduledStateMessage(
@@ -470,9 +470,7 @@ class _ScheduledMessageTile extends StatelessWidget {
       if (item.decryptionFailed) 'Preview locked',
     ].join(' | ');
 
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      minLeadingWidth: 44,
+    return GlassListTile(
       leading: Container(
         width: 40,
         height: 40,
@@ -511,7 +509,7 @@ class _ScheduledMessageTile extends StatelessWidget {
               child: sending
                   ? const Padding(
                       padding: EdgeInsets.all(10),
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                      child: GlassProgressIndicator.circular(strokeWidth: 2),
                     )
                   : IconButton(
                       tooltip: 'Send now',
@@ -524,7 +522,7 @@ class _ScheduledMessageTile extends StatelessWidget {
               child: rescheduling
                   ? const Padding(
                       padding: EdgeInsets.all(10),
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                      child: GlassProgressIndicator.circular(strokeWidth: 2),
                     )
                   : IconButton(
                       tooltip: 'Reschedule',
@@ -537,7 +535,7 @@ class _ScheduledMessageTile extends StatelessWidget {
               child: canceling
                   ? const Padding(
                       padding: EdgeInsets.all(10),
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                      child: GlassProgressIndicator.circular(strokeWidth: 2),
                     )
                   : IconButton(
                       tooltip: 'Cancel scheduled item',

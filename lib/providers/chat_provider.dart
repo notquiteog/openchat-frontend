@@ -2054,11 +2054,13 @@ class ChatProvider extends ChangeNotifier {
     required String privateKey,
   }) async {
     final fingerprint = await _storage.getFingerprint() ?? '';
+    final createdAt = DateTime.now().toUtc().toIso8601String();
     final signature = await PgpService.sign(
       data: PgpService.senderProofData(
         conversationId: convID,
         messageType: messageType,
         payload: plaintextPayload,
+        createdAt: createdAt,
       ),
       privateKeyArmored: privateKey,
     ).timeout(const Duration(seconds: 30));
@@ -2070,18 +2072,17 @@ class ChatProvider extends ChangeNotifier {
         'id': senderId,
         'key_fingerprint': fingerprint,
         'signature': signature,
+        'created_at': createdAt,
       },
     });
   }
 
   Future<String> _sealedPostToken(String convID, String privateKey) async {
     final encrypted = await _api.getEncryptedSealedPostToken(convID);
-    final token = await PgpService.decrypt(
+    return PgpService.decrypt(
       encryptedArmor: encrypted,
       privateKeyArmored: privateKey,
     );
-    await _storage.savePgpPostToken(convID, token);
-    return token;
   }
 
   Future<String?> _verifiedPgpSenderId(
@@ -2116,11 +2117,15 @@ class ChatProvider extends ChangeNotifier {
         proof.keyFingerprint.toUpperCase()) {
       return null;
     }
+    // v2 messages carry a createdAt timestamp in the signed data.  v1 messages
+    // (sent before this scheme was introduced) omit it; fall back to v1 so
+    // historical message history continues to verify correctly.
     final ok = await PgpService.verify(
       data: PgpService.senderProofData(
         conversationId: convID,
         messageType: proof.type,
         payload: proof.payload,
+        createdAt: proof.createdAt,
       ),
       signatureArmor: proof.signature,
       signerPublicKeyArmored: user.publicKey,

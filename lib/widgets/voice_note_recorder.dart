@@ -270,11 +270,7 @@ class _VoiceNoteRecorderSheetState extends State<VoiceNoteRecorderSheet> {
                     ? _stop
                     : _start,
                 icon: _busy
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
+                    ? const GlassProgressIndicator.circular(size: 20, strokeWidth: 2)
                     : Icon(_recording ? Icons.stop : Icons.mic),
               ),
               IconButton.filled(

@@ -194,24 +194,47 @@ class AttachmentService {
 
   // ---- Pickers ----
 
+  // image_picker gallery/video is not implemented on desktop (Linux/macOS/Windows);
+  // use file_selector there, which is already present for file + voice picks.
+  static bool get _isDesktop =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.linux ||
+          defaultTargetPlatform == TargetPlatform.macOS ||
+          defaultTargetPlatform == TargetPlatform.windows);
+
+  static const _imageTypeGroup = fs.XTypeGroup(
+    label: 'Images',
+    mimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic'],
+    extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic'],
+  );
+
+  static const _videoTypeGroup = fs.XTypeGroup(
+    label: 'Videos',
+    mimeTypes: ['video/mp4', 'video/quicktime', 'video/x-matroska', 'video/webm'],
+    extensions: ['mp4', 'mov', 'mkv', 'webm'],
+  );
+
   Future<PendingAttachment?> pickImage({
     bool fromCamera = false,
     AttachmentUploadProgressCallback? onProgress,
   }) async {
-    final XFile? file = fromCamera
-        ? await _imagePicker.pickImage(
-            source: ImageSource.camera,
-            imageQuality: 85,
-          )
-        : await _imagePicker.pickImage(
-            source: ImageSource.gallery,
-            imageQuality: 85,
-          );
-    if (file == null) return null;
+    final File? imageFile;
+    if (!fromCamera && _isDesktop) {
+      final picked = await fs.openFile(acceptedTypeGroups: [_imageTypeGroup]);
+      if (picked == null) return null;
+      imageFile = File(picked.path);
+    } else {
+      final XFile? picked = await _imagePicker.pickImage(
+        source: fromCamera ? ImageSource.camera : ImageSource.gallery,
+        imageQuality: 85,
+      );
+      if (picked == null) return null;
+      imageFile = File(picked.path);
+    }
     onProgress?.call(
       const AttachmentUploadProgress(stage: AttachmentUploadStage.preparing),
     );
-    final prepared = await prepareGalleryPhotoForUpload(File(file.path));
+    final prepared = await prepareGalleryPhotoForUpload(imageFile);
     return _processPrepared(prepared, onProgress: onProgress);
   }
 
@@ -219,20 +242,23 @@ class AttachmentService {
     bool fromCamera = false,
     AttachmentUploadProgressCallback? onProgress,
   }) async {
-    final XFile? file = fromCamera
-        ? await _imagePicker.pickImage(
-            source: ImageSource.camera,
-            imageQuality: 85,
-          )
-        : await _imagePicker.pickImage(
-            source: ImageSource.gallery,
-            imageQuality: 85,
-          );
-    if (file == null) return null;
+    final File? imageFile;
+    if (!fromCamera && _isDesktop) {
+      final picked = await fs.openFile(acceptedTypeGroups: [_imageTypeGroup]);
+      if (picked == null) return null;
+      imageFile = File(picked.path);
+    } else {
+      final XFile? picked = await _imagePicker.pickImage(
+        source: fromCamera ? ImageSource.camera : ImageSource.gallery,
+        imageQuality: 85,
+      );
+      if (picked == null) return null;
+      imageFile = File(picked.path);
+    }
     onProgress?.call(
       const AttachmentUploadProgress(stage: AttachmentUploadStage.preparing),
     );
-    final prepared = await prepareGalleryPhotoForUpload(File(file.path));
+    final prepared = await prepareGalleryPhotoForUpload(imageFile);
     return encryptPreparedAttachment(prepared, onProgress: onProgress);
   }
 
@@ -240,14 +266,22 @@ class AttachmentService {
     bool fromCamera = false,
     AttachmentUploadProgressCallback? onProgress,
   }) async {
-    final XFile? file = fromCamera
-        ? await _imagePicker.pickVideo(source: ImageSource.camera)
-        : await _imagePicker.pickVideo(source: ImageSource.gallery);
-    if (file == null) return null;
+    final File? videoFile;
+    if (!fromCamera && _isDesktop) {
+      final picked = await fs.openFile(acceptedTypeGroups: [_videoTypeGroup]);
+      if (picked == null) return null;
+      videoFile = File(picked.path);
+    } else {
+      final XFile? picked = await _imagePicker.pickVideo(
+        source: fromCamera ? ImageSource.camera : ImageSource.gallery,
+      );
+      if (picked == null) return null;
+      videoFile = File(picked.path);
+    }
     onProgress?.call(
       const AttachmentUploadProgress(stage: AttachmentUploadStage.preparing),
     );
-    final prepared = await prepareFileForUpload(File(file.path));
+    final prepared = await prepareFileForUpload(videoFile);
     return _processPrepared(prepared, onProgress: onProgress);
   }
 
@@ -255,14 +289,22 @@ class AttachmentService {
     bool fromCamera = false,
     AttachmentUploadProgressCallback? onProgress,
   }) async {
-    final XFile? file = fromCamera
-        ? await _imagePicker.pickVideo(source: ImageSource.camera)
-        : await _imagePicker.pickVideo(source: ImageSource.gallery);
-    if (file == null) return null;
+    final File? videoFile;
+    if (!fromCamera && _isDesktop) {
+      final picked = await fs.openFile(acceptedTypeGroups: [_videoTypeGroup]);
+      if (picked == null) return null;
+      videoFile = File(picked.path);
+    } else {
+      final XFile? picked = await _imagePicker.pickVideo(
+        source: fromCamera ? ImageSource.camera : ImageSource.gallery,
+      );
+      if (picked == null) return null;
+      videoFile = File(picked.path);
+    }
     onProgress?.call(
       const AttachmentUploadProgress(stage: AttachmentUploadStage.preparing),
     );
-    final prepared = await prepareFileForUpload(File(file.path));
+    final prepared = await prepareFileForUpload(videoFile);
     return encryptPreparedAttachment(prepared, onProgress: onProgress);
   }
 

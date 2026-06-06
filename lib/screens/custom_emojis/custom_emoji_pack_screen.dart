@@ -128,7 +128,7 @@ class _CustomEmojiPackScreenState extends State<CustomEmojiPackScreen> {
         ],
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: GlassProgressIndicator.circular())
           : _packs.isEmpty
           ? Center(
               child: Column(
@@ -579,7 +579,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
               ],
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: GlassProgressIndicator.circular())
           : Column(
               children: [
                 if (coverUrl != null)

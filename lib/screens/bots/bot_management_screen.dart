@@ -128,7 +128,7 @@ class _BotManagementScreenState extends State<BotManagementScreen> {
         ],
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: GlassProgressIndicator.circular())
           : _bots.isEmpty
               ? Center(
                   child: Column(
@@ -399,12 +399,7 @@ class _CreateBotDialogState extends State<_CreateBotDialog> {
         FilledButton(
           onPressed: _creating ? null : _submit,
           child: _creating
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: Colors.white),
-                )
+              ? const GlassProgressIndicator.circular(size: 18, strokeWidth: 2, color: Colors.white)
               : const Text('Create'),
         ),
       ],
