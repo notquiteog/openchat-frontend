@@ -92,6 +92,14 @@ bool _isDesktopCallLayout(BuildContext context) {
   };
 }
 
+bool _isMobileCallPlatform() {
+  if (kIsWeb) return false;
+  return switch (defaultTargetPlatform) {
+    TargetPlatform.android || TargetPlatform.iOS => true,
+    _ => false,
+  };
+}
+
 /// Full-screen audio/video call UI in iOS 26 Liquid Glass style.
 class CallScreen extends StatefulWidget {
   const CallScreen({super.key});
@@ -243,6 +251,10 @@ class _CallScreenState extends State<CallScreen> {
     cp.setCameraEnabled(!cp.isCameraEnabled);
   }
 
+  void _switchCamera() {
+    unawaited(context.read<CallProvider>().switchCamera());
+  }
+
   void _hangup() => context.read<CallProvider>().hangup();
   void _minimize() => context.read<CallProvider>().setCallMinimized(true);
 
@@ -352,6 +364,13 @@ class _CallScreenState extends State<CallScreen> {
           active: cameraOff,
           onTap: _toggleCamera,
         ),
+      if (isVideo && _isMobileCallPlatform())
+        _ControlButton(
+          key: const Key('call-control-switch-camera'),
+          icon: Icons.cameraswitch_rounded,
+          label: 'Flip',
+          onTap: _switchCamera,
+        ),
       _ControlButton(
         key: const Key('call-control-end'),
         icon: Icons.call_end_rounded,
@@ -409,7 +428,7 @@ class _CallScreenState extends State<CallScreen> {
                 child: IgnorePointer(
                   child: RTCVideoView(
                     _localRenderer,
-                    mirror: true,
+                    mirror: cp.isFrontCamera,
                     objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                   ),
                 ),

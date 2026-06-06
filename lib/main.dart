@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:just_audio_media_kit/just_audio_media_kit.dart';
@@ -34,7 +36,10 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
     final body = isVideo == null
         ? 'Incoming call'
         : 'Incoming ${isVideo == 'true' ? 'video' : 'voice'} call';
-    await NotificationService.showIncomingCall(body: body);
+    await NotificationService.showIncomingCall(
+      body: body,
+      payload: jsonEncode(message.data),
+    );
   } else if (message.notification == null &&
       message.data['type'] == 'new_message') {
     final conversationId = message.data['conversation_id'] as String? ?? 'push';

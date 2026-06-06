@@ -49,8 +49,12 @@ class PushNotificationService {
   static bool get isRegistered => _registered;
 
   static StreamSubscription<RemoteMessage>? _foregroundSub;
+  static StreamSubscription<RemoteMessage>? _openedSub;
   static StreamSubscription<String>? _tokenRefreshSub;
-  static void Function(Map<String, dynamic>)? _foregroundIncomingCallHandler;
+  static FutureOr<void> Function(Map<String, dynamic>)?
+  _foregroundIncomingCallHandler;
+  static void Function(String conversationId)? _notificationOpenedHandler;
+  static String? _lastOpenedMessageKey;
 
   /// Push notifications are supported only on Android and iOS.
   /// Desktop platforms use the in-app WebSocket connection instead, and
@@ -59,9 +63,15 @@ class PushNotificationService {
       !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
   static void setForegroundIncomingCallHandler(
-    void Function(Map<String, dynamic>)? handler,
+    FutureOr<void> Function(Map<String, dynamic>)? handler,
   ) {
     _foregroundIncomingCallHandler = handler;
+  }
+
+  static void setNotificationOpenedHandler(
+    void Function(String conversationId)? handler,
+  ) {
+    _notificationOpenedHandler = handler;
   }
 
   // ── Startup ──────────────────────────────────────────────────────────────────
@@ -188,13 +198,20 @@ class PushNotificationService {
           );
           break;
         case NotificationIntentKind.incomingCall:
-          _foregroundIncomingCallHandler?.call(
-            Map<String, dynamic>.from(msg.data),
-          );
+          unawaited(_handleIncomingCallPushData(msg.data));
           NotificationService.showIncomingCall(body: intent.body);
           break;
       }
     });
+
+    _openedSub?.cancel();
+    _openedSub = FirebaseMessaging.onMessageOpenedApp.listen(
+      _handleOpenedMessage,
+    );
+    final initialMessage = await messaging.getInitialMessage();
+    if (initialMessage != null) {
+      _handleOpenedMessage(initialMessage);
+    }
 
     _registered = true;
     return const PushNotificationInitResult.success();
@@ -220,6 +237,8 @@ class PushNotificationService {
   static Future<void> disable({required ApiService api}) async {
     _foregroundSub?.cancel();
     _foregroundSub = null;
+    _openedSub?.cancel();
+    _openedSub = null;
     _tokenRefreshSub?.cancel();
     _tokenRefreshSub = null;
     if (!_registered) return;
@@ -230,6 +249,37 @@ class PushNotificationService {
       await FirebaseMessaging.instance.deleteToken();
     } catch (_) {}
     _registered = false;
+  }
+
+  static Future<void> _handleIncomingCallPushData(
+    Map<String, dynamic> data,
+  ) async {
+    final handler = _foregroundIncomingCallHandler;
+    if (handler == null) return;
+    await handler(Map<String, dynamic>.from(data));
+  }
+
+  static void _handleOpenedMessage(RemoteMessage msg) {
+    if (!_markOpenedMessageHandled(msg)) return;
+    final type = msg.data['type'] as String?;
+    if (type == 'incoming_call') {
+      unawaited(_handleIncomingCallPushData(msg.data));
+      return;
+    }
+    if (type == 'new_message') {
+      final conversationId = msg.data['conversation_id'] as String? ?? '';
+      if (conversationId.isEmpty) return;
+      _notificationOpenedHandler?.call(conversationId);
+    }
+  }
+
+  static bool _markOpenedMessageHandled(RemoteMessage msg) {
+    final key =
+        msg.messageId ??
+        '${msg.sentTime?.millisecondsSinceEpoch ?? 0}:${msg.data}';
+    if (_lastOpenedMessageKey == key) return false;
+    _lastOpenedMessageKey = key;
+    return true;
   }
 
   // ── Internals ────────────────────────────────────────────────────────────────

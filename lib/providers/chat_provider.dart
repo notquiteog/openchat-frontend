@@ -125,6 +125,28 @@ class ChatProvider extends ChangeNotifier {
         return bTime.compareTo(aTime);
       });
 
+  Conversation? conversationById(String conversationId) =>
+      _conversations[conversationId];
+
+  Future<Conversation?> ensureConversationLoaded(String conversationId) async {
+    final existing = _conversations[conversationId];
+    if (existing != null) return existing;
+    try {
+      final conv = await _api.getConversation(conversationId);
+      _conversations[conv.id] = conv;
+      await loadConversationMembers(conv.id);
+      notifyListeners();
+      return _conversations[conv.id] ?? conv;
+    } catch (_) {
+      try {
+        await refreshConversationsSilently();
+      } catch (_) {
+        return null;
+      }
+      return _conversations[conversationId];
+    }
+  }
+
   List<ChatFolder> get chatFolders => List.unmodifiable(_chatFolders);
 
   List<Message> messagesFor(String convID) =>
@@ -250,6 +272,15 @@ class ChatProvider extends ChangeNotifier {
         messageId: entry.key,
         conversationId: share.conversationId,
       );
+    }
+  }
+
+  Future<void> _stopOtherLiveLocationShares(String messageID) async {
+    final otherMessageIds = _liveLocationShares.keys
+        .where((id) => id != messageID)
+        .toList(growable: false);
+    for (final id in otherMessageIds) {
+      await _stopLiveLocationShare(id, shouldNotify: true);
     }
   }
 
@@ -2294,6 +2325,7 @@ class ChatProvider extends ChangeNotifier {
     required double? accuracy,
     required DateTime expiresAt,
   }) async {
+    await _stopOtherLiveLocationShares(messageID);
     _liveLocationShares.remove(messageID)?.cancel();
     final conv = _conversations[conversationId];
     final sharingWith = conv?.displayName(_selfId ?? '') ?? 'this chat';

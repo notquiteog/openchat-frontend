@@ -100,6 +100,10 @@ class NotificationService {
   static VoidCallback? _incomingCallAnswerHandler;
   static VoidCallback? _incomingCallDismissHandler;
   static VoidCallback? _incomingCallDeclineHandler;
+  static FutureOr<void> Function(Map<String, dynamic>)?
+  _incomingCallPayloadHandler;
+  static final List<NotificationResponse> _pendingResponses = [];
+  static bool _drainingPendingResponses = false;
   static Future<void> Function(String conversationId, String messageId)?
   _liveLocationCancelHandler;
   static bool _appFocused = true;
@@ -136,7 +140,7 @@ class NotificationService {
             ),
             AndroidNotificationAction(
               incomingCallDeclineActionId,
-              'Decline',
+              'End',
               cancelNotification: true,
               showsUserInterface: true,
             ),
@@ -166,7 +170,7 @@ class NotificationService {
             ),
             LinuxNotificationAction(
               key: incomingCallDeclineActionId,
-              label: 'Decline',
+              label: 'End',
             ),
           ],
         ),
@@ -183,7 +187,7 @@ class NotificationService {
               arguments: incomingCallDismissActionId,
             ),
             WindowsAction(
-              content: 'Decline',
+              content: 'End',
               arguments: incomingCallDeclineActionId,
               buttonStyle: WindowsButtonStyle.critical,
             ),
@@ -256,6 +260,14 @@ class NotificationService {
     _incomingCallAnswerHandler = onAnswer;
     _incomingCallDismissHandler = onDismiss;
     _incomingCallDeclineHandler = onDecline;
+    _drainPendingResponses();
+  }
+
+  static void setIncomingCallPayloadHandler({
+    FutureOr<void> Function(Map<String, dynamic>)? onPayload,
+  }) {
+    _incomingCallPayloadHandler = onPayload;
+    _drainPendingResponses();
   }
 
   static void setLiveLocationHandlers({
@@ -271,16 +283,13 @@ class NotificationService {
   static void handleNotificationResponse(NotificationResponse response) {
     switch (response.actionId) {
       case incomingCallAnswerActionId:
-        _incomingCallAnswerHandler?.call();
-        unawaited(cancelIncomingCall());
+        _handleOrQueueIncomingCallResponse(response);
         return;
       case incomingCallDismissActionId:
-        _incomingCallDismissHandler?.call();
-        unawaited(cancelIncomingCall());
+        _handleOrQueueIncomingCallResponse(response);
         return;
       case incomingCallDeclineActionId:
-        _incomingCallDeclineHandler?.call();
-        unawaited(cancelIncomingCall());
+        _handleOrQueueIncomingCallResponse(response);
         return;
       case _activeCallEndActionId:
         _activeCallEndHandler?.call();
@@ -303,8 +312,82 @@ class NotificationService {
         } catch (_) {}
         return;
       default:
+        if (response.notificationResponseType ==
+                NotificationResponseType.selectedNotification &&
+            response.id == incomingCallNotificationId) {
+          _handleOrQueueIncomingCallResponse(response);
+        }
         return;
     }
+  }
+
+  static void _handleOrQueueIncomingCallResponse(
+    NotificationResponse response,
+  ) {
+    if (!_canHandleIncomingCallResponse(response)) {
+      _pendingResponses.add(response);
+      return;
+    }
+    unawaited(_handleIncomingCallResponse(response));
+  }
+
+  static bool _canHandleIncomingCallResponse(NotificationResponse response) {
+    final hasActionHandler =
+        _incomingCallAnswerHandler != null ||
+        _incomingCallDismissHandler != null ||
+        _incomingCallDeclineHandler != null;
+    final hasPayload = response.payload != null && response.payload!.isNotEmpty;
+    return hasActionHandler &&
+        (!hasPayload || _incomingCallPayloadHandler != null);
+  }
+
+  static void _drainPendingResponses() {
+    if (_drainingPendingResponses || _pendingResponses.isEmpty) return;
+    _drainingPendingResponses = true;
+    scheduleMicrotask(() {
+      try {
+        final ready = _pendingResponses
+            .where(_canHandleIncomingCallResponse)
+            .toList(growable: false);
+        _pendingResponses.removeWhere(ready.contains);
+        for (final response in ready) {
+          unawaited(_handleIncomingCallResponse(response));
+        }
+      } finally {
+        _drainingPendingResponses = false;
+      }
+    });
+  }
+
+  static Future<void> _handleIncomingCallResponse(
+    NotificationResponse response,
+  ) async {
+    await _handleIncomingCallPayload(response.payload);
+    switch (response.actionId) {
+      case incomingCallAnswerActionId:
+        _incomingCallAnswerHandler?.call();
+        break;
+      case incomingCallDismissActionId:
+        _incomingCallDismissHandler?.call();
+        break;
+      case incomingCallDeclineActionId:
+        _incomingCallDeclineHandler?.call();
+        break;
+      default:
+        break;
+    }
+    await cancelIncomingCall();
+  }
+
+  static Future<void> _handleIncomingCallPayload(String? payload) async {
+    if (payload == null || payload.isEmpty) return;
+    final handler = _incomingCallPayloadHandler;
+    if (handler == null) return;
+    try {
+      final decoded = jsonDecode(payload);
+      if (decoded is! Map) return;
+      await handler(Map<String, dynamic>.from(decoded));
+    } catch (_) {}
   }
 
   static Future<void> init() async {
@@ -325,7 +408,7 @@ class NotificationService {
           ),
           DarwinNotificationAction.plain(
             incomingCallDeclineActionId,
-            'Decline',
+            'End',
             options: {
               DarwinNotificationActionOption.destructive,
               DarwinNotificationActionOption.foreground,
@@ -374,7 +457,7 @@ class NotificationService {
         actions: [
           DarwinNotificationAction.plain(
             _liveLocationCancelActionId,
-            'Cancel',
+            'Stop sharing',
             options: {
               DarwinNotificationActionOption.destructive,
               DarwinNotificationActionOption.foreground,
@@ -411,6 +494,12 @@ class NotificationService {
         onDidReceiveBackgroundNotificationResponse:
             openChatNotificationBackgroundHandler,
       );
+      final launchDetails = await _plugin.getNotificationAppLaunchDetails();
+      final launchResponse = launchDetails?.notificationResponse;
+      if (launchDetails?.didNotificationLaunchApp == true &&
+          launchResponse != null) {
+        handleNotificationResponse(launchResponse);
+      }
       await _ensureAndroidChannels();
       _inited = true;
     } catch (e) {
@@ -521,7 +610,10 @@ class NotificationService {
     );
   }
 
-  static Future<void> showIncomingCall({required String body}) async {
+  static Future<void> showIncomingCall({
+    required String body,
+    String? payload,
+  }) async {
     if (!_supported) return;
     if (await _shouldSuppressFocusedNotification()) return;
     await init();
@@ -531,6 +623,7 @@ class NotificationService {
       title: 'Incoming call',
       body: body,
       notificationDetails: incomingCallNotificationDetails,
+      payload: payload,
     );
   }
 
@@ -692,7 +785,7 @@ class NotificationService {
         actions: [
           AndroidNotificationAction(
             _liveLocationCancelActionId,
-            'Cancel',
+            'Stop sharing',
             cancelNotification: false,
             showsUserInterface: true,
           ),

@@ -282,6 +282,45 @@ void main() {
       }
     });
 
+    testWidgets('shows camera flip control on mobile video calls', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+
+      final service = _FakeCallService(nextFrontCamera: false);
+      final provider = CallProvider(service, audio: _FakeCallAudio());
+      try {
+        final session = CallSession(
+          callId: 'c-mobile-video',
+          remoteUserId: 'u-mobile',
+          remoteUsername: 'mobile',
+          isVideo: true,
+          isIncoming: false,
+          state: CallState.connected,
+        )..connectedAt = DateTime.now();
+
+        service.emitSession(session);
+
+        await tester.pumpWidget(
+          ChangeNotifierProvider<CallProvider>.value(
+            value: provider,
+            child: const MaterialApp(home: Scaffold(body: CallOverlay())),
+          ),
+        );
+        await tester.pump();
+
+        await tester.tap(find.byKey(const Key('call-control-switch-camera')));
+        await tester.pump();
+
+        expect(service.switchCameraCalls, 1);
+        expect(provider.isFrontCamera, isFalse);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+        provider.dispose();
+        service.dispose();
+      }
+    });
+
     testWidgets('constrains desktop call controls in wide windows', (
       tester,
     ) async {
@@ -644,6 +683,20 @@ void main() {
       service.dispose();
     });
 
+    test('provider flips mobile camera and tracks mirror state', () async {
+      final service = _FakeCallService(nextFrontCamera: false);
+      final provider = CallProvider(service, audio: _FakeCallAudio());
+
+      await provider.switchCamera();
+
+      expect(service.switchCameraCalls, 1);
+      expect(provider.isFrontCamera, isFalse);
+      expect(provider.isCameraEnabled, isTrue);
+
+      provider.dispose();
+      service.dispose();
+    });
+
     test('provider resets media control defaults after calls end', () async {
       final service = _FakeCallService();
       final provider = CallProvider(service, audio: _FakeCallAudio());
@@ -971,6 +1024,7 @@ class _FakeCallService extends CallService {
     this.throwOnSetMicMuted = false,
     this.throwOnSetCameraEnabled = false,
     this.throwOnHangup = false,
+    this.nextFrontCamera = true,
     bool hasLocalMedia = true,
   }) : localMediaReady = hasLocalMedia,
        super(WebSocketService(SecureStorageService()));
@@ -979,6 +1033,7 @@ class _FakeCallService extends CallService {
   final bool throwOnSetMicMuted;
   final bool throwOnSetCameraEnabled;
   final bool throwOnHangup;
+  final bool nextFrontCamera;
   final _sessionController = StreamController<CallSession?>.broadcast();
   final _incomingController = StreamController<CallSession>.broadcast();
   final _missedController = StreamController<CallSession>.broadcast();
@@ -989,6 +1044,7 @@ class _FakeCallService extends CallService {
   int rejectCalls = 0;
   int hangupCalls = 0;
   int startCallCalls = 0;
+  int switchCameraCalls = 0;
   bool localMediaReady;
   final List<bool> startCallIsVideo = [];
   final List<bool> micMuteValues = [];
@@ -1054,6 +1110,12 @@ class _FakeCallService extends CallService {
     if (throwOnSelectAudioOutput) {
       throw UnsupportedError('unsupported');
     }
+  }
+
+  @override
+  Future<bool> switchCamera() async {
+    switchCameraCalls += 1;
+    return nextFrontCamera;
   }
 
   @override

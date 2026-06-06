@@ -6,6 +6,16 @@ import UIKit
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var callBackgroundTask: UIBackgroundTaskIdentifier = .invalid
   private var callForegroundChannel: FlutterMethodChannel?
+  private var callControlsChannel: FlutterMethodChannel?
+  private var selectedCallAudioRoute: CallAudioRoute = .speaker
+  private var currentCallIsVideo = false
+
+  private enum CallAudioRoute: String, Equatable {
+    case speaker
+    case earpiece
+    case bluetooth
+    case wiredHeadset = "wired-headset"
+  }
 
   override func application(
     _ application: UIApplication,
@@ -13,6 +23,7 @@ import UIKit
   ) -> Bool {
     let launched = super.application(application, didFinishLaunchingWithOptions: launchOptions)
     configureCallForegroundChannel()
+    configureCallControlsChannel()
     return launched
   }
 
@@ -50,13 +61,15 @@ import UIKit
 
   private func startCallBackgrounding(isVideo: Bool) -> Bool {
     do {
-      let session = AVAudioSession.sharedInstance()
-      try session.setCategory(
-        .playAndRecord,
-        mode: isVideo ? .videoChat : .voiceChat,
-        options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker]
+      currentCallIsVideo = isVideo
+      let routeApplied = try configureAudioSession(
+        isVideo: isVideo,
+        route: selectedCallAudioRoute
       )
-      try session.setActive(true)
+      if !routeApplied && selectedCallAudioRoute != .speaker {
+        selectedCallAudioRoute = .speaker
+        _ = try configureAudioSession(isVideo: isVideo, route: .speaker)
+      }
       UIApplication.shared.isIdleTimerDisabled = true
       beginCallBackgroundTask()
       return true
@@ -87,5 +100,152 @@ import UIKit
     guard callBackgroundTask != .invalid else { return }
     UIApplication.shared.endBackgroundTask(callBackgroundTask)
     callBackgroundTask = .invalid
+  }
+
+  private func configureCallControlsChannel() {
+    guard callControlsChannel == nil,
+          let registrar = registrar(forPlugin: "OpenChatCallControls") else {
+      return
+    }
+
+    let channel = FlutterMethodChannel(
+      name: "openchat/call_controls",
+      binaryMessenger: registrar.messenger()
+    )
+    channel.setMethodCallHandler { [weak self] call, result in
+      switch call.method {
+      case "selectAudioOutput":
+        let args = call.arguments as? [String: Any]
+        let deviceId = args?["deviceId"] as? String ?? ""
+        let isVideo = args?["isVideo"] as? Bool ?? false
+        result(self?.selectAudioOutput(deviceId, isVideo: isVideo) ?? false)
+      case "setMicrophoneMuted":
+        result(false)
+      case "clearAudioOutput":
+        self?.clearAudioOutput()
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    callControlsChannel = channel
+  }
+
+  private func selectAudioOutput(_ deviceId: String, isVideo: Bool) -> Bool {
+    guard let route = CallAudioRoute(rawValue: deviceId) else {
+      return false
+    }
+    selectedCallAudioRoute = route
+    currentCallIsVideo = isVideo
+    do {
+      return try configureAudioSession(isVideo: isVideo, route: route)
+    } catch {
+      return false
+    }
+  }
+
+  @discardableResult
+  private func configureAudioSession(
+    isVideo: Bool,
+    route: CallAudioRoute
+  ) throws -> Bool {
+    let session = AVAudioSession.sharedInstance()
+    try session.setCategory(
+      .playAndRecord,
+      mode: audioSessionMode(isVideo: isVideo, route: route),
+      options: audioSessionOptions(for: route)
+    )
+    try session.setActive(true)
+
+    try? session.setPreferredInput(nil)
+    try session.overrideOutputAudioPort(.none)
+
+    switch route {
+    case .speaker:
+      try session.overrideOutputAudioPort(.speaker)
+      return true
+    case .earpiece:
+      if let builtInMic = preferredInput(
+        for: [.builtInMic],
+        in: session
+      ) {
+        try? session.setPreferredInput(builtInMic)
+      }
+      return routeMatches(.earpiece, in: session)
+    case .bluetooth:
+      guard let bluetoothInput = preferredInput(
+        for: [.bluetoothHFP, .bluetoothLE],
+        in: session
+      ) else {
+        return routeMatches(.bluetooth, in: session)
+      }
+      try session.setPreferredInput(bluetoothInput)
+      return routeMatches(.bluetooth, in: session)
+    case .wiredHeadset:
+      guard let headsetMic = preferredInput(
+        for: [.headsetMic],
+        in: session
+      ) else {
+        return routeMatches(.wiredHeadset, in: session)
+      }
+      try session.setPreferredInput(headsetMic)
+      return routeMatches(.wiredHeadset, in: session)
+    }
+  }
+
+  private func clearAudioOutput() {
+    selectedCallAudioRoute = .speaker
+    let session = AVAudioSession.sharedInstance()
+    try? session.setPreferredInput(nil)
+    try? session.overrideOutputAudioPort(.none)
+  }
+
+  private func audioSessionMode(
+    isVideo: Bool,
+    route: CallAudioRoute
+  ) -> AVAudioSession.Mode {
+    route == .earpiece ? .voiceChat : (isVideo ? .videoChat : .voiceChat)
+  }
+
+  private func audioSessionOptions(
+    for route: CallAudioRoute
+  ) -> AVAudioSession.CategoryOptions {
+    switch route {
+    case .speaker:
+      return [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker]
+    case .bluetooth:
+      return [.allowBluetooth, .allowBluetoothA2DP]
+    case .earpiece, .wiredHeadset:
+      return []
+    }
+  }
+
+  private func preferredInput(
+    for portTypes: [AVAudioSession.Port],
+    in session: AVAudioSession
+  ) -> AVAudioSessionPortDescription? {
+    let inputs = session.availableInputs ?? []
+    return inputs.first { port in
+      portTypes.contains(port.portType)
+    }
+  }
+
+  private func routeMatches(
+    _ route: CallAudioRoute,
+    in session: AVAudioSession
+  ) -> Bool {
+    let outputs = session.currentRoute.outputs.map(\.portType)
+    switch route {
+    case .speaker:
+      return outputs.contains(.builtInSpeaker)
+    case .earpiece:
+      return outputs.contains(.builtInReceiver)
+    case .bluetooth:
+      return outputs.contains(.bluetoothHFP)
+        || outputs.contains(.bluetoothA2DP)
+        || outputs.contains(.bluetoothLE)
+    case .wiredHeadset:
+      return outputs.contains(.headphones)
+    }
   }
 }

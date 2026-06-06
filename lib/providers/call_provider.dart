@@ -20,6 +20,7 @@ class CallProvider extends ChangeNotifier {
   bool _isCallMinimized = false;
   bool _micMuted = false;
   bool _cameraEnabled = true;
+  bool _usingFrontCamera = true;
   List<CallAudioOutput> _audioOutputs = const [];
   String? _selectedAudioOutputId;
   CallState? _lastSessionState;
@@ -112,6 +113,7 @@ class CallProvider extends ChangeNotifier {
   bool get isCallMinimized => _isCallMinimized;
   bool get isMicMuted => _micMuted;
   bool get isCameraEnabled => _cameraEnabled;
+  bool get isFrontCamera => _usingFrontCamera;
   List<CallAudioOutput> get audioOutputs => _audioOutputs;
   String? get selectedAudioOutputId => _selectedAudioOutputId;
 
@@ -173,6 +175,7 @@ class CallProvider extends ChangeNotifier {
         _isCallMinimized = false;
         _micMuted = false;
         _cameraEnabled = true;
+        _usingFrontCamera = true;
       }
       if (s?.state == CallState.connected &&
           _lastSessionState != CallState.connected) {
@@ -368,8 +371,16 @@ class CallProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool handleIncomingCallPush(Map<String, dynamic> data) {
-    final handled = _callService.handleIncomingCallPayload(data);
+  Future<void> switchCamera() async {
+    try {
+      _usingFrontCamera = await _callService.switchCamera();
+      _cameraEnabled = true;
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  Future<bool> handleIncomingCallPush(Map<String, dynamic> data) async {
+    final handled = await _callService.handleIncomingCallPushPayload(data);
     if (!handled) return false;
     notifyListeners();
     return true;

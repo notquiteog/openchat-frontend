@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:uuid/uuid.dart';
 import '../config/api_config.dart' show IceServer;
+import '../services/call_platform_controls.dart';
 import '../services/call_signal_codec.dart';
 import '../services/websocket_service.dart';
 
@@ -196,6 +197,7 @@ String? _stringField(Map<String, dynamic> data, String key) {
 class CallService {
   final WebSocketService _ws;
   final CallSignalCodec _signalCodec;
+  final CallPlatformControls _platformControls;
   final Future<List<IceServer>> Function()? _iceServerLoader;
   RTCPeerConnection? _pc;
   MediaStream? _localStream;
@@ -203,6 +205,8 @@ class CallService {
   CallSession? _session;
   bool _micMuted = false;
   bool _cameraEnabled = true;
+  bool _usingFrontCamera = true;
+  String? _selectedAudioOutputId;
   final List<RTCIceCandidate> _pendingRemoteCandidates = [];
 
   final _sessionController = StreamController<CallSession?>.broadcast();
@@ -242,6 +246,7 @@ class CallService {
   MediaStream? get currentLocalStream => _localStream;
   MediaStream? get currentRemoteStream => _remoteStream;
   bool get hasLocalMedia => _localStream != null;
+  bool get usingFrontCamera => _usingFrontCamera;
 
   StreamSubscription<WsEvent>? _wsSub;
 
@@ -250,8 +255,13 @@ class CallService {
     IceServer(url: 'stun:stun1.l.google.com:19302'),
   ];
 
-  CallService(this._ws, {CallSignalCodec? signalCodec, this._iceServerLoader})
-    : _signalCodec = signalCodec ?? const PlainCallSignalCodec() {
+  CallService(
+    this._ws, {
+    CallSignalCodec? signalCodec,
+    CallPlatformControls? platformControls,
+    this._iceServerLoader,
+  }) : _signalCodec = signalCodec ?? const PlainCallSignalCodec(),
+       _platformControls = platformControls ?? const CallPlatformControls() {
     _wsSub = _ws.events.listen(_handleWsEvent);
   }
 
@@ -459,12 +469,13 @@ class CallService {
 
   void setMicMuted(bool muted) {
     _micMuted = muted;
+    unawaited(_platformControls.setMicrophoneMuted(muted));
     final tracks = _localStream?.getAudioTracks() ?? const <MediaStreamTrack>[];
     for (final track in tracks) {
-      track.enabled = !muted;
       if (_supportsNativeMicrophoneMute) {
         unawaited(Helper.setMicrophoneMute(muted, track).catchError((_) {}));
       }
+      track.enabled = !muted;
     }
   }
 
@@ -479,6 +490,16 @@ class CallService {
   void setCameraEnabled(bool enabled) {
     _cameraEnabled = enabled;
     _localStream?.getVideoTracks().forEach((t) => t.enabled = enabled);
+  }
+
+  Future<bool> switchCamera() async {
+    final tracks = _localStream?.getVideoTracks() ?? const <MediaStreamTrack>[];
+    if (tracks.isEmpty) return _usingFrontCamera;
+    final track = tracks.first;
+    if (!_cameraEnabled) setCameraEnabled(true);
+    final isFrontCamera = await Helper.switchCamera(track);
+    _usingFrontCamera = isFrontCamera;
+    return _usingFrontCamera;
   }
 
   Future<List<CallAudioOutput>> getAudioOutputs() async {
@@ -522,6 +543,7 @@ class CallService {
   }
 
   Future<void> selectAudioOutput(String deviceId) async {
+    _selectedAudioOutputId = deviceId;
     try {
       if (_isMobilePlatform) {
         await _selectMobileAudioOutput(deviceId);
@@ -534,12 +556,27 @@ class CallService {
   }
 
   Future<void> _selectMobileAudioOutput(String deviceId) async {
+    final routedByNative = await _platformControls.selectAudioOutput(
+      deviceId,
+      isVideo: _session?.isVideo ?? false,
+    );
+    if (routedByNative) return;
+
     if (defaultTargetPlatform == TargetPlatform.android) {
       switch (deviceId) {
         case 'speaker':
-          await Helper.setSpeakerphoneOn(true);
+          try {
+            await Helper.selectAudioOutput('speaker');
+          } catch (_) {
+            await Helper.setSpeakerphoneOn(true);
+          }
           return;
         case 'earpiece':
+          try {
+            await Helper.setSpeakerphoneOn(false);
+          } catch (_) {}
+          await Helper.selectAudioOutput('earpiece');
+          return;
         case 'bluetooth':
         case 'wired-headset':
           await Helper.selectAudioOutput(deviceId);
@@ -777,6 +814,12 @@ class CallService {
     return true;
   }
 
+  Future<bool> handleIncomingCallPushPayload(Map<String, dynamic> data) async {
+    final decoded = await _decodeCallSignal(data);
+    if (decoded == null) return false;
+    return handleIncomingCallPayload(decoded);
+  }
+
   // ---- Internals ----
 
   Future<void> _initPeerConnection(
@@ -933,6 +976,12 @@ class CallService {
       try {
         await Helper.setSpeakerphoneOnButPreferBluetooth();
       } catch (_) {}
+      final selectedOutputId = _selectedAudioOutputId;
+      if (selectedOutputId != null) {
+        try {
+          await _selectMobileAudioOutput(selectedOutputId);
+        } catch (_) {}
+      }
     }
     _localStreamController.add(_localStream);
 
@@ -1075,6 +1124,8 @@ class CallService {
     _session = null;
     _micMuted = false;
     _cameraEnabled = true;
+    _usingFrontCamera = true;
+    unawaited(_platformControls.clearAudioOutput());
 
     _sessionController.add(null);
     _remoteStreamController.add(null);

@@ -1,7 +1,13 @@
 package com.openchat.openchat
 
+import android.Manifest
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.os.Build
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.plugin.common.MethodChannel
@@ -13,6 +19,7 @@ class MainActivity : FlutterFragmentActivity() {
     private var callForegroundChannel: MethodChannel? = null
     private var callForegroundActionsReady = false
     private val pendingCallForegroundActions = mutableListOf<String>()
+    private var selectedCallAudioRoute: String? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -66,6 +73,26 @@ class MainActivity : FlutterFragmentActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "openchat/call_controls",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "selectAudioOutput" -> {
+                    val deviceId = call.argument<String>("deviceId") ?: ""
+                    result.success(selectAudioOutput(deviceId))
+                }
+                "setMicrophoneMuted" -> {
+                    val muted = call.argument<Boolean>("muted") ?: false
+                    result.success(setMicrophoneMuted(muted))
+                }
+                "clearAudioOutput" -> {
+                    clearAudioOutput()
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
         dispatchCallForegroundIntent(intent)
     }
 
@@ -87,5 +114,99 @@ class MainActivity : FlutterFragmentActivity() {
         } else {
             pendingCallForegroundActions.add(action)
         }
+    }
+
+    private fun audioManager(): AudioManager =
+        getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+    private fun selectAudioOutput(deviceId: String): Boolean {
+        if (deviceId.isBlank()) return false
+        val manager = audioManager()
+        selectedCallAudioRoute = deviceId
+        manager.mode = AudioManager.MODE_IN_COMMUNICATION
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val desiredTypes = when (deviceId) {
+                "speaker" -> intArrayOf(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+                "earpiece" -> intArrayOf(AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)
+                "bluetooth" -> intArrayOf(
+                    AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+                    AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                    AudioDeviceInfo.TYPE_BLE_HEADSET,
+                    AudioDeviceInfo.TYPE_BLE_SPEAKER,
+                )
+                "wired-headset" -> intArrayOf(
+                    AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                    AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                    AudioDeviceInfo.TYPE_USB_HEADSET,
+                )
+                else -> intArrayOf()
+            }
+            for (type in desiredTypes) {
+                val device = manager.availableCommunicationDevices.firstOrNull {
+                    it.type == type
+                }
+                if (device != null && manager.setCommunicationDevice(device)) {
+                    manager.isSpeakerphoneOn = deviceId == "speaker"
+                    return true
+                }
+            }
+        }
+
+        @Suppress("DEPRECATION")
+        return when (deviceId) {
+            "speaker" -> {
+                manager.stopBluetoothSco()
+                manager.isBluetoothScoOn = false
+                manager.isSpeakerphoneOn = true
+                true
+            }
+            "earpiece" -> {
+                manager.stopBluetoothSco()
+                manager.isBluetoothScoOn = false
+                manager.isSpeakerphoneOn = false
+                true
+            }
+            "bluetooth" -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    ContextCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.BLUETOOTH_CONNECT,
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    return false
+                }
+                manager.isSpeakerphoneOn = false
+                manager.startBluetoothSco()
+                manager.isBluetoothScoOn = true
+                true
+            }
+            "wired-headset" -> {
+                manager.stopBluetoothSco()
+                manager.isBluetoothScoOn = false
+                manager.isSpeakerphoneOn = false
+                true
+            }
+            else -> false
+        }
+    }
+
+    private fun setMicrophoneMuted(muted: Boolean): Boolean {
+        audioManager().isMicrophoneMute = muted
+        return true
+    }
+
+    private fun clearAudioOutput() {
+        val manager = audioManager()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            manager.clearCommunicationDevice()
+        }
+        @Suppress("DEPRECATION")
+        manager.stopBluetoothSco()
+        @Suppress("DEPRECATION")
+        manager.isBluetoothScoOn = false
+        manager.isSpeakerphoneOn = false
+        manager.mode = AudioManager.MODE_NORMAL
+        selectedCallAudioRoute = null
     }
 }

@@ -481,6 +481,8 @@ class _AppRootState extends State<_AppRoot> {
   String? _lastContactToken;
   DateTime? _lastContactHandledAt;
   bool _handlingContactLink = false;
+  String? _pendingPushConversationId;
+  bool _handlingPushConversation = false;
 
   @override
   void initState() {
@@ -501,9 +503,17 @@ class _AppRootState extends State<_AppRoot> {
       auth.initialize();
       context.read<KeyProvider>().load();
       context.read<CallProvider>().addListener(_onCallChanged);
-      PushNotificationService.setForegroundIncomingCallHandler((data) {
-        context.read<CallProvider>().handleIncomingCallPush(data);
+      PushNotificationService.setForegroundIncomingCallHandler((data) async {
+        await context.read<CallProvider>().handleIncomingCallPush(data);
       });
+      NotificationService.setIncomingCallPayloadHandler(
+        onPayload: (data) async {
+          await context.read<CallProvider>().handleIncomingCallPush(data);
+        },
+      );
+      PushNotificationService.setNotificationOpenedHandler(
+        _queuePushConversation,
+      );
       _wsForegroundSub = context.read<WebSocketService>().events.listen(
         _onForegroundWsEvent,
       );
@@ -644,6 +654,50 @@ class _AppRootState extends State<_AppRoot> {
     });
   }
 
+  void _queuePushConversation(String conversationId) {
+    final trimmed = conversationId.trim();
+    if (trimmed.isEmpty) return;
+    _pendingPushConversationId = trimmed;
+    _drainPendingPushConversation();
+  }
+
+  void _drainPendingPushConversation() {
+    if (!mounted || _handlingPushConversation) return;
+    final conversationId = _pendingPushConversationId;
+    if (conversationId == null) return;
+    if (_appLocked) return;
+    if (context.read<AuthProvider>().state != AuthState.authenticated) return;
+
+    final navigator = OpenChatApp.navigatorKey.currentState;
+    if (navigator == null) return;
+
+    _pendingPushConversationId = null;
+    _handlingPushConversation = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        _handlingPushConversation = false;
+        return;
+      }
+      try {
+        final chat = context.read<ChatProvider>();
+        final conv =
+            chat.conversationById(conversationId) ??
+            await chat.ensureConversationLoaded(conversationId);
+        if (conv == null || !mounted) return;
+        await navigator.push(
+          MaterialPageRoute<void>(
+            builder: (_) => ChatScreen(conversation: conv),
+          ),
+        );
+      } finally {
+        if (mounted) _handlingPushConversation = false;
+      }
+      if (!mounted) return;
+      _drainPendingPushConversation();
+    });
+  }
+
   void _onBackground() {
     NotificationService.setAppFocused(false);
     context.read<CallProvider>().refreshActiveCallNotification();
@@ -679,11 +733,13 @@ class _AppRootState extends State<_AppRoot> {
         setState(() => _appLocked = false);
         _drainPendingInviteLink();
         _drainPendingContactLink();
+        _drainPendingPushConversation();
       } else if (_appLocked) {
         _promptAppUnlock();
       } else {
         _drainPendingInviteLink();
         _drainPendingContactLink();
+        _drainPendingPushConversation();
       }
     });
   }
@@ -698,6 +754,7 @@ class _AppRootState extends State<_AppRoot> {
         setState(() => _appLocked = false);
         _drainPendingInviteLink();
         _drainPendingContactLink();
+        _drainPendingPushConversation();
       }
     } catch (_) {
       // If biometrics fail (e.g. no enrolled biometrics), stay locked but
@@ -714,6 +771,8 @@ class _AppRootState extends State<_AppRoot> {
     _inviteLinkSub?.cancel();
     _reminderTimer?.cancel();
     PushNotificationService.setForegroundIncomingCallHandler(null);
+    PushNotificationService.setNotificationOpenedHandler(null);
+    NotificationService.setIncomingCallPayloadHandler();
     _settings?.removeListener(_onSettingsChanged);
     context.read<AuthProvider>().removeListener(_onAuthChanged);
     context.read<CallProvider>().removeListener(_onCallChanged);
@@ -794,6 +853,7 @@ class _AppRootState extends State<_AppRoot> {
       _surfaceDueReminders();
       _drainPendingInviteLink();
       _drainPendingContactLink();
+      _drainPendingPushConversation();
       // Re-register the FCM/APNs push token on every login so the backend
       // always has a current token. Silently skipped when Firebase credentials
       // are placeholders or push notifications have not been enabled.
