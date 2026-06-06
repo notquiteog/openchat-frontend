@@ -63,8 +63,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
     });
     try {
       final user = context.read<AuthProvider>().currentUser;
-      final biometricAvailable =
-          await _auth.canCheckBiometrics || await _auth.isDeviceSupported();
+      final biometricAvailable = await _biometricsAvailable();
       final results = await Future.wait<Object>([
         storage.getBiometricEnabled(),
         storage.getAppLockEnabled(),
@@ -100,6 +99,16 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
         _loading = false;
         _error = e.toString();
       });
+    }
+  }
+
+  Future<bool> _biometricsAvailable() async {
+    try {
+      return await _auth.canCheckBiometrics || await _auth.isDeviceSupported();
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
     }
   }
 
@@ -166,6 +175,18 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
     final messenger = ScaffoldMessenger.of(context);
     try {
       await api.updatePreferences(allowGroupAdd: value);
+      await auth.refreshCurrentUser();
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+    }
+  }
+
+  Future<void> _setPublicDiscovery(bool value) async {
+    final api = context.read<ApiService>();
+    final auth = context.read<AuthProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await api.updateProfile(publicDiscovery: value);
       await auth.refreshCurrentUser();
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
@@ -804,6 +825,14 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
               padding: EdgeInsets.zero,
               child: Column(
                 children: [
+                  _TrustSwitchRow(
+                    icon: Icons.manage_search_outlined,
+                    title: 'Public discovery',
+                    subtitle: 'Allow people to find you by username search',
+                    value: user?.publicDiscovery ?? true,
+                    onChanged: _setPublicDiscovery,
+                  ),
+                  const _TrustDivider(),
                   _TrustSwitchRow(
                     icon: Icons.group_add_outlined,
                     title: 'Allow group adds',

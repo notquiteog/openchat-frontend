@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:image_picker/image_picker.dart';
@@ -32,7 +33,6 @@ import '../stickers/sticker_pack_screen.dart';
 import 'device_pairing_screen.dart';
 import 'pgp_keys_screen.dart';
 import 'premium_screen.dart';
-import 'private_contacts_screen.dart';
 import 'trust_center_screen.dart';
 import 'wallet_screen.dart';
 
@@ -59,8 +59,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadSecurityPrefs() async {
     final storage = context.read<SecureStorageService>();
-    final available =
-        await _auth.canCheckBiometrics || await _auth.isDeviceSupported();
+    final available = await _biometricsAvailable();
     final biometricEnabled = await storage.getBiometricEnabled();
     final appLockEnabled = await storage.getAppLockEnabled();
     if (mounted) {
@@ -69,6 +68,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _biometricEnabled = biometricEnabled;
         _appLockEnabled = appLockEnabled;
       });
+    }
+  }
+
+  Future<bool> _biometricsAvailable() async {
+    try {
+      return await _auth.canCheckBiometrics || await _auth.isDeviceSupported();
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
     }
   }
 
@@ -261,6 +270,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final displayNameCtrl = TextEditingController(
       text: user.profileDisplayName ?? '',
     );
+    final usernameCtrl = TextEditingController(text: user.username);
     final bioCtrl = TextEditingController(text: user.bio ?? '');
     String? pendingAvatarUrl = user.avatarUrl;
     bool uploading = false;
@@ -296,61 +306,96 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           return GlassAlertDialog(
             title: const Text('Edit Profile'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                GestureDetector(
-                  onTap: uploading ? null : pickAndUpload,
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      CircleAvatar(
-                        radius: 40,
-                        backgroundImage: pendingAvatarUrl != null
-                            ? CachedNetworkImageProvider(
-                                ApiConfig.resolveMedia(pendingAvatarUrl!),
-                              )
-                            : null,
-                        child: pendingAvatarUrl == null
-                            ? Text(
-                                user.avatarInitial,
-                                style: const TextStyle(fontSize: 28),
-                              )
-                            : null,
-                      ),
-                      if (uploading)
-                        const GlassProgressIndicator.circular(size: 40),
-                      if (!uploading)
-                        Positioned(
-                          bottom: 0,
-                          right: 0,
-                          child: CircleAvatar(
-                            radius: 12,
-                            backgroundColor: Theme.of(ctx).colorScheme.primary,
-                            child: const Icon(
-                              Icons.camera_alt,
-                              size: 14,
-                              color: Colors.white,
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  GestureDetector(
+                    onTap: uploading ? null : pickAndUpload,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        CircleAvatar(
+                          radius: 40,
+                          backgroundImage: pendingAvatarUrl != null
+                              ? CachedNetworkImageProvider(
+                                  ApiConfig.resolveMedia(pendingAvatarUrl!),
+                                )
+                              : null,
+                          child: pendingAvatarUrl == null
+                              ? Text(
+                                  user.avatarInitial,
+                                  style: const TextStyle(fontSize: 28),
+                                )
+                              : null,
+                        ),
+                        if (uploading)
+                          const GlassProgressIndicator.circular(size: 40),
+                        if (!uploading)
+                          Positioned(
+                            bottom: 0,
+                            right: 0,
+                            child: CircleAvatar(
+                              radius: 12,
+                              backgroundColor: Theme.of(
+                                ctx,
+                              ).colorScheme.primary,
+                              child: const Icon(
+                                Icons.camera_alt,
+                                size: 14,
+                                color: Colors.white,
+                              ),
                             ),
                           ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: displayNameCtrl,
-                  decoration: const InputDecoration(labelText: 'Display name'),
-                  maxLength: 96,
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: bioCtrl,
-                  decoration: const InputDecoration(labelText: 'Bio'),
-                  maxLines: 3,
-                  maxLength: 200,
-                ),
-              ],
+                  const SizedBox(height: 16),
+                  Text('Account ID', style: Theme.of(ctx).textTheme.labelLarge),
+                  const SizedBox(height: 4),
+                  SelectableText(
+                    user.id,
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                      color: Theme.of(
+                        ctx,
+                      ).colorScheme.onSurface.withValues(alpha: 0.65),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: displayNameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Display name',
+                      prefixIcon: Icon(Icons.badge_outlined),
+                    ),
+                    maxLength: 96,
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: usernameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: '@',
+                      prefixText: '@',
+                      prefixIcon: Icon(Icons.alternate_email_rounded),
+                      helperText:
+                          '3-32 lowercase letters, numbers, or underscores',
+                    ),
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    textCapitalization: TextCapitalization.none,
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: bioCtrl,
+                    decoration: const InputDecoration(labelText: 'Bio'),
+                    maxLines: 3,
+                    maxLength: 200,
+                  ),
+                ],
+              ),
             ),
             actions: [
               TextButton(
@@ -361,11 +406,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onPressed: uploading
                     ? null
                     : () async {
+                        final username = usernameCtrl.text
+                            .trim()
+                            .toLowerCase()
+                            .replaceFirst(RegExp(r'^@+'), '');
+                        if (username.isEmpty) {
+                          messenger.showSnackBar(
+                            const SnackBar(content: Text('Username required')),
+                          );
+                          return;
+                        }
+                        if (!RegExp(r'^[a-z0-9_]{3,32}$').hasMatch(username)) {
+                          messenger.showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Username must be 3-32 lowercase letters, numbers, or underscores',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
+                        final displayName = displayNameCtrl.text.trim();
                         final bio = bioCtrl.text.trim();
                         Navigator.pop(ctx);
                         try {
                           await api.updateProfile(
-                            displayName: displayNameCtrl.text.trim(),
+                            username: username,
+                            displayName: displayName,
                             bio: bio.isEmpty ? null : bio,
                             avatarUrl: pendingAvatarUrl,
                           );
@@ -382,7 +449,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           );
         },
       ),
-    );
+    ).whenComplete(() {
+      displayNameCtrl.dispose();
+      usernameCtrl.dispose();
+      bioCtrl.dispose();
+    });
   }
 
   static const List<Color> _accentPalette = [
@@ -1450,11 +1521,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         children: [
                           Row(
                             children: [
-                              Text(
-                                user.displayName,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 17,
+                              Flexible(
+                                child: Text(
+                                  user.displayName,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 17,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ),
                               if (user.isSystemAdmin)
@@ -1478,19 +1553,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             ],
                           ),
                           const SizedBox(height: 4),
-                          if (user.profileDisplayName?.trim().isNotEmpty ==
-                              true) ...[
-                            Text(
-                              user.handle,
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: scheme.onSurface.withValues(alpha: 0.55),
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                          Text(
+                            user.handle,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: scheme.onSurface.withValues(alpha: 0.55),
                             ),
-                            const SizedBox(height: 3),
-                          ],
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            'Account ID ${user.id}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: scheme.onSurface.withValues(alpha: 0.45),
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 3),
                           Text(
                             user.bio?.isNotEmpty == true
                                 ? user.bio!
@@ -1575,19 +1657,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ],
-                _GlassDivider(),
-                _GlassTile(
-                  icon: Icons.contacts_outlined,
-                  title: 'Private Contacts',
-                  subtitle:
-                      'Username discovery, QR bundles, and one-time links',
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const PrivateContactsScreen(),
-                    ),
-                  ),
-                ),
                 _GlassDivider(),
                 _GlassTile(
                   icon: Icons.password_outlined,
