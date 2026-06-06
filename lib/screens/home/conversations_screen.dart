@@ -24,6 +24,8 @@ import '../chat/chat_screen.dart';
 import '../profile/user_profile_screen.dart';
 import '../settings/settings_screen.dart';
 
+enum _InboxOverflowAction { folders, stories, settings }
+
 class ConversationsScreen extends StatefulWidget {
   const ConversationsScreen({super.key});
   @override
@@ -31,7 +33,6 @@ class ConversationsScreen extends StatefulWidget {
 }
 
 class _ConversationsScreenState extends State<ConversationsScreen> {
-  int _storiesRefreshKey = 0;
   String? _selectedFolderId;
 
   @override
@@ -146,33 +147,74 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: GlassAppBar(
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Image.asset(
-              'assets/images/logo.png',
-              height: 26,
-              errorBuilder: (_, _, _) => const SizedBox.shrink(),
-            ),
-            const SizedBox(width: 8),
-            const Text('OpenChat'),
-          ],
-        ),
+        title: const Text('Chats'),
         actions: [
           IconButton(
+            tooltip: 'Search',
             icon: const Icon(Icons.search_rounded),
             onPressed: () => _showSearch(context),
           ),
           IconButton(
-            icon: const Icon(Icons.create_new_folder_outlined),
-            onPressed: () => _showFolderManager(context),
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const SettingsScreen()),
+            tooltip: 'Inbox view',
+            icon: Badge(
+              isLabelVisible:
+                  selectedFolder != null ||
+                  selectedFilter != SmartInboxFilter.all,
+              smallSize: 8,
+              child: const Icon(Icons.tune_rounded),
             ),
+            onPressed: () => _showInboxViewSheet(
+              context,
+              filters: availableFilters,
+              selectedFilter: selectedFilter,
+              filterCounts: filterCounts,
+              folders: folders,
+              selectedFolder: selectedFolder,
+              folderCounts: folderCounts,
+            ),
+          ),
+          PopupMenuButton<_InboxOverflowAction>(
+            tooltip: 'More',
+            icon: const Icon(Icons.more_vert_rounded),
+            onSelected: (action) {
+              switch (action) {
+                case _InboxOverflowAction.folders:
+                  _showFolderManager(context);
+                  break;
+                case _InboxOverflowAction.stories:
+                  _showStoriesSheet(context);
+                  break;
+                case _InboxOverflowAction.settings:
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                  );
+                  break;
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: _InboxOverflowAction.folders,
+                child: ListTile(
+                  leading: Icon(Icons.folder_outlined),
+                  title: Text('Folders'),
+                ),
+              ),
+              PopupMenuItem(
+                value: _InboxOverflowAction.stories,
+                child: ListTile(
+                  leading: Icon(Icons.auto_stories_outlined),
+                  title: Text('Stories'),
+                ),
+              ),
+              PopupMenuItem(
+                value: _InboxOverflowAction.settings,
+                child: ListTile(
+                  leading: Icon(Icons.settings_outlined),
+                  title: Text('Settings'),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -182,7 +224,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
               onRefresh: () async {
                 await chat.loadConversations();
                 await chat.loadChatFolders();
-                if (mounted) setState(() => _storiesRefreshKey += 1);
               },
               displacement: MediaQuery.paddingOf(context).top + kToolbarHeight,
               child: ListView(
@@ -192,25 +233,34 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                   bottom: MediaQuery.paddingOf(context).bottom + 8,
                 ),
                 children: [
-                  StoriesStrip(key: ValueKey(_storiesRefreshKey)),
-                  _ChatFolderBar(
-                    folders: folders,
-                    selectedFolderId: selectedFolder?.id,
-                    counts: folderCounts,
-                    onAllSelected: () =>
-                        setState(() => _selectedFolderId = null),
-                    onFolderSelected: (folder) =>
-                        setState(() => _selectedFolderId = folder.id),
-                    onManage: () => _showFolderManager(context),
-                  ),
-                  if (selectedFolder == null)
-                    _SmartInboxBar(
-                      filters: availableFilters,
-                      selected: selectedFilter,
-                      counts: filterCounts,
-                      onSelected: settings.setSmartInboxFilter,
+                  if (selectedFolder != null ||
+                      selectedFilter != SmartInboxFilter.all)
+                    _ActiveInboxScopeBar(
+                      icon: selectedFolder != null
+                          ? Icons.folder_outlined
+                          : _smartInboxFilterIcon(selectedFilter),
+                      label:
+                          selectedFolder?.name ??
+                          smartInboxFilterLabel(selectedFilter),
+                      count: conversations.length,
+                      onTap: () => _showInboxViewSheet(
+                        context,
+                        filters: availableFilters,
+                        selectedFilter: selectedFilter,
+                        filterCounts: filterCounts,
+                        folders: folders,
+                        selectedFolder: selectedFolder,
+                        folderCounts: folderCounts,
+                      ),
+                      onClear: () {
+                        if (selectedFolder != null) {
+                          setState(() => _selectedFolderId = null);
+                        } else {
+                          settings.setSmartInboxFilter(SmartInboxFilter.all);
+                        }
+                      },
                     ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   if (conversations.isEmpty)
                     SizedBox(
                       height: 360,
@@ -755,6 +805,136 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
     }
+  }
+
+  Future<void> _showInboxViewSheet(
+    BuildContext context, {
+    required List<SmartInboxFilter> filters,
+    required SmartInboxFilter selectedFilter,
+    required Map<SmartInboxFilter, int> filterCounts,
+    required List<ChatFolder> folders,
+    required ChatFolder? selectedFolder,
+    required Map<String, int> folderCounts,
+  }) async {
+    final settings = context.read<SettingsProvider>();
+    void selectFilter(BuildContext sheetContext, SmartInboxFilter filter) {
+      Navigator.pop(sheetContext);
+      if (!mounted) return;
+      setState(() => _selectedFolderId = null);
+      settings.setSmartInboxFilter(filter);
+    }
+
+    void selectFolder(BuildContext sheetContext, ChatFolder folder) {
+      Navigator.pop(sheetContext);
+      if (!mounted) return;
+      setState(() => _selectedFolderId = folder.id);
+      settings.setSmartInboxFilter(SmartInboxFilter.all);
+    }
+
+    await GlassModalSheet.show<void>(
+      context: context,
+      initialState: SheetState.half,
+      halfSize: folders.isEmpty ? 0.46 : 0.62,
+      enableInteractionGlow: true,
+      builder: (sheetContext) => SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 10, 10, 4),
+                child: Row(
+                  children: [
+                    const Icon(Icons.tune_rounded, size: 20),
+                    const SizedBox(width: 10),
+                    Text(
+                      'Inbox view',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      tooltip: 'Manage folders',
+                      icon: const Icon(Icons.folder_outlined),
+                      onPressed: () {
+                        Navigator.pop(sheetContext);
+                        _showFolderManager(context);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              for (final filter in filters)
+                _InboxViewOptionTile(
+                  icon: _smartInboxFilterIcon(filter),
+                  label: filter == SmartInboxFilter.all
+                      ? 'All chats'
+                      : smartInboxFilterLabel(filter),
+                  count: filterCounts[filter] ?? 0,
+                  selected: selectedFolder == null && selectedFilter == filter,
+                  onTap: () => selectFilter(sheetContext, filter),
+                ),
+              if (folders.isNotEmpty) ...[
+                _SheetSectionHeader(label: 'Folders'),
+                for (final folder in folders)
+                  _InboxViewOptionTile(
+                    icon: Icons.folder_outlined,
+                    label: folder.name,
+                    count: folderCounts[folder.id] ?? 0,
+                    selected: selectedFolder?.id == folder.id,
+                    onTap: () => selectFolder(sheetContext, folder),
+                  ),
+              ],
+              const SizedBox(height: 12),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showStoriesSheet(BuildContext context) async {
+    await GlassModalSheet.show<void>(
+      context: context,
+      initialState: SheetState.half,
+      halfSize: 0.30,
+      enableInteractionGlow: true,
+      builder: (sheetContext) => SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 10, 10, 0),
+              child: Row(
+                children: [
+                  const Icon(Icons.auto_stories_outlined, size: 20),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Stories',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    tooltip: 'Close',
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: () => Navigator.pop(sheetContext),
+                  ),
+                ],
+              ),
+            ),
+            const StoriesStrip(),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   int _folderConversationCount(
@@ -1347,129 +1527,144 @@ class _FolderRuleChip extends StatelessWidget {
   }
 }
 
-class _ChatFolderBar extends StatelessWidget {
-  final List<ChatFolder> folders;
-  final String? selectedFolderId;
-  final Map<String, int> counts;
-  final VoidCallback onAllSelected;
-  final ValueChanged<ChatFolder> onFolderSelected;
-  final VoidCallback onManage;
+class _ActiveInboxScopeBar extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final int count;
+  final VoidCallback onTap;
+  final VoidCallback onClear;
 
-  const _ChatFolderBar({
-    required this.folders,
-    required this.selectedFolderId,
-    required this.counts,
-    required this.onAllSelected,
-    required this.onFolderSelected,
-    required this.onManage,
+  const _ActiveInboxScopeBar({
+    required this.icon,
+    required this.label,
+    required this.count,
+    required this.onTap,
+    required this.onClear,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return SizedBox(
-      height: 48,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
-        itemCount: folders.length + 2,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
-        itemBuilder: (context, index) {
-          if (index == 0) {
-            return _FolderChoiceChip(
-              icon: Icons.all_inbox_outlined,
-              label: 'All',
-              selected: selectedFolderId == null,
-              onSelected: onAllSelected,
-            );
-          }
-          if (index == folders.length + 1) {
-            return IconButton.filledTonal(
-              tooltip: 'Folders',
-              style: IconButton.styleFrom(
-                backgroundColor: scheme.surfaceContainerHighest.withValues(
-                  alpha: 0.42,
-                ),
-                foregroundColor: scheme.primary,
-                minimumSize: const Size(40, 36),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      child: Material(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.32),
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 44),
+            padding: const EdgeInsets.only(left: 14, right: 4),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: scheme.outlineVariant.withValues(alpha: 0.26),
               ),
-              icon: const Icon(Icons.create_new_folder_outlined, size: 18),
-              onPressed: onManage,
-            );
-          }
-          final folder = folders[index - 1];
-          return _FolderChoiceChip(
-            icon: Icons.folder_outlined,
-            label: folder.name,
-            count: counts[folder.id] ?? 0,
-            selected: selectedFolderId == folder.id,
-            onSelected: () => onFolderSelected(folder),
-          );
-        },
+            ),
+            child: Row(
+              children: [
+                Icon(icon, size: 18, color: scheme.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                _InboxCountBadge(count: count, active: true),
+                const SizedBox(width: 2),
+                IconButton(
+                  tooltip: 'Clear',
+                  icon: const Icon(Icons.close_rounded, size: 18),
+                  onPressed: onClear,
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
 }
 
-class _FolderChoiceChip extends StatelessWidget {
+class _InboxViewOptionTile extends StatelessWidget {
   final IconData icon;
   final String label;
-  final int? count;
+  final int count;
   final bool selected;
-  final VoidCallback onSelected;
+  final VoidCallback onTap;
 
-  const _FolderChoiceChip({
+  const _InboxViewOptionTile({
     required this.icon,
     required this.label,
-    this.count,
+    required this.count,
     required this.selected,
-    required this.onSelected,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return ChoiceChip(
-      selected: selected,
-      onSelected: (_) => onSelected(),
-      showCheckmark: false,
-      visualDensity: VisualDensity.compact,
-      backgroundColor: scheme.surfaceContainerHighest.withValues(alpha: 0.42),
-      selectedColor: scheme.primary.withValues(alpha: 0.17),
-      side: BorderSide(
-        color: selected
-            ? scheme.primary.withValues(alpha: 0.55)
-            : scheme.outlineVariant.withValues(alpha: 0.28),
+    return GlassListTile(
+      leading: Container(
+        width: 34,
+        height: 34,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: (selected ? scheme.primary : scheme.onSurface).withValues(
+            alpha: selected ? 0.14 : 0.06,
+          ),
+        ),
+        child: Icon(
+          icon,
+          size: 18,
+          color: selected
+              ? scheme.primary
+              : scheme.onSurface.withValues(alpha: 0.62),
+        ),
       ),
-      label: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 24, maxWidth: 160),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              size: 15,
-              color: selected
-                  ? scheme.primary
-                  : scheme.onSurface.withValues(alpha: 0.62),
-            ),
-            const SizedBox(width: 6),
-            Flexible(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                  color: selected ? scheme.primary : null,
-                ),
-              ),
-            ),
-            if (count != null && count! > 0) ...[
-              const SizedBox(width: 6),
-              _InboxCountBadge(count: count!, active: selected),
-            ],
+      title: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+        ),
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (count > 0) _InboxCountBadge(count: count, active: selected),
+          if (selected) ...[
+            const SizedBox(width: 8),
+            Icon(Icons.check_rounded, color: scheme.primary, size: 20),
           ],
+        ],
+      ),
+      onTap: onTap,
+    );
+  }
+}
+
+class _SheetSectionHeader extends StatelessWidget {
+  final String label;
+
+  const _SheetSectionHeader({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 6),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+          color: Theme.of(
+            context,
+          ).colorScheme.onSurface.withValues(alpha: 0.56),
+          fontWeight: FontWeight.w800,
         ),
       ),
     );
@@ -1516,81 +1711,6 @@ class _FolderManagerTile extends StatelessWidget {
         onPressed: onDelete,
       ),
       onTap: onEdit,
-    );
-  }
-}
-
-class _SmartInboxBar extends StatelessWidget {
-  final List<SmartInboxFilter> filters;
-  final SmartInboxFilter selected;
-  final Map<SmartInboxFilter, int> counts;
-  final ValueChanged<SmartInboxFilter> onSelected;
-
-  const _SmartInboxBar({
-    required this.filters,
-    required this.selected,
-    required this.counts,
-    required this.onSelected,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return SizedBox(
-      height: 48,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
-        itemCount: filters.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
-        itemBuilder: (context, index) {
-          final filter = filters[index];
-          final active = filter == selected;
-          final count = counts[filter] ?? 0;
-          return ChoiceChip(
-            selected: active,
-            onSelected: (_) => onSelected(filter),
-            showCheckmark: false,
-            visualDensity: VisualDensity.compact,
-            backgroundColor: scheme.surfaceContainerHighest.withValues(
-              alpha: 0.42,
-            ),
-            selectedColor: scheme.primary.withValues(alpha: 0.17),
-            side: BorderSide(
-              color: active
-                  ? scheme.primary.withValues(alpha: 0.55)
-                  : scheme.outlineVariant.withValues(alpha: 0.28),
-            ),
-            label: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 24),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    _smartInboxFilterIcon(filter),
-                    size: 15,
-                    color: active
-                        ? scheme.primary
-                        : scheme.onSurface.withValues(alpha: 0.62),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    smartInboxFilterLabel(filter),
-                    style: TextStyle(
-                      fontWeight: active ? FontWeight.w800 : FontWeight.w600,
-                      color: active ? scheme.primary : null,
-                    ),
-                  ),
-                  if (count > 0) ...[
-                    const SizedBox(width: 6),
-                    _InboxCountBadge(count: count, active: active),
-                  ],
-                ],
-              ),
-            ),
-          );
-        },
-      ),
     );
   }
 }

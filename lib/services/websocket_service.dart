@@ -253,7 +253,7 @@ class WebSocketService extends ChangeNotifier {
         'call_id': callId,
         'sdp': sdp,
         'is_video': isVideo,
-        'conversation_id': ?conversationId,
+        'conversation_id': conversationId,
       },
     });
   }
