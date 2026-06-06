@@ -1,5 +1,5 @@
 import AVFoundation
-import Flutter
+@preconcurrency import Flutter
 import UIKit
 
 @main
@@ -27,7 +27,9 @@ import UIKit
     return launched
   }
 
-  func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
+  nonisolated func didInitializeImplicitFlutterEngine(
+    _ engineBridge: FlutterImplicitEngineBridge
+  ) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
   }
 
@@ -53,7 +55,7 @@ import UIKit
       case "takePendingActions":
         result([])
       default:
-        result(FlutterMethodNotImplemented)
+        result(Self.methodNotImplementedError(for: call.method))
       }
     }
     callForegroundChannel = channel
@@ -125,10 +127,20 @@ import UIKit
         self?.clearAudioOutput()
         result(nil)
       default:
-        result(FlutterMethodNotImplemented)
+        result(Self.methodNotImplementedError(for: call.method))
       }
     }
     callControlsChannel = channel
+  }
+
+  private nonisolated static func methodNotImplementedError(
+    for method: String
+  ) -> FlutterError {
+    FlutterError(
+      code: "method_not_implemented",
+      message: "Method not implemented: \(method)",
+      details: nil
+    )
   }
 
   private func selectAudioOutput(_ deviceId: String, isVideo: Bool) -> Bool {

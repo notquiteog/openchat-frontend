@@ -60,6 +60,10 @@ if [ -n "$android_google_services" ]; then
     echo "GOOGLE_SERVICES_JSON did not decode to google-services.json." >&2
     exit 1
   }
+  grep -Eq '"package_name"[[:space:]]*:[[:space:]]*"com\.openchat\.openchat"' "$android_google_services" || {
+    echo "GOOGLE_SERVICES_JSON is not configured for Android package com.openchat.openchat." >&2
+    exit 1
+  }
 fi
 
 if [ -n "$ios_google_service_info" ]; then
@@ -69,4 +73,9 @@ if [ -n "$ios_google_service_info" ]; then
     echo "GOOGLE_SERVICE_INFO_PLIST did not decode to GoogleService-Info.plist." >&2
     exit 1
   }
+  tr -d '\n\r\t ' < "$ios_google_service_info" |
+    grep -Fq '<key>BUNDLE_ID</key><string>com.openchat.openchat</string>' || {
+      echo "GOOGLE_SERVICE_INFO_PLIST is not configured for iOS bundle com.openchat.openchat." >&2
+      exit 1
+    }
 fi
