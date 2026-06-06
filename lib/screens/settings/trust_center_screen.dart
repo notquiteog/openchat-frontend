@@ -516,6 +516,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
     );
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: GlassAppBar(
         title: const Text('Trust Center'),
         actions: [
@@ -529,7 +530,12 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+          padding: EdgeInsets.fromLTRB(
+            16,
+            MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
+            16,
+            MediaQuery.paddingOf(context).bottom + 32,
+          ),
           children: [
             _TrustHero(summary: summary, loading: _loading, error: _error),
             const SizedBox(height: 20),
@@ -1081,66 +1087,39 @@ class _TrustRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final color = iconColor ?? scheme.primary;
-    return ClipRRect(
-      borderRadius: BorderRadius.vertical(
-        bottom: isLast ? const Radius.circular(22) : Radius.zero,
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: color.withValues(alpha: 0.12),
-                  ),
-                  child: Icon(icon, size: 18, color: color),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        title,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 15,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (subtitle != null)
-                        Text(
-                          subtitle!,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: scheme.onSurface.withValues(alpha: 0.55),
-                            height: 1.3,
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 12),
-                trailing ??
-                    Icon(
-                      CupertinoIcons.chevron_forward,
-                      size: 14,
-                      color: scheme.onSurface.withValues(alpha: 0.35),
-                    ),
-              ],
-            ),
-          ),
+    return GlassListTile(
+      leading: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: color.withValues(alpha: 0.12),
         ),
+        child: Icon(icon, size: 18, color: color),
       ),
+      title: Text(
+        title,
+        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      subtitle: subtitle != null
+          ? Text(
+              subtitle!,
+              style: TextStyle(
+                fontSize: 12,
+                color: scheme.onSurface.withValues(alpha: 0.55),
+                height: 1.3,
+              ),
+            )
+          : null,
+      trailing: trailing ??
+          Icon(
+            CupertinoIcons.chevron_forward,
+            size: 14,
+            color: scheme.onSurface.withValues(alpha: 0.35),
+          ),
+      onTap: onTap,
     );
   }
 }

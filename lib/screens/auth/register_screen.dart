@@ -4,6 +4,7 @@ import '../../crypto/pgp_service.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/key_provider.dart';
 import '../../widgets/glass.dart';
+import '../../widgets/gold_sand_background.dart';
 import '../../widgets/secure_storage_warning.dart';
 
 class RegisterScreen extends StatefulWidget {
@@ -76,7 +77,7 @@ class _RegisterScreenState extends State<RegisterScreen>
 
     return Scaffold(
       resizeToAvoidBottomInset: true,
-      body: LiquidMeshBackground(
+      body: GoldSandBackground(
         child: SafeArea(
           child: Center(
             child: SingleChildScrollView(

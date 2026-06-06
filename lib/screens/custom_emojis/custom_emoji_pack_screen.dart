@@ -117,6 +117,7 @@ class _CustomEmojiPackScreenState extends State<CustomEmojiPackScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: GlassAppBar(
         title: const Text('Custom Emoji Packs'),
         actions: [
@@ -163,7 +164,7 @@ class _CustomEmojiPackScreenState extends State<CustomEmojiPackScreen> {
               ),
             )
           : ListView.builder(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+              padding: EdgeInsets.fromLTRB(16, MediaQuery.paddingOf(context).top + kToolbarHeight + 8, 16, MediaQuery.paddingOf(context).bottom + 32),
               itemCount: _packs.length,
               itemBuilder: (context, i) {
                 final pack = _packs[i];
@@ -555,6 +556,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
         currentUserId != null && _pack['creator_id'] == currentUserId;
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: GlassAppBar(
         title: Text(_pack['name'] as String? ?? 'Pack'),
         actions: isOwner
@@ -582,6 +584,9 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
           ? const Center(child: GlassProgressIndicator.circular())
           : Column(
               children: [
+                SizedBox(
+                  height: MediaQuery.paddingOf(context).top + kToolbarHeight,
+                ),
                 if (coverUrl != null)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 12),

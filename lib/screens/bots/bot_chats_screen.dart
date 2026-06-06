@@ -64,12 +64,15 @@ class _BotChatsScreenState extends State<BotChatsScreen> {
         .where((c) => c.isBotDM(currentUserID))
         .toList();
     return Scaffold(
-      extendBodyBehindAppBar: false,
+      extendBodyBehindAppBar: true,
       appBar: const GlassAppBar(title: Text('Bots')),
       body: Column(
         children: [
+          SizedBox(
+            height: MediaQuery.paddingOf(context).top + kToolbarHeight,
+          ),
           Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
             child: TextField(
               controller: _searchCtrl,
               onChanged: _search,

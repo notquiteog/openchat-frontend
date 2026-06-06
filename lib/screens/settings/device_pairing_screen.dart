@@ -238,9 +238,15 @@ class _DevicePairingScreenState extends State<DevicePairingScreen> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: const GlassAppBar(title: Text('Link Device')),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 32),
+        padding: EdgeInsets.fromLTRB(
+          16,
+          MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
+          16,
+          MediaQuery.paddingOf(context).bottom + 32,
+        ),
         children: [
           SegmentedButton<DevicePairingMode>(
             segments: const [

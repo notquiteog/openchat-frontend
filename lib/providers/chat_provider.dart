@@ -294,6 +294,7 @@ class ChatProvider extends ChangeNotifier {
         var hydrated = c;
         final last = c.lastMessage;
         if (last != null) {
+          await _promoteDeliveredSealedScheduledMessage(last);
           _hydrateMessageSender(last);
           final cached = _cachedDecryptedMessage(last);
           if (cached != null) {
@@ -415,6 +416,7 @@ class ChatProvider extends ChangeNotifier {
 
       final result = <Message>[];
       for (final msg in msgs.reversed) {
+        await _promoteDeliveredSealedScheduledMessage(msg);
         final cached = cachedById[msg.id];
         if (cached != null &&
             cached.isDecrypted &&
@@ -460,6 +462,7 @@ class ChatProvider extends ChangeNotifier {
       );
       if (older.isEmpty) return 0;
       for (final msg in older) {
+        await _promoteDeliveredSealedScheduledMessage(msg);
         _hydrateMessageSender(msg);
       }
       final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
@@ -2940,6 +2943,7 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<void> _handleIncomingMessage(Message msg) async {
+    await _promoteDeliveredSealedScheduledMessage(msg);
     final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
     await _tryDecrypt(msg, privateKey);
 
@@ -3008,6 +3012,14 @@ class ChatProvider extends ChangeNotifier {
     }
 
     notifyListeners();
+  }
+
+  Future<void> _promoteDeliveredSealedScheduledMessage(Message msg) async {
+    if (!msg.sealedSender) return;
+    await _api.promoteSealedScheduledControlToMessage(
+      msg.conversationId,
+      msg.id,
+    );
   }
 
   Future<void> _handlePaymentRequestUpdate(Map<String, dynamic> data) async {

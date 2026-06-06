@@ -229,6 +229,7 @@ class _IdentityQrScannerScreenState extends State<IdentityQrScannerScreen> {
   Widget build(BuildContext context) {
     final expected = widget.expectedUsername;
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: GlassAppBar(
         title: Text(expected == null ? 'Scan identity QR' : 'Verify identity'),
       ),

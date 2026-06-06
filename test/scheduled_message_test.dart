@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openchat/models/message.dart';
 import 'package:openchat/models/scheduled_message.dart';
+import 'package:openchat/services/api_service.dart';
+import 'package:openchat/services/secure_storage_service.dart';
 
 void main() {
   group('ScheduledMessage', () {
@@ -83,4 +85,92 @@ void main() {
       },
     );
   });
+
+  group('sealed scheduled controls', () {
+    test('promotes delivered scheduled token to message token', () async {
+      final storage = _FakeSecureStorage();
+      const conversationId = 'conv-1';
+      const messageId = 'scheduled-1';
+      const token = 'schedule-token';
+      await storage.saveSealedScheduleControlToken(
+        conversationId,
+        messageId,
+        token,
+      );
+      final api = ApiService(storage);
+
+      await api.promoteSealedScheduledControlToMessage(
+        conversationId,
+        messageId,
+      );
+
+      expect(
+        await storage.getSealedScheduleControlToken(conversationId, messageId),
+        isNull,
+      );
+      expect(
+        await storage.getSealedMessageControlToken(conversationId, messageId),
+        token,
+      );
+    });
+  });
+}
+
+class _FakeSecureStorage extends SecureStorageService {
+  final _scheduleTokens = <String, Map<String, String>>{};
+  final _messageTokens = <String, Map<String, String>>{};
+
+  @override
+  Future<String?> getUserID() async => '';
+
+  @override
+  Future<String?> getPublicKey() async => '';
+
+  @override
+  Future<String?> getFingerprint() async => '';
+
+  @override
+  Future<String?> getPrivateKeyIfUnlocked() async => '';
+
+  @override
+  Future<String?> getSealedScheduleControlToken(
+    String conversationID,
+    String scheduledID,
+  ) async {
+    return _scheduleTokens[conversationID]?[scheduledID];
+  }
+
+  @override
+  Future<void> saveSealedScheduleControlToken(
+    String conversationID,
+    String scheduledID,
+    String token,
+  ) async {
+    _scheduleTokens.putIfAbsent(conversationID, () => {})[scheduledID] = token;
+  }
+
+  @override
+  Future<void> deleteSealedScheduleControlToken(
+    String conversationID,
+    String scheduledID,
+  ) async {
+    _scheduleTokens[conversationID]?.remove(scheduledID);
+  }
+
+  @override
+  Future<String?> getSealedMessageControlToken(
+    String conversationID,
+    String messageID,
+  ) async {
+    return _messageTokens[conversationID]?[messageID];
+  }
+
+  @override
+  Future<void> saveSealedMessageControlToken(
+    String conversationID,
+    String messageID,
+    String token,
+  ) async {
+    _messageTokens.putIfAbsent(conversationID, () => {})[messageID] = token;
+  }
 }

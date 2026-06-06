@@ -359,7 +359,13 @@ class _ApprovalSection extends StatelessWidget {
               ],
             ),
           ),
-          Switch.adaptive(value: value, onChanged: busy ? null : onChanged),
+          AbsorbPointer(
+            absorbing: busy,
+            child: Opacity(
+              opacity: busy ? 0.5 : 1.0,
+              child: GlassSwitch(value: value, onChanged: onChanged),
+            ),
+          ),
         ],
       ),
     );

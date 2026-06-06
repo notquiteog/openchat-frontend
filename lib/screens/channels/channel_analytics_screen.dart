@@ -50,6 +50,7 @@ class _ChannelAnalyticsScreenState extends State<ChannelAnalyticsScreen> {
   Widget build(BuildContext context) {
     final analytics = _analytics;
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: GlassAppBar(
         title: const Text('Analytics'),
         actions: [
@@ -89,7 +90,12 @@ class _AnalyticsContent extends StatelessWidget {
         : DateFormat('MMM d, h:mm a').format(generatedAt.toLocal());
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+      padding: EdgeInsets.fromLTRB(
+        16,
+        MediaQuery.paddingOf(context).top + kToolbarHeight + 14,
+        16,
+        MediaQuery.paddingOf(context).bottom + 24,
+      ),
       children: [
         Text(
           channelName,

@@ -273,6 +273,7 @@ class _WalletScreenState extends State<WalletScreen> {
     final currentUserID = context.watch<AuthProvider>().currentUser?.id;
     final theme = Theme.of(context);
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: const GlassAppBar(title: Text('Wallet')),
       body: _loading
           ? const Center(child: GlassProgressIndicator.circular())
@@ -281,7 +282,12 @@ class _WalletScreenState extends State<WalletScreen> {
           : RefreshIndicator(
               onRefresh: _load,
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
+                  16,
+                  MediaQuery.paddingOf(context).bottom + 32,
+                ),
                 children: [
                   for (final provider in _providers) ...[
                     GlassCard(

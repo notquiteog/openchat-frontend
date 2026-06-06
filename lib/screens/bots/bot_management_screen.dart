@@ -117,6 +117,7 @@ class _BotManagementScreenState extends State<BotManagementScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: GlassAppBar(
         title: const Text('My Bots'),
         actions: [
@@ -171,7 +172,7 @@ class _BotManagementScreenState extends State<BotManagementScreen> {
                   ),
                 )
               : ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+                  padding: EdgeInsets.fromLTRB(16, MediaQuery.paddingOf(context).top + kToolbarHeight + 8, 16, MediaQuery.paddingOf(context).bottom + 32),
                   itemCount: _bots.length,
                   itemBuilder: (context, i) {
                     final bot = _bots[i];
@@ -639,6 +640,7 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: GlassAppBar(
         title: Text('@$_username'),
         actions: [
@@ -650,7 +652,7 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+        padding: EdgeInsets.fromLTRB(16, MediaQuery.paddingOf(context).top + kToolbarHeight, 16, MediaQuery.paddingOf(context).bottom + 32),
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 24),
@@ -804,60 +806,41 @@ class _BotDetailTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final color = isDestructive ? scheme.error : scheme.primary;
-    return ClipRRect(
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: color.withValues(alpha: 0.12),
-                  ),
-                  child: Icon(icon, size: 18, color: color),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        title,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: isDestructive ? color : null,
-                        ),
-                      ),
-                      if (subtitle != null)
-                        Text(
-                          subtitle!,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontFamily: subtitleMono ? 'monospace' : null,
-                            color: scheme.onSurface.withValues(alpha: 0.55),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                ?trailing,
-                if (trailingIcon != null)
-                  Icon(trailingIcon, size: 18,
-                      color: scheme.onSurface.withValues(alpha: 0.35)),
-              ],
-            ),
-          ),
+    return GlassListTile(
+      leading: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: color.withValues(alpha: 0.12),
+        ),
+        child: Icon(icon, size: 18, color: color),
+      ),
+      title: Text(
+        title,
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          color: isDestructive ? color : null,
         ),
       ),
+      subtitle: subtitle != null
+          ? Text(
+              subtitle!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                fontFamily: subtitleMono ? 'monospace' : null,
+                color: scheme.onSurface.withValues(alpha: 0.55),
+              ),
+            )
+          : null,
+      trailing: trailing ??
+          (trailingIcon != null
+              ? Icon(trailingIcon, size: 18,
+                  color: scheme.onSurface.withValues(alpha: 0.35))
+              : null),
+      onTap: onTap,
     );
   }
 }

@@ -150,6 +150,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
     final theme = Theme.of(context);
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: const GlassAppBar(title: Text('OpenChat Premium')),
       body: _loading
           ? const Center(child: GlassProgressIndicator.circular())
@@ -158,7 +159,12 @@ class _PremiumScreenState extends State<PremiumScreen> {
           : RefreshIndicator(
               onRefresh: _loadStatus,
               child: ListView(
-                padding: const EdgeInsets.all(16),
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
+                  16,
+                  MediaQuery.paddingOf(context).bottom + 16,
+                ),
                 children: [
                   _PremiumStatusCard(user: user),
                   _PaymentSections(
@@ -685,61 +691,39 @@ class _ProviderTile extends StatelessWidget {
     final color = enabled
         ? scheme.primary
         : scheme.onSurface.withValues(alpha: 0.35);
-    return ClipRRect(
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: enabled ? onTap : null,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: color.withValues(alpha: 0.12),
-                  ),
-                  child: Icon(icon, size: 18, color: color),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        title,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: enabled
-                              ? null
-                              : scheme.onSurface.withValues(alpha: 0.45),
-                        ),
-                      ),
-                      if (subtitle != null)
-                        Text(
-                          subtitle!,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: scheme.onSurface.withValues(alpha: 0.55),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                trailing ??
-                    Icon(
-                      Icons.chevron_right,
-                      size: 18,
-                      color: scheme.onSurface.withValues(alpha: 0.35),
-                    ),
-              ],
-            ),
-          ),
+    return GlassListTile(
+      leading: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: color.withValues(alpha: 0.12),
+        ),
+        child: Icon(icon, size: 18, color: color),
+      ),
+      title: Text(
+        title,
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          color: enabled ? null : scheme.onSurface.withValues(alpha: 0.45),
         ),
       ),
+      subtitle: subtitle != null
+          ? Text(
+              subtitle!,
+              style: TextStyle(
+                fontSize: 12,
+                color: scheme.onSurface.withValues(alpha: 0.55),
+              ),
+            )
+          : null,
+      trailing: trailing ??
+          Icon(
+            Icons.chevron_right,
+            size: 18,
+            color: scheme.onSurface.withValues(alpha: 0.35),
+          ),
+      onTap: enabled ? onTap : null,
     );
   }
 }

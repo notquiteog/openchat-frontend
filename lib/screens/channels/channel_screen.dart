@@ -204,6 +204,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     final subscribed = chat.conversations.where((c) => c.isChannel).toList();
     final searching = _searchCtrl.text.isNotEmpty;
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: GlassAppBar(
         title: const Text('Channels'),
         actions: [
@@ -212,6 +213,9 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
       ),
       body: Column(
         children: [
+          SizedBox(
+            height: MediaQuery.paddingOf(context).top + kToolbarHeight,
+          ),
           Padding(
             padding: const EdgeInsets.all(12),
             child: TextField(
@@ -555,6 +559,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       final channelWithMembers = channel.copyWith(members: members);
       final privateKey = await storage.getPrivateKey() ?? '';
       for (final p in posts) {
+        await api.promoteSealedScheduledControlToMessage(channel.id, p.id);
         ChatProvider.hydrateMessageSenderFromConversation(
           p,
           channelWithMembers,
@@ -1006,6 +1011,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       for (final pin in serverPins) {
         final message = loadedById[pin.messageId] ?? pin.message;
         if (message != null) {
+          await api.promoteSealedScheduledControlToMessage(
+            channel.id,
+            message.id,
+          );
           ChatProvider.hydrateMessageSenderFromConversation(
             message,
             channelWithMembers,
@@ -3876,6 +3885,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     );
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: GlassAppBar(
         titleSpacing: 0,
         title: InkWell(
@@ -3942,6 +3952,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       ),
       body: Column(
         children: [
+          SizedBox(
+            height: MediaQuery.paddingOf(context).top + kToolbarHeight,
+          ),
           if (_archived || channel.isArchived)
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
@@ -4490,40 +4503,25 @@ class _ChanTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final tint = color ?? scheme.primary;
-    return ClipRRect(
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: tint.withValues(alpha: 0.12),
-                  ),
-                  child: Icon(icon, size: 18, color: tint),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Text(
-                    label,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 15,
-                      color: color,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
+    return GlassListTile(
+      leading: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: tint.withValues(alpha: 0.12),
+        ),
+        child: Icon(icon, size: 18, color: tint),
+      ),
+      title: Text(
+        label,
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          fontSize: 15,
+          color: color,
         ),
       ),
+      onTap: onTap,
     );
   }
 }

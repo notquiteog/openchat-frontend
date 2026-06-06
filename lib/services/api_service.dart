@@ -1084,6 +1084,42 @@ class ApiService {
     );
   }
 
+  Future<void> promoteSealedScheduledControlToMessage(
+    String conversationId,
+    String messageId,
+  ) async {
+    final scheduleToken = await _storage.getSealedScheduleControlToken(
+      conversationId,
+      messageId,
+    );
+    if (scheduleToken == null || scheduleToken.isEmpty) return;
+
+    final existingMessageToken = await _storage.getSealedMessageControlToken(
+      conversationId,
+      messageId,
+    );
+    if (existingMessageToken != scheduleToken) {
+      await _storage.saveSealedMessageControlToken(
+        conversationId,
+        messageId,
+        scheduleToken,
+      );
+      await _appendSealedMessageControlEvent(
+        operation: 'upsert',
+        conversationId: conversationId,
+        messageId: messageId,
+        controlToken: scheduleToken,
+      );
+    }
+
+    await _storage.deleteSealedScheduleControlToken(conversationId, messageId);
+    await _appendSealedScheduleControlEvent(
+      operation: 'delete',
+      conversationId: conversationId,
+      scheduledId: messageId,
+    );
+  }
+
   Future<void> _appendSealedMessageControlEvent({
     required String operation,
     required String conversationId,

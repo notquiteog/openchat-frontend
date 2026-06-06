@@ -646,6 +646,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     final cs = Theme.of(context).colorScheme;
     final isAdmin = _viewerIsAdmin;
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: GlassAppBar(
         title: Text('@${_user.username}'),
         actions: [
@@ -660,7 +661,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       body: _loading
           ? const Center(child: GlassProgressIndicator.circular())
           : ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+              padding: EdgeInsets.fromLTRB(
+                16,
+                MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
+                16,
+                MediaQuery.paddingOf(context).bottom + 32,
+              ),
               children: [
                 // ── Warning banners ──────────────────────────────────────────
                 if (_user.isFlaggedScammer)
@@ -1191,40 +1197,25 @@ class _ProfileMenuTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final tint = color ?? scheme.primary;
-    return ClipRRect(
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: tint.withValues(alpha: 0.12),
-                  ),
-                  child: Icon(icon, size: 18, color: tint),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Text(
-                    label,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 15,
-                      color: color,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
+    return GlassListTile(
+      leading: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: tint.withValues(alpha: 0.12),
+        ),
+        child: Icon(icon, size: 18, color: tint),
+      ),
+      title: Text(
+        label,
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          fontSize: 15,
+          color: color,
         ),
       ),
+      onTap: onTap,
     );
   }
 }

@@ -146,6 +146,31 @@ class _ModerationScreenState extends State<ModerationScreen> {
     }
   }
 
+  Future<void> _showReportActions(ModerationReport report) async {
+    await showGlassActionSheet<void>(
+      context: context,
+      actions: [
+        GlassActionSheetAction(
+          icon: const Icon(Icons.check_circle_outline),
+          label: 'Resolve',
+          onPressed: () {
+            Navigator.pop(context);
+            _resolveReport(report, 'resolved');
+          },
+        ),
+        GlassActionSheetAction(
+          icon: const Icon(Icons.cancel_outlined),
+          label: 'Dismiss',
+          style: GlassActionSheetStyle.destructive,
+          onPressed: () {
+            Navigator.pop(context);
+            _resolveReport(report, 'dismissed');
+          },
+        ),
+      ],
+    );
+  }
+
   Future<void> _resolveReport(ModerationReport report, String status) async {
     try {
       await context.read<ApiService>().resolveModerationReport(
@@ -304,10 +329,17 @@ class _ModerationScreenState extends State<ModerationScreen> {
         : <ConversationMember>[];
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: const GlassAppBar(title: Text('Moderation')),
       body: _loading
           ? const Center(child: GlassProgressIndicator.circular())
           : ListView(
+              padding: EdgeInsets.fromLTRB(
+                0,
+                MediaQuery.paddingOf(context).top + kToolbarHeight,
+                0,
+                MediaQuery.paddingOf(context).bottom + 16,
+              ),
               children: [
                 if (_canManageModeration || _canManageRoles)
                   GlassListTile(
@@ -437,19 +469,9 @@ class _ModerationScreenState extends State<ModerationScreen> {
                       leading: const Icon(Icons.report_problem_outlined),
                       title: Text(_reportTitle(report)),
                       subtitle: Text(_reportSubtitle(report)),
-                      trailing: PopupMenuButton<String>(
+                      trailing: IconButton(
                         icon: const Icon(Icons.more_vert),
-                        onSelected: (status) => _resolveReport(report, status),
-                        itemBuilder: (context) => const [
-                          PopupMenuItem(
-                            value: 'resolved',
-                            child: Text('Resolve'),
-                          ),
-                          PopupMenuItem(
-                            value: 'dismissed',
-                            child: Text('Dismiss'),
-                          ),
-                        ],
+                        onPressed: () => _showReportActions(report),
                       ),
                     ),
                   const Divider(),
@@ -626,40 +648,25 @@ class _ModTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final tint = color ?? scheme.primary;
-    return ClipRRect(
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: tint.withValues(alpha: 0.12),
-                  ),
-                  child: Icon(icon, size: 18, color: tint),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Text(
-                    label,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 15,
-                      color: color,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
+    return GlassListTile(
+      leading: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: tint.withValues(alpha: 0.12),
+        ),
+        child: Icon(icon, size: 18, color: tint),
+      ),
+      title: Text(
+        label,
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          fontSize: 15,
+          color: color,
         ),
       ),
+      onTap: onTap,
     );
   }
 }

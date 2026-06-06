@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../widgets/glass.dart';
+import '../../widgets/gold_sand_background.dart';
 import '../../widgets/secure_storage_warning.dart';
 import '../settings/device_pairing_screen.dart';
 import '../settings/pgp_keys_screen.dart';
@@ -66,7 +67,7 @@ class _LoginScreenState extends State<LoginScreen>
 
     return Scaffold(
       resizeToAvoidBottomInset: true,
-      body: LiquidMeshBackground(
+      body: GoldSandBackground(
         child: SafeArea(
           child: Center(
             child: SingleChildScrollView(

@@ -24,8 +24,6 @@ import '../chat/chat_screen.dart';
 import '../profile/user_profile_screen.dart';
 import '../settings/settings_screen.dart';
 
-enum _InboxOverflowAction { folders, stories, settings }
-
 class ConversationsScreen extends StatefulWidget {
   const ConversationsScreen({super.key});
   @override
@@ -173,48 +171,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
               folderCounts: folderCounts,
             ),
           ),
-          PopupMenuButton<_InboxOverflowAction>(
+          IconButton(
             tooltip: 'More',
             icon: const Icon(Icons.more_vert_rounded),
-            onSelected: (action) {
-              switch (action) {
-                case _InboxOverflowAction.folders:
-                  _showFolderManager(context);
-                  break;
-                case _InboxOverflowAction.stories:
-                  _showStoriesSheet(context);
-                  break;
-                case _InboxOverflowAction.settings:
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
-                  );
-                  break;
-              }
-            },
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: _InboxOverflowAction.folders,
-                child: ListTile(
-                  leading: Icon(Icons.folder_outlined),
-                  title: Text('Folders'),
-                ),
-              ),
-              PopupMenuItem(
-                value: _InboxOverflowAction.stories,
-                child: ListTile(
-                  leading: Icon(Icons.auto_stories_outlined),
-                  title: Text('Stories'),
-                ),
-              ),
-              PopupMenuItem(
-                value: _InboxOverflowAction.settings,
-                child: ListTile(
-                  leading: Icon(Icons.settings_outlined),
-                  title: Text('Settings'),
-                ),
-              ),
-            ],
+            onPressed: () => _showOverflowSheet(context),
           ),
         ],
       ),
@@ -321,6 +281,41 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           stretch: 0.6,
         ),
       ),
+    );
+  }
+
+  Future<void> _showOverflowSheet(BuildContext context) async {
+    await showGlassActionSheet<void>(
+      context: context,
+      actions: [
+        GlassActionSheetAction(
+          icon: const Icon(Icons.folder_outlined),
+          label: 'Folders',
+          onPressed: () {
+            Navigator.pop(context);
+            _showFolderManager(context);
+          },
+        ),
+        GlassActionSheetAction(
+          icon: const Icon(Icons.auto_stories_outlined),
+          label: 'Stories',
+          onPressed: () {
+            Navigator.pop(context);
+            _showStoriesSheet(context);
+          },
+        ),
+        GlassActionSheetAction(
+          icon: const Icon(Icons.settings_outlined),
+          label: 'Settings',
+          onPressed: () {
+            Navigator.pop(context);
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SettingsScreen()),
+            );
+          },
+        ),
+      ],
     );
   }
 
@@ -1547,41 +1542,37 @@ class _ActiveInboxScopeBar extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-      child: Material(
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.32),
-        borderRadius: BorderRadius.circular(16),
+      child: GlassCard(
+        padding: EdgeInsets.zero,
+        margin: EdgeInsets.zero,
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(16),
-          child: Container(
+          borderRadius: BorderRadius.circular(22),
+          child: ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 44),
-            padding: const EdgeInsets.only(left: 14, right: 4),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: scheme.outlineVariant.withValues(alpha: 0.26),
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(icon, size: 18, color: scheme.primary),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
+            child: Padding(
+              padding: const EdgeInsets.only(left: 14, right: 4),
+              child: Row(
+                children: [
+                  Icon(icon, size: 18, color: scheme.primary),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
                   ),
-                ),
-                _InboxCountBadge(count: count, active: true),
-                const SizedBox(width: 2),
-                IconButton(
-                  tooltip: 'Clear',
-                  icon: const Icon(Icons.close_rounded, size: 18),
-                  onPressed: onClear,
-                ),
-              ],
+                  _InboxCountBadge(count: count, active: true),
+                  const SizedBox(width: 2),
+                  IconButton(
+                    tooltip: 'Clear',
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                    onPressed: onClear,
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -2167,6 +2158,14 @@ class _ConvAvatar extends StatelessWidget {
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           border: Border.all(color: scheme.primary, width: 2),
+          boxShadow: [
+            BoxShadow(
+              color: scheme.primary.withValues(alpha: 0.35),
+              blurRadius: 10,
+              spreadRadius: -2,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
         child: avatar,
       );

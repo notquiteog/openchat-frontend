@@ -73,6 +73,7 @@ class _AdminAuditLogScreenState extends State<AdminAuditLogScreen> {
   Widget build(BuildContext context) {
     final visibleEvents = _visibleEvents;
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: GlassAppBar(
         title: const Text('Audit log'),
         actions: [
@@ -87,6 +88,9 @@ class _AdminAuditLogScreenState extends State<AdminAuditLogScreen> {
           ? const Center(child: GlassProgressIndicator.circular())
           : Column(
               children: [
+                SizedBox(
+                  height: MediaQuery.paddingOf(context).top + kToolbarHeight,
+                ),
                 SizedBox(
                   height: 58,
                   child: ListView.separated(

@@ -83,11 +83,17 @@ class _MiniAppsScreenState extends State<MiniAppsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: const GlassAppBar(title: Text('Mini Apps')),
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 32),
+          padding: EdgeInsets.fromLTRB(
+            16,
+            MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
+            16,
+            MediaQuery.paddingOf(context).bottom + 32,
+          ),
           children: [
             TextField(
               controller: _searchCtrl,

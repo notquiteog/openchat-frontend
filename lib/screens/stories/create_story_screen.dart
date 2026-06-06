@@ -94,10 +94,10 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
     final theme = Theme.of(context);
     final pending = _pending;
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: const GlassAppBar(title: Text('New story')),
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(16),
+      body: ListView(
+          padding: EdgeInsets.fromLTRB(16, MediaQuery.paddingOf(context).top + kToolbarHeight + 16, 16, MediaQuery.paddingOf(context).bottom + 16),
           children: [
             AspectRatio(
               aspectRatio: 9 / 16,
@@ -182,7 +182,6 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
             ),
           ],
         ),
-      ),
     );
   }
 }
