@@ -3427,13 +3427,13 @@ class ChatProvider extends ChangeNotifier {
           return;
         }
         msg.setDecryptedContent(raw, verifiedSenderId: verifiedSenderId);
-        unawaited(_cache.put(
+        await _cache.put(
           msg.id,
           msg.conversationId,
           msg.encryptedPayload,
           raw,
           verifiedSenderId,
-        ));
+        );
         _applyArtifactState(msg);
         _hydrateMessageSender(msg);
         _indexMessage(msg);

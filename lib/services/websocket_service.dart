@@ -238,72 +238,8 @@ class WebSocketService extends ChangeNotifier {
     }, queueIfOffline: false);
   }
 
-  void sendCallOffer({
-    required String targetUserId,
-    required String callId,
-    required String sdp,
-    required bool isVideo,
-    String? conversationId,
-  }) {
-    if (conversationId == null || conversationId.trim().isEmpty) return;
-    _send({
-      'type': 'call_offer',
-      'data': {
-        'target_user_id': targetUserId,
-        'call_id': callId,
-        'sdp': sdp,
-        'is_video': isVideo,
-        'conversation_id': conversationId,
-      },
-    });
-  }
-
   void sendCallOfferPayload(Map<String, dynamic> data) {
     _send({'type': 'call_offer', 'data': data});
-  }
-
-  void sendCallAnswer({
-    required String targetUserId,
-    required String callId,
-    required String conversationId,
-    required String sdp,
-  }) {
-    if (conversationId.trim().isEmpty) return;
-    _send({
-      'type': 'call_answer',
-      'data': {
-        'target_user_id': targetUserId,
-        'conversation_id': conversationId,
-        'call_id': callId,
-        'sdp': sdp,
-      },
-    });
-  }
-
-  void sendCallAnswerPayload(Map<String, dynamic> data) {
-    _send({'type': 'call_answer', 'data': data});
-  }
-
-  void sendIceCandidate({
-    required String targetUserId,
-    required String callId,
-    required String conversationId,
-    required Map<String, dynamic> candidate,
-  }) {
-    if (conversationId.trim().isEmpty) return;
-    _send({
-      'type': 'call_ice_candidate',
-      'data': {
-        'target_user_id': targetUserId,
-        'conversation_id': conversationId,
-        'call_id': callId,
-        'candidate': candidate,
-      },
-    });
-  }
-
-  void sendIceCandidatePayload(Map<String, dynamic> data) {
-    _send({'type': 'call_ice_candidate', 'data': data});
   }
 
   void sendCallHangup({

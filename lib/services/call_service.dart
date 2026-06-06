@@ -1,18 +1,40 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, TargetPlatform, visibleForTesting;
-import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart'
+    show Helper, MediaDeviceInfo;
+import 'package:livekit_client/livekit_client.dart';
 import 'package:uuid/uuid.dart';
-import '../config/api_config.dart' show IceServer;
+import '../services/api_service.dart';
 import '../services/call_platform_controls.dart';
 import '../services/call_signal_codec.dart';
 import '../services/websocket_service.dart';
 
+export 'package:livekit_client/livekit_client.dart'
+    show
+        Room,
+        LocalParticipant,
+        RemoteParticipant,
+        LocalVideoTrack,
+        RemoteVideoTrack,
+        LocalAudioTrack,
+        RemoteAudioTrack,
+        Participant,
+        Track,
+        TrackPublication,
+        VideoTrack,
+        VideoTrackRenderer,
+        VideoViewFit,
+        VideoViewMirrorMode,
+        CameraPosition,
+        CameraCaptureOptions,
+        AudioCaptureOptions;
+
 enum CallState {
   idle,
-  ringing, // incoming, awaiting accept / outgoing, peer is ringing
-  calling, // outgoing, offer sent, not yet acknowledged
-  connecting, // answered; negotiating media (ICE), not yet flowing
+  ringing, // incoming awaiting accept / outgoing peer is ringing
+  calling, // outgoing offer sent, not yet acknowledged
+  connecting, // answered; joining LiveKit room
   connected, // media is flowing
   ended,
 }
@@ -22,16 +44,12 @@ class CallSession {
   final String remoteUserId;
   final String? remoteUsername;
   final String? remoteAvatarUrl;
-  // DM conversation this call belongs to. Used to post the "missed" / "answered"
-  // call event into the thread when the call ends. Null when started outside a
-  // DM context.
   final String? conversationId;
+  final List<String> participantUserIds;
   final bool isVideo;
   final bool isIncoming;
   CallState state;
 
-  // Set once media actually connects, so the end-of-call event can distinguish
-  // an answered call (→ "Call ended · 1:23") from a missed one.
   bool wasConnected = false;
   DateTime? connectedAt;
 
@@ -41,15 +59,17 @@ class CallSession {
     this.remoteUsername,
     this.remoteAvatarUrl,
     this.conversationId,
+    List<String> participantUserIds = const [],
     required this.isVideo,
     required this.isIncoming,
     this.state = CallState.ringing,
-  });
+  }) : participantUserIds = List.unmodifiable(participantUserIds);
+
+  bool get isGroupCall => participantUserIds.length > 1;
 }
 
 /// Emitted by [CallService] when an outgoing call ends, so the caller's client
-/// can record a deletable event in the DM. Only the caller emits these (it is
-/// the single writer) to avoid both peers posting duplicate events.
+/// can record a deletable event in the DM. Only the caller emits these.
 class CallEndedEvent {
   final String conversationId;
   final bool answered;
@@ -79,110 +99,18 @@ List<Map<String, dynamic>> buildCallMediaCaptureAttemptsForTesting({
   required bool isDesktop,
   List<MediaDeviceInfo> videoInputs = const [],
 }) {
+  // Only used for tests — LiveKit manages actual capture internally.
   if (!isVideo) {
     return const [
       {'audio': true, 'video': false},
     ];
   }
-
-  final profiles = isDesktop
-      ? const [
-          _VideoProfile(width: 640, height: 480, frameRate: 30),
-          _VideoProfile(width: 320, height: 240, frameRate: 15),
-          _VideoProfile(width: 1280, height: 720, frameRate: 30),
-        ]
-      : isMobile
-      ? const [_VideoProfile(width: 640, height: 480, frameRate: 30)]
-      : const [_VideoProfile(width: 1280, height: 720, frameRate: 30)];
-
-  final preferredDeviceIds = [
-    for (final device in _preferredVideoInputs(videoInputs))
-      if (device.deviceId.isNotEmpty) device.deviceId,
+  return const [
+    {
+      'audio': true,
+      'video': {'width': 640, 'height': 480, 'frameRate': 30},
+    },
   ];
-  final videoDeviceIds = isMobile
-      ? const <String?>[null]
-      : isDesktop
-      ? <String?>[null, ...preferredDeviceIds]
-      : <String?>[...preferredDeviceIds, null];
-  final effectiveDeviceIds = videoDeviceIds.isEmpty
-      ? const <String?>[null]
-      : videoDeviceIds;
-
-  return [
-    for (final deviceId in effectiveDeviceIds)
-      for (final profile in profiles)
-        {
-          'audio': true,
-          'video': _videoConstraints(
-            deviceId: deviceId,
-            profile: profile,
-            isMobile: isMobile,
-            isWeb: isWeb,
-          ),
-        },
-  ];
-}
-
-class _VideoProfile {
-  final int width;
-  final int height;
-  final int frameRate;
-
-  const _VideoProfile({
-    required this.width,
-    required this.height,
-    required this.frameRate,
-  });
-}
-
-Map<String, dynamic> _videoConstraints({
-  required String? deviceId,
-  required _VideoProfile profile,
-  required bool isMobile,
-  required bool isWeb,
-}) {
-  return {
-    if (deviceId != null && isWeb) 'deviceId': deviceId,
-    if (deviceId != null && !isWeb)
-      'optional': [
-        {'sourceId': deviceId},
-      ],
-    if (isMobile && deviceId == null) 'facingMode': 'user',
-    'width': profile.width,
-    'height': profile.height,
-    'frameRate': profile.frameRate,
-  };
-}
-
-List<MediaDeviceInfo> _preferredVideoInputs(List<MediaDeviceInfo> devices) {
-  final indexed = devices
-      .where((device) => device.kind == 'videoinput')
-      .indexed
-      .toList(growable: false);
-  indexed.sort((a, b) {
-    final byScore = _videoDeviceScore(a.$2).compareTo(_videoDeviceScore(b.$2));
-    if (byScore != 0) return byScore;
-    return a.$1.compareTo(b.$1);
-  });
-  return [for (final entry in indexed) entry.$2];
-}
-
-int _videoDeviceScore(MediaDeviceInfo device) {
-  final label = device.label.toLowerCase();
-  if (label.contains('razer') || label.contains('kiyo')) return 0;
-  if (label.contains('usb') ||
-      label.contains('webcam') ||
-      label.contains('camera') ||
-      label.contains('cam')) {
-    return 1;
-  }
-  if (label.trim().isEmpty) return 2;
-  if (label.contains('virtual') ||
-      label.contains('obs') ||
-      label.contains('screen')) {
-    return 4;
-  }
-  return 3;
 }
 
 String? _stringField(Map<String, dynamic> data, String key) {
@@ -192,94 +120,55 @@ String? _stringField(Map<String, dynamic> data, String key) {
   return trimmed.isEmpty ? null : trimmed;
 }
 
-/// Manages a single WebRTC call. Handles offer/answer, ICE candidates,
-/// and forwards signaling through the WebSocket service.
+/// Manages a call session via the LiveKit SFU. Handles invitation signaling
+/// through the WebSocket service while delegating all media to LiveKit.
 class CallService {
   final WebSocketService _ws;
   final CallSignalCodec _signalCodec;
+  final ApiService _api;
   final CallPlatformControls _platformControls;
-  final Future<List<IceServer>> Function()? _iceServerLoader;
-  RTCPeerConnection? _pc;
-  MediaStream? _localStream;
-  MediaStream? _remoteStream;
+
+  Room? _room;
+  EventsListener<RoomEvent>? _roomListener;
   CallSession? _session;
   bool _micMuted = false;
   bool _cameraEnabled = true;
   bool _usingFrontCamera = true;
   String? _selectedAudioOutputId;
-  Future<void> _micMuteQueue = Future<void>.value();
-  int _micMuteGeneration = 0;
-  final List<RTCIceCandidate> _pendingRemoteCandidates = [];
+  String? _pendingRoomName;
 
   final _sessionController = StreamController<CallSession?>.broadcast();
-  final _remoteStreamController = StreamController<MediaStream?>.broadcast();
-  final _localStreamController = StreamController<MediaStream?>.broadcast();
   final _incomingCallController = StreamController<CallSession>.broadcast();
   final _missedCallController = StreamController<CallSession>.broadcast();
   final _callEndedController = StreamController<CallEndedEvent>.broadcast();
 
   Stream<CallSession?> get sessionStream => _sessionController.stream;
-  Stream<MediaStream?> get remoteStream => _remoteStreamController.stream;
-  Stream<MediaStream?> get localStream => _localStreamController.stream;
   Stream<CallSession> get incomingCalls => _incomingCallController.stream;
-
-  /// Fires when an incoming call ends before the user answered it (the caller
-  /// hung up or the offer was withdrawn while still ringing).
   Stream<CallSession> get missedCalls => _missedCallController.stream;
-
-  /// Fires (caller side only) when an outgoing call ends, so a "missed" /
-  /// "answered" event can be written into the DM.
   Stream<CallEndedEvent> get callEnded => _callEndedController.stream;
 
-  /// How long an unanswered call rings before it's given up as missed.
   static const ringTimeout = Duration(seconds: 30);
-
-  /// How long to wait for media to actually connect after the call is answered
-  /// before giving up (covers ICE failures with no reachable TURN server).
   static const connectTimeout = Duration(seconds: 30);
   Timer? _ringTimer;
   Timer? _connectTimer;
 
-  // Incoming call that is ringing but not yet accepted. Used to distinguish a
-  // "missed call" (ended while this is set) from a normal hang-up.
   CallSession? _pendingIncoming;
 
   CallSession? get currentSession => _session;
-  MediaStream? get currentLocalStream => _localStream;
-  MediaStream? get currentRemoteStream => _remoteStream;
-  bool get hasLocalMedia => _localStream != null;
+  Room? get room => _room;
+  bool get hasLocalMedia => _room?.localParticipant != null;
   bool get usingFrontCamera => _usingFrontCamera;
 
   StreamSubscription<WsEvent>? _wsSub;
 
-  List<IceServer> _iceServers = const [
-    IceServer(url: 'stun:stun.l.google.com:19302'),
-    IceServer(url: 'stun:stun1.l.google.com:19302'),
-  ];
-
   CallService(
-    this._ws, {
+    this._ws,
+    this._api, {
     CallSignalCodec? signalCodec,
     CallPlatformControls? platformControls,
-    this._iceServerLoader,
   }) : _signalCodec = signalCodec ?? const PlainCallSignalCodec(),
        _platformControls = platformControls ?? const CallPlatformControls() {
     _wsSub = _ws.events.listen(_handleWsEvent);
-  }
-
-  void updateIceServers(List<IceServer> servers) {
-    if (servers.isNotEmpty) _iceServers = servers;
-  }
-
-  Future<void> refreshIceServers() async {
-    final loader = _iceServerLoader;
-    if (loader == null) return;
-    try {
-      final servers = await loader();
-      if (servers.isNotEmpty) updateIceServers(servers);
-    } catch (_) {
-      // Keep the existing/default STUN servers when config fetch fails.
-    }
   }
 
   // ---- Outgoing call ----
@@ -287,17 +176,28 @@ class CallService {
   Future<void> startCall({
     required String targetUserId,
     String? targetUsername,
-    String? conversationId,
+    required String conversationId,
     required bool isVideo,
+    List<String> additionalUserIds = const [],
   }) async {
-    if (_session != null) return; // already in a call
+    if (_session != null) return;
 
     final callId = const Uuid().v4();
+    final roomName = 'call_$callId';
+    final recipientIds = <String>[
+      targetUserId,
+      ...additionalUserIds,
+    ].where((id) => id.trim().isNotEmpty).toSet().toList(growable: false);
+    if (recipientIds.isEmpty) {
+      throw ArgumentError('targetUserId is required');
+    }
+
     _session = CallSession(
       callId: callId,
       remoteUserId: targetUserId,
       remoteUsername: targetUsername,
       conversationId: conversationId,
+      participantUserIds: recipientIds,
       isVideo: isVideo,
       isIncoming: false,
       state: CallState.calling,
@@ -305,32 +205,32 @@ class CallService {
     _sessionController.add(_session);
 
     try {
-      await refreshIceServers();
-      await _initPeerConnection(
-        targetUserId,
-        callId,
+      final tokenResult = await _api.getLiveKitToken(
+        roomName: roomName,
         conversationId: conversationId,
+      );
+      await _connectToRoom(
+        url: tokenResult.url,
+        token: tokenResult.token,
         isVideo: isVideo,
       );
-      await _captureLocalMedia(isVideo: isVideo);
       _sessionController.add(_session);
 
-      final offer = await _pc!.createOffer();
-      await _pc!.setLocalDescription(offer);
+      for (final userId in recipientIds) {
+        final offerData = await _signalCodec.encode(
+          CallSignalPayload(
+            kind: 'offer',
+            targetUserId: userId,
+            callId: callId,
+            conversationId: conversationId,
+            isVideo: isVideo,
+            roomName: roomName,
+            participantUserIds: recipientIds,
+          ),
+        );
+        _ws.sendCallOfferPayload(offerData);
+      }
 
-      final offerData = await _signalCodec.encode(
-        CallSignalPayload(
-          kind: 'offer',
-          targetUserId: targetUserId,
-          callId: callId,
-          conversationId: conversationId,
-          isVideo: isVideo,
-          sdp: offer.sdp!,
-        ),
-      );
-      _ws.sendCallOfferPayload(offerData);
-
-      // Give up (as a missed/no-answer call) if the callee never picks up.
       _startRingTimer();
     } catch (_) {
       _cleanup(emitEndedEvent: false);
@@ -343,8 +243,6 @@ class CallService {
     _ringTimer = Timer(ringTimeout, () {
       final s = _session;
       if (s != null && s.state != CallState.connected) {
-        // Tell the peer to stop ringing, then tear down. _cleanup emits the
-        // missed-call event for the caller.
         hangup();
       }
     });
@@ -360,19 +258,32 @@ class CallService {
   Future<void> acceptIncomingCall(CallSession session) async {
     _cancelRingTimer();
     _pendingIncoming = null;
-    _session = session..state = CallState.calling;
+    _session = session..state = CallState.connecting;
     _sessionController.add(_session);
 
+    final roomName = _pendingRoomName;
+    if (roomName == null) {
+      _cleanup(emitEndedEvent: false);
+      throw Exception(
+        'Your PGP key was locked when this call arrived. Unlock it in Settings, then ask the caller to try again.',
+      );
+    }
+    final conversationId = session.conversationId;
+    if (conversationId == null || conversationId.isEmpty) {
+      _cleanup(emitEndedEvent: false);
+      throw Exception('Call offer is missing its conversation.');
+    }
+
     try {
-      await refreshIceServers();
-      await _initPeerConnection(
-        session.remoteUserId,
-        session.callId,
-        conversationId: session.conversationId,
-        callerId: session.remoteUserId,
+      final tokenResult = await _api.getLiveKitToken(
+        roomName: roomName,
+        conversationId: conversationId,
+      );
+      await _connectToRoom(
+        url: tokenResult.url,
+        token: tokenResult.token,
         isVideo: session.isVideo,
       );
-      await _captureLocalMedia(isVideo: session.isVideo);
       _sessionController.add(_session);
 
       _ws.sendCallRinging(
@@ -386,69 +297,10 @@ class CallService {
     }
   }
 
-  Future<void> answerCall({required String sdpOffer}) async {
-    final session = _session;
-    if (session == null || _pc == null) return;
-
-    await _pc!.setRemoteDescription(RTCSessionDescription(sdpOffer, 'offer'));
-    await _flushPendingRemoteCandidates();
-    final answer = await _pc!.createAnswer();
-    await _pc!.setLocalDescription(answer);
-
-    final answerData = await _signalCodec.encode(
-      CallSignalPayload(
-        kind: 'answer',
-        targetUserId: session.remoteUserId,
-        callId: session.callId,
-        conversationId: session.conversationId,
-        callerId: session.isIncoming ? session.remoteUserId : null,
-        isVideo: session.isVideo,
-        sdp: answer.sdp!,
-      ),
-    );
-    _ws.sendCallAnswerPayload(answerData);
-    _enterConnecting();
-  }
-
-  /// Moves the session into the "connecting" (media-negotiation) phase and arms
-  /// a timeout so a call that never establishes media (e.g. ICE fails with no
-  /// reachable TURN server) tears down instead of hanging on the call screen.
-  void _enterConnecting() {
-    final s = _session;
-    if (s == null || s.state == CallState.connected) return;
-    _cancelRingTimer();
-    s.state = CallState.connecting;
-    _sessionController.add(s);
-    _connectTimer?.cancel();
-    _connectTimer = Timer(connectTimeout, () {
-      final cur = _session;
-      if (cur != null && cur.state != CallState.connected) {
-        hangup(); // give up; _cleanup posts the call event for the caller
-      }
-    });
-  }
-
-  /// Marks the active session connected and records the connect time so the
-  /// end-of-call event can report the talk duration.
-  void _markConnected() {
-    final s = _session;
-    if (s == null) return;
-    _cancelRingTimer();
-    _connectTimer?.cancel();
-    _connectTimer = null;
-    if (!s.wasConnected) {
-      s.wasConnected = true;
-      s.connectedAt = DateTime.now();
-    }
-    s.state = CallState.connected;
-    _sessionController.add(s);
-    _reapplyActiveMobileAudioControls();
-  }
-
   void rejectCall(CallSession session) {
     _cancelRingTimer();
     _pendingIncoming = null;
-    _pendingOfferSdp = null;
+    _pendingRoomName = null;
     _ws.sendCallReject(
       targetUserId: session.remoteUserId,
       conversationId: session.conversationId ?? '',
@@ -456,14 +308,30 @@ class CallService {
     );
   }
 
+  List<String> _hangupTargetIds(CallSession session) {
+    final ids = session.participantUserIds.isEmpty
+        ? <String>[session.remoteUserId]
+        : session.participantUserIds;
+    return ids
+        .where((id) => id.trim().isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+  }
+
   void hangup() {
     final session = _session;
     if (session != null) {
-      _ws.sendCallHangup(
-        targetUserId: session.remoteUserId,
-        conversationId: session.conversationId ?? '',
-        callId: session.callId,
-      );
+      final shouldSignalHangup =
+          !session.isGroupCall || session.state != CallState.connected;
+      if (shouldSignalHangup) {
+        for (final userId in _hangupTargetIds(session)) {
+          _ws.sendCallHangup(
+            targetUserId: userId,
+            conversationId: session.conversationId ?? '',
+            callId: session.callId,
+          );
+        }
+      }
     }
     _cleanup();
   }
@@ -472,53 +340,32 @@ class CallService {
 
   void setMicMuted(bool muted) {
     _micMuted = muted;
-    final tracks = _localStream?.getAudioTracks() ?? const <MediaStreamTrack>[];
-    for (final track in tracks) {
-      track.enabled = !muted;
-    }
-    final generation = ++_micMuteGeneration;
-    _micMuteQueue = _micMuteQueue
-        .then((_) => _applyMicrophoneMute(muted, tracks, generation))
-        .catchError((_) {});
-    unawaited(_micMuteQueue);
-  }
-
-  Future<void> _applyMicrophoneMute(
-    bool muted,
-    List<MediaStreamTrack> tracks,
-    int generation,
-  ) async {
-    if (generation != _micMuteGeneration) return;
-    await _platformControls.setMicrophoneMuted(muted);
-    if (generation != _micMuteGeneration || kIsWeb) return;
-    for (final track in tracks) {
-      try {
-        await Helper.setMicrophoneMute(muted, track);
-      } catch (_) {
-        track.enabled = !muted;
-      }
-      if (generation != _micMuteGeneration) return;
-      track.enabled = !muted;
-    }
+    unawaited(_room?.localParticipant?.setMicrophoneEnabled(!muted));
+    unawaited(_platformControls.setMicrophoneMuted(muted));
   }
 
   void setCameraEnabled(bool enabled) {
     _cameraEnabled = enabled;
-    _localStream?.getVideoTracks().forEach((t) => t.enabled = enabled);
+    unawaited(_room?.localParticipant?.setCameraEnabled(enabled));
   }
 
   Future<bool> switchCamera() async {
-    final tracks = _localStream?.getVideoTracks() ?? const <MediaStreamTrack>[];
-    if (tracks.isEmpty) return _usingFrontCamera;
-    final track = tracks.first;
-    if (!_cameraEnabled) setCameraEnabled(true);
-    final isFrontCamera = await Helper.switchCamera(track);
-    _usingFrontCamera = isFrontCamera;
+    final pub = _room?.localParticipant?.videoTrackPublications.firstOrNull;
+    final track = pub?.track;
+    if (track == null) return _usingFrontCamera;
+    final newPos = _usingFrontCamera
+        ? CameraPosition.back
+        : CameraPosition.front;
+    await track.setCameraPosition(newPos);
+    _usingFrontCamera = !_usingFrontCamera;
+    if (!_cameraEnabled) {
+      unawaited(_room?.localParticipant?.setCameraEnabled(true));
+      _cameraEnabled = true;
+    }
     return _usingFrontCamera;
   }
 
   Future<List<CallAudioOutput>> getAudioOutputs() async {
-    final isMobile = _isMobilePlatform;
     if (!kIsWeb &&
         defaultTargetPlatform != TargetPlatform.android &&
         defaultTargetPlatform != TargetPlatform.iOS &&
@@ -530,6 +377,7 @@ class CallService {
     try {
       final outputs = await Helper.audiooutputs;
       if (outputs.isNotEmpty) {
+        final isMobile = _isMobilePlatform;
         final detected = outputs
             .where((d) => d.deviceId.isNotEmpty)
             .map(
@@ -541,14 +389,12 @@ class CallService {
               ),
             )
             .toList(growable: false);
-        if (isMobile) {
-          return _mergeMobileAudioOutputs(detected);
-        }
+        if (isMobile) return _mergeMobileAudioOutputs(detected);
         return detected;
       }
     } catch (_) {}
 
-    if (isMobile) {
+    if (_isMobilePlatform) {
       return const [
         CallAudioOutput(deviceId: 'speaker', label: 'Speaker'),
         CallAudioOutput(deviceId: 'earpiece', label: 'Earpiece'),
@@ -564,20 +410,12 @@ class CallService {
         await _selectMobileAudioOutput(deviceId);
         return;
       }
-      // macOS requires an active audio session before output routing works.
-      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS) {
-        try {
-          await Helper.ensureAudioSession();
-        } catch (_) {}
-      }
       await Helper.selectAudioOutput(deviceId);
-    } catch (_) {
-      // Some platforms do not expose output routing in flutter_webrtc.
-    }
+    } catch (_) {}
   }
 
   Future<void> _selectMobileAudioOutput(String deviceId) async {
-    final routedByNative = await _platformControls.selectAudioOutput(
+    await _platformControls.selectAudioOutput(
       deviceId,
       isVideo: _session?.isVideo ?? false,
     );
@@ -614,10 +452,10 @@ class CallService {
       return;
     }
 
+    // iOS
     try {
       await Helper.ensureAudioSession();
     } catch (_) {}
-
     switch (deviceId) {
       case 'speaker':
         try {
@@ -638,21 +476,312 @@ class CallService {
     }
     try {
       await Helper.setSpeakerphoneOn(false);
-    } catch (_) {
-      if (!routedByNative) rethrow;
+    } catch (_) {}
+  }
+
+  // ---- WebSocket events ----
+
+  void _handleWsEvent(WsEvent event) {
+    switch (event.type) {
+      case WsEventType.callOffer:
+        unawaited(_handleCallOffer(event.data));
+
+      case WsEventType.callAnswer:
+        // With LiveKit the callee joining the room acts as the "answer".
+        // We still handle the ringing acknowledgement here.
+        final s = _session;
+        if (s != null &&
+            (s.state == CallState.calling || s.state == CallState.ringing)) {
+          s.state = CallState.connecting;
+          _sessionController.add(s);
+        }
+
+      case WsEventType.callHangup:
+        if (_session == null && _pendingIncoming != null) {
+          final missed = _pendingIncoming!;
+          _pendingIncoming = null;
+          _pendingRoomName = null;
+          _missedCallController.add(missed);
+        } else if (_session?.isGroupCall == true &&
+            _session?.state == CallState.connected) {
+          _sessionController.add(_session);
+        } else {
+          _cleanup();
+        }
+
+      case WsEventType.callReject:
+        final s = _session;
+        if (s == null && _pendingIncoming != null) {
+          final missed = _pendingIncoming!;
+          _pendingIncoming = null;
+          _pendingRoomName = null;
+          _missedCallController.add(missed);
+        } else if (s != null && !s.isGroupCall) {
+          _cleanup();
+        }
+
+      case WsEventType.callRinging:
+        final s = _session;
+        if (s != null &&
+            (s.state == CallState.calling || s.state == CallState.ringing)) {
+          s.state = CallState.ringing;
+          _sessionController.add(s);
+        }
+
+      default:
+        break;
     }
   }
 
-  void _reapplyActiveMobileAudioControls() {
-    if (!_isMobilePlatform) return;
-    final selectedOutputId = _selectedAudioOutputId;
-    if (selectedOutputId != null) {
-      unawaited(_selectMobileAudioOutput(selectedOutputId));
-    }
-    if (_micMuted) {
-      setMicMuted(true);
+  Future<void> _handleCallOffer(Map<String, dynamic> data) async {
+    final decoded = await _decodeCallSignal(data);
+    if (decoded != null) _handleIncomingCallPayload(decoded);
+  }
+
+  Future<Map<String, dynamic>?> _decodeCallSignal(
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      return await _signalCodec.decode(data);
+    } catch (_) {
+      return null;
     }
   }
+
+  bool _handleIncomingCallPayload(Map<String, dynamic> data) {
+    final callId = data['call_id'] as String? ?? '';
+    final callerId = data['caller_id'] as String? ?? '';
+    final callerName = _stringField(data, 'caller_username');
+    final callerAvatar = _stringField(data, 'caller_avatar');
+    final conversationId = data['conversation_id'] as String?;
+    final roomName = _stringField(data, 'room_name');
+    final participantUserIds = _participantUserIds(data, callerId);
+    final isVideo = switch (data['is_video']) {
+      true => true,
+      'true' => true,
+      _ => false,
+    };
+
+    if (callId.isEmpty) return false;
+    if (_session != null || _pendingIncoming != null) {
+      if (callerId.isNotEmpty) {
+        _ws.sendCallReject(
+          targetUserId: callerId,
+          conversationId: conversationId ?? '',
+          callId: callId,
+        );
+      }
+      return false;
+    }
+
+    final incoming = CallSession(
+      callId: callId,
+      remoteUserId: callerId,
+      remoteUsername: callerName,
+      remoteAvatarUrl: callerAvatar,
+      conversationId: conversationId,
+      participantUserIds: participantUserIds,
+      isVideo: isVideo,
+      isIncoming: true,
+      state: CallState.ringing,
+    );
+    _pendingRoomName = roomName;
+    _pendingIncoming = incoming;
+    _incomingCallController.add(incoming);
+
+    _ringTimer?.cancel();
+    _ringTimer = Timer(ringTimeout, () {
+      if (_session == null && _pendingIncoming == incoming) {
+        _pendingIncoming = null;
+        _pendingRoomName = null;
+        _missedCallController.add(incoming);
+      }
+    });
+    return true;
+  }
+
+  List<String> _participantUserIds(Map<String, dynamic> data, String callerId) {
+    final raw = data['participant_user_ids'];
+    final ids = <String>{};
+    if (raw is List) {
+      for (final value in raw) {
+        if (value is! String) continue;
+        final trimmed = value.trim();
+        if (trimmed.isNotEmpty) ids.add(trimmed);
+      }
+    }
+    if (ids.isEmpty && callerId.trim().isNotEmpty) {
+      ids.add(callerId.trim());
+    }
+    return ids.toList(growable: false);
+  }
+
+  bool handleIncomingCallPayload(Map<String, dynamic> data) =>
+      _handleIncomingCallPayload(data);
+
+  Future<bool> handleIncomingCallPushPayload(Map<String, dynamic> data) async {
+    final decoded = await _decodeCallSignal(data);
+    if (decoded == null) return false;
+    return _handleIncomingCallPayload(decoded);
+  }
+
+  // ---- Room connection ----
+
+  Future<void> _connectToRoom({
+    required String url,
+    required String token,
+    required bool isVideo,
+  }) async {
+    final room = Room(
+      roomOptions: RoomOptions(
+        adaptiveStream: true,
+        dynacast: true,
+        defaultCameraCaptureOptions: CameraCaptureOptions(
+          cameraPosition: _usingFrontCamera
+              ? CameraPosition.front
+              : CameraPosition.back,
+        ),
+        defaultAudioCaptureOptions: const AudioCaptureOptions(
+          noiseSuppression: true,
+          echoCancellation: true,
+        ),
+      ),
+    );
+    _room = room;
+
+    final listener = room.createListener();
+    _roomListener = listener;
+
+    listener
+      ..on<RoomDisconnectedEvent>((_) => _cleanup())
+      ..on<ParticipantConnectedEvent>((_) {
+        _markConnected();
+        _sessionController.add(_session);
+      })
+      ..on<ParticipantDisconnectedEvent>((_) {
+        if ((room.remoteParticipants).isEmpty) {
+          _cleanup();
+        } else {
+          _sessionController.add(_session);
+        }
+      })
+      ..on<TrackSubscribedEvent>((_) {
+        _markConnected();
+        _sessionController.add(_session);
+      })
+      ..on<TrackUnsubscribedEvent>((_) {
+        _sessionController.add(_session);
+      })
+      ..on<TrackMutedEvent>((_) => _sessionController.add(_session))
+      ..on<TrackUnmutedEvent>((_) => _sessionController.add(_session));
+
+    await room.connect(url, token);
+
+    // Publish tracks after connecting.
+    await room.localParticipant?.setMicrophoneEnabled(!_micMuted);
+    if (isVideo) {
+      await room.localParticipant?.setCameraEnabled(_cameraEnabled);
+    }
+
+    if (room.remoteParticipants.isNotEmpty) {
+      _markConnected();
+      _sessionController.add(_session);
+    }
+
+    if (_session?.state != CallState.connected) {
+      // Re-arm connect timeout: if no remote participant joins within 30s
+      // (unanswered call), hang up.
+      _connectTimer?.cancel();
+      _connectTimer = Timer(connectTimeout, () {
+        final cur = _session;
+        if (cur != null && cur.state != CallState.connected) {
+          hangup();
+        }
+      });
+    }
+  }
+
+  void _markConnected() {
+    final s = _session;
+    if (s == null) return;
+    _cancelRingTimer();
+    _connectTimer?.cancel();
+    _connectTimer = null;
+    if (!s.wasConnected) {
+      s.wasConnected = true;
+      s.connectedAt = DateTime.now();
+    }
+    s.state = CallState.connected;
+    if (_isMobilePlatform) {
+      final selectedOutputId = _selectedAudioOutputId;
+      if (selectedOutputId != null) {
+        unawaited(_selectMobileAudioOutput(selectedOutputId));
+      }
+    }
+  }
+
+  // ---- Cleanup ----
+
+  bool _isCleaningUp = false;
+
+  void _cleanup({bool emitEndedEvent = true}) {
+    if (_isCleaningUp) return;
+    _isCleaningUp = true;
+    _cancelRingTimer();
+    _connectTimer?.cancel();
+    _connectTimer = null;
+
+    final ending = _session;
+    if (emitEndedEvent &&
+        ending != null &&
+        !ending.isIncoming &&
+        ending.conversationId != null) {
+      final dur = ending.wasConnected && ending.connectedAt != null
+          ? DateTime.now().difference(ending.connectedAt!).inSeconds
+          : 0;
+      _callEndedController.add(
+        CallEndedEvent(
+          conversationId: ending.conversationId!,
+          answered: ending.wasConnected,
+          isVideo: ending.isVideo,
+          durationSecs: dur,
+        ),
+      );
+    }
+
+    unawaited(_roomListener?.dispose());
+    _roomListener = null;
+    unawaited(_room?.disconnect());
+    unawaited(_room?.dispose());
+    _room = null;
+    _pendingRoomName = null;
+    _session = null;
+    _micMuted = false;
+    _cameraEnabled = true;
+    _usingFrontCamera = true;
+    unawaited(_platformControls.clearAudioOutput());
+
+    _sessionController.add(null);
+    _isCleaningUp = false;
+  }
+
+  void dispose() {
+    _cleanup();
+    _cancelRingTimer();
+    _connectTimer?.cancel();
+    _wsSub?.cancel();
+    _sessionController.close();
+    _incomingCallController.close();
+    _missedCallController.close();
+    _callEndedController.close();
+  }
+
+  // ---- Audio helpers ----
+
+  bool get _isMobilePlatform =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
 
   String _labelForAudioOutput(String raw) {
     final label = raw.trim();
@@ -661,9 +790,7 @@ class CallService {
     if (lower.contains('bluetooth') || lower.contains('airpods')) {
       return 'Bluetooth';
     }
-    if (lower.contains('speaker')) {
-      return 'Speaker';
-    }
+    if (lower.contains('speaker')) return 'Speaker';
     if (lower.contains('earpiece') || lower.contains('receiver')) {
       return 'Earpiece';
     }
@@ -675,11 +802,6 @@ class CallService {
     }
     return label;
   }
-
-  bool get _isMobilePlatform =>
-      !kIsWeb &&
-      (defaultTargetPlatform == TargetPlatform.android ||
-          defaultTargetPlatform == TargetPlatform.iOS);
 
   String _mobileAudioOutputId(String deviceId, String label) {
     switch (deviceId) {
@@ -717,489 +839,5 @@ class CallService {
       byId[output.deviceId] = output;
     }
     return byId.values.toList(growable: false);
-  }
-
-  // ---- WebSocket events ----
-
-  void _handleWsEvent(WsEvent event) {
-    switch (event.type) {
-      case WsEventType.callOffer:
-        unawaited(_handleCallOffer(event.data));
-
-      case WsEventType.callAnswer:
-        unawaited(_handleCallAnswer(event.data));
-
-      case WsEventType.callIceCandidate:
-        unawaited(_handleCallIceCandidate(event.data));
-
-      case WsEventType.callHangup:
-      case WsEventType.callReject:
-        // If a call was still ringing (never answered) when the caller hung up,
-        // that's a missed call — surface it instead of silently cleaning up.
-        if (_session == null && _pendingIncoming != null) {
-          final missed = _pendingIncoming!;
-          _pendingIncoming = null;
-          _pendingOfferSdp = null;
-          _missedCallController.add(missed);
-        } else {
-          _cleanup();
-        }
-
-      case WsEventType.callRinging:
-        // The callee's device is now ringing. Only reflect this while we're
-        // still placing the call — never downgrade a connecting/connected call.
-        final s = _session;
-        if (s != null &&
-            (s.state == CallState.calling || s.state == CallState.ringing)) {
-          s.state = CallState.ringing;
-          _sessionController.add(s);
-        }
-
-      default:
-        break;
-    }
-  }
-
-  String? _pendingOfferSdp;
-  String? get pendingOfferSdp => _pendingOfferSdp;
-
-  Future<void> _handleCallOffer(Map<String, dynamic> data) async {
-    final decoded = await _decodeCallSignal(data);
-    if (decoded != null) handleIncomingCallPayload(decoded);
-  }
-
-  Future<void> _handleCallAnswer(Map<String, dynamic> data) async {
-    final decoded = await _decodeCallSignal(data);
-    if (decoded == null) return;
-    final sdp = decoded['sdp'] as String? ?? '';
-    _cancelRingTimer();
-    // Peer answered — enter connecting phase immediately so the 30-second
-    // timeout starts ticking. setRemoteDescription is async; errors are
-    // caught and trigger a clean hangup rather than leaving the call stuck.
-    _enterConnecting();
-    if (_pc != null && sdp.isNotEmpty) {
-      _pc!
-          .setRemoteDescription(RTCSessionDescription(sdp, 'answer'))
-          .then((_) => _flushPendingRemoteCandidates())
-          .catchError((_) => hangup());
-    }
-  }
-
-  Future<void> _handleCallIceCandidate(Map<String, dynamic> data) async {
-    final decoded = await _decodeCallSignal(data);
-    if (decoded == null) return;
-    final callId = decoded['call_id'] as String? ?? '';
-    final candidateMap = decoded['candidate'] as Map<String, dynamic>?;
-    if (candidateMap != null) {
-      final candidate = RTCIceCandidate(
-        candidateMap['candidate'] as String?,
-        candidateMap['sdpMid'] as String?,
-        candidateMap['sdpMLineIndex'] as int?,
-      );
-      await _addOrQueueRemoteCandidate(callId, candidate);
-    }
-  }
-
-  Future<Map<String, dynamic>?> _decodeCallSignal(
-    Map<String, dynamic> data,
-  ) async {
-    try {
-      return await _signalCodec.decode(data);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  bool handleIncomingCallPayload(Map<String, dynamic> data) {
-    final callId = data['call_id'] as String? ?? '';
-    final callerId = data['caller_id'] as String? ?? '';
-    final callerName = _stringField(data, 'caller_username');
-    final callerAvatar = _stringField(data, 'caller_avatar');
-    final conversationId = data['conversation_id'] as String?;
-    final sdp = data['sdp'] as String? ?? '';
-    final isVideo = switch (data['is_video']) {
-      true => true,
-      'true' => true,
-      _ => false,
-    };
-
-    if (callId.isEmpty) return false;
-    if (_session != null || _pendingIncoming != null) {
-      if (callerId.isNotEmpty) {
-        _ws.sendCallReject(
-          targetUserId: callerId,
-          conversationId: conversationId ?? '',
-          callId: callId,
-        );
-      }
-      return false;
-    }
-
-    final incoming = CallSession(
-      callId: callId,
-      remoteUserId: callerId,
-      remoteUsername: callerName,
-      remoteAvatarUrl: callerAvatar,
-      conversationId: conversationId,
-      isVideo: isVideo,
-      isIncoming: true,
-      state: CallState.ringing,
-    );
-    _pendingRemoteCandidates.clear();
-    // sdp may be absent when the recipient's key was locked at arrival time;
-    // the call still rings but cannot be answered without the decrypted offer.
-    _pendingOfferSdp = sdp.isEmpty ? null : sdp;
-    _pendingIncoming = incoming;
-    _incomingCallController.add(incoming);
-
-    _ringTimer?.cancel();
-    _ringTimer = Timer(ringTimeout, () {
-      if (_session == null && _pendingIncoming == incoming) {
-        _pendingIncoming = null;
-        _pendingOfferSdp = null;
-        _missedCallController.add(incoming);
-      }
-    });
-    return true;
-  }
-
-  Future<bool> handleIncomingCallPushPayload(Map<String, dynamic> data) async {
-    final decoded = await _decodeCallSignal(data);
-    if (decoded == null) return false;
-    return handleIncomingCallPayload(decoded);
-  }
-
-  // ---- Internals ----
-
-  Future<void> _initPeerConnection(
-    String remoteUserId,
-    String callId, {
-    String? conversationId,
-    String? callerId,
-    required bool isVideo,
-  }) async {
-    final config = {
-      'iceServers': _iceServers.map((s) => s.toRtcMap()).toList(),
-    };
-
-    _pc = await createPeerConnection(config);
-
-    _pc!.onIceCandidate = (candidate) {
-      if (candidate.candidate == null) return;
-      unawaited(
-        _sendIceCandidate(
-          targetUserId: remoteUserId,
-          callId: callId,
-          conversationId: conversationId,
-          callerId: callerId,
-          isVideo: isVideo,
-          candidate: {
-            'candidate': candidate.candidate,
-            'sdpMid': candidate.sdpMid,
-            'sdpMLineIndex': candidate.sdpMLineIndex,
-          },
-        ),
-      );
-    };
-
-    _pc!.onTrack = (event) {
-      if (event.streams.isNotEmpty) {
-        _remoteStream = event.streams[0];
-        _remoteStream!.getAudioTracks().forEach((track) {
-          track.enabled = true;
-        });
-        _remoteStreamController.add(_remoteStream);
-        // Some desktop flutter_webrtc builds do not reliably promote
-        // peerConnectionState to Connected even after media arrives. A remote
-        // track means the call negotiated enough to leave "Connecting…".
-        _markConnected();
-      }
-    };
-
-    _pc!.onIceConnectionState = (state) {
-      switch (state) {
-        case RTCIceConnectionState.RTCIceConnectionStateConnected:
-        case RTCIceConnectionState.RTCIceConnectionStateCompleted:
-          _markConnected();
-        case RTCIceConnectionState.RTCIceConnectionStateFailed:
-        case RTCIceConnectionState.RTCIceConnectionStateClosed:
-          _cleanup();
-        default:
-          break;
-      }
-    };
-
-    _pc!.onConnectionState = (state) {
-      switch (state) {
-        case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
-          // Media is actually flowing now — this is the real "connected".
-          _markConnected();
-        case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
-        case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
-        case RTCPeerConnectionState.RTCPeerConnectionStateClosed:
-          _cleanup();
-        default:
-          break;
-      }
-    };
-  }
-
-  Future<void> _sendIceCandidate({
-    required String targetUserId,
-    required String callId,
-    required String? conversationId,
-    required String? callerId,
-    required bool isVideo,
-    required Map<String, dynamic> candidate,
-  }) async {
-    try {
-      final data = await _signalCodec.encode(
-        CallSignalPayload(
-          kind: 'ice',
-          targetUserId: targetUserId,
-          callId: callId,
-          conversationId: conversationId,
-          callerId: callerId,
-          isVideo: isVideo,
-          candidate: candidate,
-        ),
-      );
-      _ws.sendIceCandidatePayload(data);
-    } catch (_) {}
-  }
-
-  Future<void> _addOrQueueRemoteCandidate(
-    String callId,
-    RTCIceCandidate candidate,
-  ) async {
-    final activeCallId = _session?.callId ?? _pendingIncoming?.callId;
-    if (callId.isNotEmpty && activeCallId != null && callId != activeCallId) {
-      return;
-    }
-
-    final pc = _pc;
-    if (pc == null) {
-      _pendingRemoteCandidates.add(candidate);
-      return;
-    }
-
-    try {
-      final remote = await pc.getRemoteDescription();
-      if (remote == null) {
-        _pendingRemoteCandidates.add(candidate);
-        return;
-      }
-      await pc.addCandidate(candidate);
-    } catch (_) {
-      _pendingRemoteCandidates.add(candidate);
-    }
-  }
-
-  Future<void> _flushPendingRemoteCandidates() async {
-    final pc = _pc;
-    if (pc == null || _pendingRemoteCandidates.isEmpty) return;
-    final pending = List<RTCIceCandidate>.from(_pendingRemoteCandidates);
-    _pendingRemoteCandidates.clear();
-    for (final candidate in pending) {
-      try {
-        await pc.addCandidate(candidate);
-      } catch (_) {
-        // A stale/duplicate candidate should not strand the call setup.
-      }
-    }
-  }
-
-  Future<void> _captureLocalMedia({required bool isVideo}) async {
-    final isMobile = _isMobilePlatform;
-
-    _localStream = await _createLocalMediaStream(
-      isVideo: isVideo,
-      isMobile: isMobile,
-    );
-    setMicMuted(_micMuted);
-    setCameraEnabled(_cameraEnabled);
-    // setSpeakerphoneOnButPreferBluetooth is mobile-only audio routing.
-    // On Windows/desktop the underlying API does not exist, so skip it entirely
-    // rather than relying on try/catch to absorb a potential native crash.
-    if (isMobile) {
-      try {
-        await Helper.setSpeakerphoneOnButPreferBluetooth();
-      } catch (_) {}
-      final selectedOutputId = _selectedAudioOutputId;
-      if (selectedOutputId != null) {
-        try {
-          await _selectMobileAudioOutput(selectedOutputId);
-        } catch (_) {}
-      }
-    }
-    _localStreamController.add(_localStream);
-
-    for (final track in _localStream!.getTracks()) {
-      _pc!.addTrack(track, _localStream!);
-    }
-  }
-
-  Future<MediaStream> _createLocalMediaStream({
-    required bool isVideo,
-    required bool isMobile,
-  }) async {
-    final attempts = await _captureConstraintAttempts(
-      isVideo: isVideo,
-      isMobile: isMobile,
-    );
-    Object? lastError;
-    for (final constraints in attempts) {
-      MediaStream? stream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia(constraints);
-        if (!isVideo || stream.getVideoTracks().isNotEmpty) {
-          return stream;
-        }
-        lastError = StateError('camera opened without a video track');
-      } catch (e) {
-        lastError = e;
-      }
-
-      await _releaseMediaStream(stream);
-    }
-
-    if (isVideo) {
-      throw StateError('Could not open a camera for the video call');
-    }
-    throw StateError('Could not open local media: $lastError');
-  }
-
-  Future<List<Map<String, dynamic>>> _captureConstraintAttempts({
-    required bool isVideo,
-    required bool isMobile,
-  }) async {
-    final isDesktop =
-        !kIsWeb &&
-        !isMobile &&
-        (defaultTargetPlatform == TargetPlatform.linux ||
-            defaultTargetPlatform == TargetPlatform.macOS ||
-            defaultTargetPlatform == TargetPlatform.windows);
-    final videoInputs = isVideo && !isMobile && !_isLinuxDesktop
-        ? await _safeVideoInputs()
-        : const <MediaDeviceInfo>[];
-    return buildCallMediaCaptureAttemptsForTesting(
-      isVideo: isVideo,
-      isMobile: isMobile,
-      isWeb: kIsWeb,
-      isDesktop: isDesktop,
-      videoInputs: videoInputs,
-    );
-  }
-
-  bool get _isLinuxDesktop =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.linux;
-
-  Future<List<MediaDeviceInfo>> _safeVideoInputs() async {
-    try {
-      final devices = await navigator.mediaDevices.enumerateDevices();
-      return devices
-          .where(
-            (device) =>
-                device.kind == 'videoinput' && device.deviceId.isNotEmpty,
-          )
-          .toList(growable: false);
-    } catch (_) {
-      return const [];
-    }
-  }
-
-  Future<void> _releaseMediaStream(MediaStream? stream) async {
-    if (stream == null) return;
-    for (final track in stream.getTracks()) {
-      try {
-        await track.stop();
-      } catch (_) {}
-    }
-    try {
-      await stream.dispose();
-    } catch (_) {}
-  }
-
-  bool _isCleaningUp = false;
-
-  /// Tears down the active call exactly once. Idempotent and exception-safe:
-  /// the previous version could run twice (e.g. the ring/connect timeout's
-  /// hangup() and onConnectionState=Failed firing together on a call that never
-  /// connected), double-closing native WebRTC objects and crashing the app. The
-  /// guard plus try/catch make re-entrant calls no-ops, and the peer-owned
-  /// remote stream is dropped (not disposed) since closing the connection frees it.
-  void _cleanup({bool emitEndedEvent = true}) {
-    if (_isCleaningUp) return;
-    _isCleaningUp = true;
-    _cancelRingTimer();
-    _connectTimer?.cancel();
-    _connectTimer = null;
-
-    // Caller side only: record a deletable event in the DM describing how the
-    // call ended. The callee doesn't post (the caller is the single writer) so
-    // both peers see exactly one event.
-    final ending = _session;
-    if (emitEndedEvent &&
-        ending != null &&
-        !ending.isIncoming &&
-        ending.conversationId != null) {
-      final dur = ending.wasConnected && ending.connectedAt != null
-          ? DateTime.now().difference(ending.connectedAt!).inSeconds
-          : 0;
-      _callEndedController.add(
-        CallEndedEvent(
-          conversationId: ending.conversationId!,
-          answered: ending.wasConnected,
-          isVideo: ending.isVideo,
-          durationSecs: dur,
-        ),
-      );
-    }
-
-    try {
-      _localStream?.getTracks().forEach((t) => t.stop());
-      _localStream?.dispose();
-    } catch (_) {}
-    _localStream = null;
-    // The remote stream is owned by the peer connection; closing the connection
-    // releases it. Disposing it here would double-free and crash native code.
-    _remoteStream = null;
-    try {
-      // Clear callbacks before close so that async native teardown events from
-      // the old PC cannot fire _cleanup() again after _isCleaningUp resets,
-      // which would tear down the next call's peer connection mid-setup.
-      _pc?.onIceCandidate = null;
-      _pc?.onTrack = null;
-      _pc?.onIceConnectionState = null;
-      _pc?.onConnectionState = null;
-      _pc?.close();
-    } catch (_) {}
-    _pc = null;
-    _pendingOfferSdp = null;
-    _pendingRemoteCandidates.clear();
-    _session = null;
-    _micMuteGeneration++;
-    _micMuted = false;
-    _cameraEnabled = true;
-    _usingFrontCamera = true;
-    unawaited(_platformControls.clearAudioOutput());
-
-    _sessionController.add(null);
-    _remoteStreamController.add(null);
-    _localStreamController.add(null);
-    _isCleaningUp = false;
-  }
-
-  void dispose() {
-    _cleanup();
-    _cancelRingTimer();
-    _connectTimer?.cancel();
-    _wsSub?.cancel();
-    _sessionController.close();
-    _remoteStreamController.close();
-    _localStreamController.close();
-    _incomingCallController.close();
-    _missedCallController.close();
-    _callEndedController.close();
   }
 }

@@ -4,13 +4,13 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:openchat/providers/call_provider.dart';
 import 'package:openchat/screens/call/call_screen.dart';
 import 'package:openchat/services/call_audio.dart';
 import 'package:openchat/services/call_foreground_service.dart';
 import 'package:openchat/services/call_media_permissions.dart';
 import 'package:openchat/services/call_service.dart';
+import 'package:openchat/services/api_service.dart';
 import 'package:openchat/services/notification_service.dart';
 import 'package:openchat/services/secure_storage_service.dart';
 import 'package:openchat/services/websocket_service.dart';
@@ -128,7 +128,11 @@ void main() {
         );
 
         await expectLater(
-          provider.startCall(targetUserId: 'u-denied', isVideo: false),
+          provider.startCall(
+            targetUserId: 'u-denied',
+            conversationId: 'dm-denied',
+            isVideo: false,
+          ),
           throwsA(isA<CallPermissionException>()),
         );
         expect(service.startCallCalls, 0);
@@ -415,47 +419,30 @@ void main() {
       ]);
     });
 
-    test('desktop video calls try generic safe modes before camera pins', () {
+    test('video calls use the LiveKit default capture profile', () {
       final attempts = buildCallMediaCaptureAttemptsForTesting(
         isVideo: true,
         isMobile: false,
         isWeb: false,
         isDesktop: true,
-        videoInputs: [
-          MediaDeviceInfo(
-            kind: 'videoinput',
-            label: 'Integrated Camera',
-            deviceId: 'integrated-camera',
-          ),
-          MediaDeviceInfo(
-            kind: 'videoinput',
-            label: 'Razer Kiyo',
-            deviceId: 'razer-kiyo',
-          ),
-        ],
       );
 
-      final videos = attempts
-          .map((attempt) => attempt['video']! as Map<String, dynamic>)
-          .toList();
-
-      expect(videos.first.containsKey('optional'), isFalse);
-      expect(videos.take(3).map((video) => [video['width'], video['height']]), [
-        [640, 480],
-        [320, 240],
-        [1280, 720],
+      expect(attempts, const [
+        {
+          'audio': true,
+          'video': {'width': 640, 'height': 480, 'frameRate': 30},
+        },
       ]);
-      final firstPinned = videos.firstWhere(
-        (video) => video.containsKey('optional'),
-      );
-      final firstOptional = firstPinned['optional']! as List<Object?>;
-      expect(firstOptional.single, {'sourceId': 'razer-kiyo'});
     });
   });
 
   group('Incoming call lifecycle', () {
     test('incoming payload carries caller profile into the session', () async {
-      final service = CallService(WebSocketService(SecureStorageService()));
+      final storage = SecureStorageService();
+      final service = CallService(
+        WebSocketService(storage),
+        ApiService(storage),
+      );
       final seen = Completer<CallSession>();
       final sub = service.incomingCalls.listen(seen.complete);
 
@@ -478,7 +465,11 @@ void main() {
     });
 
     test('rejecting a pending call does not re-emit it as incoming', () async {
-      final service = CallService(WebSocketService(SecureStorageService()));
+      final storage = SecureStorageService();
+      final service = CallService(
+        WebSocketService(storage),
+        ApiService(storage),
+      );
       var emitted = false;
       final sub = service.incomingCalls.listen((_) => emitted = true);
 
@@ -1027,7 +1018,10 @@ class _FakeCallService extends CallService {
     this.nextFrontCamera = true,
     bool hasLocalMedia = true,
   }) : localMediaReady = hasLocalMedia,
-       super(WebSocketService(SecureStorageService()));
+       super(
+         WebSocketService(SecureStorageService()),
+         ApiService(SecureStorageService()),
+       );
 
   final bool throwOnSelectAudioOutput;
   final bool throwOnSetMicMuted;
@@ -1047,14 +1041,9 @@ class _FakeCallService extends CallService {
   int switchCameraCalls = 0;
   bool localMediaReady;
   final List<bool> startCallIsVideo = [];
+  final List<List<String>> startCallAdditionalUserIds = [];
   final List<bool> micMuteValues = [];
   final List<bool> cameraEnabledValues = [];
-  // Non-null by default so normal test scenarios bypass the locked-key guard.
-  // Set to null to simulate an offer that arrived while the PGP key was locked.
-  String? pendingOfferSdpValue = 'fake-sdp';
-
-  @override
-  String? get pendingOfferSdp => pendingOfferSdpValue;
 
   void emitSession(CallSession? session) {
     _session = session;
@@ -1087,16 +1076,19 @@ class _FakeCallService extends CallService {
   Future<void> startCall({
     required String targetUserId,
     String? targetUsername,
-    String? conversationId,
+    required String conversationId,
     required bool isVideo,
+    List<String> additionalUserIds = const [],
   }) async {
     startCallCalls += 1;
     startCallIsVideo.add(isVideo);
+    startCallAdditionalUserIds.add(additionalUserIds);
     _session = CallSession(
       callId: 'started-$startCallCalls',
       remoteUserId: targetUserId,
       remoteUsername: targetUsername,
       conversationId: conversationId,
+      participantUserIds: [targetUserId, ...additionalUserIds],
       isVideo: isVideo,
       isIncoming: false,
       state: CallState.calling,

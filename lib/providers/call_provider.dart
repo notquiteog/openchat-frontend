@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../services/call_audio.dart';
 import '../services/call_foreground_service.dart';
 import '../services/call_media_permissions.dart';
@@ -108,8 +107,7 @@ class CallProvider extends ChangeNotifier {
   }
 
   CallSession? get session => _callService.currentSession;
-  MediaStream? get localStream => _callService.currentLocalStream;
-  MediaStream? get remoteStream => _callService.currentRemoteStream;
+  Room? get room => _callService.room;
   bool get isCallMinimized => _isCallMinimized;
   bool get isMicMuted => _micMuted;
   bool get isCameraEnabled => _cameraEnabled;
@@ -130,7 +128,6 @@ class CallProvider extends ChangeNotifier {
 
   // Pending incoming call waiting for user accept/reject
   CallSession? _incomingCall;
-  String? _pendingOfferSdp;
   CallSession? get incomingCall => _incomingCall;
 
   // Most recent missed call, consumed by the UI to show an in-app banner.
@@ -160,7 +157,6 @@ class CallProvider extends ChangeNotifier {
       final s = session;
       if (s == null || s.state == CallState.ended) {
         _incomingCall = null;
-        _pendingOfferSdp = null;
         unawaited(NotificationService.cancelIncomingCall());
         if (_micMuted) {
           try {
@@ -180,7 +176,6 @@ class CallProvider extends ChangeNotifier {
       if (s?.state == CallState.connected &&
           _lastSessionState != CallState.connected) {
         _incomingCall = null;
-        _pendingOfferSdp = null;
         unawaited(NotificationService.cancelIncomingCall());
         unawaited(refreshAudioOutputs());
       }
@@ -235,7 +230,6 @@ class CallProvider extends ChangeNotifier {
   void _onIncomingCall(CallSession incoming) {
     if (incoming.state == CallState.ended) return;
     _incomingCall = incoming;
-    _pendingOfferSdp = _callService.pendingOfferSdp;
     final kind = incoming.isVideo ? 'video' : 'voice';
     final from = incoming.remoteUsername != null
         ? ' from @${incoming.remoteUsername}'
@@ -272,8 +266,9 @@ class CallProvider extends ChangeNotifier {
   Future<void> startCall({
     required String targetUserId,
     String? targetUsername,
-    String? conversationId,
+    required String conversationId,
     required bool isVideo,
+    List<String> additionalUserIds = const [],
   }) async {
     await _mediaPermissionGate(isVideo: isVideo);
     await _callService.startCall(
@@ -281,6 +276,7 @@ class CallProvider extends ChangeNotifier {
       targetUsername: targetUsername,
       conversationId: conversationId,
       isVideo: isVideo,
+      additionalUserIds: additionalUserIds,
     );
     notifyListeners();
   }
@@ -289,27 +285,15 @@ class CallProvider extends ChangeNotifier {
 
   Future<void> acceptIncomingCall() async {
     final incoming = _incomingCall;
-    final sdp = _pendingOfferSdp;
     if (incoming == null) return;
-    if (sdp == null) {
-      // The offer arrived while the PGP key was locked and could not be
-      // decrypted. Reject cleanly so the caller isn't left hanging.
-      rejectIncomingCall();
-      throw Exception(
-        'Your PGP key was locked when this call arrived. '
-        'Unlock it in Settings → PGP Keys, then ask the caller to try again.',
-      );
-    }
     await _mediaPermissionGate(isVideo: incoming.isVideo);
 
     _incomingCall = null;
-    _pendingOfferSdp = null;
     unawaited(NotificationService.cancelIncomingCall());
     _syncAudio();
     notifyListeners();
 
     await _callService.acceptIncomingCall(incoming);
-    await _callService.answerCall(sdpOffer: sdp);
     notifyListeners();
   }
 
@@ -317,7 +301,6 @@ class CallProvider extends ChangeNotifier {
     final incoming = _incomingCall;
     if (incoming == null) return;
     _incomingCall = null;
-    _pendingOfferSdp = null;
     _callService.rejectCall(incoming);
     unawaited(NotificationService.cancelIncomingCall());
     _syncAudio();
@@ -341,7 +324,6 @@ class CallProvider extends ChangeNotifier {
       _callService.hangup();
     } catch (_) {}
     _incomingCall = null;
-    _pendingOfferSdp = null;
     _activeCallNotificationSessionId = null;
     _activeCallNotificationState = null;
     _activeCallNotificationMuted = null;

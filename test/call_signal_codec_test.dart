@@ -14,7 +14,7 @@ void main() {
   setUpAll(_ensureOpenPgpBridgeForUnitTests);
 
   test(
-    'PGP call signal encrypts SDP and hides call details outside ciphertext',
+    'PGP call signal encrypts LiveKit room details outside ciphertext',
     () async {
       final keyPair = await PgpService.generateKeyPair(username: 'alice');
       final storage = _FakeSecureStorage(
@@ -48,12 +48,18 @@ void main() {
           conversationId: conversation.id,
           callerId: 'alice-id',
           isVideo: true,
-          sdp: 'v=0 secret-sdp',
+          roomName: 'call_11111111-1111-4111-8111-111111111111',
+          participantUserIds: const ['bob-id', 'carol-id'],
         ),
       );
 
       expect(encoded['encrypted_signal'], isA<String>());
-      for (final key in ['sdp', 'candidate', 'is_video', 'caller_id']) {
+      for (final key in [
+        'room_name',
+        'participant_user_ids',
+        'is_video',
+        'caller_id',
+      ]) {
         expect(encoded.containsKey(key), isFalse);
       }
 
@@ -63,7 +69,11 @@ void main() {
       expect(decoded?['caller_username'], 'alice');
       expect(decoded?['caller_avatar'], 'https://example.test/alice.png');
       expect(decoded?['is_video'], isTrue);
-      expect(decoded?['sdp'], 'v=0 secret-sdp');
+      expect(
+        decoded?['room_name'],
+        'call_11111111-1111-4111-8111-111111111111',
+      );
+      expect(decoded?['participant_user_ids'], ['bob-id', 'carol-id']);
     },
   );
 
@@ -95,15 +105,15 @@ void main() {
       // Must be non-null so handleIncomingCallPayload fires a notification.
       expect(decoded, isNotNull);
       expect(decoded!['call_id'], 'call-99');
-      // Privacy: caller identity and SDP must stay hidden (they're ciphertext).
+      // Privacy: caller identity and room details must stay hidden.
       expect(decoded.containsKey('caller_id'), isFalse);
-      expect(decoded.containsKey('sdp'), isFalse);
+      expect(decoded.containsKey('room_name'), isFalse);
       expect(decoded.containsKey('is_video'), isFalse);
     },
   );
 
   test(
-    'MLS call signal encrypts ICE candidate and keeps outer payload generic',
+    'MLS call signal encrypts LiveKit room details and keeps outer payload generic',
     () async {
       final storage = _FakeSecureStorage(
         userId: 'alice-id',
@@ -121,23 +131,25 @@ void main() {
 
       final encoded = await codec.encode(
         CallSignalPayload(
-          kind: 'ice',
+          kind: 'offer',
           targetUserId: 'bob-id',
           callId: 'call-2',
           conversationId: conversation.id,
           callerId: 'alice-id',
           isVideo: false,
-          candidate: const {
-            'candidate': 'candidate:host 10.0.0.5',
-            'sdpMid': '0',
-            'sdpMLineIndex': 0,
-          },
+          roomName: 'call_22222222-2222-4222-8222-222222222222',
+          participantUserIds: const ['bob-id'],
         ),
       );
 
       expect(encoded['encryption_mode'], 'mls');
       expect(encoded['encrypted_signal'], isA<String>());
-      for (final key in ['sdp', 'candidate', 'is_video', 'caller_id']) {
+      for (final key in [
+        'room_name',
+        'participant_user_ids',
+        'is_video',
+        'caller_id',
+      ]) {
         expect(encoded.containsKey(key), isFalse);
       }
 
@@ -145,9 +157,10 @@ void main() {
       expect(decoded?['call_id'], 'call-2');
       expect(decoded?['caller_username'], 'alice');
       expect(
-        decoded?['candidate'],
-        containsPair('candidate', 'candidate:host 10.0.0.5'),
+        decoded?['room_name'],
+        'call_22222222-2222-4222-8222-222222222222',
       );
+      expect(decoded?['participant_user_ids'], ['bob-id']);
     },
   );
 }

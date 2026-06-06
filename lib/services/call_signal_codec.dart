@@ -24,8 +24,8 @@ class CallSignalPayload {
   final String? callerUsername;
   final String? callerAvatarUrl;
   final bool? isVideo;
-  final String? sdp;
-  final Map<String, dynamic>? candidate;
+  final String? roomName;
+  final List<String> participantUserIds;
 
   const CallSignalPayload({
     required this.kind,
@@ -36,19 +36,20 @@ class CallSignalPayload {
     this.callerUsername,
     this.callerAvatarUrl,
     this.isVideo,
-    this.sdp,
-    this.candidate,
+    this.roomName,
+    this.participantUserIds = const [],
   });
 
   Map<String, dynamic> toPlainOuter() => {
     'target_user_id': targetUserId,
     'call_id': callId,
     'conversation_id': ?conversationId,
-    'sdp': ?sdp,
-    'candidate': ?candidate,
+    'room_name': ?roomName,
     'is_video': ?isVideo,
     'caller_username': ?callerUsername,
     'caller_avatar': ?callerAvatarUrl,
+    if (participantUserIds.isNotEmpty)
+      'participant_user_ids': participantUserIds,
   };
 }
 
@@ -108,8 +109,9 @@ class PrivacyCallSignalCodec implements CallSignalCodec {
       'caller_username': ?(payload.callerUsername ?? callerProfile.username),
       'caller_avatar': ?(payload.callerAvatarUrl ?? callerProfile.avatarUrl),
       'is_video': payload.isVideo,
-      'sdp': ?payload.sdp,
-      'candidate': ?payload.candidate,
+      'room_name': ?payload.roomName,
+      if (payload.participantUserIds.isNotEmpty)
+        'participant_user_ids': payload.participantUserIds,
       'created_at': DateTime.now().toUtc().toIso8601String(),
     });
 
@@ -199,11 +201,14 @@ class PrivacyCallSignalCodec implements CallSignalCodec {
       'is_video': payload['is_video'],
       'encryption_mode': mode.apiValue,
     };
-    final sdp = payload['sdp'];
-    if (sdp is String && sdp.isNotEmpty) out['sdp'] = sdp;
-    final candidate = payload['candidate'];
-    if (candidate is Map) {
-      out['candidate'] = Map<String, dynamic>.from(candidate);
+    final roomName = payload['room_name'];
+    if (roomName is String && roomName.isNotEmpty) out['room_name'] = roomName;
+    final participantUserIds = payload['participant_user_ids'];
+    if (participantUserIds is List) {
+      out['participant_user_ids'] = participantUserIds
+          .whereType<String>()
+          .where((id) => id.trim().isNotEmpty)
+          .toList(growable: false);
     }
     return out;
   }

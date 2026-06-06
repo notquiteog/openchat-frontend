@@ -23,7 +23,6 @@ import 'screens/settings/pgp_keys_screen.dart';
 import 'services/api_service.dart';
 import 'services/app_access_gate.dart';
 import 'services/background_ws_service.dart';
-import 'services/call_service.dart';
 import 'services/foreground_ws_notification_router.dart';
 import 'services/mls_service.dart';
 import 'services/notification_service.dart';
@@ -846,7 +845,6 @@ class _AppRootState extends State<_AppRoot> {
       if (settings != null && settings.isLoaded) {
         _syncNotificationPreferences(settings);
       }
-      _fetchIceServers();
       context.read<KeyProvider>().load();
       unawaited(_prepareMlsIdentity());
       context.read<ChatProvider>().connectWebSocket();
@@ -942,17 +940,6 @@ class _AppRootState extends State<_AppRoot> {
           duration: const Duration(seconds: 6),
         ),
       );
-    }
-  }
-
-  Future<void> _fetchIceServers() async {
-    try {
-      final servers = await context.read<ApiService>().getIceServers();
-      if (mounted && servers.isNotEmpty) {
-        context.read<CallService>().updateIceServers(servers);
-      }
-    } catch (_) {
-      // Silently fall back to default STUN servers baked into CallService
     }
   }
 

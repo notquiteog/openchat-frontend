@@ -104,8 +104,8 @@ class _Providers extends StatelessWidget {
     final mls = MlsService(storage);
     final callService = CallService(
       ws,
+      api,
       signalCodec: PrivacyCallSignalCodec(api, storage, mls),
-      iceServerLoader: api.getIceServers,
     );
 
     return MultiProvider(

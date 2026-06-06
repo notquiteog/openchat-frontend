@@ -17,7 +17,6 @@ import '../../providers/call_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
-import '../../services/call_service.dart';
 import '../../services/mls_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/attachment_service.dart';
@@ -1734,40 +1733,29 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _startCall({required bool isVideo}) async {
     final auth = context.read<AuthProvider>();
     final callProvider = context.read<CallProvider>();
-    final api = context.read<ApiService>();
-    final callService = context.read<CallService>();
 
-    // For DMs, call the other person
-    final otherMember = conv.members
+    final recipients = conv.members
         .where((m) => m.userId != (auth.currentUser?.id ?? ''))
-        .firstOrNull;
+        .toList(growable: false);
 
-    if (otherMember == null) {
+    if (recipients.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Cannot start call in a group — open a DM first'),
-        ),
+        const SnackBar(content: Text('No one else is in this chat')),
       );
       return;
-    }
-
-    // Refresh ICE/TURN servers immediately before dialing: TURN credentials are
-    // short-lived, so the set fetched at login may have expired.
-    try {
-      final servers = await api.getIceServers();
-      if (servers.isNotEmpty) callService.updateIceServers(servers);
-    } catch (_) {
-      // Fall back to whatever servers are already configured.
     }
 
     // The root CallOverlay shows the call UI off CallProvider state, so we just
     // start the call — no navigation needed.
     try {
       await callProvider.startCall(
-        targetUserId: otherMember.userId,
-        targetUsername: otherMember.user?.username,
+        targetUserId: recipients.first.userId,
+        targetUsername: conv.isGroup
+            ? conv.name
+            : recipients.first.user?.username,
         conversationId: conv.id,
         isVideo: isVideo,
+        additionalUserIds: recipients.skip(1).map((m) => m.userId).toList(),
       );
     } catch (e) {
       if (!mounted) return;
@@ -2384,8 +2372,7 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       ),
       actions: [
-        // Audio call (DMs only)
-        if (!conv.isGroup) ...[
+        if (!conv.isChannel) ...[
           IconButton(
             icon: const Icon(Icons.call),
             tooltip: 'Voice call',

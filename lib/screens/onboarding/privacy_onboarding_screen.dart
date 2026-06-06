@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/conversation.dart';
 import '../../widgets/glass.dart';
+import '../../widgets/gold_sand_background.dart';
 
 class PrivacyOnboardingScreen extends StatefulWidget {
   final VoidCallback onComplete;
@@ -88,7 +89,7 @@ class _PrivacyOnboardingScreenState extends State<PrivacyOnboardingScreen> {
     final scheme = Theme.of(context).colorScheme;
     final page = _pages[_page];
     return Scaffold(
-      body: LiquidMeshBackground(
+      body: GoldSandBackground(
         child: SafeArea(
           child: Column(
             children: [

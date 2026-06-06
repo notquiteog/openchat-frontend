@@ -4,7 +4,6 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
 import '../../config/api_config.dart';
 import '../../providers/call_provider.dart';
@@ -109,14 +108,6 @@ class CallScreen extends StatefulWidget {
 }
 
 class _CallScreenState extends State<CallScreen> {
-  final _localRenderer = RTCVideoRenderer();
-  final _remoteRenderer = RTCVideoRenderer();
-  bool _renderersReady = false;
-  bool _renderersInitialized = false;
-  bool _renderersInitializing = false;
-  String? _boundLocalVideoTrackId;
-  String? _boundRemoteVideoTrackId;
-
   @override
   void initState() {
     super.initState();
@@ -124,121 +115,6 @@ class _CallScreenState extends State<CallScreen> {
       if (!mounted) return;
       context.read<CallProvider>().refreshAudioOutputs();
     });
-  }
-
-  Future<void> _initRenderers() async {
-    if (_renderersInitialized || _renderersInitializing) return;
-    _renderersInitializing = true;
-    try {
-      await _localRenderer.initialize();
-      await _remoteRenderer.initialize();
-      _renderersInitialized = true;
-    } catch (_) {
-      _renderersInitializing = false;
-      await _disposeRenderer(_localRenderer);
-      await _disposeRenderer(_remoteRenderer);
-      if (mounted) setState(() => _renderersReady = false);
-      return;
-    }
-    if (!mounted) {
-      await _disposeRenderers();
-      return;
-    }
-    _renderersInitializing = false;
-    final ready =
-        _localRenderer.textureId != null && _remoteRenderer.textureId != null;
-    if (ready) {
-      _syncRendererStreams(context.read<CallProvider>());
-    }
-    setState(() => _renderersReady = ready);
-  }
-
-  @override
-  void dispose() {
-    unawaited(_disposeRenderers());
-    super.dispose();
-  }
-
-  bool _shouldUseVideoRenderers(CallSession? session) {
-    return shouldUseCallVideoRenderersForTesting(session);
-  }
-
-  Future<void> _disposeRenderers() async {
-    if (!_renderersInitialized) return;
-    _renderersInitialized = false;
-    _renderersInitializing = false;
-    _renderersReady = false;
-    await _clearRenderer(_localRenderer);
-    await _clearRenderer(_remoteRenderer);
-    _boundLocalVideoTrackId = null;
-    _boundRemoteVideoTrackId = null;
-    await _disposeRenderer(_localRenderer);
-    await _disposeRenderer(_remoteRenderer);
-  }
-
-  Future<void> _clearRenderer(RTCVideoRenderer renderer) async {
-    if (renderer.textureId == null) return;
-    try {
-      await renderer.setSrcObject(stream: null);
-    } catch (_) {}
-  }
-
-  bool _hasVideoTrack(MediaStream? stream) {
-    return stream != null && stream.getVideoTracks().isNotEmpty;
-  }
-
-  bool _hasAnyVideoTrack(CallProvider cp) {
-    return _hasVideoTrack(cp.localStream) || _hasVideoTrack(cp.remoteStream);
-  }
-
-  void _maybeInitRenderers(CallProvider cp, bool useVideoRenderers) {
-    if (!useVideoRenderers || !_hasAnyVideoTrack(cp)) return;
-    if (_renderersInitialized || _renderersInitializing) return;
-    unawaited(_initRenderers());
-  }
-
-  void _syncRendererStreams(CallProvider cp) {
-    if (!_renderersReady) return;
-    _syncRendererStream(
-      renderer: _localRenderer,
-      stream: cp.localStream,
-      currentTrackId: _boundLocalVideoTrackId,
-      setCurrentTrackId: (trackId) => _boundLocalVideoTrackId = trackId,
-    );
-    _syncRendererStream(
-      renderer: _remoteRenderer,
-      stream: cp.remoteStream,
-      currentTrackId: _boundRemoteVideoTrackId,
-      setCurrentTrackId: (trackId) => _boundRemoteVideoTrackId = trackId,
-    );
-  }
-
-  void _syncRendererStream({
-    required RTCVideoRenderer renderer,
-    required MediaStream? stream,
-    required String? currentTrackId,
-    required ValueChanged<String?> setCurrentTrackId,
-  }) {
-    if (renderer.textureId == null) return;
-    final tracks = stream?.getVideoTracks() ?? const <MediaStreamTrack>[];
-    final nextTrackId = tracks.isEmpty ? null : tracks.first.id;
-    final nextStream = nextTrackId == null ? null : stream;
-    if (currentTrackId == nextTrackId &&
-        renderer.srcObject?.id == nextStream?.id) {
-      return;
-    }
-    setCurrentTrackId(nextTrackId);
-    unawaited(
-      renderer
-          .setSrcObject(stream: nextStream, trackId: nextTrackId)
-          .catchError((_) {}),
-    );
-  }
-
-  Future<void> _disposeRenderer(RTCVideoRenderer renderer) async {
-    try {
-      await renderer.dispose();
-    } catch (_) {}
   }
 
   void _toggleMic() {
@@ -320,18 +196,18 @@ class _CallScreenState extends State<CallScreen> {
     if (session == null) return const SizedBox.shrink();
 
     final isVideo = session.isVideo;
-    final useVideoRenderers = _shouldUseVideoRenderers(session);
-
-    _maybeInitRenderers(cp, useVideoRenderers);
-    if (useVideoRenderers) {
-      _syncRendererStreams(cp);
-    }
-
     final statusText = cp.callStatusText;
     final micMuted = cp.isMicMuted;
     final cameraOff = !cp.isCameraEnabled;
     final avatarUrl = session.remoteAvatarUrl;
     final username = session.remoteUsername ?? 'Unknown';
+    final participants = _callParticipantsFor(
+      room: cp.room,
+      session: session,
+      mirrorLocalVideo: cp.isFrontCamera,
+    );
+    final hasLiveVideo =
+        isVideo && participants.any((p) => p.videoTrack != null);
     final screenWidth = MediaQuery.sizeOf(context).width;
     final desktopLayout = _isDesktopCallLayout(context);
     // Compact mode for narrow phones (e.g. iPhone 16 at 390 pt): 5-button video
@@ -401,55 +277,18 @@ class _CallScreenState extends State<CallScreen> {
       body: Stack(
         children: [
           // ── Background ─────────────────────────────────────────────────────
-          if (!isVideo || !_renderersReady || !useVideoRenderers)
+          if (!hasLiveVideo)
             Positioned.fill(
               child: _CallBackground(avatarUrl: avatarUrl, username: username),
             ),
 
-          // Hidden audio renderer
-          if (!isVideo && useVideoRenderers && _renderersReady)
-            Positioned(
-              left: 0,
-              top: 0,
-              width: 1,
-              height: 1,
-              child: IgnorePointer(
-                child: Opacity(
-                  opacity: 0,
-                  child: RTCVideoView(_remoteRenderer),
-                ),
-              ),
+          Positioned.fill(
+            child: _ParticipantStage(
+              participants: participants,
+              isVideo: isVideo,
+              controlsBottomInset: desktopLayout ? 150 : 164,
             ),
-
-          // Remote video
-          if (isVideo && useVideoRenderers && _renderersReady)
-            Positioned.fill(
-              child: IgnorePointer(
-                child: RTCVideoView(
-                  _remoteRenderer,
-                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                ),
-              ),
-            ),
-
-          // Local PiP
-          if (isVideo && useVideoRenderers && _renderersReady)
-            Positioned(
-              top: 72,
-              right: 16,
-              width: 104,
-              height: 148,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: IgnorePointer(
-                  child: RTCVideoView(
-                    _localRenderer,
-                    mirror: cp.isFrontCamera,
-                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                  ),
-                ),
-              ),
-            ),
+          ),
 
           // ── Top bar ────────────────────────────────────────────────────────
           Positioned(
@@ -495,32 +334,6 @@ class _CallScreenState extends State<CallScreen> {
             ),
           ),
 
-          // ── Audio-only: name + status centered ─────────────────────────────
-          if (!isVideo || !_renderersReady || !useVideoRenderers)
-            Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const SizedBox(height: 60),
-                  // Avatar with glass ring
-                  _GlowAvatar(avatarUrl: avatarUrl, username: username),
-                  const SizedBox(height: 22),
-                  Text(
-                    username,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 28,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-            ),
-
           // ── Controls bar ───────────────────────────────────────────────────
           Positioned(
             bottom: 0,
@@ -555,6 +368,397 @@ class _CallScreenState extends State<CallScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+List<_CallParticipantView> _callParticipantsFor({
+  required Room? room,
+  required CallSession session,
+  required bool mirrorLocalVideo,
+}) {
+  final views = <_CallParticipantView>[];
+  final remoteParticipants = room?.remoteParticipants.values.toList(
+    growable: false,
+  );
+  remoteParticipants?.sort(_compareRemoteParticipants);
+
+  if (remoteParticipants != null) {
+    for (final participant in remoteParticipants) {
+      final isPrimaryRemote = participant.identity == session.remoteUserId;
+      views.add(
+        _CallParticipantView(
+          id: participant.identity,
+          name: _participantDisplayName(
+            participant,
+            fallback: isPrimaryRemote ? session.remoteUsername : null,
+          ),
+          avatarUrl: isPrimaryRemote ? session.remoteAvatarUrl : null,
+          isLocal: false,
+          audioMuted: participant.isMuted,
+          isSpeaking: participant.isSpeaking,
+          videoTrack: _cameraTrackFor(participant),
+          mirrorVideo: false,
+        ),
+      );
+    }
+  }
+
+  final localParticipant = room?.localParticipant;
+  if (localParticipant != null) {
+    views.add(
+      _CallParticipantView(
+        id: localParticipant.identity,
+        name: 'You',
+        isLocal: true,
+        audioMuted: localParticipant.isMuted,
+        isSpeaking: localParticipant.isSpeaking,
+        videoTrack: _cameraTrackFor(localParticipant),
+        mirrorVideo: mirrorLocalVideo,
+      ),
+    );
+  }
+
+  if (views.isEmpty) {
+    views.add(
+      _CallParticipantView(
+        id: session.remoteUserId,
+        name: session.remoteUsername ?? 'Unknown',
+        avatarUrl: session.remoteAvatarUrl,
+        isLocal: false,
+        audioMuted: false,
+        isSpeaking: false,
+        mirrorVideo: false,
+      ),
+    );
+  }
+  return views;
+}
+
+int _compareRemoteParticipants(RemoteParticipant a, RemoteParticipant b) {
+  if (a.isSpeaking != b.isSpeaking) return a.isSpeaking ? -1 : 1;
+  final aSpoke = a.lastSpokeAt?.millisecondsSinceEpoch ?? 0;
+  final bSpoke = b.lastSpokeAt?.millisecondsSinceEpoch ?? 0;
+  if (aSpoke != bSpoke) return bSpoke.compareTo(aSpoke);
+  return a.identity.compareTo(b.identity);
+}
+
+String _participantDisplayName(Participant participant, {String? fallback}) {
+  final name = participant.name.trim();
+  if (name.isNotEmpty) return name;
+  final fallbackName = fallback?.trim();
+  if (fallbackName != null && fallbackName.isNotEmpty) return fallbackName;
+  return _shortParticipantId(participant.identity);
+}
+
+String _shortParticipantId(String identity) {
+  final trimmed = identity.trim();
+  if (trimmed.isEmpty) return 'Unknown';
+  if (trimmed.length <= 8) return trimmed;
+  return trimmed.substring(0, 8);
+}
+
+VideoTrack? _cameraTrackFor(dynamic participant) {
+  final publications = participant.videoTrackPublications as List<dynamic>;
+  for (final publication in publications) {
+    if (publication.isScreenShare == true || publication.muted == true) {
+      continue;
+    }
+    final track = publication.track;
+    if (track is VideoTrack) return track;
+  }
+  return null;
+}
+
+class _CallParticipantView {
+  final String id;
+  final String name;
+  final String? avatarUrl;
+  final bool isLocal;
+  final bool audioMuted;
+  final bool isSpeaking;
+  final VideoTrack? videoTrack;
+  final bool mirrorVideo;
+
+  const _CallParticipantView({
+    required this.id,
+    required this.name,
+    this.avatarUrl,
+    required this.isLocal,
+    required this.audioMuted,
+    required this.isSpeaking,
+    this.videoTrack,
+    required this.mirrorVideo,
+  });
+}
+
+class _ParticipantStage extends StatelessWidget {
+  final List<_CallParticipantView> participants;
+  final bool isVideo;
+  final double controlsBottomInset;
+
+  const _ParticipantStage({
+    required this.participants,
+    required this.isVideo,
+    required this.controlsBottomInset,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final local = participants.where((p) => p.isLocal).firstOrNull;
+    final primaryRemote = participants
+        .where((p) => !p.isLocal && p.videoTrack != null)
+        .firstOrNull;
+    final usePiP =
+        isVideo &&
+        primaryRemote != null &&
+        participants.where((p) => !p.isLocal).length == 1;
+
+    if (usePiP) {
+      return Stack(
+        children: [
+          Positioned.fill(
+            child: _ParticipantTile(
+              participant: primaryRemote,
+              isVideoCall: true,
+              fullBleed: true,
+            ),
+          ),
+          if (local != null)
+            Positioned(
+              top: 72,
+              right: 16,
+              width: 112,
+              height: 152,
+              child: _ParticipantTile(
+                participant: local,
+                isVideoCall: true,
+                compact: true,
+              ),
+            ),
+        ],
+      );
+    }
+
+    return _ParticipantGrid(
+      participants: participants,
+      isVideoCall: isVideo,
+      controlsBottomInset: controlsBottomInset,
+    );
+  }
+}
+
+class _ParticipantGrid extends StatelessWidget {
+  final List<_CallParticipantView> participants;
+  final bool isVideoCall;
+  final double controlsBottomInset;
+
+  const _ParticipantGrid({
+    required this.participants,
+    required this.isVideoCall,
+    required this.controlsBottomInset,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final count = participants.length;
+        final width = constraints.maxWidth;
+        final columns = switch (count) {
+          <= 1 => 1,
+          2 => width >= 620 ? 2 : 1,
+          <= 4 => width >= 760 ? 2 : 1,
+          _ => width >= 1120 ? 4 : (width >= 760 ? 3 : 2),
+        };
+        return GridView.count(
+          physics: const NeverScrollableScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(14, 96, 14, controlsBottomInset),
+          crossAxisCount: columns,
+          mainAxisSpacing: 10,
+          crossAxisSpacing: 10,
+          childAspectRatio: isVideoCall ? 0.82 : 1.05,
+          children: [
+            for (final participant in participants)
+              _ParticipantTile(
+                participant: participant,
+                isVideoCall: isVideoCall,
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ParticipantTile extends StatelessWidget {
+  final _CallParticipantView participant;
+  final bool isVideoCall;
+  final bool compact;
+  final bool fullBleed;
+
+  const _ParticipantTile({
+    required this.participant,
+    required this.isVideoCall,
+    this.compact = false,
+    this.fullBleed = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final track = isVideoCall ? participant.videoTrack : null;
+    final radius = fullBleed ? BorderRadius.zero : BorderRadius.circular(8);
+    final content = track != null
+        ? IgnorePointer(
+            child: VideoTrackRenderer(
+              track,
+              fit: VideoViewFit.cover,
+              mirrorMode: participant.mirrorVideo
+                  ? VideoViewMirrorMode.mirror
+                  : VideoViewMirrorMode.off,
+            ),
+          )
+        : _ParticipantAvatarPanel(participant: participant, compact: compact);
+
+    return ClipRRect(
+      borderRadius: radius,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ColoredBox(color: const Color(0xFF070D1A), child: content),
+          Positioned(
+            left: compact ? 8 : 12,
+            right: compact ? 8 : 12,
+            bottom: compact ? 8 : 12,
+            child: _ParticipantLabel(
+              participant: participant,
+              compact: compact,
+            ),
+          ),
+          if (participant.isSpeaking)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: _callAnswerColor.withValues(alpha: 0.78),
+                      width: compact ? 2 : 3,
+                    ),
+                    borderRadius: radius,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ParticipantAvatarPanel extends StatelessWidget {
+  final _CallParticipantView participant;
+  final bool compact;
+
+  const _ParticipantAvatarPanel({
+    required this.participant,
+    required this.compact,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final shortest = constraints.biggest.shortestSide;
+        final avatarSize = compact
+            ? 54.0
+            : shortest.clamp(86.0, 132.0).toDouble();
+        final fontSize = compact ? 0.0 : (shortest / 7).clamp(20.0, 28.0);
+        return Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _GlowAvatar(
+                avatarUrl: participant.avatarUrl,
+                username: participant.name,
+                size: avatarSize,
+              ),
+              if (!compact) ...[
+                const SizedBox(height: 18),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 18),
+                  child: Text(
+                    participant.name,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: fontSize,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ParticipantLabel extends StatelessWidget {
+  final _CallParticipantView participant;
+  final bool compact;
+
+  const _ParticipantLabel({required this.participant, required this.compact});
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.bottomLeft,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.54),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.16),
+            width: 0.6,
+          ),
+        ),
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 8 : 10,
+            vertical: compact ? 5 : 7,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (participant.audioMuted) ...[
+                Icon(
+                  Icons.mic_off_rounded,
+                  color: Colors.white70,
+                  size: compact ? 12 : 14,
+                ),
+                const SizedBox(width: 5),
+              ],
+              Flexible(
+                child: Text(
+                  participant.name,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: compact ? 11 : 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -628,8 +832,9 @@ class _CallBackground extends StatelessWidget {
 class _GlowAvatar extends StatelessWidget {
   final String? avatarUrl;
   final String username;
+  final double size;
 
-  const _GlowAvatar({this.avatarUrl, required this.username});
+  const _GlowAvatar({this.avatarUrl, required this.username, this.size = 120});
 
   @override
   Widget build(BuildContext context) {
@@ -637,8 +842,8 @@ class _GlowAvatar extends StatelessWidget {
         ? username.substring(0, 1).toUpperCase()
         : '?';
     return Container(
-      width: 120,
-      height: 120,
+      width: size,
+      height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         boxShadow: [
@@ -660,8 +865,8 @@ class _GlowAvatar extends StatelessWidget {
                 child: Center(
                   child: Text(
                     initial,
-                    style: const TextStyle(
-                      fontSize: 48,
+                    style: TextStyle(
+                      fontSize: size * 0.4,
                       color: Colors.white,
                       fontWeight: FontWeight.w700,
                     ),

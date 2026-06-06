@@ -167,7 +167,15 @@ class MlsService {
     if (!active) {
       throw StateError('Could not join MLS group.');
     }
-    await _processCommits(engine, groupId, state.commits, conversation.id);
+    // Only replay commits when our local epoch is genuinely behind the server's.
+    // Re-processing already-applied commits can corrupt sender-ratchet state in
+    // the OpenMLS engine; the engine's own persistent SQLite already reflects
+    // every commit we've merged, so there is nothing to do when epochs match.
+    final serverEpoch = state.epoch;
+    final localEpoch = (await engine.groupEpoch(groupIdBytes: groupId)).toInt();
+    if (localEpoch < serverEpoch) {
+      await _processCommits(engine, groupId, state.commits, conversation.id);
+    }
     return _JoinedGroup(engine: engine, identity: identity, groupId: groupId);
   }
 
