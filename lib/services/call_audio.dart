@@ -46,11 +46,14 @@ class CallAudio implements CallAudioController {
   Future<void> _apply({required int op, required String? tone}) async {
     if (op != _op) return;
     if (tone == null) {
-      if (_current == null) return;
-      _current = null;
+      // Check both _current and the player's live state so that a silently-
+      // failing stop() (e.g. PipeWire on Linux not completing cleanly) can
+      // still be retried on the next _enqueue(null) call.
+      if (_current == null && !_player.playing) return;
       try {
         await _player.stop();
       } catch (_) {}
+      _current = null;
       return;
     }
     if (_current == tone) return;

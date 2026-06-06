@@ -94,6 +94,20 @@ class MlsService {
     }
   }
 
+  /// Processes any pending MLS commits for [conversation] without sending or
+  /// decrypting anything.  Called when a peer posts a commit (e.g. an external
+  /// join) so that existing members advance their epoch before the next send,
+  /// rather than being left on a stale epoch that the new member cannot read.
+  Future<void> refreshGroupState({
+    required ApiService api,
+    required Conversation conversation,
+  }) async {
+    if (!conversation.usesMls) return;
+    try {
+      await _ensureJoined(api, conversation);
+    } catch (_) {}
+  }
+
   Future<String?> decryptPayload({
     required ApiService api,
     required Conversation conversation,

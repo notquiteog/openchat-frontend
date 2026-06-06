@@ -56,6 +56,7 @@ class SecureStorageService {
   static const _keySearchIndexKey = 'search_index_key_v1';
   static const _keyOutboxKey = 'offline_outbox_key_v1';
   static const _keyLocalPrivateStateKey = 'local_private_state_key_v1';
+  static const _keyMessageCacheKey = 'message_cache_key_v1';
   static const _keyTrustPins = 'key_trust_pins_v1';
   static const _keyMlsEngineKeyPrefix = 'mls_engine_key_v1';
   static const _keyMlsSignerBytesPrefix = 'mls_signer_bytes_v1';
@@ -161,6 +162,12 @@ class SecureStorageService {
     final existing = await _readOrNull(_keyLocalPrivateStateKey);
     if (existing != null && existing.isNotEmpty) return existing;
     return _createRandomStorageKey(_keyLocalPrivateStateKey);
+  }
+
+  Future<String> getOrCreateMessageCacheKey() async {
+    final existing = await _readOrNull(_keyMessageCacheKey);
+    if (existing != null && existing.isNotEmpty) return existing;
+    return _createRandomStorageKey(_keyMessageCacheKey);
   }
 
   Future<Map<String, KeyTrustPin>> getKeyTrustPins() async {

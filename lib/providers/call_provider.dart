@@ -348,6 +348,9 @@ class CallProvider extends ChangeNotifier {
     unawaited(_foreground.stop());
     unawaited(NotificationService.cancelActiveCall());
     unawaited(NotificationService.cancelIncomingCall());
+    // Explicitly stop audio first so the player halts even if _syncAudio's
+    // _enqueue(null) is delayed or silently swallowed by the platform.
+    unawaited(_audio.stop());
     _syncAudio();
     notifyListeners();
   }

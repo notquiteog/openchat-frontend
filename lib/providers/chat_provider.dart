@@ -13,6 +13,7 @@ import '../providers/settings_provider.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
 import '../services/message_search_service.dart';
+import '../services/message_cache_service.dart';
 import '../services/mls_service.dart';
 import '../services/notification_service.dart';
 import '../services/offline_outbox_service.dart';
@@ -103,6 +104,7 @@ class ChatProvider extends ChangeNotifier {
   final SettingsProvider _settings;
   final MlsService _mls;
   final MessageSearchService _search;
+  final MessageCacheService _cache;
   final OfflineOutboxService _outbox;
 
   final Map<String, List<Message>> _messages = {};
@@ -111,6 +113,7 @@ class ChatProvider extends ChangeNotifier {
   final Map<String, Set<String>> _typingUsers = {};
   final Map<String, Map<String, String>> _readReceipts = {};
   final Map<String, _ActiveLiveLocationShare> _liveLocationShares = {};
+  final Set<String> _mlsRefreshInFlight = {};
   List<OfflineOutboxItem> _outboxItems = const [];
   String? _selfId;
   String? _selfUsername;
@@ -190,8 +193,10 @@ class ChatProvider extends ChangeNotifier {
     this._settings,
     this._mls, {
     MessageSearchService? searchService,
+    MessageCacheService? cacheService,
     OfflineOutboxService? outboxService,
   }) : _search = searchService ?? MessageSearchService(_storage),
+       _cache = cacheService ?? MessageCacheService(_storage),
        _outbox = outboxService ?? OfflineOutboxService(_storage) {
     _wsSub = _ws.events.listen(_handleWsEvent);
     _ws.addListener(_onWsConnectionChanged);
@@ -466,11 +471,24 @@ class ChatProvider extends ChangeNotifier {
           _indexMessage(merged);
         } else {
           _hydrateMessageSender(msg);
-          await _tryDecrypt(
-            msg,
-            privateKey,
-            conversation: _conversations[convID],
-          );
+          // For MLS messages, check the persistent cache before attempting
+          // decryption — MLS application keys are one-time-use (forward
+          // secrecy) so re-decryption after a restart would always fail.
+          final conv = _conversations[convID];
+          MessageCacheEntry? cacheEntry;
+          if (msg.isEncrypted && conv?.usesMls == true) {
+            cacheEntry = await _cache.get(msg.id, msg.encryptedPayload);
+          }
+          if (cacheEntry != null) {
+            msg.setDecryptedContent(
+              cacheEntry.plaintext,
+              verifiedSenderId: cacheEntry.senderId,
+            );
+            _applyArtifactState(msg);
+            _indexMessage(msg);
+          } else {
+            await _tryDecrypt(msg, privateKey, conversation: conv);
+          }
           await _syncLiveLocationShareFromMessage(msg);
           result.add(msg);
         }
@@ -497,14 +515,23 @@ class ChatProvider extends ChangeNotifier {
         _hydrateMessageSender(msg);
       }
       final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
+      final conv = _conversations[convID];
       await Future.wait(
-        older.map(
-          (msg) => _tryDecrypt(
-            msg,
-            privateKey,
-            conversation: _conversations[convID],
-          ),
-        ),
+        older.map((msg) async {
+          if (msg.isEncrypted && conv?.usesMls == true) {
+            final entry = await _cache.get(msg.id, msg.encryptedPayload);
+            if (entry != null) {
+              msg.setDecryptedContent(
+                entry.plaintext,
+                verifiedSenderId: entry.senderId,
+              );
+              _applyArtifactState(msg);
+              _indexMessage(msg);
+              return;
+            }
+          }
+          await _tryDecrypt(msg, privateKey, conversation: conv);
+        }),
       );
       for (final msg in older) {
         await _syncLiveLocationShareFromMessage(msg);
@@ -2778,6 +2805,21 @@ class ChatProvider extends ChangeNotifier {
           unawaited(refreshConversationsSilently());
           if (_conversations.containsKey(convID)) {
             loadConversationMembers(convID);
+            // For MLS groups, process any pending commits (e.g. a new member's
+            // external join commit).  This advances the local epoch so the next
+            // outbound message uses the correct epoch that all members share,
+            // rather than an epoch the newly-joined member cannot decrypt.
+            final conv = _conversations[convID];
+            if (conv != null &&
+                conv.usesMls &&
+                !_mlsRefreshInFlight.contains(convID)) {
+              _mlsRefreshInFlight.add(convID);
+              unawaited(
+                _mls
+                    .refreshGroupState(api: _api, conversation: conv)
+                    .whenComplete(() => _mlsRefreshInFlight.remove(convID)),
+              );
+            }
           }
         }
 
@@ -3318,10 +3360,12 @@ class ChatProvider extends ChangeNotifier {
 
   void _deleteSearchMessage(String messageId) {
     unawaited(_search.deleteMessage(messageId));
+    unawaited(_cache.delete(messageId));
   }
 
   void _deleteSearchConversation(String conversationId) {
     unawaited(_search.deleteConversation(conversationId));
+    unawaited(_cache.deleteConversation(conversationId));
   }
 
   static void hydrateMessageSenderFromConversation(
@@ -3383,6 +3427,13 @@ class ChatProvider extends ChangeNotifier {
           return;
         }
         msg.setDecryptedContent(raw, verifiedSenderId: verifiedSenderId);
+        unawaited(_cache.put(
+          msg.id,
+          msg.conversationId,
+          msg.encryptedPayload,
+          raw,
+          verifiedSenderId,
+        ));
         _applyArtifactState(msg);
         _hydrateMessageSender(msg);
         _indexMessage(msg);

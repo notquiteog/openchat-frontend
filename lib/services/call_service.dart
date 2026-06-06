@@ -564,6 +564,12 @@ class CallService {
         await _selectMobileAudioOutput(deviceId);
         return;
       }
+      // macOS requires an active audio session before output routing works.
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS) {
+        try {
+          await Helper.ensureAudioSession();
+        } catch (_) {}
+      }
       await Helper.selectAudioOutput(deviceId);
     } catch (_) {
       // Some platforms do not expose output routing in flutter_webrtc.
@@ -1159,6 +1165,13 @@ class CallService {
     // releases it. Disposing it here would double-free and crash native code.
     _remoteStream = null;
     try {
+      // Clear callbacks before close so that async native teardown events from
+      // the old PC cannot fire _cleanup() again after _isCleaningUp resets,
+      // which would tear down the next call's peer connection mid-setup.
+      _pc?.onIceCandidate = null;
+      _pc?.onTrack = null;
+      _pc?.onIceConnectionState = null;
+      _pc?.onConnectionState = null;
       _pc?.close();
     } catch (_) {}
     _pc = null;

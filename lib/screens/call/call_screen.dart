@@ -332,9 +332,20 @@ class _CallScreenState extends State<CallScreen> {
     final cameraOff = !cp.isCameraEnabled;
     final avatarUrl = session.remoteAvatarUrl;
     final username = session.remoteUsername ?? 'Unknown';
+    final screenWidth = MediaQuery.sizeOf(context).width;
     final desktopLayout = _isDesktopCallLayout(context);
+    // Compact mode for narrow phones (e.g. iPhone 16 at 390 pt): 5-button video
+    // row needs 348 pt at 60 pt each; shrinking to 52 pt brings it to 292 pt
+    // and eliminates the second-row wrap that crowds the controls bar.
+    final compactLayout = !desktopLayout && screenWidth < 430;
+    final buttonSize = compactLayout ? 52.0 : 60.0;
+    // Desktop: scale the controls bar with the window so it doesn't look like a
+    // narrow island on large monitors, while staying within a sensible range.
     final controlsMaxWidth = desktopLayout
-        ? (isVideo ? 560.0 : 460.0)
+        ? (screenWidth * 0.55).clamp(
+            isVideo ? 520.0 : 420.0,
+            isVideo ? 800.0 : 680.0,
+          )
         : double.infinity;
     final controlsPadding = EdgeInsets.fromLTRB(
       desktopLayout ? 32 : 24,
@@ -349,12 +360,14 @@ class _CallScreenState extends State<CallScreen> {
         label: micMuted ? 'Unmute' : 'Mute',
         active: micMuted,
         onTap: _toggleMic,
+        size: buttonSize,
       ),
       _ControlButton(
         key: const Key('call-control-audio-output'),
         icon: Icons.volume_up_rounded,
         label: 'Audio',
         onTap: _pickAudioOutput,
+        size: buttonSize,
       ),
       if (isVideo)
         _ControlButton(
@@ -363,6 +376,7 @@ class _CallScreenState extends State<CallScreen> {
           label: cameraOff ? 'Camera on' : 'Camera off',
           active: cameraOff,
           onTap: _toggleCamera,
+          size: buttonSize,
         ),
       if (isVideo && _isMobileCallPlatform())
         _ControlButton(
@@ -370,6 +384,7 @@ class _CallScreenState extends State<CallScreen> {
           icon: Icons.cameraswitch_rounded,
           label: 'Flip',
           onTap: _switchCamera,
+          size: buttonSize,
         ),
       _ControlButton(
         key: const Key('call-control-end'),
@@ -377,6 +392,7 @@ class _CallScreenState extends State<CallScreen> {
         label: 'End',
         onTap: _hangup,
         color: _callEndColor,
+        size: buttonSize,
       ),
     ];
 
@@ -520,15 +536,15 @@ class _CallScreenState extends State<CallScreen> {
                     child: _CallSurface(
                       blur: 56,
                       borderRadius: const BorderRadius.all(Radius.circular(36)),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 20,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: desktopLayout ? 20 : 8,
+                        vertical: desktopLayout ? 18 : 20,
                       ),
                       child: Wrap(
                         alignment: WrapAlignment.spaceEvenly,
                         runAlignment: WrapAlignment.center,
                         crossAxisAlignment: WrapCrossAlignment.center,
-                        spacing: desktopLayout ? 20 : 12,
+                        spacing: desktopLayout ? 24 : (compactLayout ? 8 : 12),
                         runSpacing: 14,
                         children: controls,
                       ),
@@ -673,8 +689,12 @@ class _CallIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Tooltip(
-      message: tooltip,
+    // Tooltip is intentionally omitted: on desktop, Tooltip creates a new
+    // Overlay compositing layer above the RTCVideoView platform texture, which
+    // confuses desktop compositors and causes white-square artifacts on hover.
+    return Semantics(
+      label: tooltip,
+      button: true,
       child: GestureDetector(
         onTap: onTap,
         child: _CallSurface(
@@ -699,6 +719,8 @@ class _ControlButton extends StatelessWidget {
   final VoidCallback onTap;
   final Color? color;
   final bool active;
+  // Adaptive size: 60 on normal screens, 52 on compact mobile screens.
+  final double size;
 
   const _ControlButton({
     super.key,
@@ -707,6 +729,7 @@ class _ControlButton extends StatelessWidget {
     required this.onTap,
     this.color,
     this.active = false,
+    this.size = 60.0,
   });
 
   @override
@@ -718,44 +741,45 @@ class _ControlButton extends StatelessWidget {
         ? Colors.white
         : Colors.white;
 
-    return Tooltip(
-      message: label,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _CallSurface(
-              blur: 40,
-              borderRadius: BorderRadius.circular(30),
-              tint: tint,
-              boxShadow: [
-                BoxShadow(
-                  color: (color ?? Colors.white).withValues(
-                    alpha: color != null ? 0.42 : 0.10,
-                  ),
-                  blurRadius: color != null ? 22 : 12,
-                  spreadRadius: -4,
-                  offset: const Offset(0, 8),
+    // Tooltip is intentionally omitted: on desktop, Tooltip creates a new
+    // Overlay compositing layer above the RTCVideoView platform texture, which
+    // confuses desktop compositors and causes white-square artifacts on hover.
+    // The visible text label below each icon already conveys the action.
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _CallSurface(
+            blur: 40,
+            borderRadius: BorderRadius.circular(size * 0.5),
+            tint: tint,
+            boxShadow: [
+              BoxShadow(
+                color: (color ?? Colors.white).withValues(
+                  alpha: color != null ? 0.42 : 0.10,
                 ),
-              ],
-              child: SizedBox(
-                width: 60,
-                height: 60,
-                child: Icon(icon, color: iconColor, size: 26),
+                blurRadius: color != null ? 22 : 12,
+                spreadRadius: -4,
+                offset: const Offset(0, 8),
               ),
+            ],
+            child: SizedBox(
+              width: size,
+              height: size,
+              child: Icon(icon, color: iconColor, size: size * 0.43),
             ),
-            const SizedBox(height: 8),
-            Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
