@@ -852,6 +852,11 @@ class CallService {
       isVideo: _session?.isVideo ?? false,
     );
 
+    // iOS: AppDelegate's configureAudioSession() handles complete session setup
+    // and audio routing. Do not call Helper.ensureAudioSession() or
+    // Helper.setSpeakerphoneOn() — they undo the route AppDelegate just applied.
+    if (defaultTargetPlatform == TargetPlatform.iOS) return;
+
     if (defaultTargetPlatform == TargetPlatform.android) {
       switch (deviceId) {
         case 'speaker':
@@ -884,31 +889,6 @@ class CallService {
       return;
     }
 
-    // iOS
-    try {
-      await Helper.ensureAudioSession();
-    } catch (_) {}
-    switch (deviceId) {
-      case 'speaker':
-        try {
-          await Helper.setSpeakerphoneOn(true);
-        } catch (_) {}
-        return;
-      case 'bluetooth':
-        try {
-          await Helper.setSpeakerphoneOnButPreferBluetooth();
-        } catch (_) {}
-        return;
-      case 'earpiece':
-      case 'wired-headset':
-        try {
-          await Helper.setSpeakerphoneOn(false);
-        } catch (_) {}
-        return;
-    }
-    try {
-      await Helper.setSpeakerphoneOn(false);
-    } catch (_) {}
   }
 
   // ── Connected state ─────────────────────────────────────────────────────────
@@ -957,6 +937,13 @@ class CallService {
   }
 
   Future<MediaStream> _getUserMedia({required bool isVideo}) async {
+    // iOS requires AVAudioSession to be in playAndRecord mode before getUserMedia.
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      try {
+        await Helper.ensureAudioSession();
+      } catch (_) {}
+    }
+
     final constraints = <String, dynamic>{
       'audio': {
         'echoCancellation': true,
@@ -965,14 +952,29 @@ class CallService {
       },
       'video': isVideo
           ? {
-              'facingMode': _usingFrontCamera ? 'user' : 'environment',
+              // facingMode is a mobile concept; specifying it as a mandatory
+              // constraint on desktop causes OverconstrainedError. Use ideal
+              // so it's a preference, not a requirement.
+              if (_isMobilePlatform)
+                'facingMode': {
+                  'ideal': _usingFrontCamera ? 'user' : 'environment',
+                },
               'width': {'ideal': 1280},
               'height': {'ideal': 720},
               'frameRate': {'ideal': 30},
             }
           : false,
     };
-    return navigator.mediaDevices.getUserMedia(constraints);
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (_) {
+      // Fallback to minimal constraints if ideal ones fail (e.g. no camera
+      // matching the preferred facingMode, or constrained device).
+      return await navigator.mediaDevices.getUserMedia({
+        'audio': true,
+        'video': isVideo,
+      });
+    }
   }
 
   // ── Cleanup ─────────────────────────────────────────────────────────────────

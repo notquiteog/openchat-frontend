@@ -220,11 +220,9 @@ class _CallScreenState extends State<CallScreen> {
     final hasLiveVideo = isVideo && participants.any((p) => p.renderer != null);
     final screenWidth = MediaQuery.sizeOf(context).width;
     final desktopLayout = _isDesktopCallLayout(context);
-    // Compact mode for narrow phones (e.g. iPhone 16 at 390 pt): 5-button video
-    // row needs 348 pt at 60 pt each; shrinking to 52 pt brings it to 292 pt
-    // and eliminates the second-row wrap that crowds the controls bar.
+    // Compact mode for narrow phones (e.g. iPhone SE / 13 mini at 375 pt).
     final compactLayout = !desktopLayout && screenWidth < 430;
-    final buttonSize = compactLayout ? 52.0 : 60.0;
+    final buttonSize = compactLayout ? 48.0 : 56.0;
     // Desktop: scale the controls bar with the window so it doesn't look like a
     // narrow island on large monitors, while staying within a sensible range.
     final controlsMaxWidth = desktopLayout
@@ -239,12 +237,14 @@ class _CallScreenState extends State<CallScreen> {
       desktopLayout ? 32 : 24,
       desktopLayout ? 28 : 24,
     );
-    final controls = [
+    // Secondary controls (everything except End Call)
+    final secondaryControls = <Widget>[
       _ControlButton(
         key: const Key('call-control-mute'),
         icon: micMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
         label: micMuted ? 'Unmute' : 'Mute',
         active: micMuted,
+        activeColor: _callEndColor,
         onTap: _toggleMic,
         size: buttonSize,
       ),
@@ -278,20 +278,14 @@ class _CallScreenState extends State<CallScreen> {
           icon: cp.isScreenSharing
               ? Icons.stop_screen_share_rounded
               : Icons.screen_share_rounded,
-          label: cp.isScreenSharing ? 'Stop Share' : 'Share Screen',
+          label: cp.isScreenSharing ? 'Stop' : 'Share',
           active: cp.isScreenSharing,
           onTap: _toggleScreenShare,
           size: buttonSize,
         ),
-      _ControlButton(
-        key: const Key('call-control-end'),
-        icon: Icons.call_end_rounded,
-        label: 'End',
-        onTap: _hangup,
-        color: _callEndColor,
-        size: buttonSize,
-      ),
     ];
+
+    final controlsBottomInset = desktopLayout ? 188.0 : 208.0;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -307,7 +301,7 @@ class _CallScreenState extends State<CallScreen> {
             child: _ParticipantStage(
               participants: participants,
               isVideo: isVideo,
-              controlsBottomInset: desktopLayout ? 150 : 164,
+              controlsBottomInset: controlsBottomInset,
             ),
           ),
 
@@ -322,40 +316,70 @@ class _CallScreenState extends State<CallScreen> {
                   horizontal: 16,
                   vertical: 8,
                 ),
-                child: Row(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    _CallIconButton(
-                      key: const Key('minimize-call-button'),
-                      tooltip: 'Minimize call',
-                      icon: Icons.keyboard_arrow_down_rounded,
-                      onTap: _minimize,
+                    Row(
+                      children: [
+                        _CallIconButton(
+                          key: const Key('minimize-call-button'),
+                          tooltip: 'Minimize call',
+                          icon: Icons.keyboard_arrow_down_rounded,
+                          onTap: _minimize,
+                        ),
+                        const Spacer(),
+                        // Status chip (shows duration once connected)
+                        _CallSurface.capsule(
+                          blur: 36,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 7,
+                          ),
+                          child: Text(
+                            statusText,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const Spacer(),
+                        const SizedBox(width: 44),
+                      ],
                     ),
-                    const Spacer(),
-                    // Status chip
-                    _CallSurface.capsule(
-                      blur: 36,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 7,
-                      ),
-                      child: Text(
-                        statusText,
+                    // Caller name + call type (shown when no live video stream)
+                    if (!hasLiveVideo) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        username,
                         style: const TextStyle(
                           color: Colors.white,
+                          fontSize: 24,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.3,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        isVideo ? 'Video call' : 'Voice call',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.55),
                           fontSize: 13,
-                          fontWeight: FontWeight.w600,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
-                    ),
-                    const Spacer(),
-                    const SizedBox(width: 44), // balance the minimize button
+                    ],
                   ],
                 ),
               ),
             ),
           ),
 
-          // ── Controls bar ───────────────────────────────────────────────────
+          // ── Controls panel ─────────────────────────────────────────────────
           Positioned(
             bottom: 0,
             left: 0,
@@ -367,21 +391,12 @@ class _CallScreenState extends State<CallScreen> {
                   child: ConstrainedBox(
                     key: const Key('call-controls-bar'),
                     constraints: BoxConstraints(maxWidth: controlsMaxWidth),
-                    child: _CallSurface(
-                      blur: 56,
-                      borderRadius: const BorderRadius.all(Radius.circular(36)),
-                      padding: EdgeInsets.symmetric(
-                        horizontal: desktopLayout ? 20 : 8,
-                        vertical: desktopLayout ? 18 : 20,
-                      ),
-                      child: Wrap(
-                        alignment: WrapAlignment.spaceEvenly,
-                        runAlignment: WrapAlignment.center,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        spacing: desktopLayout ? 24 : (compactLayout ? 8 : 12),
-                        runSpacing: 14,
-                        children: controls,
-                      ),
+                    child: _CallControlsPanel(
+                      secondaryControls: secondaryControls,
+                      onHangup: _hangup,
+                      buttonSize: buttonSize,
+                      desktopLayout: desktopLayout,
+                      compactLayout: compactLayout,
                     ),
                   ),
                 ),
@@ -903,15 +918,102 @@ class _CallIconButton extends StatelessWidget {
   }
 }
 
+// ── Controls panel ────────────────────────────────────────────────────────────
+
+/// iOS 26-style call controls: secondary actions in a glass pill above a
+/// distinct, full-width End Call button.
+class _CallControlsPanel extends StatelessWidget {
+  final List<Widget> secondaryControls;
+  final VoidCallback onHangup;
+  final double buttonSize;
+  final bool desktopLayout;
+  final bool compactLayout;
+
+  const _CallControlsPanel({
+    required this.secondaryControls,
+    required this.onHangup,
+    required this.buttonSize,
+    required this.desktopLayout,
+    required this.compactLayout,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (secondaryControls.isNotEmpty) ...[
+          _CallSurface(
+            blur: 56,
+            borderRadius: const BorderRadius.all(Radius.circular(36)),
+            padding: EdgeInsets.symmetric(
+              horizontal: desktopLayout ? 20 : 8,
+              vertical: desktopLayout ? 18 : 16,
+            ),
+            child: Wrap(
+              alignment: WrapAlignment.center,
+              runAlignment: WrapAlignment.center,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: desktopLayout ? 24 : (compactLayout ? 8 : 12),
+              runSpacing: 14,
+              children: secondaryControls,
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+        // End Call — prominent primary action, full-width pill
+        GestureDetector(
+          onTap: onHangup,
+          child: _CallSurface(
+            blur: 48,
+            borderRadius: const BorderRadius.all(Radius.circular(32)),
+            tint: _callEndColor,
+            boxShadow: [
+              BoxShadow(
+                color: _callEndColor.withValues(alpha: 0.46),
+                blurRadius: 28,
+                spreadRadius: -4,
+                offset: const Offset(0, 10),
+              ),
+            ],
+            padding: EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: desktopLayout ? 18 : 20,
+            ),
+            child: const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.call_end_rounded, color: Colors.white, size: 24),
+                SizedBox(width: 10),
+                Text(
+                  'End Call',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 // ── Control button ────────────────────────────────────────────────────────────
 
 class _ControlButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
-  final Color? color;
   final bool active;
-  // Adaptive size: 60 on normal screens, 52 on compact mobile screens.
+  // Color to use for the tint when active. Defaults to white; pass a color
+  // (e.g. _callEndColor) for destructive or warning states like mute.
+  final Color activeColor;
+  // Adaptive size: 56 on normal screens, 48 on compact mobile screens.
   final double size;
 
   const _ControlButton({
@@ -919,18 +1021,16 @@ class _ControlButton extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
-    this.color,
     this.active = false,
-    this.size = 60.0,
+    this.activeColor = Colors.white,
+    this.size = 56.0,
   });
 
   @override
   Widget build(BuildContext context) {
-    final tint = active ? Colors.white : color;
+    final tint = active ? activeColor : null;
     final iconColor = active
-        ? Colors.black87
-        : color != null
-        ? Colors.white
+        ? (activeColor == Colors.white ? Colors.black87 : Colors.white)
         : Colors.white;
 
     // Tooltip is intentionally omitted: on desktop, Tooltip creates a new
@@ -948,10 +1048,10 @@ class _ControlButton extends StatelessWidget {
             tint: tint,
             boxShadow: [
               BoxShadow(
-                color: (color ?? Colors.white).withValues(
-                  alpha: color != null ? 0.42 : 0.10,
+                color: (tint ?? Colors.white).withValues(
+                  alpha: tint != null ? 0.38 : 0.10,
                 ),
-                blurRadius: color != null ? 22 : 12,
+                blurRadius: tint != null ? 20 : 12,
                 spreadRadius: -4,
                 offset: const Offset(0, 8),
               ),
@@ -959,14 +1059,18 @@ class _ControlButton extends StatelessWidget {
             child: SizedBox(
               width: size,
               height: size,
-              child: Icon(icon, color: iconColor, size: size * 0.43),
+              child: Icon(icon, color: iconColor, size: size * 0.44),
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 7),
           Text(
             label,
-            style: const TextStyle(
-              color: Colors.white70,
+            style: TextStyle(
+              color: active
+                  ? (activeColor == Colors.white
+                      ? Colors.white
+                      : activeColor.withValues(alpha: 0.90))
+                  : Colors.white70,
               fontSize: 12,
               fontWeight: FontWeight.w500,
             ),
