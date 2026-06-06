@@ -209,7 +209,8 @@ class BackgroundWsService {
       if (stopped || token == null) return;
       try {
         channel = WebSocketChannel.connect(
-          Uri.parse('${ApiConfig.wsUrl}?token=$token'),
+          Uri.parse(ApiConfig.wsUrl),
+          protocols: ['openchat.v1', 'openchat.jwt.$token'],
         );
         channel!.stream.listen(
           (raw) => _handleRaw(

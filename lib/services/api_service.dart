@@ -54,17 +54,20 @@ class AuthResponse {
 class UploadRequest {
   final String attachmentId;
   final String uploadUrl;
+  final String uploadToken;
   final int expiresIn;
 
   UploadRequest({
     required this.attachmentId,
     required this.uploadUrl,
+    required this.uploadToken,
     required this.expiresIn,
   });
 
   factory UploadRequest.fromJson(Map<String, dynamic> json) => UploadRequest(
     attachmentId: json['attachment_id'] as String,
     uploadUrl: json['upload_url'] as String,
+    uploadToken: json['upload_token'] as String,
     expiresIn: json['expires_in'] as int,
   );
 }
@@ -1610,8 +1613,10 @@ class ApiService {
   }
 
   /// Confirm that an attachment was successfully uploaded.
-  Future<void> confirmUpload(String attachmentId) async {
-    await _post('/api/v1/attachments/$attachmentId/confirm', {});
+  Future<void> confirmUpload(String attachmentId, String uploadToken) async {
+    await _post('/api/v1/attachments/$attachmentId/confirm', {
+      'upload_token': uploadToken,
+    });
   }
 
   /// Get a short-lived presigned download URL for an attachment.

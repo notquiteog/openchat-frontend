@@ -356,6 +356,7 @@ class CallService {
 
       _ws.sendCallRinging(
         targetUserId: session.remoteUserId,
+        conversationId: session.conversationId ?? '',
         callId: session.callId,
       );
     } catch (_) {
@@ -428,6 +429,7 @@ class CallService {
     _pendingOfferSdp = null;
     _ws.sendCallReject(
       targetUserId: session.remoteUserId,
+      conversationId: session.conversationId ?? '',
       callId: session.callId,
     );
   }
@@ -437,6 +439,7 @@ class CallService {
     if (session != null) {
       _ws.sendCallHangup(
         targetUserId: session.remoteUserId,
+        conversationId: session.conversationId ?? '',
         callId: session.callId,
       );
     }
@@ -728,7 +731,11 @@ class CallService {
     if (callId.isEmpty) return false;
     if (_session != null || _pendingIncoming != null) {
       if (callerId.isNotEmpty) {
-        _ws.sendCallReject(targetUserId: callerId, callId: callId);
+        _ws.sendCallReject(
+          targetUserId: callerId,
+          conversationId: conversationId ?? '',
+          callId: callId,
+        );
       }
       return false;
     }

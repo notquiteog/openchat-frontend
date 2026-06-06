@@ -88,6 +88,7 @@ class _RecordingApiService extends ApiService {
   String? uploadedMimeType;
   Uint8List? uploadedBytes;
   String? confirmedAttachmentId;
+  String? confirmedUploadToken;
 
   @override
   Future<UploadRequest> requestUpload({
@@ -101,6 +102,7 @@ class _RecordingApiService extends ApiService {
     return UploadRequest(
       attachmentId: 'opaque-attachment-id',
       uploadUrl: 'https://upload.invalid/object',
+      uploadToken: 'opaque-upload-token',
       expiresIn: 900,
     );
   }
@@ -118,8 +120,9 @@ class _RecordingApiService extends ApiService {
   }
 
   @override
-  Future<void> confirmUpload(String attachmentId) async {
+  Future<void> confirmUpload(String attachmentId, String uploadToken) async {
     confirmedAttachmentId = attachmentId;
+    confirmedUploadToken = uploadToken;
   }
 }
 

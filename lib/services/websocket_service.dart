@@ -94,7 +94,8 @@ class WebSocketService extends ChangeNotifier {
     StreamSubscription<dynamic>? subscription;
     try {
       channel = WebSocketChannel.connect(
-        Uri.parse('${ApiConfig.wsUrl}?token=$token'),
+        Uri.parse(ApiConfig.wsUrl),
+        protocols: ['openchat.v1', 'openchat.jwt.$token'],
       );
       _channel = channel;
       subscription = channel.stream.listen(
@@ -244,6 +245,7 @@ class WebSocketService extends ChangeNotifier {
     required bool isVideo,
     String? conversationId,
   }) {
+    if (conversationId == null || conversationId.trim().isEmpty) return;
     _send({
       'type': 'call_offer',
       'data': {
@@ -263,11 +265,18 @@ class WebSocketService extends ChangeNotifier {
   void sendCallAnswer({
     required String targetUserId,
     required String callId,
+    required String conversationId,
     required String sdp,
   }) {
+    if (conversationId.trim().isEmpty) return;
     _send({
       'type': 'call_answer',
-      'data': {'target_user_id': targetUserId, 'call_id': callId, 'sdp': sdp},
+      'data': {
+        'target_user_id': targetUserId,
+        'conversation_id': conversationId,
+        'call_id': callId,
+        'sdp': sdp,
+      },
     });
   }
 
@@ -278,12 +287,15 @@ class WebSocketService extends ChangeNotifier {
   void sendIceCandidate({
     required String targetUserId,
     required String callId,
+    required String conversationId,
     required Map<String, dynamic> candidate,
   }) {
+    if (conversationId.trim().isEmpty) return;
     _send({
       'type': 'call_ice_candidate',
       'data': {
         'target_user_id': targetUserId,
+        'conversation_id': conversationId,
         'call_id': callId,
         'candidate': candidate,
       },
@@ -294,24 +306,51 @@ class WebSocketService extends ChangeNotifier {
     _send({'type': 'call_ice_candidate', 'data': data});
   }
 
-  void sendCallHangup({required String targetUserId, required String callId}) {
+  void sendCallHangup({
+    required String targetUserId,
+    required String conversationId,
+    required String callId,
+  }) {
+    if (conversationId.trim().isEmpty) return;
     _send({
       'type': 'call_hangup',
-      'data': {'target_user_id': targetUserId, 'call_id': callId},
+      'data': {
+        'target_user_id': targetUserId,
+        'conversation_id': conversationId,
+        'call_id': callId,
+      },
     });
   }
 
-  void sendCallReject({required String targetUserId, required String callId}) {
+  void sendCallReject({
+    required String targetUserId,
+    required String conversationId,
+    required String callId,
+  }) {
+    if (conversationId.trim().isEmpty) return;
     _send({
       'type': 'call_reject',
-      'data': {'target_user_id': targetUserId, 'call_id': callId},
+      'data': {
+        'target_user_id': targetUserId,
+        'conversation_id': conversationId,
+        'call_id': callId,
+      },
     });
   }
 
-  void sendCallRinging({required String targetUserId, required String callId}) {
+  void sendCallRinging({
+    required String targetUserId,
+    required String conversationId,
+    required String callId,
+  }) {
+    if (conversationId.trim().isEmpty) return;
     _send({
       'type': 'call_ringing',
-      'data': {'target_user_id': targetUserId, 'call_id': callId},
+      'data': {
+        'target_user_id': targetUserId,
+        'conversation_id': conversationId,
+        'call_id': callId,
+      },
     });
   }
 

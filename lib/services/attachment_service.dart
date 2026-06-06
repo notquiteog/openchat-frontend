@@ -592,7 +592,7 @@ class AttachmentService {
         totalBytes: encrypted.ciphertext.length,
       ),
     );
-    await _api.confirmUpload(uploadReq.attachmentId);
+    await _api.confirmUpload(uploadReq.attachmentId, uploadReq.uploadToken);
 
     return encrypted.toPendingAttachment(uploadReq.attachmentId);
   }
