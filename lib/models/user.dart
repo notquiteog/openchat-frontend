@@ -154,6 +154,7 @@ class User {
     bool? allowGroupAdd,
     bool? publicDiscovery,
     DateTime? premiumUntil,
+    DateTime? lastSeen,
   }) => User(
     id: id,
     username: username,
@@ -170,7 +171,7 @@ class User {
     isBanned: isBanned ?? this.isBanned,
     allowGroupAdd: allowGroupAdd ?? this.allowGroupAdd,
     createdAt: createdAt,
-    lastSeen: lastSeen,
+    lastSeen: lastSeen ?? this.lastSeen,
     premiumUntil: premiumUntil ?? this.premiumUntil,
     publicKeyExpiresAt: publicKeyExpiresAt,
   );

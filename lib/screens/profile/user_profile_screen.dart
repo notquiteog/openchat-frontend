@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/services.dart';
@@ -8,6 +10,7 @@ import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../services/api_service.dart';
+import '../../services/websocket_service.dart';
 import '../../utils/identity_qr.dart';
 import '../../widgets/glass.dart';
 import '../settings/identity_qr_scanner_screen.dart';
@@ -25,6 +28,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   late User _user;
   bool _loading = false;
   Future<List<Conversation>>? _sharedConversationsFuture;
+  StreamSubscription<WsEvent>? _wsSub;
 
   @override
   void initState() {
@@ -38,6 +42,37 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     _sharedConversationsFuture ??= context
         .read<ApiService>()
         .getSharedConversations(_user.id);
+    if (_wsSub == null) {
+      _fetchFreshUser();
+      _wsSub = context.read<WebSocketService>().events.listen(_onWsEvent);
+    }
+  }
+
+  void _fetchFreshUser() async {
+    try {
+      final fresh = await context.read<ApiService>().getUserByUsername(_user.username);
+      if (mounted) setState(() => _user = fresh);
+    } catch (_) {}
+  }
+
+  void _onWsEvent(WsEvent event) {
+    if (event.type != WsEventType.userOnline && event.type != WsEventType.userOffline) return;
+    final userId = event.data['user_id'] as String?;
+    if (userId != _user.id || !mounted) return;
+    setState(() {
+      if (event.type == WsEventType.userOnline) {
+        _user = _user.copyWith(lastSeen: DateTime.now());
+      } else {
+        // Push lastSeen into the past so isOnline immediately returns false
+        _user = _user.copyWith(lastSeen: DateTime.now().subtract(const Duration(minutes: 10)));
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _wsSub?.cancel();
+    super.dispose();
   }
 
   bool get _isOwnProfile {

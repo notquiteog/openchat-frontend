@@ -313,11 +313,6 @@ jobs:
       - name: Build iOS (no codesign)
         run: |
           flutter pub get
-          cd ios
-          rm -rf Pods Podfile.lock
-          pod cache clean --all
-          pod install --repo-update --clean-install
-          cd ..
           perl -0pi -e 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' ios/Runner.xcodeproj/project.pbxproj
           perl -0pi -e 's/"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]" = "iPhone Developer";/"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";\n\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n\t\t\t\tCODE_SIGNING_REQUIRED = NO;/g' ios/Runner.xcodeproj/project.pbxproj
           export CODE_SIGNING_ALLOWED=NO
