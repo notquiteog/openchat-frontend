@@ -46,14 +46,7 @@ class CallAudio implements CallAudioController {
   Future<void> _apply({required int op, required String? tone}) async {
     if (op != _op) return;
     if (tone == null) {
-      // Check both _current and the player's live state so that a silently-
-      // failing stop() (e.g. PipeWire on Linux not completing cleanly) can
-      // still be retried on the next _enqueue(null) call.
-      if (_current == null && !_player.playing) return;
-      try {
-        await _player.stop();
-      } catch (_) {}
-      _current = null;
+      await _stopPlayback();
       return;
     }
     if (_current == tone) return;
@@ -68,6 +61,28 @@ class CallAudio implements CallAudioController {
       await _player.play();
     } catch (_) {
       // No audio device / unsupported — fail quietly, the call still works.
+    }
+  }
+
+  /// Forcefully silence the player and clear the current tone.
+  ///
+  /// A bare [AudioPlayer.stop] can silently no-op — PipeWire/media_kit on Linux
+  /// not completing cleanly, or a lagging audio session on mobile — which left
+  /// the looped tone running with no subsequent [_enqueue] to retry it. That is
+  /// the "ringing/connecting tone keeps playing after the call connects or
+  /// ends" bug. Pause first (takes effect immediately), then stop, then verify
+  /// the player actually went quiet, retrying briefly if it did not.
+  Future<void> _stopPlayback() async {
+    _current = null;
+    for (var attempt = 0; attempt < 4; attempt++) {
+      try {
+        await _player.pause();
+      } catch (_) {}
+      try {
+        await _player.stop();
+      } catch (_) {}
+      if (!_player.playing) return;
+      await Future<void>.delayed(const Duration(milliseconds: 60));
     }
   }
 

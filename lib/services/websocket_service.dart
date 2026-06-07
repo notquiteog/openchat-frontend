@@ -28,6 +28,9 @@ enum WsEventType {
   callHangup,
   callReject,
   callRinging,
+  groupCallJoin,
+  groupCallLeave,
+  groupCallState,
   error,
   unknown,
 }
@@ -246,6 +249,22 @@ class WebSocketService extends ChangeNotifier {
     _send({'type': 'call_answer', 'data': data});
   }
 
+  /// Announce joining (also used as a periodic heartbeat) / leaving an active
+  /// group SFU call so the server can broadcast the conversation's call state.
+  void sendGroupCallJoin(String conversationId) {
+    _send({
+      'type': 'group_call_join',
+      'data': {'conversation_id': conversationId},
+    });
+  }
+
+  void sendGroupCallLeave(String conversationId) {
+    _send({
+      'type': 'group_call_leave',
+      'data': {'conversation_id': conversationId},
+    }, queueIfOffline: false);
+  }
+
   void sendCallIceCandidate({
     required String targetUserId,
     required String conversationId,
@@ -375,6 +394,9 @@ class WebSocketService extends ChangeNotifier {
     'call_hangup' => WsEventType.callHangup,
     'call_reject' => WsEventType.callReject,
     'call_ringing' => WsEventType.callRinging,
+    'group_call_join' => WsEventType.groupCallJoin,
+    'group_call_leave' => WsEventType.groupCallLeave,
+    'group_call_state' => WsEventType.groupCallState,
     'error' => WsEventType.error,
     _ => WsEventType.unknown,
   };

@@ -1,18 +1,17 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
-import '../../config/api_config.dart';
 import '../../providers/call_provider.dart';
 import '../../services/call_service.dart';
 import '../../widgets/glass.dart';
+import 'call_glass.dart';
 
-const _callEndColor = Color(0xFFFF453A);
-const _callAnswerColor = Color(0xFF30D158);
+const _callEndColor = callEndColor;
+const _callAnswerColor = callAnswerColor;
 const _callDismissColor = Color(0xFF8E8E93);
 
 @visibleForTesting
@@ -156,7 +155,7 @@ class _CallScreenState extends State<CallScreen> {
     );
 
     final secondaryControls = <Widget>[
-      _ControlButton(
+      CallControlButton(
         key: const Key('call-control-mute'),
         icon: micMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
         label: micMuted ? 'Unmute' : 'Mute',
@@ -165,7 +164,7 @@ class _CallScreenState extends State<CallScreen> {
         onTap: _toggleMic,
         size: buttonSize,
       ),
-      _ControlButton(
+      CallControlButton(
         key: const Key('call-control-audio-output'),
         icon: Icons.volume_up_rounded,
         label: 'Audio',
@@ -173,7 +172,7 @@ class _CallScreenState extends State<CallScreen> {
         size: buttonSize,
       ),
       if (isVideo)
-        _ControlButton(
+        CallControlButton(
           key: const Key('call-control-camera'),
           icon: cameraOff ? Icons.videocam_off_rounded : Icons.videocam_rounded,
           label: cameraOff ? 'Camera on' : 'Camera off',
@@ -182,7 +181,7 @@ class _CallScreenState extends State<CallScreen> {
           size: buttonSize,
         ),
       if (isVideo && _isMobileCallPlatform())
-        _ControlButton(
+        CallControlButton(
           key: const Key('call-control-switch-camera'),
           icon: Icons.cameraswitch_rounded,
           label: 'Flip',
@@ -190,7 +189,7 @@ class _CallScreenState extends State<CallScreen> {
           size: buttonSize,
         ),
       if (isVideo && cp.canScreenShare)
-        _ControlButton(
+        CallControlButton(
           key: const Key('call-control-screenshare'),
           icon: cp.isScreenSharing
               ? Icons.stop_screen_share_rounded
@@ -211,7 +210,7 @@ class _CallScreenState extends State<CallScreen> {
           // ── Background ─────────────────────────────────────────────────────
           if (!hasLiveVideo)
             Positioned.fill(
-              child: _CallBackground(avatarUrl: avatarUrl, username: username),
+              child: CallBackground(avatarUrl: avatarUrl, username: username),
             ),
 
           Positioned.fill(
@@ -317,7 +316,7 @@ class _CallScreenState extends State<CallScreen> {
                   child: ConstrainedBox(
                     key: const Key('call-controls-bar'),
                     constraints: BoxConstraints(maxWidth: controlsMaxWidth),
-                    child: _CallControlsPanel(
+                    child: CallControlsPanel(
                       secondaryControls: secondaryControls,
                       onHangup: _hangup,
                       buttonSize: buttonSize,
@@ -698,8 +697,9 @@ class _ParticipantTile extends StatelessWidget {
             left: compact ? 8 : 12,
             right: compact ? 8 : 12,
             bottom: compact ? 8 : 12,
-            child: _ParticipantLabel(
-              participant: participant,
+            child: CallParticipantLabel(
+              name: participant.name,
+              muted: participant.audioMuted,
               compact: compact,
             ),
           ),
@@ -745,7 +745,7 @@ class _ParticipantAvatarPanel extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _GlowAvatar(
+              GlowAvatar(
                 avatarUrl: participant.avatarUrl,
                 username: participant.name,
                 size: avatarSize,
@@ -776,318 +776,14 @@ class _ParticipantAvatarPanel extends StatelessWidget {
   }
 }
 
-class _ParticipantLabel extends StatelessWidget {
-  final _CallParticipantView participant;
-  final bool compact;
-
-  const _ParticipantLabel({required this.participant, required this.compact});
-
-  @override
-  Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.bottomLeft,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.54),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.16),
-            width: 0.6,
-          ),
-        ),
-        child: Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: compact ? 8 : 10,
-            vertical: compact ? 5 : 7,
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (participant.audioMuted) ...[
-                Icon(
-                  Icons.mic_off_rounded,
-                  color: Colors.white70,
-                  size: compact ? 12 : 14,
-                ),
-                const SizedBox(width: 5),
-              ],
-              Flexible(
-                child: Text(
-                  participant.name,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: compact ? 11 : 12,
-                    fontWeight: FontWeight.w700,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ── Background ────────────────────────────────────────────────────────────────
-
-class _CallBackground extends StatelessWidget {
-  final String? avatarUrl;
-  final String username;
-
-  const _CallBackground({this.avatarUrl, required this.username});
-
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        const Positioned.fill(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                center: Alignment(0, -0.3),
-                radius: 1.4,
-                colors: [
-                  Color(0xFF1A2340),
-                  Color(0xFF070D1A),
-                  Color(0xFF000000),
-                ],
-              ),
-            ),
-          ),
-        ),
-        if (avatarUrl != null)
-          Positioned.fill(
-            child: Opacity(
-              opacity: 0.14,
-              child: CachedNetworkImage(
-                imageUrl: ApiConfig.resolveMedia(avatarUrl!),
-                fit: BoxFit.cover,
-              ),
-            ),
-          ),
-        Positioned(
-          top: -100,
-          left: -100,
-          right: -100,
-          height: 500,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                center: Alignment.topCenter,
-                radius: 1.0,
-                colors: [
-                  const Color(0xFF3D5AFE).withValues(alpha: 0.18),
-                  Colors.transparent,
-                ],
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// ── Glow avatar ───────────────────────────────────────────────────────────────
-
-class _GlowAvatar extends StatelessWidget {
-  final String? avatarUrl;
-  final String username;
-  final double size;
-
-  const _GlowAvatar({this.avatarUrl, required this.username, this.size = 120});
-
-  @override
-  Widget build(BuildContext context) {
-    final initial = username.isNotEmpty
-        ? username.substring(0, 1).toUpperCase()
-        : '?';
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF3D5AFE).withValues(alpha: 0.40),
-            blurRadius: 48,
-            spreadRadius: -4,
-          ),
-        ],
-      ),
-      child: ClipOval(
-        child: avatarUrl != null
-            ? CachedNetworkImage(
-                imageUrl: ApiConfig.resolveMedia(avatarUrl!),
-                fit: BoxFit.cover,
-              )
-            : Container(
-                color: const Color(0xFF1A2340),
-                child: Center(
-                  child: Text(
-                    initial,
-                    style: TextStyle(
-                      fontSize: size * 0.4,
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
-      ),
-    );
-  }
-}
+// _ParticipantLabel, _CallBackground and _GlowAvatar now live in call_glass.dart
+// as CallParticipantLabel / CallBackground / GlowAvatar (shared with the SFU
+// screen).
 
 // ── Controls panel ────────────────────────────────────────────────────────────
 
-/// iOS 26-style call controls: secondary actions in a glass pill above a
-/// distinct, full-width End Call button.
-class _CallControlsPanel extends StatelessWidget {
-  final List<Widget> secondaryControls;
-  final VoidCallback onHangup;
-  final double buttonSize;
-  final bool desktopLayout;
-  final bool compactLayout;
-
-  const _CallControlsPanel({
-    required this.secondaryControls,
-    required this.onHangup,
-    required this.buttonSize,
-    required this.desktopLayout,
-    required this.compactLayout,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (secondaryControls.isNotEmpty) ...[
-          // Secondary controls pill — shader-based glass, safe over RTCVideoView
-          GlassContainer(
-            shape: const LiquidRoundedSuperellipse(borderRadius: 36),
-            useOwnLayer: true,
-            quality: GlassQuality.standard,
-            padding: EdgeInsets.symmetric(
-              horizontal: desktopLayout ? 20 : 8,
-              vertical: desktopLayout ? 18 : 16,
-            ),
-            child: Wrap(
-              alignment: WrapAlignment.center,
-              runAlignment: WrapAlignment.center,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: desktopLayout ? 24 : (compactLayout ? 8 : 12),
-              runSpacing: 14,
-              children: secondaryControls,
-            ),
-          ),
-          const SizedBox(height: 10),
-        ],
-        // End Call — prominent full-width pill with red glass tint
-        LayoutBuilder(
-          builder: (ctx, c) => GlassButton.custom(
-            key: const Key('call-control-end'),
-            onTap: onHangup,
-            useOwnLayer: true,
-            quality: GlassQuality.standard,
-            width: c.maxWidth,
-            height: desktopLayout ? 56 : 62,
-            shape: const LiquidRoundedSuperellipse(borderRadius: 32),
-            settings: LiquidGlassSettings(
-              glassColor: _callEndColor.withValues(alpha: 0.62),
-            ),
-            glowColor: _callEndColor,
-            glowRadius: 28,
-            child: const Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.call_end_rounded, color: Colors.white, size: 24),
-                SizedBox(width: 10),
-                Text(
-                  'End Call',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 17,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: -0.2,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// ── Control button ────────────────────────────────────────────────────────────
-
-class _ControlButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  final bool active;
-  final Color activeColor;
-  final double size;
-
-  const _ControlButton({
-    super.key,
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    this.active = false,
-    this.activeColor = Colors.white,
-    this.size = 56.0,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    // Use a colored glass tint when active (e.g. muted = red fill).
-    final settings = active && activeColor != Colors.white
-        ? LiquidGlassSettings(glassColor: activeColor.withValues(alpha: 0.45))
-        : null;
-
-    // Tooltip is intentionally omitted: on desktop, Tooltip creates a new
-    // Overlay compositing layer above the RTCVideoView platform texture, which
-    // confuses desktop compositors and causes white-square artifacts on hover.
-    // The visible text label below each icon already conveys the action.
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        GlassIconButton(
-          icon: Icon(icon),
-          onPressed: onTap,
-          size: size,
-          useOwnLayer: true,
-          quality: GlassQuality.standard,
-          glowColor: active ? activeColor : null,
-          glowRadius: 18,
-          settings: settings,
-        ),
-        const SizedBox(height: 7),
-        Text(
-          label,
-          style: TextStyle(
-            color: active
-                ? (activeColor == Colors.white
-                    ? Colors.white
-                    : activeColor.withValues(alpha: 0.90))
-                : Colors.white70,
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-      ],
-    );
-  }
-}
+// _CallControlsPanel and _ControlButton now live in call_glass.dart as
+// CallControlsPanel / CallControlButton (shared with the SFU screen).
 
 // ── Call overlay ──────────────────────────────────────────────────────────────
 
@@ -1302,7 +998,7 @@ class IncomingCallModal extends StatelessWidget {
       child: Stack(
         children: [
           Positioned.fill(
-            child: _CallBackground(
+            child: CallBackground(
               avatarUrl: avatarUrl,
               username: incoming.remoteUsername ?? '',
             ),
@@ -1320,7 +1016,7 @@ class IncomingCallModal extends StatelessWidget {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      _GlowAvatar(
+                      GlowAvatar(
                         avatarUrl: avatarUrl,
                         username: incoming.remoteUsername ?? '',
                       ),

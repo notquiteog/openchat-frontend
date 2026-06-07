@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.5.26+102
+version: 0.5.27+103
 publish_to: 'none'
 
 environment:
@@ -20,7 +20,7 @@ dependencies:
   openpgp:
     git:
       url: https://github.com/notquiteog/flutter-openpgp.git
-      ref: v3.12.3
+      ref: v3.12.5
   pointycastle: ^4.0.0
   cryptography: ^2.9.0
   crypto: ^3.0.7
@@ -55,7 +55,11 @@ dependencies:
   image: ^4.8.0
 
   # P2P WebRTC — handles media, ICE, SDP negotiation.
-  flutter_webrtc: 1.4.0
+  flutter_webrtc: 1.4.1
+
+  # SFU for premium "Call with SFU" group calls. 1:1 and the default group path
+  # stay on the P2P mesh above; LiveKit is an additional, premium-only option.
+  livekit_client: 2.8.0
 
   # Call ringtone / connecting tones + voice-note playback
   just_audio: ^0.10.5
@@ -126,6 +130,10 @@ dev_dependencies:
 
 dependency_overrides:
   flutter_secure_storage_linux: 3.0.1
+  # livekit_client 2.8.0 hard-pins flutter_webrtc 1.4.0, but we keep 1.4.1
+  # (a patch over 1.4.0 — Dart-API compatible). Force 1.4.1 app-wide so the P2P
+  # mesh and the LiveKit SFU share a single flutter_webrtc native plugin.
+  flutter_webrtc: 1.4.1
 
 # App / launcher icons. Regenerate after changing the logo with:
 #   dart run flutter_launcher_icons

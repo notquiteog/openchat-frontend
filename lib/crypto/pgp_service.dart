@@ -418,10 +418,7 @@ class PgpService {
       return await _serial(
         () => OpenPGP.verify(signatureArmor, data, signerPublicKeyArmored),
       );
-    } catch (e) {
-      // TEMP DIAGNOSTIC: surface go-crypto's rejection reason (normally
-      // swallowed) to pinpoint the intermittent PQC verify failure.
-      debugPrint('PgpService.verify rejected: $e');
+    } catch (_) {
       return false;
     }
   }

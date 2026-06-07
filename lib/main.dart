@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'app.dart';
 import 'providers/auth_provider.dart';
 import 'providers/call_provider.dart';
+import 'providers/group_call_presence_provider.dart';
 import 'providers/chat_provider.dart';
 import 'providers/key_provider.dart';
 import 'providers/settings_provider.dart';
@@ -15,6 +16,7 @@ import 'services/api_service.dart';
 import 'services/background_ws_service.dart';
 import 'services/call_service.dart';
 import 'services/call_signal_codec.dart';
+import 'services/sfu_call_controller.dart';
 import 'services/desktop_startup_service.dart';
 import 'services/local_private_state_service.dart';
 import 'services/mls_service.dart';
@@ -125,6 +127,10 @@ class _Providers extends StatelessWidget {
               ChatProvider(api, storage, ws, ctx.read<SettingsProvider>(), mls),
         ),
         ChangeNotifierProvider(create: (_) => CallProvider(callService)),
+        ChangeNotifierProvider(create: (_) => SfuCallController(api, ws)),
+        ChangeNotifierProvider(
+          create: (_) => GroupCallPresenceProvider(ws, api),
+        ),
       ],
       child: const OpenChatApp(),
     );

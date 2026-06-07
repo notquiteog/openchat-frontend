@@ -370,7 +370,9 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<void> loadChatFolders() async {
-    final folders = await _settings.loadChatFolders();
+    // SettingsProvider.loadChatFolders() returns an unmodifiable list, so copy
+    // before sorting — sorting it in place throws and chat folders never load.
+    final folders = (await _settings.loadChatFolders()).toList();
     folders.sort((a, b) {
       final position = a.position.compareTo(b.position);
       if (position != 0) return position;
@@ -2187,7 +2189,6 @@ class ChatProvider extends ChangeNotifier {
   ) async {
     final proof = Message.senderProofFromRaw(raw);
     if (proof == null) {
-      debugPrint('verifySender: NO PROOF in payload conv=$convID');
       return null;
     }
     var conv = conversation ?? _conversations[convID];
@@ -2198,8 +2199,7 @@ class ChatProvider extends ChangeNotifier {
         if (conv != null) {
           _conversations[convID] = conv.copyWith(members: members);
         }
-      } catch (e) {
-        debugPrint('verifySender: members fetch FAILED conv=$convID: $e');
+      } catch (_) {
         return null;
       }
     }
@@ -2212,15 +2212,10 @@ class ChatProvider extends ChangeNotifier {
     }
     final user = sender?.user;
     if (user == null) {
-      debugPrint('verifySender: sender ${proof.senderId} NOT in members '
-          '(or member has no user) conv=$convID members=${members.length} '
-          'matchedMember=${sender != null}');
       return null;
     }
     if (user.keyFingerprint.toUpperCase() !=
         proof.keyFingerprint.toUpperCase()) {
-      debugPrint('verifySender: FINGERPRINT MISMATCH sender=${proof.senderId} '
-          'record=${user.keyFingerprint} signed=${proof.keyFingerprint}');
       return null;
     }
     // v2 messages carry a createdAt timestamp in the signed data.  v1 messages
@@ -2236,10 +2231,6 @@ class ChatProvider extends ChangeNotifier {
       signatureArmor: proof.signature,
       signerPublicKeyArmored: user.publicKey,
     );
-    if (!ok) {
-      debugPrint('verifySender: verify false for sender ${proof.senderId} '
-          '(transient openpgp PQC-verify; will self-heal)');
-    }
     return ok ? proof.senderId : null;
   }
 

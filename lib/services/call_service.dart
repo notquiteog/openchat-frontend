@@ -760,8 +760,14 @@ class CallService {
 
   void setMicMuted(bool muted) {
     final audioTrack = _localStream?.getAudioTracks().firstOrNull;
-    if (audioTrack != null) audioTrack.enabled = !muted;
-    unawaited(_platformControls.setMicrophoneMuted(muted));
+    if (audioTrack == null) return;
+    // Mute through flutter_webrtc so it flows through the plugin's own audio
+    // management (RTCAudioSession on iOS, AudioSwitchManager on Android) instead
+    // of the app's parallel native layer, which conflicts with it (and whose
+    // iOS path, AVAudioSession.setInputGain, is a no-op on most devices). Also
+    // disable the track directly so no audio is sent regardless of platform.
+    audioTrack.enabled = !muted;
+    unawaited(Helper.setMicrophoneMute(muted, audioTrack));
   }
 
   void setCameraEnabled(bool enabled) {
@@ -886,10 +892,15 @@ class CallService {
     if (kIsWeb) return true;
     return switch (defaultTargetPlatform) {
       TargetPlatform.android ||
+      // iOS needs a Broadcast Upload Extension target wired to flutter_webrtc
+      // (App Group + RTCAppGroupIdentifier/RTCScreenSharingExtension Info.plist
+      // keys). See ios/SCREENSHARE_IOS_SETUP.md. getDisplayMedia() then shows the
+      // system broadcast picker; without the extension the picker is empty.
+      TargetPlatform.iOS ||
       TargetPlatform.macOS ||
       TargetPlatform.linux ||
       TargetPlatform.windows => true,
-      _ => false, // iOS requires a native Broadcast Extension
+      _ => false,
     };
   }
 
@@ -945,15 +956,28 @@ class CallService {
   }
 
   Future<void> _selectMobileAudioOutput(String deviceId) async {
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      // Route through flutter_webrtc's RTCAudioSession (Helper). The app's
+      // AppDelegate AVAudioSession route gets overridden by flutter_webrtc's own
+      // session management, so it never sticks; going through Helper does.
+      try {
+        switch (deviceId) {
+          case 'speaker':
+            await Helper.setSpeakerphoneOn(true);
+          case 'bluetooth':
+            await Helper.setSpeakerphoneOnButPreferBluetooth();
+          default: // earpiece / wired-headset
+            await Helper.setSpeakerphoneOn(false);
+        }
+      } catch (_) {}
+      return;
+    }
+
+    // Android: native AudioManager routing + Helper fallback.
     await _platformControls.selectAudioOutput(
       deviceId,
       isVideo: _session?.isVideo ?? false,
     );
-
-    // iOS: AppDelegate's configureAudioSession() handles complete session setup
-    // and audio routing. Do not call Helper.ensureAudioSession() or
-    // Helper.setSpeakerphoneOn() — they undo the route AppDelegate just applied.
-    if (defaultTargetPlatform == TargetPlatform.iOS) return;
 
     if (defaultTargetPlatform == TargetPlatform.android) {
       switch (deviceId) {

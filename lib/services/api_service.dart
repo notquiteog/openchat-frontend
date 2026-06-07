@@ -1859,6 +1859,23 @@ class ApiService {
 
   // ---- Client config ----
 
+  /// Premium/group/member-gated LiveKit room-join token for "Call with SFU".
+  /// Returns {url, room, token}.
+  Future<Map<String, dynamic>> getLiveKitToken(String conversationId) async {
+    final resp = await _post('/api/v1/calls/livekit-token', {
+      'conversation_id': conversationId,
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  /// Active SFU group call in a conversation (for the join banner). Returns
+  /// {active, mode, participant_ids}.
+  Future<Map<String, dynamic>> getActiveCall(String conversationId) async {
+    final resp =
+        await _get('/api/v1/conversations/$conversationId/active-call');
+    return resp['data'] as Map<String, dynamic>;
+  }
+
   Future<List<IceServer>> getIceServers() async {
     final resp = await _get('/api/v1/config', authenticated: false);
     final data = resp['data'];

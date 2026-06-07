@@ -15,8 +15,11 @@ import '../../models/message.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/call_provider.dart';
 import '../../providers/chat_provider.dart';
+import '../../providers/group_call_presence_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
+import '../../services/sfu_call_controller.dart';
+import '../call/sfu_call_screen.dart';
 import '../../services/mls_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/attachment_service.dart';
@@ -144,6 +147,9 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       }
       unawaited(chat.loadConversationMembers(conv.id));
+      if (mounted && conv.isGroup) {
+        unawaited(context.read<GroupCallPresenceProvider>().refresh(conv.id));
+      }
     });
     _scrollCtrl.addListener(_onScroll);
     _inputCtrl.addListener(_onInputTextChanged);
@@ -1765,6 +1771,99 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// Groups let the user pick the call backend: P2P mesh, or the premium SFU.
+  /// 1:1 chats are always P2P (no chooser).
+  void _onCallPressed({required bool isVideo}) {
+    if (!conv.isGroup) {
+      _startCall(isVideo: isVideo);
+      return;
+    }
+    _showGroupCallChooser(isVideo: isVideo);
+  }
+
+  void _showGroupCallChooser({required bool isVideo}) {
+    final isPremium =
+        context.read<AuthProvider>().currentUser?.isPremium == true;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => GlassBottomSheetFrame(
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const GlassSheetGrabber(),
+              const GlassSheetHeader(
+                icon: Icons.call,
+                title: 'Start a group call',
+                subtitle: 'Choose how to connect',
+              ),
+              GlassActionTile(
+                icon: Icons.lan_outlined,
+                label: 'Call with P2P',
+                subtitle: 'Direct peer-to-peer mesh',
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  _startCall(isVideo: isVideo);
+                },
+              ),
+              GlassActionTile(
+                icon: Icons.hub_outlined,
+                label: 'Call with SFU',
+                subtitle: isPremium
+                    ? 'Routed through the server — scales to larger groups'
+                    : 'Requires OpenChat Premium',
+                trailing: isPremium
+                    ? null
+                    : const Icon(Icons.workspace_premium_outlined, size: 20),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  if (isPremium) {
+                    _startSfuCall(isVideo: isVideo);
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content:
+                            Text('SFU group calls require OpenChat Premium'),
+                      ),
+                    );
+                  }
+                },
+              ),
+              const SizedBox(height: 10),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _startSfuCall({required bool isVideo}) {
+    final sfu = context.read<SfuCallController>();
+    unawaited(
+      sfu
+          .join(
+            conversationId: conv.id,
+            title: conv.name ?? 'Group call',
+            isVideo: isVideo,
+          )
+          .catchError((Object e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not start SFU call: $e')),
+        );
+      }),
+    );
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (_) => const SfuCallScreen(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
@@ -1799,6 +1898,7 @@ class _ChatScreenState extends State<ChatScreen> {
             curve: Curves.easeOutCubic,
             child: Column(
               children: [
+                _GroupCallBanner(conversation: conv),
                 Expanded(
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
@@ -2376,12 +2476,12 @@ class _ChatScreenState extends State<ChatScreen> {
           IconButton(
             icon: const Icon(Icons.call),
             tooltip: 'Voice call',
-            onPressed: () => _startCall(isVideo: false),
+            onPressed: () => _onCallPressed(isVideo: false),
           ),
           IconButton(
             icon: const Icon(Icons.videocam),
             tooltip: 'Video call',
-            onPressed: () => _startCall(isVideo: true),
+            onPressed: () => _onCallPressed(isVideo: true),
           ),
         ],
         IconButton(
@@ -4250,6 +4350,93 @@ class _ReminderChoiceTile extends StatelessWidget {
       leading: const Icon(Icons.alarm_outlined, size: 20),
       title: Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
       onTap: onTap,
+    );
+  }
+}
+
+/// Top-of-chat banner shown when a group has a live SFU call and the local user
+/// isn't already in it — tapping joins (premium-gated).
+class _GroupCallBanner extends StatelessWidget {
+  const _GroupCallBanner({required this.conversation});
+
+  final Conversation conversation;
+
+  @override
+  Widget build(BuildContext context) {
+    final info =
+        context.watch<GroupCallPresenceProvider>().infoFor(conversation.id);
+    final sfu = context.watch<SfuCallController>();
+    final inThisCall = sfu.isActive && sfu.conversationId == conversation.id;
+    if (info == null || !info.active || inThisCall) {
+      return const SizedBox.shrink();
+    }
+    final scheme = Theme.of(context).colorScheme;
+    final count = info.participantIds.length;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
+      child: GestureDetector(
+        onTap: () => _join(context),
+        child: GlassContainer(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              const Icon(Icons.hub_outlined, size: 20),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  count > 0
+                      ? 'Group call in progress · $count in call'
+                      : 'Group call in progress',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Join',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: scheme.primary,
+                ),
+              ),
+              const Icon(Icons.chevron_right, size: 18),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _join(BuildContext context) {
+    final isPremium =
+        context.read<AuthProvider>().currentUser?.isPremium == true;
+    if (!isPremium) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Joining an SFU group call requires OpenChat Premium'),
+        ),
+      );
+      return;
+    }
+    final sfu = context.read<SfuCallController>();
+    unawaited(
+      sfu
+          .join(
+            conversationId: conversation.id,
+            title: conversation.name ?? 'Group call',
+            isVideo: false,
+          )
+          .catchError((Object e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not join call: $e')),
+        );
+      }),
+    );
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (_) => const SfuCallScreen(),
+      ),
     );
   }
 }
