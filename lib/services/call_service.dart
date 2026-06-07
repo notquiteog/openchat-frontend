@@ -108,6 +108,28 @@ String? _stringField(Map<String, dynamic> data, String key) {
   return trimmed.isEmpty ? null : trimmed;
 }
 
+/// Extracts an SDP string without trimming. libwebrtc's parser rejects a
+/// message that doesn't end in a line terminator, so the trailing CRLF must be
+/// preserved (unlike display fields, which `_stringField` trims).
+String? _sdpField(Map<String, dynamic> data, String key) {
+  final value = data[key];
+  if (value is! String || value.trim().isEmpty) return null;
+  return value;
+}
+
+/// Guarantees the SDP ends with a line terminator. `setRemoteDescription`
+/// fails with "Invalid type or sdp" if the final line isn't newline-terminated,
+/// which happens when an upstream trim() or server normalization strips it.
+String _ensureSdpTerminator(String sdp) => sdp.endsWith('\n') ? sdp : '$sdp\r\n';
+
+String _candType(String candidate) {
+  final i = candidate.indexOf('typ ');
+  if (i < 0) return '?';
+  final rest = candidate.substring(i + 4);
+  final end = rest.indexOf(' ');
+  return end < 0 ? rest : rest.substring(0, end);
+}
+
 /// P2P WebRTC call service. Handles signaling via the existing WebSocket and
 /// peer-to-peer media negotiation with coturn for NAT traversal.
 class CallService {
@@ -127,6 +149,10 @@ class CallService {
   // Pending incoming call awaiting user accept/reject.
   CallSession? _pendingIncoming;
   String? _pendingRemoteSdp; // SDP offer from incoming call_offer
+  // ICE candidates that trickle in during ringing, before the callee answers
+  // and builds its peer connection. Flushed into the peer on accept; without
+  // this buffer they are dropped and ICE has no remote candidates to check.
+  final List<RTCIceCandidate> _pendingRemoteCandidates = [];
 
   // Active call state.
   CallSession? _session;
@@ -209,6 +235,7 @@ class CallService {
     try {
       await _initLocalRenderer();
       _iceServers = await _api.getIceServers();
+      debugPrint('CallService: ICE servers loaded: ${_iceServers.length} -> ${_iceServers.map((s) => s.url).toList()}');
       _localStream = await _getUserMedia(isVideo: isVideo);
       _localRenderer.srcObject = _localStream;
       _sessionController.add(_session);
@@ -223,7 +250,8 @@ class CallService {
       }
 
       _startRingTimer();
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('CallService.startCall failed: $e\n$st');
       _cleanup(emitEndedEvent: false);
       rethrow;
     }
@@ -278,6 +306,7 @@ class CallService {
   // ── Incoming call actions ───────────────────────────────────────────────────
 
   Future<void> acceptIncomingCall(CallSession session) async {
+    debugPrint('CallService: acceptIncomingCall start (callId=${session.callId})');
     _cancelRingTimer();
     _pendingIncoming = null;
     _session = session..state = CallState.connecting;
@@ -299,6 +328,7 @@ class CallService {
     try {
       await _initLocalRenderer();
       _iceServers = await _api.getIceServers();
+      debugPrint('CallService: ICE servers loaded: ${_iceServers.length} -> ${_iceServers.map((s) => s.url).toList()}');
       _localStream = await _getUserMedia(isVideo: session.isVideo);
       _localRenderer.srcObject = _localStream;
 
@@ -313,6 +343,14 @@ class CallService {
       );
       _peers[session.remoteUserId] = peerState;
 
+      // Apply ICE candidates that trickled in during ringing. They're queued
+      // until setRemoteDescription succeeds, then flushed with the rest below.
+      if (_pendingRemoteCandidates.isNotEmpty) {
+        debugPrint('CallService: flushing ${_pendingRemoteCandidates.length} buffered remote ICE candidate(s)');
+        peerState.pendingCandidates.addAll(_pendingRemoteCandidates);
+        _pendingRemoteCandidates.clear();
+      }
+
       _setupPcCallbacks(pc, peerState, session.remoteUserId, session.callId, conversationId);
 
       final stream = _localStream;
@@ -322,7 +360,9 @@ class CallService {
         }
       }
 
-      await pc.setRemoteDescription(RTCSessionDescription(remoteSdp, 'offer'));
+      await pc.setRemoteDescription(
+        RTCSessionDescription(_ensureSdpTerminator(remoteSdp), 'offer'),
+      );
       peerState.remoteDescriptionSet = true;
 
       for (final candidate in peerState.pendingCandidates) {
@@ -347,13 +387,15 @@ class CallService {
         ),
       );
       _ws.sendCallAnswer(answerData);
+      debugPrint('CallService: answer sent for ${session.callId}, awaiting connection');
 
       _ws.sendCallRinging(
         targetUserId: session.remoteUserId,
         conversationId: conversationId,
         callId: session.callId,
       );
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('CallService.acceptIncomingCall failed: $e\n$st');
       _cleanup(emitEndedEvent: false);
       rethrow;
     }
@@ -363,6 +405,7 @@ class CallService {
     _cancelRingTimer();
     _pendingIncoming = null;
     _pendingRemoteSdp = null;
+    _pendingRemoteCandidates.clear();
     _ws.sendCallReject(
       targetUserId: session.remoteUserId,
       conversationId: session.conversationId ?? '',
@@ -416,11 +459,13 @@ class CallService {
           final missed = _pendingIncoming!;
           _pendingIncoming = null;
           _pendingRemoteSdp = null;
+          _pendingRemoteCandidates.clear();
           _missedCallController.add(missed);
         } else if (_session?.isGroupCall == true &&
             _session?.state == CallState.connected) {
           _sessionController.add(_session);
         } else {
+          debugPrint('CallService: remote hangup signal -> cleanup');
           _cleanup();
         }
 
@@ -430,8 +475,10 @@ class CallService {
           final missed = _pendingIncoming!;
           _pendingIncoming = null;
           _pendingRemoteSdp = null;
+          _pendingRemoteCandidates.clear();
           _missedCallController.add(missed);
         } else if (s != null && !s.isGroupCall) {
+          debugPrint('CallService: remote reject signal -> cleanup');
           _cleanup();
         }
 
@@ -481,7 +528,9 @@ class CallService {
 
   Future<void> _applyRemoteAnswer(_PeerState peer, String sdp) async {
     try {
-      await peer.pc.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
+      await peer.pc.setRemoteDescription(
+        RTCSessionDescription(_ensureSdpTerminator(sdp), 'answer'),
+      );
       peer.remoteDescriptionSet = true;
       for (final candidate in peer.pendingCandidates) {
         try {
@@ -509,13 +558,27 @@ class CallService {
     // Backend injects caller_id into the relay — use it to route to the right PC.
     final callerId = data['caller_id']?.toString() ?? '';
     final peer = _peers[callerId] ?? _peers.values.firstOrNull;
-    if (peer == null) return;
+    if (peer == null) {
+      // Candidate arrived before the peer connection exists — the caller
+      // trickles ICE during ringing, before the callee answers. Buffer it so
+      // acceptIncomingCall can apply it; dropping it leaves ICE with no remote
+      // candidates and the call never connects.
+      if (_pendingIncoming != null) {
+        _pendingRemoteCandidates.add(candidate);
+        debugPrint('CallService: buffered early remote ICE candidate (${_candType(candidateStr)})');
+      } else {
+        debugPrint('CallService: remote ICE candidate dropped — no peer (callerId=$callerId)');
+      }
+      return;
+    }
 
     if (peer.remoteDescriptionSet) {
+      debugPrint('CallService: remote ICE candidate (${_candType(candidateStr)}) applied');
       try {
         await peer.pc.addCandidate(candidate);
       } catch (_) {}
     } else {
+      debugPrint('CallService: remote ICE candidate (${_candType(candidateStr)}) queued (no remote desc yet)');
       peer.pendingCandidates.add(candidate);
     }
   }
@@ -536,7 +599,7 @@ class CallService {
     final callerName = _stringField(data, 'caller_username');
     final callerAvatar = _stringField(data, 'caller_avatar');
     final conversationId = data['conversation_id'] as String?;
-    final sdp = _stringField(data, 'sdp');
+    final sdp = _sdpField(data, 'sdp');
     final participantUserIds = _participantUserIds(data, callerId);
     final isVideo = switch (data['is_video']) {
       true => true,
@@ -568,6 +631,7 @@ class CallService {
       state: CallState.ringing,
     );
     _pendingRemoteSdp = sdp;
+    _pendingRemoteCandidates.clear();
     _pendingIncoming = incoming;
     _incomingCallController.add(incoming);
 
@@ -576,6 +640,7 @@ class CallService {
       if (_session == null && _pendingIncoming == incoming) {
         _pendingIncoming = null;
         _pendingRemoteSdp = null;
+        _pendingRemoteCandidates.clear();
         _missedCallController.add(incoming);
       }
     });
@@ -636,6 +701,7 @@ class CallService {
     pc.onIceCandidate = (RTCIceCandidate candidate) {
       final c = candidate.candidate;
       if (c != null && c.isNotEmpty) {
+        debugPrint('CallService: local ICE candidate (${_candType(c)}) -> $userId');
         _ws.sendCallIceCandidate(
           targetUserId: userId,
           conversationId: conversationId,
@@ -656,6 +722,7 @@ class CallService {
     };
 
     pc.onConnectionState = (RTCPeerConnectionState state) {
+      debugPrint('CallService: peer[$userId] connectionState -> $state');
       switch (state) {
         case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
           _markConnected();
@@ -669,8 +736,13 @@ class CallService {
       }
     };
 
+    pc.onIceGatheringState = (RTCIceGatheringState state) {
+      debugPrint('CallService: peer[$userId] iceGatheringState -> $state');
+    };
+
     // Fallback: ICE connection state also indicates connectivity.
     pc.onIceConnectionState = (RTCIceConnectionState state) {
+      debugPrint('CallService: peer[$userId] iceConnectionState -> $state');
       switch (state) {
         case RTCIceConnectionState.RTCIceConnectionStateConnected:
         case RTCIceConnectionState.RTCIceConnectionStateCompleted:
@@ -1009,6 +1081,7 @@ class CallService {
 
     _session = null;
     _pendingRemoteSdp = null;
+    _pendingRemoteCandidates.clear();
     _usingFrontCamera = true;
     _isScreenSharing = false;
     unawaited(_platformControls.clearAudioOutput());
@@ -1018,6 +1091,16 @@ class CallService {
     // Dispose peers and streams after the UI has a frame to rebuild.
     final peersSnapshot = Map.of(_peers);
     _peers.clear();
+    // Detach callbacks synchronously BEFORE closing. The async native teardown
+    // of a closed peer connection fires onConnectionState/onIceConnectionState,
+    // which call _cleanup() again. Since _isCleaningUp resets to false in this
+    // same frame, that re-entrant cleanup would tear down a *subsequent* call.
+    for (final peer in peersSnapshot.values) {
+      peer.pc.onIceCandidate = null;
+      peer.pc.onTrack = null;
+      peer.pc.onConnectionState = null;
+      peer.pc.onIceConnectionState = null;
+    }
     unawaited(Future.microtask(() async {
       for (final peer in peersSnapshot.values) {
         try {

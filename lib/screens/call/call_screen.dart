@@ -149,7 +149,7 @@ class _CallScreenState extends State<CallScreen> {
     final compactLayout = !desktopLayout && screenWidth < 430;
     final buttonSize = compactLayout ? 48.0 : 56.0;
     final controlsMaxWidth = desktopLayout
-        ? (screenWidth * 0.55).clamp(
+        ? (screenWidth * 0.45).clamp(
             isVideo ? 520.0 : 420.0,
             isVideo ? 800.0 : 680.0,
           )
@@ -858,6 +858,7 @@ class _CallControlsPanel extends StatelessWidget {
         // End Call — prominent full-width pill with red glass tint
         LayoutBuilder(
           builder: (ctx, c) => GlassButton.custom(
+            key: const Key('call-control-end'),
             onTap: onHangup,
             useOwnLayer: true,
             quality: GlassQuality.standard,

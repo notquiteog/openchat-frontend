@@ -1861,10 +1861,27 @@ class ApiService {
 
   Future<List<IceServer>> getIceServers() async {
     final resp = await _get('/api/v1/config', authenticated: false);
-    final list = (resp['data']['ice_servers'] as List? ?? []);
-    return list
-        .map((e) => IceServer.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final data = resp['data'];
+    final list =
+        (data is Map<String, dynamic> ? data['ice_servers'] : null) as List? ??
+        const [];
+    final servers = <IceServer>[];
+    for (final entry in list) {
+      if (entry is! Map<String, dynamic>) continue;
+      final raw = entry['url'] ?? entry['urls'];
+      final url = raw is List
+          ? (raw.isEmpty ? null : raw.first?.toString())
+          : raw?.toString();
+      if (url == null || url.isEmpty) continue;
+      servers.add(
+        IceServer(
+          url: url,
+          username: entry['username']?.toString(),
+          credential: entry['credential']?.toString(),
+        ),
+      );
+    }
+    return servers;
   }
 
 
