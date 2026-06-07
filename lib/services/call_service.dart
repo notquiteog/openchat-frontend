@@ -713,15 +713,10 @@ class CallService {
   Future<void> startScreenShare() async {
     if (_isScreenSharing || !_supportsScreenShare) return;
 
-    MediaStream? screenStream;
-    try {
-      screenStream = await navigator.mediaDevices.getDisplayMedia(<String, dynamic>{
-        'video': true,
-        'audio': false,
-      });
-    } catch (_) {
-      return;
-    }
+    final screenStream = await navigator.mediaDevices.getDisplayMedia(<String, dynamic>{
+      'video': true,
+      'audio': false,
+    });
 
     final screenTrack = screenStream.getVideoTracks().firstOrNull;
     if (screenTrack == null) {

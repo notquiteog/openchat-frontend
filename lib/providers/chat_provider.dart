@@ -3411,6 +3411,21 @@ class ChatProvider extends ChangeNotifier {
     }
     final conv = conversation ?? _conversations[msg.conversationId];
     if (conv?.usesMls == true) {
+      // MLS application keys are one-time-use (forward secrecy).  Check the
+      // persistent plaintext cache first so that app restarts and re-loads of
+      // already-decrypted messages don't fail because the sender ratchet has
+      // moved on.
+      final cacheEntry = await _cache.get(msg.id, msg.encryptedPayload);
+      if (cacheEntry != null) {
+        msg.setDecryptedContent(
+          cacheEntry.plaintext,
+          verifiedSenderId: cacheEntry.senderId,
+        );
+        _applyArtifactState(msg);
+        _hydrateMessageSender(msg);
+        _indexMessage(msg);
+        return;
+      }
       final raw = await _mls.decryptPayload(
         api: _api,
         conversation: conv!,
@@ -3462,9 +3477,11 @@ class ChatProvider extends ChangeNotifier {
         _applyArtifactState(msg);
         _hydrateMessageSender(msg);
         _indexMessage(msg);
-      } else {
-        msg.markDecryptionFailed();
       }
+      // Empty-string result without an exception can be a transient PGP
+      // service state issue (e.g. library internal buffer race on concurrent
+      // calls).  Don't permanently mark failed — the next loadMessages call
+      // will retry with a fresh PgpService invocation.
     } catch (_) {
       msg.markDecryptionFailed();
     }

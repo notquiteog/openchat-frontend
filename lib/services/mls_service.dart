@@ -163,6 +163,25 @@ class MlsService {
       );
       _processedCommitIds.add(_commitDedupeKey(conversation.id, join.commit));
       active = true;
+
+      // Re-fetch state after posting our external commit.  When two users join
+      // simultaneously both receive the same group info (same epoch), post
+      // their external commits, and only the first one's commit is applied by
+      // the server before the epoch advances.  Refetching ensures we replay
+      // any commits posted by concurrent joiners and reach the current epoch.
+      try {
+        final refreshed = await api.getConversationMlsState(conversation.id);
+        final localEpochAfterJoin =
+            (await engine.groupEpoch(groupIdBytes: groupId)).toInt();
+        if (localEpochAfterJoin < refreshed.epoch) {
+          await _processCommits(
+            engine,
+            groupId,
+            refreshed.commits,
+            conversation.id,
+          );
+        }
+      } catch (_) {}
     }
     if (!active) {
       throw StateError('Could not join MLS group.');

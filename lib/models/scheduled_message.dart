@@ -155,8 +155,15 @@ class ScheduledMessage {
       if (decoded is! Map<String, dynamic>) return null;
       if (decoded['openchat_message'] != 1) return null;
       final type = decoded['type'];
-      final payload = decoded['payload'];
-      if (type is! String || payload is! String) return null;
+      if (type is! String) return null;
+      final payloadRaw = decoded['payload'];
+      // payload may arrive as a pre-serialized JSON string or as a nested
+      // object (rich content types). Normalise to a string either way.
+      final payload = payloadRaw is String
+          ? payloadRaw
+          : payloadRaw != null
+          ? jsonEncode(payloadRaw)
+          : '';
       return _ScheduledOpenChatPayload(type: type, payload: payload);
     } catch (_) {
       return null;

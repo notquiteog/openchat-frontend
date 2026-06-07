@@ -324,9 +324,7 @@ class CallProvider extends ChangeNotifier {
   // ---- Controls ----
 
   Future<void> startScreenShare() async {
-    try {
-      await _callService.startScreenShare();
-    } catch (_) {}
+    await _callService.startScreenShare();
     notifyListeners();
   }
 

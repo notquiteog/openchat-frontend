@@ -15,67 +15,6 @@ const _callEndColor = Color(0xFFFF453A);
 const _callAnswerColor = Color(0xFF30D158);
 const _callDismissColor = Color(0xFF8E8E93);
 
-/// Call chrome intentionally avoids BackdropFilter/ImageFilter. WebRTC video
-/// surfaces and desktop compositors can glitch when blurred glass is stacked
-/// above them, producing white tiles and broken hit testing.
-class _CallSurface extends StatelessWidget {
-  final Widget child;
-  final double blur;
-  final BorderRadius borderRadius;
-  final EdgeInsetsGeometry? padding;
-  final List<BoxShadow>? boxShadow;
-  final Color? tint;
-
-  const _CallSurface({
-    required this.child,
-    this.blur = 0,
-    this.borderRadius = const BorderRadius.all(Radius.circular(28)),
-    this.padding,
-    this.boxShadow,
-    this.tint,
-  });
-
-  const _CallSurface.capsule({required this.child, this.blur = 0, this.padding})
-    : borderRadius = const BorderRadius.all(Radius.circular(999)),
-      boxShadow = null,
-      tint = null;
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final fill = tint == null
-        ? Colors.black.withValues(alpha: isDark ? 0.62 : 0.52)
-        : tint!.withValues(alpha: tint == Colors.white ? 0.88 : 0.92);
-    final shadowBlur = (blur * 0.45).clamp(18.0, 32.0).toDouble();
-    final shadows =
-        boxShadow ??
-        [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.30),
-            blurRadius: shadowBlur,
-            spreadRadius: -6,
-            offset: const Offset(0, 12),
-          ),
-        ];
-
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: fill,
-        borderRadius: borderRadius,
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.18),
-          width: 0.7,
-        ),
-        boxShadow: shadows,
-      ),
-      child: ClipRRect(
-        borderRadius: borderRadius,
-        child: Padding(padding: padding ?? EdgeInsets.zero, child: child),
-      ),
-    );
-  }
-}
-
 @visibleForTesting
 bool shouldUseCallVideoRenderersForTesting(CallSession? session) {
   return session?.isVideo == true;
@@ -137,7 +76,18 @@ class _CallScreenState extends State<CallScreen> {
     if (cp.isScreenSharing) {
       unawaited(cp.stopScreenShare());
     } else {
-      unawaited(cp.startScreenShare());
+      unawaited(_startScreenShare(cp));
+    }
+  }
+
+  Future<void> _startScreenShare(CallProvider cp) async {
+    try {
+      await cp.startScreenShare();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Screen share failed: $e')),
+      );
     }
   }
 
@@ -155,48 +105,24 @@ class _CallScreenState extends State<CallScreen> {
       );
       return;
     }
-    final selected = await showModalBottomSheet<String>(
+    final selectedId = cp.selectedAudioOutputId;
+    await showGlassActionSheet<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          child: _CallSurface(
-            blur: 56,
-            borderRadius: const BorderRadius.all(Radius.circular(28)),
-            padding: const EdgeInsets.fromLTRB(0, 20, 0, 8),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'Audio Output',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 15,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  for (final output in outputs)
-                    _AudioOutputTile(
-                      label: output.label,
-                      selected: cp.selectedAudioOutputId == output.deviceId,
-                      onTap: () => Navigator.of(ctx).pop(output.deviceId),
-                    ),
-                  const SizedBox(height: 4),
-                ],
-              ),
-            ),
+      title: 'Audio Output',
+      actions: [
+        for (final output in outputs)
+          GlassActionSheetAction(
+            label: output.label,
+            icon: selectedId == output.deviceId
+                ? const Icon(Icons.check_rounded, size: 16)
+                : null,
+            onPressed: () {
+              Navigator.of(context).pop();
+              unawaited(cp.selectAudioOutput(output.deviceId));
+            },
           ),
-        ),
-      ),
+      ],
     );
-    if (selected != null) {
-      await cp.selectAudioOutput(selected);
-    }
   }
 
   @override
@@ -220,11 +146,8 @@ class _CallScreenState extends State<CallScreen> {
     final hasLiveVideo = isVideo && participants.any((p) => p.renderer != null);
     final screenWidth = MediaQuery.sizeOf(context).width;
     final desktopLayout = _isDesktopCallLayout(context);
-    // Compact mode for narrow phones (e.g. iPhone SE / 13 mini at 375 pt).
     final compactLayout = !desktopLayout && screenWidth < 430;
     final buttonSize = compactLayout ? 48.0 : 56.0;
-    // Desktop: scale the controls bar with the window so it doesn't look like a
-    // narrow island on large monitors, while staying within a sensible range.
     final controlsMaxWidth = desktopLayout
         ? (screenWidth * 0.55).clamp(
             isVideo ? 520.0 : 420.0,
@@ -237,7 +160,7 @@ class _CallScreenState extends State<CallScreen> {
       desktopLayout ? 32 : 24,
       desktopLayout ? 28 : 24,
     );
-    // Secondary controls (everything except End Call)
+
     final secondaryControls = <Widget>[
       _ControlButton(
         key: const Key('call-control-mute'),
@@ -321,16 +244,25 @@ class _CallScreenState extends State<CallScreen> {
                   children: [
                     Row(
                       children: [
-                        _CallIconButton(
+                        // Minimize button
+                        GlassIconButton(
                           key: const Key('minimize-call-button'),
-                          tooltip: 'Minimize call',
-                          icon: Icons.keyboard_arrow_down_rounded,
-                          onTap: _minimize,
+                          icon: const Icon(
+                            Icons.keyboard_arrow_down_rounded,
+                          ),
+                          onPressed: _minimize,
+                          useOwnLayer: true,
+                          quality: GlassQuality.standard,
+                          size: 44,
                         ),
                         const Spacer(),
                         // Status chip (shows duration once connected)
-                        _CallSurface.capsule(
-                          blur: 36,
+                        GlassContainer(
+                          shape: const LiquidRoundedSuperellipse(
+                            borderRadius: 999,
+                          ),
+                          useOwnLayer: true,
+                          quality: GlassQuality.standard,
                           padding: const EdgeInsets.symmetric(
                             horizontal: 14,
                             vertical: 7,
@@ -778,7 +710,6 @@ class _CallBackground extends StatelessWidget {
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        // Deep gradient base
         const Positioned.fill(
           child: DecoratedBox(
             decoration: BoxDecoration(
@@ -794,7 +725,6 @@ class _CallBackground extends StatelessWidget {
             ),
           ),
         ),
-        // Avatar blurred behind everything (gives a "bokeh" call background)
         if (avatarUrl != null)
           Positioned.fill(
             child: Opacity(
@@ -805,7 +735,6 @@ class _CallBackground extends StatelessWidget {
               ),
             ),
           ),
-        // Radial glow accent
         Positioned(
           top: -100,
           left: -100,
@@ -880,44 +809,6 @@ class _GlowAvatar extends StatelessWidget {
   }
 }
 
-// ── Icon button ───────────────────────────────────────────────────────────────
-
-class _CallIconButton extends StatelessWidget {
-  final String tooltip;
-  final IconData icon;
-  final VoidCallback onTap;
-
-  const _CallIconButton({
-    super.key,
-    required this.tooltip,
-    required this.icon,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    // Tooltip is intentionally omitted: on desktop, Tooltip creates a new
-    // Overlay compositing layer above the RTCVideoView platform texture, which
-    // confuses desktop compositors and causes white-square artifacts on hover.
-    return Semantics(
-      label: tooltip,
-      button: true,
-      child: GestureDetector(
-        onTap: onTap,
-        child: _CallSurface(
-          blur: 36,
-          borderRadius: BorderRadius.circular(22),
-          child: SizedBox(
-            width: 44,
-            height: 44,
-            child: Icon(icon, color: Colors.white70, size: 22),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 // ── Controls panel ────────────────────────────────────────────────────────────
 
 /// iOS 26-style call controls: secondary actions in a glass pill above a
@@ -941,11 +832,14 @@ class _CallControlsPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (secondaryControls.isNotEmpty) ...[
-          _CallSurface(
-            blur: 56,
-            borderRadius: const BorderRadius.all(Radius.circular(36)),
+          // Secondary controls pill — shader-based glass, safe over RTCVideoView
+          GlassContainer(
+            shape: const LiquidRoundedSuperellipse(borderRadius: 36),
+            useOwnLayer: true,
+            quality: GlassQuality.standard,
             padding: EdgeInsets.symmetric(
               horizontal: desktopLayout ? 20 : 8,
               vertical: desktopLayout ? 18 : 16,
@@ -961,27 +855,23 @@ class _CallControlsPanel extends StatelessWidget {
           ),
           const SizedBox(height: 10),
         ],
-        // End Call — prominent primary action, full-width pill
-        GestureDetector(
-          onTap: onHangup,
-          child: _CallSurface(
-            blur: 48,
-            borderRadius: const BorderRadius.all(Radius.circular(32)),
-            tint: _callEndColor,
-            boxShadow: [
-              BoxShadow(
-                color: _callEndColor.withValues(alpha: 0.46),
-                blurRadius: 28,
-                spreadRadius: -4,
-                offset: const Offset(0, 10),
-              ),
-            ],
-            padding: EdgeInsets.symmetric(
-              horizontal: 24,
-              vertical: desktopLayout ? 18 : 20,
+        // End Call — prominent full-width pill with red glass tint
+        LayoutBuilder(
+          builder: (ctx, c) => GlassButton.custom(
+            onTap: onHangup,
+            useOwnLayer: true,
+            quality: GlassQuality.standard,
+            width: c.maxWidth,
+            height: desktopLayout ? 56 : 62,
+            shape: const LiquidRoundedSuperellipse(borderRadius: 32),
+            settings: LiquidGlassSettings(
+              glassColor: _callEndColor.withValues(alpha: 0.62),
             ),
+            glowColor: _callEndColor,
+            glowRadius: 28,
             child: const Row(
               mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(Icons.call_end_rounded, color: Colors.white, size: 24),
                 SizedBox(width: 10),
@@ -1010,10 +900,7 @@ class _ControlButton extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
   final bool active;
-  // Color to use for the tint when active. Defaults to white; pass a color
-  // (e.g. _callEndColor) for destructive or warning states like mute.
   final Color activeColor;
-  // Adaptive size: 56 on normal screens, 48 on compact mobile screens.
   final double size;
 
   const _ControlButton({
@@ -1028,55 +915,42 @@ class _ControlButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tint = active ? activeColor : null;
-    final iconColor = active
-        ? (activeColor == Colors.white ? Colors.black87 : Colors.white)
-        : Colors.white;
+    // Use a colored glass tint when active (e.g. muted = red fill).
+    final settings = active && activeColor != Colors.white
+        ? LiquidGlassSettings(glassColor: activeColor.withValues(alpha: 0.45))
+        : null;
 
     // Tooltip is intentionally omitted: on desktop, Tooltip creates a new
     // Overlay compositing layer above the RTCVideoView platform texture, which
     // confuses desktop compositors and causes white-square artifacts on hover.
     // The visible text label below each icon already conveys the action.
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _CallSurface(
-            blur: 40,
-            borderRadius: BorderRadius.circular(size * 0.5),
-            tint: tint,
-            boxShadow: [
-              BoxShadow(
-                color: (tint ?? Colors.white).withValues(
-                  alpha: tint != null ? 0.38 : 0.10,
-                ),
-                blurRadius: tint != null ? 20 : 12,
-                spreadRadius: -4,
-                offset: const Offset(0, 8),
-              ),
-            ],
-            child: SizedBox(
-              width: size,
-              height: size,
-              child: Icon(icon, color: iconColor, size: size * 0.44),
-            ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        GlassIconButton(
+          icon: Icon(icon),
+          onPressed: onTap,
+          size: size,
+          useOwnLayer: true,
+          quality: GlassQuality.standard,
+          glowColor: active ? activeColor : null,
+          glowRadius: 18,
+          settings: settings,
+        ),
+        const SizedBox(height: 7),
+        Text(
+          label,
+          style: TextStyle(
+            color: active
+                ? (activeColor == Colors.white
+                    ? Colors.white
+                    : activeColor.withValues(alpha: 0.90))
+                : Colors.white70,
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
           ),
-          const SizedBox(height: 7),
-          Text(
-            label,
-            style: TextStyle(
-              color: active
-                  ? (activeColor == Colors.white
-                      ? Colors.white
-                      : activeColor.withValues(alpha: 0.90))
-                  : Colors.white70,
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -1120,9 +994,6 @@ class _MinimizedCallOverlay extends StatelessWidget {
     final name = session.remoteUsername ?? 'Unknown';
     final scheme = Theme.of(context).colorScheme;
 
-    // The bar anchors inside the AppBar zone — top of SafeArea, not below the
-    // toolbar. Body content (messages, lists) starts below the AppBar and is
-    // therefore never covered by the bar regardless of which screen is open.
     return Align(
       alignment: Alignment.topCenter,
       child: SafeArea(
@@ -1145,7 +1016,6 @@ class _MinimizedCallOverlay extends StatelessWidget {
                 child: Row(
                   children: [
                     const SizedBox(width: 14),
-                    // Green pulse dot — shows call is live
                     Container(
                       width: 8,
                       height: 8,
@@ -1179,7 +1049,6 @@ class _MinimizedCallOverlay extends StatelessWidget {
                         ],
                       ),
                     ),
-                    // Expand button
                     GestureDetector(
                       key: const Key('expand-call-button'),
                       onTap: () => cp.setCallMinimized(false),
@@ -1202,7 +1071,6 @@ class _MinimizedCallOverlay extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 6),
-                    // End call button
                     GestureDetector(
                       onTap: cp.hangup,
                       child: Container(
@@ -1241,8 +1109,8 @@ class _MinimizedCallOverlay extends StatelessWidget {
 
 // ── Incoming call modal ───────────────────────────────────────────────────────
 
-/// Full-screen, frosted-glass incoming-call prompt with the caller's avatar
-/// centered and Answer / Decline / Dismiss actions.
+/// Full-screen, iOS 26 Liquid Glass incoming-call prompt with the caller's
+/// avatar centered and Answer / Decline / Dismiss actions.
 class IncomingCallModal extends StatelessWidget {
   const IncomingCallModal({super.key});
 
@@ -1299,7 +1167,6 @@ class IncomingCallModal extends StatelessWidget {
       type: MaterialType.transparency,
       child: Stack(
         children: [
-          // Blurred + tinted background
           Positioned.fill(
             child: _CallBackground(
               avatarUrl: avatarUrl,
@@ -1337,8 +1204,13 @@ class IncomingCallModal extends StatelessWidget {
                         maxLines: 1,
                       ),
                       const SizedBox(height: 8),
-                      _CallSurface.capsule(
-                        blur: 36,
+                      // Kind badge — shader-based glass capsule
+                      GlassContainer(
+                        shape: const LiquidRoundedSuperellipse(
+                          borderRadius: 999,
+                        ),
+                        useOwnLayer: true,
+                        quality: GlassQuality.standard,
                         padding: const EdgeInsets.symmetric(
                           horizontal: 16,
                           vertical: 6,
@@ -1387,52 +1259,7 @@ class IncomingCallModal extends StatelessWidget {
   }
 }
 
-class _AudioOutputTile extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _AudioOutputTile({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    label,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w500,
-                      fontSize: 15,
-                    ),
-                  ),
-                ),
-                if (selected)
-                  const Icon(
-                    Icons.check_rounded,
-                    color: _callAnswerColor,
-                    size: 20,
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
+// ── Incoming call action button ───────────────────────────────────────────────
 
 class _CallAction extends StatelessWidget {
   final IconData icon;
@@ -1449,40 +1276,29 @@ class _CallAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _CallSurface(
-            blur: 44,
-            borderRadius: BorderRadius.circular(38),
-            tint: color,
-            boxShadow: [
-              BoxShadow(
-                color: color.withValues(alpha: 0.44),
-                blurRadius: 26,
-                spreadRadius: -4,
-                offset: const Offset(0, 12),
-              ),
-            ],
-            child: SizedBox(
-              width: 72,
-              height: 72,
-              child: Icon(icon, color: Colors.white, size: 30),
-            ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        GlassIconButton(
+          icon: Icon(icon, size: 30, color: Colors.white),
+          onPressed: onTap,
+          size: 72,
+          useOwnLayer: true,
+          quality: GlassQuality.standard,
+          glowColor: color,
+          glowRadius: 30,
+          settings: LiquidGlassSettings(glassColor: color.withValues(alpha: 0.55)),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
           ),
-          const SizedBox(height: 10),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
