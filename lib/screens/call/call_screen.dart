@@ -48,6 +48,8 @@ class CallScreen extends StatefulWidget {
 }
 
 class _CallScreenState extends State<CallScreen> {
+  bool _audioPickerOpen = false;
+
   @override
   void initState() {
     super.initState();
@@ -98,31 +100,23 @@ class _CallScreenState extends State<CallScreen> {
     final cp = context.read<CallProvider>();
     await cp.refreshAudioOutputs();
     if (!mounted) return;
-    final outputs = cp.audioOutputs;
-    if (outputs.isEmpty) {
+    if (cp.audioOutputs.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No audio outputs are available')),
       );
       return;
     }
-    final selectedId = cp.selectedAudioOutputId;
-    await showGlassActionSheet<void>(
-      context: context,
-      title: 'Audio Output',
-      actions: [
-        for (final output in outputs)
-          GlassActionSheetAction(
-            label: output.label,
-            icon: selectedId == output.deviceId
-                ? const Icon(Icons.check_rounded, size: 16)
-                : null,
-            onPressed: () {
-              Navigator.of(context).pop();
-              unawaited(cp.selectAudioOutput(output.deviceId));
-            },
-          ),
-      ],
-    );
+    // CallScreen lives in CallOverlay, mounted in MaterialApp.builder ABOVE the
+    // app's Navigator, so routed popups (showGlassActionSheet / Navigator.of)
+    // either throw "no Navigator" or render on the root overlay BENEATH the call
+    // UI (visible only after the call ends) without a Material ancestor (yellow
+    // underline). Render the picker inline in this screen's own Stack instead.
+    setState(() => _audioPickerOpen = true);
+  }
+
+  void _closeAudioPicker() {
+    if (!_audioPickerOpen) return;
+    setState(() => _audioPickerOpen = false);
   }
 
   @override
@@ -335,7 +329,146 @@ class _CallScreenState extends State<CallScreen> {
               ),
             ),
           ),
+
+          // ── Audio output picker ────────────────────────────────────────────
+          // Rendered inline (not via the Navigator) because CallScreen sits
+          // above the app's Navigator — see _pickAudioOutput.
+          if (_audioPickerOpen)
+            Positioned.fill(
+              child: _AudioOutputSheet(
+                outputs: cp.audioOutputs,
+                selectedId: cp.selectedAudioOutputId,
+                onSelected: (id) {
+                  unawaited(cp.selectAudioOutput(id));
+                  _closeAudioPicker();
+                },
+                onDismiss: _closeAudioPicker,
+              ),
+            ),
         ],
+      ),
+    );
+  }
+}
+
+/// Inline audio-output picker. Rendered inside CallScreen's own Scaffold/Stack
+/// (which is above the app Navigator) rather than via a route, so it always
+/// paints over the call UI and inherits a Material ancestor from the Scaffold
+/// (no yellow debug underline). Uses the shader-backed GlassContainer + a plain
+/// color scrim, both safe over an active RTCVideoView.
+class _AudioOutputSheet extends StatelessWidget {
+  const _AudioOutputSheet({
+    required this.outputs,
+    required this.selectedId,
+    required this.onSelected,
+    required this.onDismiss,
+  });
+
+  final List<CallAudioOutput> outputs;
+  final String? selectedId;
+  final ValueChanged<String> onSelected;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onDismiss,
+            child: const ColoredBox(color: Color(0x99000000)),
+          ),
+        ),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  child: GlassContainer(
+                    shape: const LiquidRoundedSuperellipse(borderRadius: 28),
+                    useOwnLayer: true,
+                    quality: GlassQuality.standard,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(20, 12, 20, 8),
+                          child: Text(
+                            'Audio Output',
+                            style: TextStyle(
+                              color: Color(0x8CFFFFFF),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: -0.1,
+                              decoration: TextDecoration.none,
+                            ),
+                          ),
+                        ),
+                        for (final output in outputs)
+                          _AudioOutputRow(
+                            label: output.label,
+                            selected: output.deviceId == selectedId,
+                            onTap: () => onSelected(output.deviceId),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AudioOutputRow extends StatelessWidget {
+  const _AudioOutputRow({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                  decoration: TextDecoration.none,
+                ),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+              ),
+            ),
+            if (selected)
+              const Icon(Icons.check_rounded, color: Colors.white, size: 20),
+          ],
+        ),
       ),
     );
   }

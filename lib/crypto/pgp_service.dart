@@ -20,6 +20,21 @@ class PgpService {
   static const _cipherName = 'openpgp';
   static const _slotsKey = 'slots';
 
+  // ── OpenPGP serialization ───────────────────────────────────────────────────
+  // The openpgp package is backed by a Go/FFI bridge that is NOT safe to call
+  // concurrently: a second operation started while another is in flight can
+  // transiently fail — verify() returns false, decrypt() returns empty — which
+  // surfaced as random "🔒 Unable to decrypt" on freshly-arrived messages that
+  // fixed themselves on reload. Routing every crypto op through this gate
+  // guarantees strictly one-at-a-time execution. A throwing op (caught by the
+  // onError below) never breaks the chain for the next operation.
+  static Future<void> _opGate = Future<void>.value();
+  static Future<T> _serial<T>(Future<T> Function() op) {
+    final result = _opGate.then((_) => op());
+    _opGate = result.then((_) {}, onError: (_) {});
+    return result;
+  }
+
   /// Generate a new ECC key pair (Curve25519 + Ed25519).
   static Future<PgpKeyPair> generateKeyPair({
     required String username,
@@ -209,10 +224,12 @@ class PgpService {
         ..privateKey = signingPrivateKeyArmored
         ..passphrase = signingKeyPassphrase;
       slots.add({
-        'ciphertext': await OpenPGP.encrypt(
-          paddedPlaintext,
-          recipient.publicKeyArmored,
-          signed: signer,
+        'ciphertext': await _serial(
+          () => OpenPGP.encrypt(
+            paddedPlaintext,
+            recipient.publicKeyArmored,
+            signed: signer,
+          ),
         ),
       });
     }
@@ -283,14 +300,16 @@ class PgpService {
         envelopeCiphertexts,
         privateKeyArmored: privateKeyArmored,
         privateKeyPassphrase: privateKeyPassphrase,
-        decryptor: OpenPGP.decrypt,
+        decryptor: (a, b, c) => _serial(() => OpenPGP.decrypt(a, b, c)),
       );
     }
 
-    return OpenPGP.decrypt(
-      encryptedArmor,
-      privateKeyArmored,
-      privateKeyPassphrase,
+    return _serial(
+      () => OpenPGP.decrypt(
+        encryptedArmor,
+        privateKeyArmored,
+        privateKeyPassphrase,
+      ),
     );
   }
 
@@ -386,7 +405,7 @@ class PgpService {
     required String privateKeyArmored,
     String passphrase = '',
   }) {
-    return OpenPGP.sign(data, privateKeyArmored, passphrase);
+    return _serial(() => OpenPGP.sign(data, privateKeyArmored, passphrase));
   }
 
   /// Verify an attached PGP signature produced by [sign].
@@ -396,8 +415,13 @@ class PgpService {
     required String signerPublicKeyArmored,
   }) async {
     try {
-      return await OpenPGP.verify(signatureArmor, data, signerPublicKeyArmored);
-    } catch (_) {
+      return await _serial(
+        () => OpenPGP.verify(signatureArmor, data, signerPublicKeyArmored),
+      );
+    } catch (e) {
+      // TEMP DIAGNOSTIC: surface go-crypto's rejection reason (normally
+      // swallowed) to pinpoint the intermittent PQC verify failure.
+      debugPrint('PgpService.verify rejected: $e');
       return false;
     }
   }

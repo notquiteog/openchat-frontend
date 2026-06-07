@@ -29,6 +29,12 @@ class CallProvider extends ChangeNotifier {
   bool? _activeCallNotificationMuted;
   bool _disposed = false;
 
+  static final bool _isDesktopPlatform =
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.linux ||
+          defaultTargetPlatform == TargetPlatform.macOS ||
+          defaultTargetPlatform == TargetPlatform.windows);
+
   /// Plays/stops the ringing/connecting tones to match the current call.
   void _syncAudio() {
     if (_incomingCall != null) {
@@ -56,6 +62,12 @@ class CallProvider extends ChangeNotifier {
   }
 
   void _syncActiveCallNotification() {
+    // Desktop shows the call in its own window, so an OS notification for an
+    // active call is redundant. It's also harmful on Linux: the
+    // flutter_local_notifications + window_manager.isFocused() calls run on the
+    // GTK platform thread and stall the whole UI on every answer and every mute
+    // toggle (the "freeze then recover" symptom). Skip it entirely off mobile.
+    if (_isDesktopPlatform) return;
     final s = session;
     if (s == null ||
         s.state == CallState.ended ||

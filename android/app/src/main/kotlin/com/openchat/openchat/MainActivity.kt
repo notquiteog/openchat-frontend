@@ -90,6 +90,30 @@ class MainActivity : FlutterFragmentActivity() {
                     clearAudioOutput()
                     result.success(null)
                 }
+                "startMediaProjection" -> {
+                    // Android 14+ requires a running mediaProjection foreground
+                    // service before getDisplayMedia() / MediaProjection.start().
+                    val intent = Intent(this, MediaProjectionService::class.java).apply {
+                        action = MediaProjectionService.ACTION_START
+                    }
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(intent)
+                        } else {
+                            startService(intent)
+                        }
+                        result.success(true)
+                    } catch (_: Exception) {
+                        result.success(false)
+                    }
+                }
+                "stopMediaProjection" -> {
+                    val intent = Intent(this, MediaProjectionService::class.java).apply {
+                        action = MediaProjectionService.ACTION_STOP
+                    }
+                    stopService(intent)
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         }

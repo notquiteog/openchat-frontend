@@ -785,14 +785,43 @@ class CallService {
   Future<void> startScreenShare() async {
     if (_isScreenSharing || !_supportsScreenShare) return;
 
-    final screenStream = await navigator.mediaDevices.getDisplayMedia(<String, dynamic>{
-      'video': true,
-      'audio': false,
-    });
+    final isAndroid =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+    if (isAndroid) {
+      // Android 14+ hard-crashes (SecurityException) if MediaProjection.start()
+      // runs without a foreground service of type mediaProjection already
+      // active. flutter_webrtc 1.4.1 doesn't manage that service, so we do it:
+      //   1. obtain the screen-capture consent token up front
+      //      (getDisplayMedia reuses it, so this avoids a second prompt),
+      //   2. start the mediaProjection foreground service,
+      //   3. give it a moment to reach the foreground, then
+      //   4. getDisplayMedia() finds the running service and the saved token.
+      final granted = await Helper.requestCapturePermission();
+      if (!granted) {
+        throw Exception('Screen capture permission was denied');
+      }
+      final started = await _platformControls.startMediaProjection();
+      if (!started) {
+        throw Exception('Could not start the screen-sharing service');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    }
+
+    final MediaStream screenStream;
+    try {
+      screenStream = await navigator.mediaDevices.getDisplayMedia(<String, dynamic>{
+        'video': true,
+        'audio': false,
+      });
+    } catch (_) {
+      if (isAndroid) unawaited(_platformControls.stopMediaProjection());
+      rethrow;
+    }
 
     final screenTrack = screenStream.getVideoTracks().firstOrNull;
     if (screenTrack == null) {
       await screenStream.dispose();
+      if (isAndroid) unawaited(_platformControls.stopMediaProjection());
       return;
     }
 
@@ -846,6 +875,8 @@ class CallService {
         await stream.dispose();
       } catch (_) {}
     }
+
+    unawaited(_platformControls.stopMediaProjection());
 
     _localRenderer.srcObject = _localStream;
     _sessionController.add(_session);
@@ -1019,13 +1050,14 @@ class CallService {
       },
       'video': isVideo
           ? {
-              // facingMode is a mobile concept; specifying it as a mandatory
-              // constraint on desktop causes OverconstrainedError. Use ideal
-              // so it's a preference, not a requirement.
+              // facingMode selects the front/back camera and only applies on
+              // mobile. It MUST be a plain string: the flutter_webrtc Android/iOS
+              // plugins read it via ConstraintsMap.getString(), so the web-style
+              // {'ideal': ...} object throws ClassCastException (HashMap cannot be
+              // cast to String) and hard-crashes the app on a video call. Desktop
+              // ignores facingMode, so we omit it there entirely.
               if (_isMobilePlatform)
-                'facingMode': {
-                  'ideal': _usingFrontCamera ? 'user' : 'environment',
-                },
+                'facingMode': _usingFrontCamera ? 'user' : 'environment',
               'width': {'ideal': 1280},
               'height': {'ideal': 720},
               'frameRate': {'ideal': 30},
@@ -1084,11 +1116,12 @@ class CallService {
     _pendingRemoteCandidates.clear();
     _usingFrontCamera = true;
     _isScreenSharing = false;
+    unawaited(_platformControls.stopMediaProjection());
     unawaited(_platformControls.clearAudioOutput());
 
     _sessionController.add(null);
 
-    // Dispose peers and streams after the UI has a frame to rebuild.
+    // Tear down peers and the local capture after the UI has a frame to rebuild.
     final peersSnapshot = Map.of(_peers);
     _peers.clear();
     // Detach callbacks synchronously BEFORE closing. The async native teardown
@@ -1101,6 +1134,13 @@ class CallService {
       peer.pc.onConnectionState = null;
       peer.pc.onIceConnectionState = null;
     }
+    final localStream = _localStream;
+    final screenStream = _screenStream;
+    _localStream = null;
+    _screenStream = null;
+    // Close the peer connections FIRST, then stop and dispose the local
+    // capture — the standard teardown order (don't dispose tracks still
+    // attached to an open sender).
     unawaited(Future.microtask(() async {
       for (final peer in peersSnapshot.values) {
         try {
@@ -1110,24 +1150,23 @@ class CallService {
           await peer.renderer.dispose();
         } catch (_) {}
       }
+      await _stopLocalStream(localStream);
+      await _stopLocalStream(screenStream);
     }));
-
-    _stopLocalStream(_localStream);
-    _localStream = null;
-    _stopLocalStream(_screenStream);
-    _screenStream = null;
 
     _isCleaningUp = false;
   }
 
-  void _stopLocalStream(MediaStream? stream) {
+  Future<void> _stopLocalStream(MediaStream? stream) async {
     if (stream == null) return;
     for (final track in stream.getTracks()) {
       try {
-        track.stop();
+        await track.stop();
       } catch (_) {}
     }
-    unawaited(stream.dispose());
+    try {
+      await stream.dispose();
+    } catch (_) {}
   }
 
   void dispose() {

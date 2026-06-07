@@ -43,4 +43,25 @@ class CallPlatformControls {
       await _channel.invokeMethod<void>('clearAudioOutput');
     } catch (_) {}
   }
+
+  /// Starts the Android `mediaProjection` foreground service. Required on
+  /// Android 14+ before getDisplayMedia()/MediaProjection.start(), which
+  /// otherwise throws SecurityException and crashes the app. No-op off Android.
+  Future<bool> startMediaProjection() async {
+    if (kIsWeb || !Platform.isAndroid) return false;
+    try {
+      final started = await _channel.invokeMethod<bool>('startMediaProjection');
+      return started ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Stops the Android `mediaProjection` foreground service. No-op off Android.
+  Future<void> stopMediaProjection() async {
+    if (kIsWeb || !Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod<void>('stopMediaProjection');
+    } catch (_) {}
+  }
 }

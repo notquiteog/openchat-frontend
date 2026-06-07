@@ -99,6 +99,10 @@ class _PreparedEncryptedPayload {
 
 class ChatProvider extends ChangeNotifier {
   final ApiService _api;
+  bool _disposed = false;
+  // Sealed-sender messages whose signature verification transiently fails
+  // (openpgp fork PQC-verify bug) are re-verified a few times: msgId -> attempts.
+  final Map<String, int> _verifyRetryCounts = {};
   final SecureStorageService _storage;
   final WebSocketService _ws;
   final SettingsProvider _settings;
@@ -2182,7 +2186,10 @@ class ChatProvider extends ChangeNotifier {
     Conversation? conversation,
   ) async {
     final proof = Message.senderProofFromRaw(raw);
-    if (proof == null) return null;
+    if (proof == null) {
+      debugPrint('verifySender: NO PROOF in payload conv=$convID');
+      return null;
+    }
     var conv = conversation ?? _conversations[convID];
     var members = conv?.members ?? const <ConversationMember>[];
     if (members.isEmpty) {
@@ -2191,7 +2198,8 @@ class ChatProvider extends ChangeNotifier {
         if (conv != null) {
           _conversations[convID] = conv.copyWith(members: members);
         }
-      } catch (_) {
+      } catch (e) {
+        debugPrint('verifySender: members fetch FAILED conv=$convID: $e');
         return null;
       }
     }
@@ -2203,9 +2211,16 @@ class ChatProvider extends ChangeNotifier {
       }
     }
     final user = sender?.user;
-    if (user == null) return null;
+    if (user == null) {
+      debugPrint('verifySender: sender ${proof.senderId} NOT in members '
+          '(or member has no user) conv=$convID members=${members.length} '
+          'matchedMember=${sender != null}');
+      return null;
+    }
     if (user.keyFingerprint.toUpperCase() !=
         proof.keyFingerprint.toUpperCase()) {
+      debugPrint('verifySender: FINGERPRINT MISMATCH sender=${proof.senderId} '
+          'record=${user.keyFingerprint} signed=${proof.keyFingerprint}');
       return null;
     }
     // v2 messages carry a createdAt timestamp in the signed data.  v1 messages
@@ -2221,7 +2236,40 @@ class ChatProvider extends ChangeNotifier {
       signatureArmor: proof.signature,
       signerPublicKeyArmored: user.publicKey,
     );
+    if (!ok) {
+      debugPrint('verifySender: verify false for sender ${proof.senderId} '
+          '(transient openpgp PQC-verify; will self-heal)');
+    }
     return ok ? proof.senderId : null;
+  }
+
+  /// Re-runs sender verification on already-decrypted plaintext after a short,
+  /// growing delay (bounded). The openpgp fork's PQC signature verification
+  /// intermittently returns false for valid signatures and succeeds on a later
+  /// attempt — the same reason manually reopening the chat fixes it. This
+  /// re-verifies only (never re-decrypts), so it is safe for MLS one-time keys.
+  void _scheduleVerifyRetry(Message msg, String raw, Conversation? conv) {
+    final attempts = _verifyRetryCounts[msg.id] ?? 0;
+    if (attempts >= 5) {
+      _verifyRetryCounts.remove(msg.id);
+      return;
+    }
+    _verifyRetryCounts[msg.id] = attempts + 1;
+    Future.delayed(Duration(milliseconds: 500 * (attempts + 1)), () async {
+      if (_disposed) return;
+      final verifiedSenderId =
+          await _verifiedPgpSenderId(raw, msg.conversationId, conv);
+      if (verifiedSenderId == null) {
+        _scheduleVerifyRetry(msg, raw, conv);
+        return;
+      }
+      _verifyRetryCounts.remove(msg.id);
+      msg.setDecryptedContent(raw, verifiedSenderId: verifiedSenderId);
+      _applyArtifactState(msg);
+      _hydrateMessageSender(msg);
+      _indexMessage(msg);
+      if (!_disposed) notifyListeners();
+    });
   }
 
   Future<bool> _sendEncryptedPayload({
@@ -3438,6 +3486,10 @@ class ChatProvider extends ChangeNotifier {
           conv,
         );
         if (msg.sealedSender && verifiedSenderId == null) {
+          // Transient PQC-verify failure in the openpgp fork: re-verify the
+          // already-decrypted plaintext shortly so the message self-heals
+          // instead of staying "Unable to decrypt" until a manual reopen.
+          _scheduleVerifyRetry(msg, raw, conv);
           msg.markDecryptionFailed();
           return;
         }
@@ -3453,6 +3505,8 @@ class ChatProvider extends ChangeNotifier {
         _hydrateMessageSender(msg);
         _indexMessage(msg);
       } else {
+        debugPrint('ChatProvider: decrypt FAILED (MLS returned empty — sender '
+            'ratchet/epoch mismatch?) msg=${msg.id} conv=${msg.conversationId}');
         msg.markDecryptionFailed();
       }
       return;
@@ -3470,6 +3524,10 @@ class ChatProvider extends ChangeNotifier {
           conv,
         );
         if (msg.sealedSender && verifiedSenderId == null) {
+          // Transient PQC-verify failure in the openpgp fork: re-verify the
+          // already-decrypted plaintext shortly so the message self-heals
+          // instead of staying "Unable to decrypt" until a manual reopen.
+          _scheduleVerifyRetry(msg, raw, conv);
           msg.markDecryptionFailed();
           return;
         }
@@ -3482,7 +3540,9 @@ class ChatProvider extends ChangeNotifier {
       // service state issue (e.g. library internal buffer race on concurrent
       // calls).  Don't permanently mark failed — the next loadMessages call
       // will retry with a fresh PgpService invocation.
-    } catch (_) {
+    } catch (e) {
+      debugPrint('ChatProvider: decrypt FAILED (PGP threw) msg=${msg.id} '
+          'conv=${msg.conversationId} sealed=${msg.sealedSender}: $e');
       msg.markDecryptionFailed();
     }
   }
@@ -3511,6 +3571,7 @@ class ChatProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _wsSub?.cancel();
     NotificationService.setLiveLocationHandlers(onCancel: null);
     unawaited(_stopAllLiveLocationShares());
