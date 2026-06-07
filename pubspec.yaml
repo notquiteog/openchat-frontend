@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.5.28+104
+version: 0.5.29+105
 publish_to: 'none'
 
 environment:
@@ -93,14 +93,14 @@ dependencies:
 
   # Local OS notifications (missed calls). No Windows/web implementation — usage
   # is guarded by platform in NotificationService; those fall back to in-app.
-  flutter_local_notifications: ^22.0.0-dev.3
+  flutter_local_notifications: 22.0.0
   timezone: ^0.11.0
 
   # Open Stripe checkout URLs in the system browser
   url_launcher: ^6.3.0
   html: ^0.15.6
   flutter_image_compress: ^2.4.0
-  package_info_plus: ^9.0.1
+  package_info_plus: 10.1.0
   window_manager: ^0.5.1
   tray_manager: ^0.5.2
   record: ^7.0.0
@@ -129,11 +129,35 @@ dev_dependencies:
   flutter_launcher_icons: ^0.14.1
 
 dependency_overrides:
-  flutter_secure_storage_linux: 3.0.1
   # livekit_client 2.8.0 hard-pins flutter_webrtc 1.4.0, but we keep 1.4.1
   # (a patch over 1.4.0 — Dart-API compatible). Force 1.4.1 app-wide so the P2P
   # mesh and the LiveKit SFU share a single flutter_webrtc native plugin.
   flutter_webrtc: 1.4.1
+  # Pinned to exact versions — keep in sync with the version table in the PR.
+  _fe_analyzer_shared: 101.0.0
+  analyzer: 13.1.0
+  cli_util: 0.5.1
+  dart_style: 3.1.9
+  dbus: 0.7.14
+  device_info_plus: 13.1.0
+  device_info_plus_platform_interface: 8.1.0
+  flutter_local_notifications_linux: 8.0.1
+  flutter_local_notifications_platform_interface: 12.0.0
+  flutter_local_notifications_web: 1.0.0
+  flutter_local_notifications_windows: 3.1.0
+  flutter_secure_storage_darwin: 0.4.0
+  flutter_secure_storage_linux: 3.0.1
+  flutter_secure_storage_windows: 4.2.2
+  geolocator_linux: 0.2.5
+  matcher: 0.12.20
+  meta: 1.18.3
+  package_info_plus_platform_interface: 4.1.0
+  test_api: 0.7.12
+  vector_math: 2.4.0
+  win32: 6.3.0
+  win32_registry: 3.0.3
+  image: 4.9.1
+  xml: 7.0.1
 
 # App / launcher icons. Regenerate after changing the logo with:
 #   dart run flutter_launcher_icons

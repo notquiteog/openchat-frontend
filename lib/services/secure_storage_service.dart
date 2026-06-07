@@ -16,6 +16,19 @@ class SecureStorageStatus {
   const SecureStorageStatus.unavailable(this.warning) : available = false;
 }
 
+/// Thrown when secure storage is temporarily unavailable (e.g. the Linux
+/// keyring is locked at launch) at the moment a key protecting an *existing*
+/// encrypted store is read. Callers must degrade for this session — NOT mint a
+/// replacement key, which would orphan the store — and may surface [message].
+class SecureStorageUnavailableException implements Exception {
+  final String message;
+
+  const SecureStorageUnavailableException(this.message);
+
+  @override
+  String toString() => 'SecureStorageUnavailableException: $message';
+}
+
 class MlsSignerStorage {
   final String signerBytes;
   final String publicKey;
@@ -164,11 +177,12 @@ class SecureStorageService {
     return _createRandomStorageKey(_keyLocalPrivateStateKey);
   }
 
-  Future<String> getOrCreateMessageCacheKey() async {
-    final existing = await _readOrNull(_keyMessageCacheKey);
-    if (existing != null && existing.isNotEmpty) return existing;
-    return _createRandomStorageKey(_keyMessageCacheKey);
-  }
+  /// Key for the at-rest decrypted-message cache. Uses [_getOrCreateProtectedKey]
+  /// so a locked keyring at launch cannot mint a fresh key that orphans the
+  /// cache DB — which would make every past MLS message show "Unable to decrypt"
+  /// after a restart.
+  Future<String> getOrCreateMessageCacheKey() =>
+      _getOrCreateProtectedKey(_keyMessageCacheKey);
 
   Future<Map<String, KeyTrustPin>> getKeyTrustPins() async {
     final raw = await _readOrNull(_keyTrustPins);
@@ -203,19 +217,18 @@ class SecureStorageService {
     );
   }
 
-  Future<String> getOrCreateMlsEngineKey(String userID) async {
-    final key = _scopedKey(_keyMlsEngineKeyPrefix, userID);
-    final existing = await _readOrNull(key);
-    if (existing != null && existing.isNotEmpty) return existing;
-    return _createRandomStorageKey(key);
-  }
+  /// SQLCipher key for the per-user MLS engine DB (group state + ratchet tree).
+  /// Protected: a locked keyring must not mint a new key, which would orphan the
+  /// engine DB and lose all group state (and thus all decryptable history).
+  Future<String> getOrCreateMlsEngineKey(String userID) =>
+      _getOrCreateProtectedKey(_scopedKey(_keyMlsEngineKeyPrefix, userID));
 
-  Future<String> getOrCreateMlsCredentialIdentity(String userID) async {
-    final key = _scopedKey(_keyMlsCredentialIdentityPrefix, userID);
-    final existing = await _readOrNull(key);
-    if (existing != null && existing.isNotEmpty) return existing;
-    return _createRandomStorageKey(key);
-  }
+  /// Stable MLS credential identity. Protected so a locked keyring can't mint a
+  /// new identity that would diverge from the one baked into existing groups.
+  Future<String> getOrCreateMlsCredentialIdentity(String userID) =>
+      _getOrCreateProtectedKey(
+        _scopedKey(_keyMlsCredentialIdentityPrefix, userID),
+      );
 
   Future<MlsSignerStorage?> getMlsSigner(String userID) async {
     final signer = await _readOrNull(
@@ -415,6 +428,30 @@ class SecureStorageService {
     final encoded = base64Encode(bytes);
     await _storage.write(key: key, value: encoded);
     return encoded;
+  }
+
+  /// Reads a key that protects an *existing* encrypted store, creating a fresh
+  /// random key ONLY when the key is genuinely absent (first run).
+  ///
+  /// Unlike [_readOrNull], a recoverable keyring failure (e.g. the Linux keyring
+  /// locked at launch) is NOT swallowed into `null`: it throws
+  /// [SecureStorageUnavailableException]. Returning null here would make this
+  /// method mint a brand-new key and overwrite the real one, orphaning the
+  /// encrypted store it protects (message cache, MLS engine DB) and destroying
+  /// data that is fully recoverable once the keyring unlocks. Failing loudly
+  /// lets the caller degrade for this session instead (and the store survives).
+  Future<String> _getOrCreateProtectedKey(String key) async {
+    String? existing;
+    try {
+      existing = await _storage.read(key: key);
+    } on PlatformException catch (error) {
+      if (isRecoverableReadFailure(error)) {
+        throw const SecureStorageUnavailableException(linuxKeyringWarning);
+      }
+      rethrow;
+    }
+    if (existing != null && existing.isNotEmpty) return existing;
+    return _createRandomStorageKey(key);
   }
 
   Future<bool> isLoggedIn() async {

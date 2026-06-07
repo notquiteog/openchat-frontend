@@ -33,6 +33,17 @@ class ApiException implements Exception {
   String toString() => 'ApiException($statusCode): $code - $message';
 }
 
+/// Thrown by [ApiService.postConversationMlsCommit] when the server rejects an
+/// MLS commit because the group epoch already advanced (HTTP 409
+/// MLS_EPOCH_CONFLICT) — i.e. a concurrent external-commit join won the race.
+/// Callers should discard their local fork, refetch the canonical group state,
+/// and rebuild their commit against it.
+class MlsEpochConflictException implements Exception {
+  const MlsEpochConflictException();
+  @override
+  String toString() => 'MlsEpochConflictException';
+}
+
 class AuthResponse {
   final String accessToken;
   final String refreshToken;
@@ -1431,11 +1442,20 @@ class ApiService {
     String commitPayload, {
     MlsBootstrap? nextState,
   }) async {
-    final resp = await _post('/api/v1/conversations/$convID/mls/commits', {
-      'commit_payload': commitPayload,
-      ...?nextState?.toCommitJson(),
-    });
-    return ConversationMlsCommit.fromJson(resp['data'] as Map<String, dynamic>);
+    try {
+      final resp = await _post('/api/v1/conversations/$convID/mls/commits', {
+        'commit_payload': commitPayload,
+        ...?nextState?.toCommitJson(),
+      });
+      return ConversationMlsCommit.fromJson(
+        resp['data'] as Map<String, dynamic>,
+      );
+    } on ApiException catch (e) {
+      if (e.statusCode == 409 && e.code == 'MLS_EPOCH_CONFLICT') {
+        throw const MlsEpochConflictException();
+      }
+      rethrow;
+    }
   }
 
   Future<Message> editMessage({

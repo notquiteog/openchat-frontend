@@ -145,43 +145,13 @@ class MlsService {
     final groupId = base64Decode(state.groupId);
     var active = await _isGroupActive(engine, groupId);
     if (!active) {
-      final join = await engine.joinGroupExternalCommitV2(
-        config: _config,
-        groupInfoBytes: base64Decode(state.groupInfo),
-        ratchetTreeBytes: Uint8List.fromList(base64Decode(state.ratchetTree)),
-        signerBytes: identity.signerBytes,
-        credentialIdentity: identity.credentialIdentity,
-        signerPublicKey: identity.publicKey,
-        aad: Uint8List.fromList(utf8.encode(conversation.id)),
-        skipLifetimeValidation: true,
+      active = await _joinViaExternalCommit(
+        api,
+        engine,
+        identity,
+        conversation,
+        groupId,
       );
-      final nextState = await _exportBootstrap(engine, join.groupId, identity);
-      await api.postConversationMlsCommit(
-        conversation.id,
-        base64Encode(join.commit),
-        nextState: nextState,
-      );
-      _processedCommitIds.add(_commitDedupeKey(conversation.id, join.commit));
-      active = true;
-
-      // Re-fetch state after posting our external commit.  When two users join
-      // simultaneously both receive the same group info (same epoch), post
-      // their external commits, and only the first one's commit is applied by
-      // the server before the epoch advances.  Refetching ensures we replay
-      // any commits posted by concurrent joiners and reach the current epoch.
-      try {
-        final refreshed = await api.getConversationMlsState(conversation.id);
-        final localEpochAfterJoin =
-            (await engine.groupEpoch(groupIdBytes: groupId)).toInt();
-        if (localEpochAfterJoin < refreshed.epoch) {
-          await _processCommits(
-            engine,
-            groupId,
-            refreshed.commits,
-            conversation.id,
-          );
-        }
-      } catch (_) {}
     }
     if (!active) {
       throw StateError('Could not join MLS group.');
@@ -196,6 +166,60 @@ class MlsService {
       await _processCommits(engine, groupId, state.commits, conversation.id);
     }
     return _JoinedGroup(engine: engine, identity: identity, groupId: groupId);
+  }
+
+  /// Joins [conversation]'s MLS group via an external commit, serialising
+  /// against concurrent joiners. When two members are added at the same time
+  /// they each build a commit against the same epoch; the server applies only
+  /// the first (epoch compare-and-swap) and rejects the rest with a 409
+  /// ([MlsEpochConflictException]). On rejection we discard our now-orphaned
+  /// local fork and rebuild against the winner's group info, so every joiner
+  /// ends up in the single canonical tree — instead of a private fork that can
+  /// decrypt nothing (the old "1 of 2 simultaneous joiners is broken" bug).
+  /// Returns true once our commit is accepted.
+  Future<bool> _joinViaExternalCommit(
+    ApiService api,
+    MlsEngine engine,
+    _MlsIdentity identity,
+    Conversation conversation,
+    List<int> groupId,
+  ) async {
+    const maxAttempts = 6;
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      // Rebuild against the freshest server state each time — it may have
+      // advanced while we waited behind another joiner.
+      final state = await api.getConversationMlsState(conversation.id);
+      if (await _isGroupActive(engine, groupId)) return true;
+      final join = await engine.joinGroupExternalCommitV2(
+        config: _config,
+        groupInfoBytes: base64Decode(state.groupInfo),
+        ratchetTreeBytes: Uint8List.fromList(base64Decode(state.ratchetTree)),
+        signerBytes: identity.signerBytes,
+        credentialIdentity: identity.credentialIdentity,
+        signerPublicKey: identity.publicKey,
+        aad: Uint8List.fromList(utf8.encode(conversation.id)),
+        skipLifetimeValidation: true,
+      );
+      final nextState = await _exportBootstrap(engine, join.groupId, identity);
+      try {
+        await api.postConversationMlsCommit(
+          conversation.id,
+          base64Encode(join.commit),
+          nextState: nextState,
+        );
+        _processedCommitIds.add(_commitDedupeKey(conversation.id, join.commit));
+        return true;
+      } on MlsEpochConflictException {
+        // Lost the race: another joiner advanced the epoch first. Discard our
+        // private fork so the next iteration rebuilds against the new canonical
+        // group info (which now includes the joiner that won).
+        try {
+          await engine.deleteGroup(groupIdBytes: join.groupId);
+        } catch (_) {}
+        await Future<void>.delayed(Duration(milliseconds: 150 * (attempt + 1)));
+      }
+    }
+    return false;
   }
 
   Future<void> _processCommits(

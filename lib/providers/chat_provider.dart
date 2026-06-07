@@ -2256,6 +2256,18 @@ class ChatProvider extends ChangeNotifier {
       }
       _verifyRetryCounts.remove(msg.id);
       msg.setDecryptedContent(raw, verifiedSenderId: verifiedSenderId);
+      // Backfill the now-verified sender id into the durable cache so a restart
+      // shows the message correctly attributed. (MLS plaintext was cached at
+      // decrypt time with a null sender; PGP can re-decrypt so it needs no cache.)
+      if (conv?.usesMls == true) {
+        await _cache.put(
+          msg.id,
+          msg.conversationId,
+          msg.encryptedPayload,
+          raw,
+          verifiedSenderId,
+        );
+      }
       _applyArtifactState(msg);
       _hydrateMessageSender(msg);
       _indexMessage(msg);
@@ -3476,6 +3488,19 @@ class ChatProvider extends ChangeNotifier {
           msg.conversationId,
           conv,
         );
+        // The MLS ratchet key for this message is consumed by the decrypt above
+        // and cannot be replayed after a restart. Persist the plaintext NOW,
+        // before the sender-verification gate — otherwise a message whose sender
+        // can't be verified yet (a transient PQC-verify failure) is shown on
+        // screen but never cached, and is permanently lost on the next launch.
+        // _scheduleVerifyRetry backfills the verified sender id into the cache.
+        await _cache.put(
+          msg.id,
+          msg.conversationId,
+          msg.encryptedPayload,
+          raw,
+          verifiedSenderId,
+        );
         if (msg.sealedSender && verifiedSenderId == null) {
           // Transient PQC-verify failure in the openpgp fork: re-verify the
           // already-decrypted plaintext shortly so the message self-heals
@@ -3485,13 +3510,6 @@ class ChatProvider extends ChangeNotifier {
           return;
         }
         msg.setDecryptedContent(raw, verifiedSenderId: verifiedSenderId);
-        await _cache.put(
-          msg.id,
-          msg.conversationId,
-          msg.encryptedPayload,
-          raw,
-          verifiedSenderId,
-        );
         _applyArtifactState(msg);
         _hydrateMessageSender(msg);
         _indexMessage(msg);
