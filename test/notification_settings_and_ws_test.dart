@@ -149,7 +149,6 @@ void main() {
             'active_calls',
             'bg_messages',
             'bg_calls',
-            'live_location',
             'message_reminders',
           }),
         );

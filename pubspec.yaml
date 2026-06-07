@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.5.30+106
+version: 0.5.31+107
 publish_to: 'none'
 
 environment:
@@ -106,6 +106,15 @@ dependencies:
   record: ^7.0.0
   permission_handler: ^12.0.3
   app_links: ^7.1.1
+
+  # Outgoing share — share a message / media out to other apps via the OS sheet.
+  # 13.x targets win32 ^6.x, matching our pinned win32 6.3.0 (11/12.x target
+  # win32 5.5.3 and fail to compile against the 6.x OSVERSIONINFOEX API).
+  share_plus: ^13.0.0
+
+  # Inbound share — receive text shared from other apps (OS "Share to OpenChat").
+  # Android only for now; iOS additionally needs a Share Extension + App Group.
+  share_handler: ^0.0.25
   openmls:
     git:
       url: https://github.com/notquiteog/openmls_dart.git

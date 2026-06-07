@@ -9,6 +9,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../config/api_config.dart';
 import '../../models/conversation.dart';
 import '../../models/message.dart';
@@ -2942,6 +2943,18 @@ class _ChatScreenState extends State<ChatScreen> {
             icon: Icons.copy_rounded,
             label: 'Copy text',
           ),
+        if (msg.type == MessageType.text && hasCopyableText)
+          const MessageActionSheetItem(
+            value: 'forward',
+            icon: Icons.forward_rounded,
+            label: 'Forward',
+          ),
+        if (hasCopyableText || canDownloadMessageAttachment(msg))
+          const MessageActionSheetItem(
+            value: 'share',
+            icon: Icons.share_rounded,
+            label: 'Share',
+          ),
         const MessageActionSheetItem(
           value: 'copy_link',
           icon: Icons.link_rounded,
@@ -3010,6 +3023,10 @@ class _ChatScreenState extends State<ChatScreen> {
         await _copyMessageText(msg);
       case 'copy_link':
         await _copyMessageLink(msg);
+      case 'forward':
+        await _forwardMessage(msg);
+      case 'share':
+        await _shareMessage(msg);
       case 'remind':
         await _remindAboutMessage(msg);
       case 'download':
@@ -3204,6 +3221,110 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       if (!mounted) return;
       messenger.showSnackBar(SnackBar(content: Text('Download failed: $e')));
+    }
+  }
+
+  Future<void> _forwardMessage(Message msg) async {
+    final text = msg.decryptedContent ?? '';
+    if (text.isEmpty) return;
+    final target = await _pickForwardTarget();
+    if (target == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final chat = context.read<ChatProvider>();
+    final sent = await chat.sendMessage(convID: target.id, plaintext: text);
+    if (!mounted) return;
+    messenger.showSnackBar(
+      SnackBar(content: Text(sent ? 'Forwarded' : 'Could not forward message')),
+    );
+  }
+
+  Future<Conversation?> _pickForwardTarget() async {
+    final chat = context.read<ChatProvider>();
+    final selfId = context.read<AuthProvider>().currentUser?.id ?? '';
+    final targets = chat.conversations
+        .where((c) => c.id != conv.id)
+        .toList(growable: false);
+    if (targets.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No other conversations to forward to')),
+      );
+      return null;
+    }
+    return showModalBottomSheet<Conversation>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      builder: (sheetCtx) {
+        final scheme = Theme.of(sheetCtx).colorScheme;
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 4, 20, 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Forward to',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: targets.length,
+                  itemBuilder: (_, i) {
+                    final c = targets[i];
+                    final label = c.displayName(selfId);
+                    return ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: scheme.primaryContainer,
+                        child: Text(
+                          label.isNotEmpty ? label[0].toUpperCase() : '#',
+                          style: TextStyle(color: scheme.onPrimaryContainer),
+                        ),
+                      ),
+                      title: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: () => Navigator.pop(sheetCtx, c),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _shareMessage(Message msg) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      if (canDownloadMessageAttachment(msg)) {
+        final file = await saveMessageAttachment(
+          message: msg,
+          attachmentService: AttachmentService(context.read<ApiService>()),
+        );
+        final caption = msg.decryptedContent ?? '';
+        await SharePlus.instance.share(
+          ShareParams(
+            files: [XFile(file.path)],
+            text: caption.isNotEmpty ? caption : null,
+          ),
+        );
+      } else {
+        final text = msg.decryptedContent ?? '';
+        if (text.isEmpty) return;
+        await SharePlus.instance.share(ShareParams(text: text));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text('Share failed: $e')));
     }
   }
 

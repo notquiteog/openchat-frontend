@@ -79,6 +79,7 @@ class SecureStorageService {
   static const _keyPgpPostTokenPrefix = 'pgp_post_token_v1';
   static const _keySealedScheduleControlsPrefix = 'sealed_schedule_controls_v1';
   static const _keySealedMessageControlsPrefix = 'sealed_message_controls_v1';
+  static const _keyScheduledPlaintextPrefix = 'scheduled_plaintext_v1';
   static const _keySelfStateLogSequence = 'self_state_log_sequence_v1';
   static const _keyStorageProbe = '_openchat_secure_storage_probe';
 
@@ -159,23 +160,20 @@ class SecureStorageService {
   Future<String?> getUserID() => _readOrNull(_keyUserID);
   Future<String?> getUsername() => _readOrNull(_keyUsername);
 
-  Future<String> getOrCreateSearchIndexKey() async {
-    final existing = await _readOrNull(_keySearchIndexKey);
-    if (existing != null && existing.isNotEmpty) return existing;
-    return _createRandomStorageKey(_keySearchIndexKey);
-  }
+  /// Key for the local full-text search index. Resilient: a locked keyring at
+  /// launch returns a throwaway session key rather than overwriting the real
+  /// one, so the index DB survives and recovers once the keyring unlocks (the
+  /// index just reads empty this session, then rebuilds).
+  Future<String> getOrCreateSearchIndexKey() =>
+      _getOrCreateResilientKey(_keySearchIndexKey);
 
-  Future<String> getOrCreateOutboxKey() async {
-    final existing = await _readOrNull(_keyOutboxKey);
-    if (existing != null && existing.isNotEmpty) return existing;
-    return _createRandomStorageKey(_keyOutboxKey);
-  }
+  /// Key for the offline outbox. Resilient — see [getOrCreateSearchIndexKey].
+  Future<String> getOrCreateOutboxKey() =>
+      _getOrCreateResilientKey(_keyOutboxKey);
 
-  Future<String> getOrCreateLocalPrivateStateKey() async {
-    final existing = await _readOrNull(_keyLocalPrivateStateKey);
-    if (existing != null && existing.isNotEmpty) return existing;
-    return _createRandomStorageKey(_keyLocalPrivateStateKey);
-  }
+  /// Key for local private state. Resilient — see [getOrCreateSearchIndexKey].
+  Future<String> getOrCreateLocalPrivateStateKey() =>
+      _getOrCreateResilientKey(_keyLocalPrivateStateKey);
 
   /// Key for the at-rest decrypted-message cache. Uses [_getOrCreateProtectedKey]
   /// so a locked keyring at launch cannot mint a fresh key that orphans the
@@ -346,6 +344,68 @@ class SecureStorageService {
     }
   }
 
+  // ---- Author-local scheduled-message plaintext ----
+  // The server-side scheduled payload is ciphertext the author cannot decrypt
+  // back (sealed sender / forward-secret MLS), so we keep a local copy of the
+  // composed plaintext, scoped per conversation, purely so the schedule list
+  // can show the intended message. Removed when the item is sent or canceled.
+
+  Future<Map<String, String>> getScheduledPlaintexts(
+    String conversationID,
+  ) async {
+    final raw = await _readOrNull(
+      _scopedKey(_keyScheduledPlaintextPrefix, conversationID),
+    );
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return {};
+      return decoded.map(
+        (key, value) => MapEntry(key.toString(), value.toString()),
+      )..removeWhere((key, value) => key.isEmpty || value.isEmpty);
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<String?> getScheduledPlaintext(
+    String conversationID,
+    String scheduledID,
+  ) async {
+    final map = await getScheduledPlaintexts(conversationID);
+    return map[scheduledID];
+  }
+
+  Future<void> saveScheduledPlaintext(
+    String conversationID,
+    String scheduledID,
+    String plaintext,
+  ) async {
+    if (conversationID.isEmpty || scheduledID.isEmpty || plaintext.isEmpty) {
+      return;
+    }
+    final map = await getScheduledPlaintexts(conversationID);
+    map[scheduledID] = plaintext;
+    await _storage.write(
+      key: _scopedKey(_keyScheduledPlaintextPrefix, conversationID),
+      value: jsonEncode(map),
+    );
+  }
+
+  Future<void> deleteScheduledPlaintext(
+    String conversationID,
+    String scheduledID,
+  ) async {
+    final map = await getScheduledPlaintexts(conversationID);
+    map.remove(scheduledID);
+    final key = _scopedKey(_keyScheduledPlaintextPrefix, conversationID);
+    if (map.isEmpty) {
+      await _storage.delete(key: key);
+    } else {
+      await _storage.write(key: key, value: jsonEncode(map));
+    }
+  }
+
   Future<Map<String, String>> getSealedMessageControlTokens(
     String conversationID,
   ) async {
@@ -452,6 +512,29 @@ class SecureStorageService {
     }
     if (existing != null && existing.isNotEmpty) return existing;
     return _createRandomStorageKey(key);
+  }
+
+  /// Like [_getOrCreateProtectedKey] but for lower-stakes derived stores (search
+  /// index, offline outbox, local private state). On a recoverable keyring
+  /// failure it returns a throwaway session key that is NOT persisted, so the
+  /// real key + its encrypted store survive on disk and recover once the keyring
+  /// unlocks. The store reads empty for this session — but is never orphaned,
+  /// and callers need no special handling (this never throws on a locked
+  /// keyring, unlike the protected variant).
+  Future<String> _getOrCreateResilientKey(String key) async {
+    try {
+      final existing = await _storage.read(key: key);
+      if (existing != null && existing.isNotEmpty) return existing;
+      return await _createRandomStorageKey(key);
+    } on PlatformException catch (error) {
+      if (isRecoverableReadFailure(error)) {
+        final random = Random.secure();
+        return base64Encode(
+          List<int>.generate(32, (_) => random.nextInt(256)),
+        );
+      }
+      rethrow;
+    }
   }
 
   Future<bool> isLoggedIn() async {

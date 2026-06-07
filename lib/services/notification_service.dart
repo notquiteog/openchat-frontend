@@ -60,12 +60,6 @@ class NotificationService {
       importance: Importance.max,
     ),
     AndroidNotificationChannel(
-      'live_location',
-      'Live location sharing',
-      description: 'Ongoing live location sharing updates',
-      importance: Importance.low,
-    ),
-    AndroidNotificationChannel(
       'message_reminders',
       'Message reminders',
       description: 'Notifications for message reminders',
@@ -822,6 +816,12 @@ class NotificationService {
     required bool live,
   }) async {
     if (!_supported) return;
+    // On Android the live-location share runs as a foreground service whose
+    // ongoing notification (ChatProvider._liveLocationSettings) is the single,
+    // OS-mandated indicator. Posting our own here would duplicate it, so Android
+    // defers entirely to that one. iOS/macOS/desktop have no such service and
+    // still rely on the notification built below.
+    if (Platform.isAndroid) return;
     if (await _shouldSuppressFocusedNotification()) {
       await cancelLiveLocationNotification(
         messageId: messageId,
@@ -891,6 +891,7 @@ class NotificationService {
     required String conversationId,
   }) async {
     if (!_supported) return;
+    if (Platform.isAndroid) return; // never posted on Android (FGS owns it)
     await init();
     if (!_available) return;
     await _plugin.cancel(

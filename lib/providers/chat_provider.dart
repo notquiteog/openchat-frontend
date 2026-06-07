@@ -1802,7 +1802,7 @@ class ChatProvider extends ChangeNotifier {
 
     if (scheduledFor != null) {
       if (conv.isEncrypted) {
-        await _api.scheduleSealedMessage(
+        final scheduled = await _api.scheduleSealedMessage(
           convID: convID,
           encryptedPayload: prepared.encryptedPayload,
           postToken: prepared.postToken ?? '',
@@ -1811,6 +1811,14 @@ class ChatProvider extends ChangeNotifier {
           attachmentId: attachmentId,
           topicId: null,
           silent: silent,
+        );
+        // Author-local copy of the composed plaintext so the schedule list can
+        // show the intended message — the stored payload is ciphertext the
+        // author can't decrypt back (sealed sender / forward-secret MLS).
+        await _storage.saveScheduledPlaintext(
+          convID,
+          scheduled.id,
+          plaintextPayload,
         );
       } else {
         await _api.sendMessage(
@@ -2324,9 +2332,18 @@ class ChatProvider extends ChangeNotifier {
     if (!background) return true;
 
     if (permission != LocationPermission.always) {
-      final next = await Geolocator.requestPermission();
-      permission = next;
+      permission = await Geolocator.requestPermission();
       if (permission != LocationPermission.always) {
+        // Android 11+ won't grant background ("Allow all the time") from an
+        // in-app prompt — the user has to enable it in system settings. Route
+        // them there instead of failing with no way forward.
+        if (defaultTargetPlatform == TargetPlatform.android) {
+          await Geolocator.openAppSettings();
+          throw const ChatSendException(
+            'Set location access to "Allow all the time" in Settings to share '
+            'live location in the background.',
+          );
+        }
         throw const ChatSendException(
           'Enable Always location access for background live sharing.',
         );
@@ -2351,6 +2368,7 @@ class ChatProvider extends ChangeNotifier {
           foregroundNotificationConfig: ForegroundNotificationConfig(
             notificationTitle: 'OpenChat live location',
             notificationText: 'Sharing with $sharingWith',
+            notificationChannelName: 'Live location sharing',
             enableWakeLock: true,
             setOngoing: true,
             notificationIcon: const AndroidResource(

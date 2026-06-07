@@ -82,7 +82,7 @@ class _ScheduledMessagesSheetState extends State<ScheduledMessagesSheet> {
       );
       final privateKey = await storage.getPrivateKeyIfUnlocked() ?? '';
       final hydrated = await Future.wait(
-        items.map((item) => _hydratePreview(item, privateKey)),
+        items.map((item) => _hydratePreview(item, privateKey, storage)),
       );
       if (!mounted) return;
       setState(() {
@@ -101,13 +101,26 @@ class _ScheduledMessagesSheetState extends State<ScheduledMessagesSheet> {
   Future<ScheduledMessage> _hydratePreview(
     ScheduledMessage item,
     String privateKey,
+    SecureStorageService storage,
   ) async {
+    final mls = context.read<MlsService>();
+    final api = context.read<ApiService>();
+    // Author-local plaintext saved at schedule time — the only reliable preview
+    // for encrypted conversations, where the stored payload is ciphertext the
+    // author can't decrypt back (forward-secret MLS especially).
+    final local = await storage.getScheduledPlaintext(
+      item.conversationId,
+      item.id,
+    );
+    if (local != null && local.isNotEmpty) {
+      return item.copyWith(decryptedContent: local, decryptionFailed: false);
+    }
     if (!widget.conversation.isEncrypted) {
       return item.copyWith(decryptedContent: item.encryptedPayload);
     }
     if (widget.conversation.usesMls) {
-      final raw = await context.read<MlsService>().decryptPayload(
-        api: context.read<ApiService>(),
+      final raw = await mls.decryptPayload(
+        api: api,
         conversation: widget.conversation,
         encryptedPayload: item.encryptedPayload,
       );
@@ -152,12 +165,14 @@ class _ScheduledMessagesSheetState extends State<ScheduledMessagesSheet> {
     if (confirmed != true || !mounted) return;
 
     setState(() => _cancelingIds.add(item.id));
+    final storage = context.read<SecureStorageService>();
     try {
       await context.read<ApiService>().cancelScheduledMessage(
         widget.conversation.id,
         item.id,
         channel: widget.channel,
       );
+      await storage.deleteScheduledPlaintext(widget.conversation.id, item.id);
       if (!mounted) return;
       setState(() {
         _messages = _messages.where((msg) => msg.id != item.id).toList();
@@ -288,12 +303,14 @@ class _ScheduledMessagesSheetState extends State<ScheduledMessagesSheet> {
 
   Future<void> _sendNow(ScheduledMessage item) async {
     setState(() => _sendingIds.add(item.id));
+    final storage = context.read<SecureStorageService>();
     try {
       await context.read<ApiService>().sendScheduledMessageNow(
         widget.conversation.id,
         item.id,
         channel: widget.channel,
       );
+      await storage.deleteScheduledPlaintext(widget.conversation.id, item.id);
       if (!mounted) return;
       setState(() {
         _messages = _messages.where((msg) => msg.id != item.id).toList();

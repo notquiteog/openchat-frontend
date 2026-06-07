@@ -1,3 +1,5 @@
+import 'invite_links.dart';
+
 final _linkPreviewUrlPattern = RegExp(
   r'(?:(?:https?):\/\/|www\.)[^\s<>()]+',
   caseSensitive: false,
@@ -52,3 +54,49 @@ String? _normalizeLinkMatch(String raw) {
 
 String _trimTrailingPunctuation(String raw) =>
     raw.replaceAll(RegExp(r'[.,!?;:]+$'), '');
+
+// ── OpenChat invite links ──────────────────────────────────────────────────
+// openchat://invite/<token> deep links are not http(s), so the matcher above
+// ignores them. These detect them separately so chat bubbles can render a
+// first-party invite preview + a tappable link.
+
+final _invitePattern = RegExp(
+  r'openchat:\/\/invite\/[^\s<>()]+',
+  caseSensitive: false,
+);
+
+class InviteTextMatch {
+  final int start;
+  final int end;
+  final String token;
+
+  const InviteTextMatch({
+    required this.start,
+    required this.end,
+    required this.token,
+  });
+}
+
+String? firstInviteToken(String text) {
+  final matches = inviteTextMatches(text);
+  return matches.isEmpty ? null : matches.first.token;
+}
+
+List<InviteTextMatch> inviteTextMatches(String text) {
+  final matches = <InviteTextMatch>[];
+  for (final match in _invitePattern.allMatches(text)) {
+    final raw = _trimTrailingPunctuation(match.group(0) ?? '');
+    final uri = Uri.tryParse(raw);
+    if (uri == null) continue;
+    final token = inviteTokenFromUri(uri);
+    if (token == null) continue;
+    matches.add(
+      InviteTextMatch(
+        start: match.start,
+        end: match.start + raw.length,
+        token: token,
+      ),
+    );
+  }
+  return matches;
+}

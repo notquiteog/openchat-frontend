@@ -14,11 +14,14 @@ import 'package:timeago/timeago.dart' as timeago;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import '../config/api_config.dart';
+import '../models/conversation.dart';
+import '../models/conversation_invite.dart';
 import '../models/link_preview.dart';
 import '../models/message.dart';
 import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
 import '../providers/settings_provider.dart';
+import '../screens/invites/invite_preview_screen.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
 import '../services/link_preview_service.dart';
@@ -657,6 +660,9 @@ class _TextBubble extends StatelessWidget {
     final previewUrl = linkPreviewsEnabled
         ? embeddedPreview?.url ?? firstLinkPreviewUrl(message.content!.text)
         : null;
+    // OpenChat invite links resolve via our own API (no third-party fetch), so
+    // they preview regardless of the link-preview setting.
+    final inviteToken = firstInviteToken(message.content!.text);
 
     return _BubbleShell(
       color: bubbleColor,
@@ -689,7 +695,14 @@ class _TextBubble extends StatelessWidget {
             ),
             style: TextStyle(color: textColor, fontSize: 15, height: 1.25),
           ),
-          if (previewUrl != null) ...[
+          if (inviteToken != null) ...[
+            const SizedBox(height: 8),
+            _InvitePreviewCard(
+              token: inviteToken,
+              isMe: isMe,
+              textColor: textColor,
+            ),
+          ] else if (previewUrl != null) ...[
             const SizedBox(height: 8),
             _LinkPreviewCard(
               url: previewUrl,
@@ -1322,41 +1335,247 @@ List<InlineSpan> _formatMessageText(
   return spans;
 }
 
+void _openInvite(BuildContext context, String token) {
+  Navigator.of(context).push(
+    MaterialPageRoute<void>(builder: (_) => InvitePreviewScreen(token: token)),
+  );
+}
+
+/// Inline preview for an `openchat://invite/<token>` link: resolves the invite
+/// via the first-party API (no third-party fetch, so it's safe regardless of
+/// the link-preview privacy setting) and shows the group/channel name +
+/// description. Tapping opens the full join screen.
+class _InvitePreviewCard extends StatefulWidget {
+  final String token;
+  final bool isMe;
+  final Color textColor;
+
+  const _InvitePreviewCard({
+    required this.token,
+    required this.isMe,
+    required this.textColor,
+  });
+
+  @override
+  State<_InvitePreviewCard> createState() => _InvitePreviewCardState();
+}
+
+class _InvitePreviewCardState extends State<_InvitePreviewCard> {
+  Future<InvitePreview?>? _future;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _future ??= _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _InvitePreviewCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.token != widget.token) _future = _load();
+  }
+
+  Future<InvitePreview?> _load() async {
+    try {
+      return await context.read<ApiService>().getInvite(widget.token);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<InvitePreview?>(
+      future: _future,
+      builder: (context, snapshot) {
+        final preview = snapshot.data;
+        if (preview == null) return const SizedBox.shrink();
+        return _InvitePreviewBody(
+          conversation: preview.conversation,
+          isMe: widget.isMe,
+          textColor: widget.textColor,
+          onTap: () => _openInvite(context, widget.token),
+        );
+      },
+    );
+  }
+}
+
+class _InvitePreviewBody extends StatelessWidget {
+  final Conversation conversation;
+  final bool isMe;
+  final Color textColor;
+  final VoidCallback onTap;
+
+  const _InvitePreviewBody({
+    required this.conversation,
+    required this.isMe,
+    required this.textColor,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final accent = isMe ? Colors.white : scheme.primary;
+    final borderColor = accent.withValues(alpha: isMe ? 0.38 : 0.24);
+    final fill = isMe
+        ? Colors.white.withValues(alpha: 0.10)
+        : scheme.surface.withValues(alpha: 0.34);
+    final name = (conversation.name?.trim().isNotEmpty ?? false)
+        ? conversation.name!.trim()
+        : (conversation.isChannel ? 'Channel' : 'Group');
+    final kind = conversation.isChannel ? 'Channel invite' : 'Group invite';
+    final description = conversation.description?.trim() ?? '';
+    final avatarUrl = conversation.avatarUrl;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        constraints: const BoxConstraints(minWidth: 200, maxWidth: 280),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: fill,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: borderColor),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: SizedBox(
+                width: 40,
+                height: 40,
+                child: (avatarUrl != null && avatarUrl.isNotEmpty)
+                    ? CachedNetworkImage(
+                        imageUrl: ApiConfig.resolveMedia(avatarUrl),
+                        fit: BoxFit.cover,
+                        errorWidget: (_, _, _) =>
+                            _InviteAvatarFallback(accent: accent, name: name),
+                      )
+                    : _InviteAvatarFallback(accent: accent, name: name),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    kind,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: textColor.withValues(alpha: 0.72),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: textColor,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                        height: 1.18,
+                      ),
+                    ),
+                  ),
+                  if (description.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text(
+                        description,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: textColor.withValues(alpha: 0.72),
+                          fontSize: 12,
+                          height: 1.18,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _InviteAvatarFallback extends StatelessWidget {
+  final Color accent;
+  final String name;
+
+  const _InviteAvatarFallback({required this.accent, required this.name});
+
+  @override
+  Widget build(BuildContext context) {
+    final initial = name.isNotEmpty ? name.substring(0, 1).toUpperCase() : '#';
+    return Container(
+      color: accent.withValues(alpha: 0.18),
+      alignment: Alignment.center,
+      child: Text(
+        initial,
+        style: TextStyle(
+          color: accent,
+          fontWeight: FontWeight.w800,
+          fontSize: 18,
+        ),
+      ),
+    );
+  }
+}
+
 List<InlineSpan> _formatPlainTextDecorations(
   BuildContext context,
   String text,
   Color mentionColor,
   bool strictPrivacyMode,
 ) {
-  final links = linkTextMatches(text);
-  if (links.isEmpty) return _formatPlainTextMentions(text, mentionColor);
+  final decos = <({int start, int end, VoidCallback onTap})>[
+    for (final l in linkTextMatches(text))
+      (
+        start: l.start,
+        end: l.end,
+        onTap: () => _openMessageLink(context, l.url, strictPrivacyMode),
+      ),
+    for (final i in inviteTextMatches(text))
+      (start: i.start, end: i.end, onTap: () => _openInvite(context, i.token)),
+  ]..sort((a, b) => a.start.compareTo(b.start));
+  if (decos.isEmpty) return _formatPlainTextMentions(text, mentionColor);
   final spans = <InlineSpan>[];
   var cursor = 0;
-  for (final link in links) {
-    if (link.start > cursor) {
+  for (final deco in decos) {
+    if (deco.start < cursor) continue; // skip overlaps (shouldn't happen)
+    if (deco.start > cursor) {
       spans.addAll(
         _formatPlainTextMentions(
-          text.substring(cursor, link.start),
+          text.substring(cursor, deco.start),
           mentionColor,
         ),
       );
     }
-    final label = text.substring(link.start, link.end);
     spans.add(
       TextSpan(
-        text: label,
+        text: text.substring(deco.start, deco.end),
         style: TextStyle(
           color: mentionColor,
           fontWeight: FontWeight.w700,
           decoration: TextDecoration.underline,
           decorationColor: mentionColor.withValues(alpha: 0.75),
         ),
-        recognizer: TapGestureRecognizer()
-          ..onTap = () =>
-              _openMessageLink(context, link.url, strictPrivacyMode),
+        recognizer: TapGestureRecognizer()..onTap = deco.onTap,
       ),
     );
-    cursor = link.end;
+    cursor = deco.end;
   }
   if (cursor < text.length) {
     spans.addAll(

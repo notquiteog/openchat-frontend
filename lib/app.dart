@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:provider/provider.dart';
+import 'package:share_handler/share_handler.dart';
+import 'models/conversation.dart';
 import 'providers/auth_provider.dart';
 import 'providers/call_provider.dart';
 import 'providers/chat_provider.dart';
@@ -482,11 +484,15 @@ class _AppRootState extends State<_AppRoot> {
   bool _handlingContactLink = false;
   String? _pendingPushConversationId;
   bool _handlingPushConversation = false;
+  StreamSubscription<SharedMedia>? _shareSub;
+  String? _pendingShareText;
+  bool _handlingShare = false;
 
   @override
   void initState() {
     super.initState();
     _initInviteLinks();
+    _initShareIntake();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final auth = context.read<AuthProvider>();
       final settings = context.read<SettingsProvider>();
@@ -547,6 +553,126 @@ class _AppRootState extends State<_AppRoot> {
     } catch (_) {
       // Deep links are best-effort on unsupported test/desktop runners.
     }
+  }
+
+  // ── Inbound share (OS "Share to OpenChat") ──────────────────────────────────
+  // Android only for now, text/URL only. iOS additionally needs a Share
+  // Extension + App Group; shared files need the attachment pipeline — both
+  // tracked as follow-ups.
+  void _initShareIntake() {
+    try {
+      final handler = ShareHandler.instance;
+      _shareSub = handler.sharedMediaStream.listen(
+        _handleSharedMedia,
+        onError: (_) {},
+      );
+      handler.getInitialSharedMedia().then((media) {
+        if (media == null) return;
+        _handleSharedMedia(media);
+        handler.resetInitialSharedMedia();
+      });
+    } catch (_) {
+      // Share intents are mobile-only; no-op on desktop/test runners.
+    }
+  }
+
+  void _handleSharedMedia(SharedMedia media) {
+    // v1: text/URL only. Attachments (media.attachments) need the upload
+    // pipeline, and iOS needs a Share Extension + App Group — both follow-ups.
+    final text = media.content?.trim() ?? '';
+    if (text.isEmpty) return;
+    _pendingShareText = text;
+    _drainPendingShare();
+  }
+
+  void _drainPendingShare() {
+    if (!mounted || _handlingShare) return;
+    final text = _pendingShareText;
+    if (text == null) return;
+    if (_appLocked) return;
+    if (context.read<AuthProvider>().state != AuthState.authenticated) return;
+    final navigator = OpenChatApp.navigatorKey.currentState;
+    if (navigator == null) return;
+
+    _pendingShareText = null;
+    _handlingShare = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        _handlingShare = false;
+        return;
+      }
+      try {
+        final target = await _pickShareTarget(navigator.context);
+        if (target != null && mounted) {
+          final messenger = ScaffoldMessenger.maybeOf(navigator.context);
+          final sent = await context.read<ChatProvider>().sendMessage(
+            convID: target.id,
+            plaintext: text,
+          );
+          messenger?.showSnackBar(
+            SnackBar(content: Text(sent ? 'Shared' : 'Could not share')),
+          );
+        }
+      } finally {
+        if (mounted) _handlingShare = false;
+      }
+    });
+  }
+
+  Future<Conversation?> _pickShareTarget(BuildContext sheetContext) {
+    final chat = context.read<ChatProvider>();
+    final selfId = context.read<AuthProvider>().currentUser?.id ?? '';
+    final targets = chat.conversations.toList(growable: false);
+    if (targets.isEmpty) return Future<Conversation?>.value(null);
+    return showModalBottomSheet<Conversation>(
+      context: sheetContext,
+      showDragHandle: true,
+      builder: (ctx) {
+        final scheme = Theme.of(ctx).colorScheme;
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 4, 20, 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Share to',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: targets.length,
+                  itemBuilder: (_, i) {
+                    final c = targets[i];
+                    final label = c.displayName(selfId);
+                    return ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: scheme.primaryContainer,
+                        child: Text(
+                          label.isNotEmpty ? label[0].toUpperCase() : '#',
+                          style: TextStyle(color: scheme.onPrimaryContainer),
+                        ),
+                      ),
+                      title: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: () => Navigator.pop(ctx, c),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   void _queueDeepLink(Uri uri) {
@@ -733,12 +859,14 @@ class _AppRootState extends State<_AppRoot> {
         _drainPendingInviteLink();
         _drainPendingContactLink();
         _drainPendingPushConversation();
+        _drainPendingShare();
       } else if (_appLocked) {
         _promptAppUnlock();
       } else {
         _drainPendingInviteLink();
         _drainPendingContactLink();
         _drainPendingPushConversation();
+        _drainPendingShare();
       }
     });
   }
@@ -754,6 +882,7 @@ class _AppRootState extends State<_AppRoot> {
         _drainPendingInviteLink();
         _drainPendingContactLink();
         _drainPendingPushConversation();
+        _drainPendingShare();
       }
     } catch (_) {
       // If biometrics fail (e.g. no enrolled biometrics), stay locked but
@@ -768,6 +897,7 @@ class _AppRootState extends State<_AppRoot> {
     _lifecycleListener?.dispose();
     _wsForegroundSub?.cancel();
     _inviteLinkSub?.cancel();
+    _shareSub?.cancel();
     _reminderTimer?.cancel();
     PushNotificationService.setForegroundIncomingCallHandler(null);
     PushNotificationService.setNotificationOpenedHandler(null);
