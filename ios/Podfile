@@ -31,10 +31,10 @@ target 'Runner' do
   use_frameworks!
   use_modular_headers!
 
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+
   share_handler_models_path = File.expand_path('../.symlinks/plugins/share_handler_ios/ios/Models', __FILE__)
   pod 'share_handler_ios_models', :path => share_handler_models_path if File.directory?(share_handler_models_path)
-
-  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
   target 'RunnerTests' do
     inherit! :search_paths
   end
