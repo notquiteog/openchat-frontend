@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config/api_config.dart';
+import '../services/proxy_service.dart';
 import '../services/secure_storage_service.dart';
 
 enum WsEventType {
@@ -31,6 +32,7 @@ enum WsEventType {
   groupCallJoin,
   groupCallLeave,
   groupCallState,
+  stageState,
   error,
   unknown,
 }
@@ -96,10 +98,16 @@ class WebSocketService extends ChangeNotifier {
     WebSocketChannel? channel;
     StreamSubscription<dynamic>? subscription;
     try {
-      channel = WebSocketChannel.connect(
-        Uri.parse(ApiConfig.wsUrl),
-        protocols: ['openchat.v1', 'openchat.jwt.$token'],
-      );
+      final wsUri = Uri.parse(ApiConfig.wsUrl);
+      final protocols = ['openchat.v1', 'openchat.jwt.$token'];
+      // Route the socket through the proxy when one is configured; otherwise use
+      // the default lazy connection.
+      channel =
+          await ProxyService.instance.connectWebSocket(
+            wsUri,
+            protocols: protocols,
+          ) ??
+          WebSocketChannel.connect(wsUri, protocols: protocols);
       _channel = channel;
       subscription = channel.stream.listen(
         (raw) => _onMessage(raw, channel!),
@@ -397,6 +405,7 @@ class WebSocketService extends ChangeNotifier {
     'group_call_join' => WsEventType.groupCallJoin,
     'group_call_leave' => WsEventType.groupCallLeave,
     'group_call_state' => WsEventType.groupCallState,
+    'stage_state' => WsEventType.stageState,
     'error' => WsEventType.error,
     _ => WsEventType.unknown,
   };

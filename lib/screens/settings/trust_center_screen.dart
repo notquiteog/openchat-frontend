@@ -17,12 +17,14 @@ import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/mls_service.dart';
 import '../../services/secure_storage_service.dart';
+import '../../services/security_service.dart';
 import '../../utils/account_security_duration.dart';
 import '../../utils/device_label.dart';
 import '../../utils/identity_qr.dart';
 import '../../utils/trust_center_summary.dart';
 import '../../widgets/glass.dart';
 import 'identity_qr_scanner_screen.dart';
+import 'smp_verify_screen.dart';
 import 'pgp_keys_screen.dart';
 
 class TrustCenterScreen extends StatefulWidget {
@@ -37,6 +39,8 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
   bool _biometricAvailable = false;
   bool _biometricEnabled = false;
   bool _appLockEnabled = false;
+  bool _forceTurn = false;
+  bool _screenSecurity = false;
   bool _loading = true;
   Map<String, dynamic> _security = const {};
   List<Map<String, dynamic>> _sessions = const [];
@@ -71,6 +75,8 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
         api.listSessions(),
       ]);
       final keyPins = await storage.getKeyTrustPins();
+      final forceTurn = await storage.getForceTurn();
+      final screenSecurity = await storage.getScreenSecurity();
       var keyEvents = <KeyTransparencyEvent>[];
       MlsSignerStorage? mlsSigner;
       if (user != null) {
@@ -86,6 +92,8 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
         _biometricAvailable = biometricAvailable;
         _biometricEnabled = results[0] as bool;
         _appLockEnabled = results[1] as bool;
+        _forceTurn = forceTurn;
+        _screenSecurity = screenSecurity;
         _security = results[2] as Map<String, dynamic>;
         _sessions = results[3] as List<Map<String, dynamic>>;
         _keyPins = keyPins;
@@ -147,6 +155,17 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
     if (!mounted) return;
     await context.read<SecureStorageService>().setBiometricEnabled(value);
     if (mounted) setState(() => _biometricEnabled = value);
+  }
+
+  Future<void> _setForceTurn(bool value) async {
+    await context.read<SecureStorageService>().setForceTurn(value);
+    if (mounted) setState(() => _forceTurn = value);
+  }
+
+  Future<void> _setScreenSecurity(bool value) async {
+    await context.read<SecureStorageService>().setScreenSecurity(value);
+    await SecurityService.instance.setGlobalSecure(value);
+    if (mounted) setState(() => _screenSecurity = value);
   }
 
   Future<void> _setAppLock(bool value) async {
@@ -644,6 +663,18 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                         builder: (_) => const IdentityQrScannerScreen(),
                       ),
                     ),
+                  ),
+                  const _TrustDivider(),
+                  _TrustRow(
+                    icon: Icons.vpn_key_outlined,
+                    title: 'Verify a contact (shared secret)',
+                    subtitle: 'Socialist Millionaire Protocol — in-band, no key swap',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute<void>(
+                        builder: (_) => const SmpVerifyScreen(),
+                      ),
+                    ),
                     isLast: true,
                   ),
                 ],
@@ -799,6 +830,23 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                     subtitle: 'Require biometrics when returning to OpenChat',
                     value: _appLockEnabled,
                     onChanged: _setAppLock,
+                  ),
+                  const _TrustDivider(),
+                  _TrustSwitchRow(
+                    icon: Icons.shield_moon_outlined,
+                    title: 'Always relay calls',
+                    subtitle: 'Hide your IP — route call media through TURN',
+                    value: _forceTurn,
+                    onChanged: _setForceTurn,
+                  ),
+                  const _TrustDivider(),
+                  _TrustSwitchRow(
+                    icon: Icons.screenshot_monitor_outlined,
+                    title: 'Block screenshots',
+                    subtitle:
+                        'Prevent screenshots & screen recording across the app',
+                    value: _screenSecurity,
+                    onChanged: _setScreenSecurity,
                   ),
                   if (_biometricAvailable) ...[
                     const _TrustDivider(),

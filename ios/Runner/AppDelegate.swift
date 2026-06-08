@@ -7,9 +7,16 @@ import UIKit
   private var callBackgroundTask: UIBackgroundTaskIdentifier = .invalid
   private var callForegroundChannel: FlutterMethodChannel?
   private var callControlsChannel: FlutterMethodChannel?
+  private var securityChannel: FlutterMethodChannel?
   private var selectedCallAudioRoute: CallAudioRoute = .speaker
   private var currentCallIsVideo = false
   private var microphoneMuted = false
+  // Hosts the app's layer inside a secure (DRM-style) canvas when screen
+  // security is on, which blanks screenshots, screen recordings, and the
+  // app-switcher snapshot. iOS has no hard screenshot block — this is the
+  // documented best-effort approach.
+  private let secureTextField = UITextField()
+  private var screenshotObserver: NSObjectProtocol?
 
   private enum CallAudioRoute: String, Equatable {
     case speaker
@@ -25,6 +32,7 @@ import UIKit
     let launched = super.application(application, didFinishLaunchingWithOptions: launchOptions)
     configureCallForegroundChannel()
     configureCallControlsChannel()
+    configureSecurityChannel()
     return launched
   }
 
@@ -279,6 +287,74 @@ import UIKit
         || outputs.contains(.bluetoothLE)
     case .wiredHeadset:
       return outputs.contains(.headphones)
+    }
+  }
+
+  // MARK: - Screen security (screenshot prevention + detection)
+
+  private func configureSecurityChannel() {
+    guard securityChannel == nil,
+          let registrar = registrar(forPlugin: "OpenChatSecurity") else {
+      return
+    }
+    let channel = FlutterMethodChannel(
+      name: "openchat/security",
+      binaryMessenger: registrar.messenger()
+    )
+    channel.setMethodCallHandler { [weak self] call, result in
+      switch call.method {
+      case "setScreenSecure":
+        let args = call.arguments as? [String: Any]
+        let secure = args?["secure"] as? Bool ?? false
+        self?.setScreenSecure(secure)
+        result(true)
+      case "startScreenshotDetection":
+        self?.startScreenshotDetection()
+        result(true)
+      case "stopScreenshotDetection":
+        self?.stopScreenshotDetection()
+        result(nil)
+      default:
+        result(Self.methodNotImplementedError(for: call.method))
+      }
+    }
+    securityChannel = channel
+  }
+
+  // Routes the app window's layer through a secure UITextField canvas. Toggling
+  // isSecureTextEntry enables/disables the protection without tearing the layer
+  // tree down. The layer wiring is installed once, on first enable.
+  private func setScreenSecure(_ secure: Bool) {
+    guard let window = window else { return }
+    if secureTextField.superview == nil {
+      secureTextField.isUserInteractionEnabled = false
+      secureTextField.translatesAutoresizingMaskIntoConstraints = false
+      window.addSubview(secureTextField)
+      NSLayoutConstraint.activate([
+        secureTextField.centerXAnchor.constraint(equalTo: window.centerXAnchor),
+        secureTextField.centerYAnchor.constraint(equalTo: window.centerYAnchor),
+      ])
+      window.layer.superlayer?.addSublayer(secureTextField.layer)
+      secureTextField.layer.sublayers?.first?.addSublayer(window.layer)
+    }
+    secureTextField.isSecureTextEntry = secure
+  }
+
+  private func startScreenshotDetection() {
+    guard screenshotObserver == nil else { return }
+    screenshotObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.userDidTakeScreenshotNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.securityChannel?.invokeMethod("screenshotTaken", arguments: nil)
+    }
+  }
+
+  private func stopScreenshotDetection() {
+    if let observer = screenshotObserver {
+      NotificationCenter.default.removeObserver(observer)
+      screenshotObserver = nil
     }
   }
 }

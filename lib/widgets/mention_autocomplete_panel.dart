@@ -5,22 +5,28 @@ import 'package:flutter/material.dart';
 
 import '../config/api_config.dart';
 import '../models/conversation.dart';
+import '../utils/mention_utils.dart';
 import 'glass.dart';
 
 class MentionAutocompletePanel extends StatelessWidget {
   final List<ConversationMember> members;
   final ValueChanged<ConversationMember> onSelected;
+  final List<SpecialMention> specialMentions;
+  final ValueChanged<SpecialMention>? onSpecialSelected;
 
   const MentionAutocompletePanel({
     super.key,
     required this.members,
     required this.onSelected,
+    this.specialMentions = const [],
+    this.onSpecialSelected,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (members.isEmpty) return const SizedBox.shrink();
-    final height = math.min(218.0, 10.0 + members.length * 52.0);
+    final total = specialMentions.length + members.length;
+    if (total == 0) return const SizedBox.shrink();
+    final height = math.min(218.0, 10.0 + total * 52.0);
 
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
@@ -45,14 +51,81 @@ class MentionAutocompletePanel extends StatelessWidget {
             child: ListView.separated(
               physics: const BouncingScrollPhysics(),
               padding: const EdgeInsets.symmetric(horizontal: 6),
-              itemCount: members.length,
+              itemCount: total,
               separatorBuilder: (_, _) => const SizedBox(height: 2),
-              itemBuilder: (context, index) => _MentionSuggestionTile(
-                member: members[index],
-                onTap: () => onSelected(members[index]),
-              ),
+              itemBuilder: (context, index) {
+                if (index < specialMentions.length) {
+                  final special = specialMentions[index];
+                  return _SpecialMentionTile(
+                    special: special,
+                    onTap: () => onSpecialSelected?.call(special),
+                  );
+                }
+                final member = members[index - specialMentions.length];
+                return _MentionSuggestionTile(
+                  member: member,
+                  onTap: () => onSelected(member),
+                );
+              },
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SpecialMentionTile extends StatelessWidget {
+  final SpecialMention special;
+  final VoidCallback onTap;
+
+  const _SpecialMentionTile({required this.special, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 48),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          color: scheme.primary.withValues(alpha: 0.10),
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 16,
+              backgroundColor: scheme.primary.withValues(alpha: 0.18),
+              child: Icon(Icons.campaign_rounded,
+                  size: 18, color: scheme.primary),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    special.label,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  Text(
+                    special.description,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: scheme.onSurface.withValues(alpha: 0.55),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

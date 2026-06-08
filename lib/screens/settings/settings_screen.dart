@@ -33,6 +33,7 @@ import '../stickers/sticker_pack_screen.dart';
 import 'device_pairing_screen.dart';
 import 'pgp_keys_screen.dart';
 import 'premium_screen.dart';
+import 'proxy_settings_screen.dart';
 import 'trust_center_screen.dart';
 import 'wallet_screen.dart';
 
@@ -1622,6 +1623,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ),
+                if (!kIsWeb) ...[
+                  _GlassDivider(),
+                  _GlassTile(
+                    icon: Icons.vpn_lock_outlined,
+                    title: 'Proxy & Tor',
+                    subtitle: 'Route traffic through HTTP, SOCKS5, or Tor',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const ProxySettingsScreen(),
+                      ),
+                    ),
+                  ),
+                ],
                 _GlassDivider(),
                 _GlassTile(
                   icon: keys.hasKey ? Icons.verified_user : Icons.warning_amber,
@@ -1884,6 +1899,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: () => _pickAccentColor(context, settings),
                 ),
                 _GlassDivider(),
+                _MessageFontSizeTile(settings: settings),
+                _GlassDivider(),
                 _GlassSwitchTile(
                   icon: Icons.campaign_outlined,
                   title: 'Channels in their own tab',
@@ -1906,6 +1923,56 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: 'Use more opaque surfaces throughout the app',
                   value: settings.reduceTransparency,
                   onChanged: settings.setReduceTransparency,
+                  isLast: true,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // ── Data & Storage (auto-download) ───────────────────────────────
+          const _SectionHeader('Auto-download media'),
+          GlassCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                _GlassSwitchTile(
+                  icon: Icons.wifi_rounded,
+                  title: 'On Wi-Fi',
+                  subtitle: 'Automatically download photos & videos on Wi-Fi',
+                  value: settings.autoDownloadWifi,
+                  onChanged: settings.setAutoDownloadWifi,
+                ),
+                _GlassDivider(),
+                _GlassSwitchTile(
+                  icon: Icons.signal_cellular_alt_rounded,
+                  title: 'On mobile data',
+                  subtitle: 'Roaming can\'t be detected separately',
+                  value: settings.autoDownloadMobile,
+                  onChanged: settings.setAutoDownloadMobile,
+                ),
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.straighten_rounded,
+                  title: 'Size limit',
+                  subtitle: settings.autoDownloadMaxMb == 0
+                      ? 'No limit'
+                      : 'Skip files over ${settings.autoDownloadMaxMb} MB',
+                  trailing: DropdownButton<int>(
+                    value: settings.autoDownloadMaxMb,
+                    underline: const SizedBox.shrink(),
+                    items: const [
+                      DropdownMenuItem(value: 0, child: Text('No limit')),
+                      DropdownMenuItem(value: 1, child: Text('1 MB')),
+                      DropdownMenuItem(value: 5, child: Text('5 MB')),
+                      DropdownMenuItem(value: 10, child: Text('10 MB')),
+                      DropdownMenuItem(value: 25, child: Text('25 MB')),
+                      DropdownMenuItem(value: 50, child: Text('50 MB')),
+                    ],
+                    onChanged: (v) {
+                      if (v != null) settings.setAutoDownloadMaxMb(v);
+                    },
+                  ),
                   isLast: true,
                 ),
               ],
@@ -2098,6 +2165,64 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Message text-size control with a live preview bubble (Batch 5.1).
+class _MessageFontSizeTile extends StatelessWidget {
+  final SettingsProvider settings;
+  const _MessageFontSizeTile({required this.settings});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final scale = settings.messageFontScale;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.text_fields_rounded, color: scheme.primary, size: 22),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'Message text size',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+              Text('${(scale * 100).round()}%'),
+            ],
+          ),
+          const SizedBox(height: 6),
+          // Live preview bubble.
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Container(
+              margin: const EdgeInsets.symmetric(vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: scheme.primary.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Text(
+                'The quick brown fox',
+                textScaler: TextScaler.linear(scale),
+                style: const TextStyle(fontSize: 15),
+              ),
+            ),
+          ),
+          GlassSlider(
+            value: scale,
+            min: SettingsProvider.minMessageFontScale,
+            max: SettingsProvider.maxMessageFontScale,
+            divisions: 14,
+            onChanged: settings.setMessageFontScale,
           ),
         ],
       ),

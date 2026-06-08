@@ -259,6 +259,35 @@ class _ConversationNotificationControlsSheetState
                   endMinute: end,
                 ),
               ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+                child: Row(
+                  children: [
+                    const Icon(Icons.music_note_outlined, size: 20),
+                    const SizedBox(width: 12),
+                    const Expanded(child: Text('Notification sound')),
+                    DropdownButton<String>(
+                      value: preference.customSoundId ?? 'default',
+                      underline: const SizedBox.shrink(),
+                      items: [
+                        for (final entry in messageNotificationSounds.entries)
+                          DropdownMenuItem(
+                            value: entry.key,
+                            child: Text(entry.value),
+                          ),
+                      ],
+                      onChanged: (id) {
+                        if (id == null) return;
+                        _setPreference(
+                          id == 'default'
+                              ? preference.copyWith(clearCustomSound: true)
+                              : preference.copyWith(customSoundId: id),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
               const Divider(height: 18),
               _NotificationTile(
                 icon: Icons.notifications_paused_outlined,

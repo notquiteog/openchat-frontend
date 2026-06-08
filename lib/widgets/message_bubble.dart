@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -10,6 +11,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
@@ -25,6 +27,8 @@ import '../screens/invites/invite_preview_screen.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
 import '../services/link_preview_service.dart';
+import '../services/network_service.dart';
+import '../services/security_service.dart';
 import '../utils/link_preview_utils.dart';
 import '../utils/mention_utils.dart';
 import 'glass.dart';
@@ -99,6 +103,16 @@ class MessageBubble extends StatelessWidget {
         onTap: onTap,
         onLongPress: onLongPress,
       );
+    }
+    if (message.isScreenshotNotice) {
+      return _ScreenshotNoticeChip(
+        sender: message.sender?.displayName,
+        isMe: isMe,
+      );
+    }
+    final dice = message.dice;
+    if (dice != null) {
+      return _DiceBubble(dice: dice, isMe: isMe);
     }
 
     return Padding(
@@ -233,6 +247,16 @@ class MessageBubble extends StatelessWidget {
 
     final content = message.content!;
 
+    if (message.type == MessageType.contact && content.contact != null) {
+      return _ContactBubble(
+        contact: content.contact!,
+        bubbleColor: bubbleColor,
+        textColor: textColor,
+        radii: radii,
+        message: message,
+      );
+    }
+
     if (message is PendingMessage &&
         content.hasAttachment &&
         (message.attachmentId?.startsWith('pending-attachment-') ?? false)) {
@@ -256,7 +280,7 @@ class MessageBubble extends StatelessWidget {
     }
 
     if (content.hasAttachment) {
-      return switch (message.type) {
+      final attachment = switch (message.type) {
         MessageType.image => _ImageBubble(
           message: message,
           content: content,
@@ -286,6 +310,25 @@ class MessageBubble extends StatelessWidget {
           radii: radii,
         ),
       };
+      if (content.hasSpoiler &&
+          (message.type == MessageType.image ||
+              message.type == MessageType.video)) {
+        return _SpoilerGate(radii: radii, child: attachment);
+      }
+      // Auto-download gating: on a restricted network, hold heavy incoming media
+      // behind a tap-to-download placeholder.
+      if (!isMe &&
+          (message.type == MessageType.image ||
+              message.type == MessageType.video)) {
+        return _AutoDownloadGate(
+          content: content,
+          bubbleColor: bubbleColor,
+          textColor: textColor,
+          radii: radii,
+          child: attachment,
+        );
+      }
+      return attachment;
     }
 
     return _TextBubble(
@@ -500,6 +543,122 @@ class _CallEventChip extends StatelessWidget {
   }
 }
 
+/// Centered system note shown when someone screenshots view-once media.
+class _ScreenshotNoticeChip extends StatelessWidget {
+  final String? sender;
+  final bool isMe;
+
+  const _ScreenshotNoticeChip({required this.sender, required this.isMe});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final who = isMe ? 'You' : (sender ?? 'Someone');
+    return Center(
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: cs.errorContainer.withValues(alpha: 0.45),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.screenshot_monitor_outlined,
+              size: 15,
+              color: cs.error,
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                '$who took a screenshot',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: cs.error,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Animated reveal of a server-rolled dice/randomiser (Batch 8.1). The emoji
+/// "tumbles" through random faces before settling on the authoritative value.
+class _DiceBubble extends StatefulWidget {
+  final DiceContent dice;
+  final bool isMe;
+  const _DiceBubble({required this.dice, required this.isMe});
+
+  @override
+  State<_DiceBubble> createState() => _DiceBubbleState();
+}
+
+class _DiceBubbleState extends State<_DiceBubble>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl = AnimationController(
+    duration: const Duration(milliseconds: 900),
+    vsync: this,
+  )..forward();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Align(
+      alignment: widget.isMe ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AnimatedBuilder(
+              animation: _ctrl,
+              builder: (context, _) {
+                // While rolling, jiggle scale; the emoji stays (server result).
+                final rolling = _ctrl.value < 1.0;
+                final scale = rolling
+                    ? 1.0 + 0.15 * (0.5 - (_ctrl.value % 0.25) * 4).abs()
+                    : 1.0;
+                return Transform.scale(
+                  scale: scale,
+                  child: Text(
+                    widget.dice.emoji,
+                    style: const TextStyle(fontSize: 44),
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 4),
+            Text(
+              widget.dice.label,
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                color: scheme.onSurface.withValues(alpha: 0.85),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _ReplyContextPreview extends StatelessWidget {
   final Message? message;
   final bool isMe;
@@ -657,7 +816,9 @@ class _TextBubble extends StatelessWidget {
       strictPrivacyMode = false;
     }
     final embeddedPreview = message.content!.linkPreview;
-    final previewUrl = linkPreviewsEnabled
+    // Honor a per-message "no link preview" flag — skips the IP-leaking fetch.
+    final previewUrl = (linkPreviewsEnabled &&
+            !message.content!.suppressLinkPreview)
         ? embeddedPreview?.url ?? firstLinkPreviewUrl(message.content!.text)
         : null;
     // OpenChat invite links resolve via our own API (no third-party fetch), so
@@ -683,17 +844,38 @@ class _TextBubble extends StatelessWidget {
                 ),
               ),
             ),
-          Text.rich(
-            TextSpan(
-              children: _formatMessageContent(
-                context,
-                message.content!,
-                textColor,
-                isMe ? textColor : cs.primary,
-                strictPrivacyMode,
+          if (message.content!.forwardedFrom != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.forward_rounded,
+                      size: 13, color: textColor.withValues(alpha: 0.6)),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(
+                      'Forwarded from ${message.content!.forwardedFrom}',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontStyle: FontStyle.italic,
+                        color: textColor.withValues(alpha: 0.6),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
+          _CollapsibleText(
+            spans: _formatMessageContent(
+              context,
+              message.content!,
+              textColor,
+              isMe ? textColor : cs.primary,
+              strictPrivacyMode,
+            ),
             style: TextStyle(color: textColor, fontSize: 15, height: 1.25),
+            accentColor: isMe ? textColor.withValues(alpha: 0.9) : cs.primary,
           ),
           if (inviteToken != null) ...[
             const SizedBox(height: 8),
@@ -732,6 +914,81 @@ class _TextBubble extends StatelessWidget {
           _Timestamp(message: message, textColor: textColor),
         ],
       ),
+    );
+  }
+}
+
+/// Clamps long messages to ~10 lines with a Read more / Show less toggle.
+class _CollapsibleText extends StatefulWidget {
+  final List<InlineSpan> spans;
+  final TextStyle style;
+  final Color accentColor;
+
+  const _CollapsibleText({
+    required this.spans,
+    required this.style,
+    required this.accentColor,
+  });
+
+  @override
+  State<_CollapsibleText> createState() => _CollapsibleTextState();
+}
+
+class _CollapsibleTextState extends State<_CollapsibleText> {
+  static const _collapsedMaxLines = 10;
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    double scale = 1.0;
+    try {
+      scale = context.select<SettingsProvider, double>(
+        (s) => s.messageFontScale,
+      );
+    } on ProviderNotFoundException {
+      scale = 1.0;
+    }
+    final textScaler = TextScaler.linear(scale);
+    final textSpan = TextSpan(children: widget.spans, style: widget.style);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final painter = TextPainter(
+          text: textSpan,
+          maxLines: _collapsedMaxLines,
+          textScaler: textScaler,
+          textDirection: Directionality.of(context),
+        )..layout(maxWidth: constraints.maxWidth);
+        final overflows = painter.didExceedMaxLines;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text.rich(
+              textSpan,
+              style: widget.style,
+              textScaler: textScaler,
+              maxLines: _expanded ? null : _collapsedMaxLines,
+              overflow: _expanded ? TextOverflow.clip : TextOverflow.ellipsis,
+            ),
+            if (overflows)
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => setState(() => _expanded = !_expanded),
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Text(
+                    _expanded ? 'Show less' : 'Read more',
+                    style: TextStyle(
+                      color: widget.accentColor,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }
@@ -2402,11 +2659,52 @@ class _PollBubbleState extends State<_PollBubble> {
     }
   }
 
+  static String _formatMeetingSlot(String iso) {
+    final d = DateTime.tryParse(iso)?.toLocal();
+    if (d == null) return iso;
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    final hh = d.hour.toString().padLeft(2, '0');
+    final mm = d.minute.toString().padLeft(2, '0');
+    return '${months[d.month - 1]} ${d.day} · $hh:$mm';
+  }
+
+  Future<void> _addMeetingToCalendar(Poll poll) async {
+    PollOption? best;
+    for (final o in poll.options) {
+      if (best == null || o.voterCount > best.voterCount) best = o;
+    }
+    final start = best == null ? null : DateTime.tryParse(best.text);
+    if (start == null) return;
+    final end = start.add(const Duration(hours: 1));
+    String stamp(DateTime d) =>
+        '${d.toUtc().toIso8601String().replaceAll(RegExp(r'[-:]'), '').split('.').first}Z';
+    final title = poll.question.replaceFirst('📅 ', '');
+    final ics =
+        'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//OpenChat//Meeting//EN\r\n'
+        'BEGIN:VEVENT\r\nUID:${poll.id}@openchat\r\nDTSTAMP:${stamp(DateTime.now())}\r\n'
+        'DTSTART:${stamp(start)}\r\nDTEND:${stamp(end)}\r\nSUMMARY:$title\r\n'
+        'END:VEVENT\r\nEND:VCALENDAR\r\n';
+    try {
+      final dir = await getTemporaryDirectory();
+      final file = File(p.join(dir.path, 'meeting_${poll.id}.ics'));
+      await file.writeAsString(ics);
+      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
+    } catch (_) {}
+  }
+
   @override
   Widget build(BuildContext context) {
     final poll = widget.message.poll!;
     final cs = Theme.of(context).colorScheme;
     final total = math.max(1, poll.totalVoterCount);
+    // Quiz: reveal the correct answer + explanation once the user has voted
+    // (or the poll closed).
+    final quizRevealed = poll.isQuiz &&
+        poll.correctOptionIds.isNotEmpty &&
+        (poll.voterOptionIds.isNotEmpty || poll.isClosed);
 
     return _BubbleShell(
       color: widget.bubbleColor,
@@ -2460,16 +2758,64 @@ class _PollBubbleState extends State<_PollBubble> {
               option: option,
               percent: option.voterCount / total,
               selected: poll.isSelected(option.id),
-              enabled: !poll.isClosed && !_voting,
+              enabled: !poll.isClosed &&
+                  !_voting &&
+                  !(poll.isQuiz && poll.voterOptionIds.isNotEmpty),
               textColor: widget.textColor,
+              quizReveal: quizRevealed,
+              isCorrect: poll.isCorrectOption(option.index),
+              labelOverride:
+                  poll.isMeeting ? _formatMeetingSlot(option.text) : null,
               onTap: () => _vote(option),
+            ),
+            const SizedBox(height: 6),
+          ],
+          if (poll.isMeeting && poll.options.isNotEmpty)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                icon: const Icon(Icons.event_available, size: 16),
+                label: const Text('Add to calendar'),
+                onPressed: () => _addMeetingToCalendar(poll),
+              ),
+            ),
+          if (quizRevealed &&
+              poll.explanation != null &&
+              poll.explanation!.isNotEmpty) ...[
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: widget.textColor.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.lightbulb_outline_rounded,
+                      size: 16, color: widget.textColor.withValues(alpha: 0.7)),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      poll.explanation!,
+                      style: TextStyle(
+                        color: widget.textColor.withValues(alpha: 0.85),
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 6),
           ],
           Row(
             children: [
               Text(
-                poll.isClosed ? 'Closed' : '${poll.totalVoterCount} votes',
+                poll.isClosed
+                    ? 'Closed'
+                    : poll.isQuiz
+                    ? 'Quiz · ${poll.totalVoterCount} answered'
+                    : '${poll.totalVoterCount} votes',
                 style: TextStyle(
                   color: widget.textColor.withValues(alpha: 0.68),
                   fontSize: 12,
@@ -2491,6 +2837,9 @@ class _PollOptionRow extends StatelessWidget {
   final bool selected;
   final bool enabled;
   final Color textColor;
+  final bool quizReveal;
+  final bool isCorrect;
+  final String? labelOverride;
   final VoidCallback onTap;
 
   const _PollOptionRow({
@@ -2499,13 +2848,36 @@ class _PollOptionRow extends StatelessWidget {
     required this.selected,
     required this.enabled,
     required this.textColor,
+    this.quizReveal = false,
+    this.isCorrect = false,
+    this.labelOverride,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final fill = textColor.withValues(alpha: selected ? 0.24 : 0.14);
-    final border = textColor.withValues(alpha: selected ? 0.42 : 0.16);
+    const correctColor = Color(0xFF2E9E5B);
+    const wrongColor = Color(0xFFD05050);
+    Color fill;
+    Color border;
+    IconData icon;
+    Color iconColor;
+    if (quizReveal && isCorrect) {
+      fill = correctColor.withValues(alpha: 0.22);
+      border = correctColor.withValues(alpha: 0.6);
+      icon = Icons.check_circle;
+      iconColor = correctColor;
+    } else if (quizReveal && selected && !isCorrect) {
+      fill = wrongColor.withValues(alpha: 0.22);
+      border = wrongColor.withValues(alpha: 0.6);
+      icon = Icons.cancel;
+      iconColor = wrongColor;
+    } else {
+      fill = textColor.withValues(alpha: selected ? 0.24 : 0.14);
+      border = textColor.withValues(alpha: selected ? 0.42 : 0.16);
+      icon = selected ? Icons.check_circle : Icons.radio_button_unchecked;
+      iconColor = textColor.withValues(alpha: selected ? 0.95 : 0.7);
+    }
     return InkWell(
       onTap: enabled ? onTap : null,
       borderRadius: BorderRadius.circular(8),
@@ -2530,16 +2902,14 @@ class _PollOptionRow extends StatelessWidget {
               child: Row(
                 children: [
                   Icon(
-                    selected
-                        ? Icons.check_circle
-                        : Icons.radio_button_unchecked,
+                    icon,
                     size: 18,
-                    color: textColor.withValues(alpha: selected ? 0.95 : 0.7),
+                    color: iconColor,
                   ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      option.text,
+                      labelOverride ?? option.text,
                       style: TextStyle(color: textColor, fontSize: 14),
                     ),
                   ),
@@ -2556,6 +2926,157 @@ class _PollOptionRow extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Blurs media until tapped (tap-to-reveal spoiler). Reveal is ephemeral — it
+/// re-blurs when the bubble is rebuilt (e.g. scrolled out of view and back).
+class _SpoilerGate extends StatefulWidget {
+  final Widget child;
+  final BorderRadius radii;
+  const _SpoilerGate({required this.child, required this.radii});
+
+  @override
+  State<_SpoilerGate> createState() => _SpoilerGateState();
+}
+
+class _SpoilerGateState extends State<_SpoilerGate> {
+  bool _revealed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_revealed) return widget.child;
+    return GestureDetector(
+      onTap: () => setState(() => _revealed = true),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          ClipRRect(
+            borderRadius: widget.radii,
+            child: ImageFiltered(
+              imageFilter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+              child: widget.child,
+            ),
+          ),
+          Positioned.fill(
+            child: ClipRRect(
+              borderRadius: widget.radii,
+              child: Container(color: Colors.black.withValues(alpha: 0.18)),
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.45),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.visibility_off_outlined,
+                    size: 16, color: Colors.white),
+                SizedBox(width: 6),
+                Text(
+                  'Spoiler',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Holds heavy incoming media behind a tap-to-download placeholder when the
+/// user's auto-download policy disallows it on the current network (Batch 5.3).
+class _AutoDownloadGate extends StatefulWidget {
+  final MessageContent content;
+  final Color bubbleColor;
+  final Color textColor;
+  final BorderRadius radii;
+  final Widget child;
+
+  const _AutoDownloadGate({
+    required this.content,
+    required this.bubbleColor,
+    required this.textColor,
+    required this.radii,
+    required this.child,
+  });
+
+  @override
+  State<_AutoDownloadGate> createState() => _AutoDownloadGateState();
+}
+
+class _AutoDownloadGateState extends State<_AutoDownloadGate> {
+  bool _userRequested = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_userRequested) return widget.child;
+    bool allowed;
+    try {
+      final net = context.watch<NetworkService>().current;
+      final settings = context.watch<SettingsProvider>();
+      allowed = settings.allowAutoDownload(
+        net,
+        sizeBytes: widget.content.fileSize,
+      );
+    } on ProviderNotFoundException {
+      // No providers (e.g. widget tests) — don't gate.
+      return widget.child;
+    }
+    if (allowed) return widget.child;
+
+    final size = widget.content.fileSize;
+    final sizeLabel = size != null && size > 0
+        ? ' (${size < 1024 * 1024 ? '${(size / 1024).toStringAsFixed(0)} KB' : '${(size / (1024 * 1024)).toStringAsFixed(1)} MB'})'
+        : '';
+    return GestureDetector(
+      onTap: () => setState(() => _userRequested = true),
+      child: _BubbleShell(
+        color: widget.bubbleColor,
+        radii: widget.radii,
+        child: SizedBox(
+          width: math.min(MediaQuery.of(context).size.width * 0.6, 300),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.download_rounded, color: widget.textColor, size: 26),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Tap to download$sizeLabel',
+                      style: TextStyle(
+                        color: widget.textColor,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    Text(
+                      'Auto-download is off for this network',
+                      style: TextStyle(
+                        color: widget.textColor.withValues(alpha: 0.66),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2584,6 +3105,37 @@ class _ViewOnceAttachmentGate extends StatefulWidget {
 
 class _ViewOnceAttachmentGateState extends State<_ViewOnceAttachmentGate> {
   bool _revealed = false;
+  VoidCallback? _releaseSecure;
+  StreamSubscription<void>? _shotSub;
+
+  @override
+  void dispose() {
+    _releaseSecure?.call();
+    unawaited(SecurityService.instance.stopScreenshotDetection());
+    _shotSub?.cancel();
+    super.dispose();
+  }
+
+  // While the decrypted view-once media is on screen: force screenshot blocking
+  // and, on platforms that report it, notify the conversation if a screenshot is
+  // captured anyway.
+  Future<void> _armScreenProtection() async {
+    _releaseSecure = await SecurityService.instance.pushForceSecure();
+    if (!mounted) {
+      _releaseSecure?.call();
+      _releaseSecure = null;
+      return;
+    }
+    final convID = widget.message.conversationId;
+    _shotSub = SecurityService.instance.screenshots.listen((_) {
+      if (mounted) {
+        unawaited(
+          context.read<ChatProvider>().postScreenshotNotice(convID: convID),
+        );
+      }
+    });
+    await SecurityService.instance.startScreenshotDetection();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2679,6 +3231,7 @@ class _ViewOnceAttachmentGateState extends State<_ViewOnceAttachmentGate> {
   Future<void> _open() async {
     if (_revealed) return;
     setState(() => _revealed = true);
+    unawaited(_armScreenProtection());
     await context.read<SettingsProvider>().markViewOnceMediaViewed(
       widget.message.id,
     );
@@ -3076,7 +3629,10 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
   void initState() {
     super.initState();
     _duration = _durationFromMetadata(widget.content.durationMs);
-    _levels = _voiceLevels(widget.message.id);
+    final waveform = widget.content.waveform;
+    _levels = (waveform != null && waveform.isNotEmpty)
+        ? _resampleVoiceLevels(waveform, 28)
+        : _voiceLevels(widget.message.id);
   }
 
   @override
@@ -3425,6 +3981,16 @@ List<double> _voiceLevels(String seed) {
   });
 }
 
+/// Resamples a recorded amplitude waveform to [count] bars for the scrubber,
+/// keeping a small floor so quiet segments stay visible.
+List<double> _resampleVoiceLevels(List<double> src, int count) {
+  if (src.isEmpty) return _voiceLevels('');
+  return List<double>.generate(count, (i) {
+    final idx = (i * src.length / count).floor().clamp(0, src.length - 1);
+    return (0.12 + src[idx] * 0.88).clamp(0.0, 1.0).toDouble();
+  });
+}
+
 // ── File bubble ───────────────────────────────────────────────────────────────
 
 class _FileBubble extends StatefulWidget {
@@ -3564,6 +4130,114 @@ class _FileBubbleState extends State<_FileBubble> {
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
+class _ContactBubble extends StatelessWidget {
+  final MessageContact contact;
+  final Color bubbleColor;
+  final Color textColor;
+  final BorderRadius radii;
+  final Message message;
+
+  const _ContactBubble({
+    required this.contact,
+    required this.bubbleColor,
+    required this.textColor,
+    required this.radii,
+    required this.message,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final label = contact.displayLabel;
+    final fp = contact.fingerprint;
+    return _BubbleShell(
+      color: bubbleColor,
+      radii: radii,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircleAvatar(
+                radius: 22,
+                backgroundColor: textColor.withValues(alpha: 0.15),
+                child: Text(
+                  label.isNotEmpty ? label[0].toUpperCase() : '?',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: textColor,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.person_rounded,
+                          size: 14, color: textColor.withValues(alpha: 0.7)),
+                      const SizedBox(width: 4),
+                      Text(
+                        label,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                          color: textColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    '@${contact.username}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: textColor.withValues(alpha: 0.7),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          if (fp != null && fp.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            InkWell(
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: fp));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Fingerprint copied')),
+                );
+              },
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.fingerprint_rounded,
+                      size: 14, color: scheme.primary),
+                  const SizedBox(width: 4),
+                  Text(
+                    fp.length > 16 ? '${fp.substring(0, 16)}…' : fp,
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      color: textColor.withValues(alpha: 0.7),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 4),
+          _Timestamp(message: message, textColor: textColor),
+        ],
+      ),
+    );
+  }
+}
+
 class _Timestamp extends StatelessWidget {
   final Message message;
   final Color textColor;
@@ -3624,30 +4298,126 @@ class _Timestamp extends StatelessWidget {
             ),
           ),
         if (message.hasAutoDelete)
-          StreamBuilder<int>(
-            stream: Stream.periodic(const Duration(seconds: 30), (i) => i),
-            builder: (context, _) => Text(
-              ' · ${_remainingAutoDelete(message)} left',
-              style: TextStyle(
-                fontSize: 10,
-                color: textColor.withValues(alpha: 0.7),
-              ),
-            ),
-          ),
+          _AutoDeleteIndicator(message: message, color: textColor),
       ],
     );
   }
+}
 
-  String _remainingAutoDelete(Message message) {
-    final expiresAt = message.autoDeleteExpiresAt;
-    if (expiresAt == null) return '';
-    final remaining = expiresAt.difference(DateTime.now());
-    if (remaining.inSeconds <= 0) return 'expiring';
-    if (remaining.inDays >= 1) return '${remaining.inDays}d';
-    if (remaining.inHours >= 1) return '${remaining.inHours}h';
-    if (remaining.inMinutes >= 1) return '${remaining.inMinutes}m';
-    return '${remaining.inSeconds}s';
+/// A Telegram-style shrinking-clock countdown for disappearing messages, with a
+/// remaining-time label. Ticks every second under ~2 min, otherwise every 30 s.
+class _AutoDeleteIndicator extends StatefulWidget {
+  final Message message;
+  final Color color;
+  const _AutoDeleteIndicator({required this.message, required this.color});
+
+  @override
+  State<_AutoDeleteIndicator> createState() => _AutoDeleteIndicatorState();
+}
+
+class _AutoDeleteIndicatorState extends State<_AutoDeleteIndicator> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _schedule();
   }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  void _schedule() {
+    final remaining = _remaining();
+    final interval = remaining.inSeconds <= 120
+        ? const Duration(seconds: 1)
+        : const Duration(seconds: 30);
+    _timer?.cancel();
+    _timer = Timer(interval, () {
+      if (mounted) setState(_schedule);
+    });
+  }
+
+  Duration _remaining() {
+    final expiresAt = widget.message.autoDeleteExpiresAt;
+    if (expiresAt == null) return Duration.zero;
+    final r = expiresAt.difference(DateTime.now());
+    return r.isNegative ? Duration.zero : r;
+  }
+
+  double _fraction() {
+    final total = widget.message.autoDeleteSeconds;
+    if (total <= 0) return 1;
+    return (_remaining().inSeconds / total).clamp(0.0, 1.0);
+  }
+
+  String _label(Duration r) {
+    if (r.inSeconds <= 0) return 'expiring';
+    if (r.inDays >= 1) return '${r.inDays}d';
+    if (r.inHours >= 1) return '${r.inHours}h';
+    if (r.inMinutes >= 1) return '${r.inMinutes}m';
+    return '${r.inSeconds}s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final remaining = _remaining();
+    final color = widget.color.withValues(alpha: 0.7);
+    return Padding(
+      padding: const EdgeInsets.only(left: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 11,
+            height: 11,
+            child: CustomPaint(
+              painter: _ClockPiePainter(fraction: _fraction(), color: color),
+            ),
+          ),
+          const SizedBox(width: 3),
+          Text(
+            _label(remaining),
+            style: TextStyle(fontSize: 10, color: color),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ClockPiePainter extends CustomPainter {
+  final double fraction;
+  final Color color;
+  _ClockPiePainter({required this.fraction, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final radius = size.width / 2;
+    final ring = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = color;
+    canvas.drawCircle(center, radius - 0.5, ring);
+    final pie = Paint()
+      ..style = PaintingStyle.fill
+      ..color = color;
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius - 1.5),
+      -math.pi / 2,
+      2 * math.pi * fraction,
+      true,
+      pie,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_ClockPiePainter old) =>
+      old.fraction != fraction || old.color != color;
 }
 
 class _DecryptionError extends StatelessWidget {

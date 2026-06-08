@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
@@ -9,10 +10,12 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import 'package:local_auth/local_auth.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../config/api_config.dart';
 import '../../models/conversation.dart';
 import '../../models/message.dart';
+import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/call_provider.dart';
 import '../../providers/chat_provider.dart';
@@ -24,6 +27,11 @@ import '../call/sfu_call_screen.dart';
 import '../../services/mls_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/attachment_service.dart';
+import '../../services/proxy_service.dart';
+import '../../services/secure_storage_service.dart';
+import '../call/stage_room_screen.dart';
+import '../../widgets/dice_game_sheet.dart';
+import '../../widgets/pin_lock_gate.dart';
 import '../../utils/custom_emoji_payload.dart';
 import '../../utils/disappearing_message_duration.dart';
 import '../../utils/local_conversation_preferences.dart';
@@ -88,6 +96,9 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _loadingMore = false;
   bool _historyExhausted = false;
   bool _sendSilent = false;
+  bool _suppressLinkPreview = false;
+  bool _locked = false;
+  bool _unlocked = false;
   DateTime? _scheduledFor;
   int _lastMessageCount = 0;
   String? _lastTailMessageId;
@@ -129,6 +140,11 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     _settings = context.read<SettingsProvider>();
     NotificationService.setActiveConversation(widget.conversation.id);
+    context.read<SecureStorageService>().hasConversationPin(conv.id).then((
+      locked,
+    ) {
+      if (locked && mounted) setState(() => _locked = true);
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final chat = context.read<ChatProvider>();
       _restoreLocalDraft();
@@ -257,6 +273,21 @@ class _ChatScreenState extends State<ChatScreen> {
     return '${names[0]} and ${names.length - 1} others are typing…';
   }
 
+  /// Ensures the outgoing text payload is a JSON object carrying
+  /// `suppress_link_preview` so the recipient's client skips the (IP-leaking)
+  /// preview fetch. Works whether the draft payload is plain text or already
+  /// JSON (e.g. with custom-emoji entities).
+  String _payloadWithSuppressedPreview(String payload, String text) {
+    Map<String, dynamic>? obj;
+    try {
+      final decoded = jsonDecode(payload);
+      if (decoded is Map<String, dynamic>) obj = decoded;
+    } catch (_) {}
+    obj ??= {'text': text};
+    obj['suppress_link_preview'] = true;
+    return jsonEncode(obj);
+  }
+
   Future<void> _sendMessage() async {
     final draft = buildCustomEmojiTextPayload(
       _inputCtrl.text,
@@ -283,9 +314,12 @@ class _ChatScreenState extends State<ChatScreen> {
       _syncCustomEmojiEntities(const []);
     });
     try {
+      final payload = _suppressLinkPreview
+          ? _payloadWithSuppressedPreview(draft.payload, draft.text)
+          : draft.payload;
       final sent = await context.read<ChatProvider>().sendMessage(
         convID: conv.id,
-        plaintext: draft.payload,
+        plaintext: payload,
         replyTo: replyTo,
         silent: _sendSilent,
         scheduledFor: _scheduledFor,
@@ -300,7 +334,10 @@ class _ChatScreenState extends State<ChatScreen> {
             SnackBar(content: Text('Scheduled for ${_scheduleLabel()}')),
           );
         }
-        setState(() => _scheduledFor = null);
+        setState(() {
+          _scheduledFor = null;
+          _suppressLinkPreview = false;
+        });
       } else {
         _restoreComposedMessage(rawText, replyingTo, draftEntities);
         messenger.showSnackBar(
@@ -457,6 +494,26 @@ class _ChatScreenState extends State<ChatScreen> {
                   setSheetState(() {});
                 },
               ),
+              GlassListTile(
+                leading: const Icon(Icons.link_off_rounded),
+                title: const Text(
+                  'No link preview',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                trailing: GlassSwitch(
+                  value: _suppressLinkPreview,
+                  onChanged: (v) {
+                    setState(() => _suppressLinkPreview = v);
+                    setSheetState(() {});
+                  },
+                  activeColor: Theme.of(context).colorScheme.primary,
+                  enableHaptics: true,
+                ),
+                onTap: () {
+                  setState(() => _suppressLinkPreview = !_suppressLinkPreview);
+                  setSheetState(() {});
+                },
+              ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
                 child: Row(
@@ -608,6 +665,47 @@ class _ChatScreenState extends State<ChatScreen> {
       active: _activeMentionQuery,
       currentUserId: currentUserID,
     );
+  }
+
+  List<SpecialMention> _specialMentionSuggestions() {
+    return specialMentionSuggestions(
+      active: _activeMentionQuery,
+      allowed:
+          conv.type == ConversationType.group ||
+          conv.type == ConversationType.channel,
+    );
+  }
+
+  void _insertSpecialMention(SpecialMention special) {
+    final value = _inputCtrl.value;
+    final active = value.selection.isValid && value.selection.isCollapsed
+        ? findActiveMentionQuery(value.text, value.selection.baseOffset)
+        : _activeMentionQuery;
+    if (active == null) return;
+    final oldText = value.text;
+    final start = active.start.clamp(0, oldText.length).toInt();
+    final end = active.end.clamp(start, oldText.length).toInt();
+    final replacement = '@${special.handle} ';
+    final newText = oldText.replaceRange(start, end, replacement);
+    final shifted = shiftCustomEmojiEntitiesForTextEdit(
+      oldText: oldText,
+      newText: newText,
+      entities: _customEmojiEntities,
+    );
+    setState(() {
+      _activeMentionQuery = null;
+      _showStickers = false;
+      _showCustomEmojis = false;
+      _syncCustomEmojiEntities(shifted);
+    });
+    _setComposerValue(
+      TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: start + replacement.length),
+      ),
+    );
+    _scheduleDraftSave(newText);
+    _onTyping();
   }
 
   void _insertMention(ConversationMember member) {
@@ -855,9 +953,19 @@ class _ChatScreenState extends State<ChatScreen> {
               onTap: () => Navigator.pop(sheetCtx, 'gallery_image'),
             ),
             _AttachTile(
+              icon: Icons.collections_outlined,
+              label: 'Photo album',
+              onTap: () => Navigator.pop(sheetCtx, 'gallery_album'),
+            ),
+            _AttachTile(
               icon: Icons.visibility_off_outlined,
               label: 'View-once photo',
               onTap: () => Navigator.pop(sheetCtx, 'view_once_image'),
+            ),
+            _AttachTile(
+              icon: Icons.blur_on_rounded,
+              label: 'Spoiler photo',
+              onTap: () => Navigator.pop(sheetCtx, 'spoiler_image'),
             ),
             _AttachTile(
               icon: Icons.share_location_outlined,
@@ -886,6 +994,11 @@ class _ChatScreenState extends State<ChatScreen> {
               onTap: () => Navigator.pop(sheetCtx, 'view_once_video'),
             ),
             _AttachTile(
+              icon: Icons.blur_on_rounded,
+              label: 'Spoiler video',
+              onTap: () => Navigator.pop(sheetCtx, 'spoiler_video'),
+            ),
+            _AttachTile(
               icon: Icons.attach_file_rounded,
               label: 'File',
               onTap: () => Navigator.pop(sheetCtx, 'file'),
@@ -899,6 +1012,21 @@ class _ChatScreenState extends State<ChatScreen> {
               icon: Icons.poll_outlined,
               label: 'Poll',
               onTap: () => Navigator.pop(sheetCtx, 'poll'),
+            ),
+            _AttachTile(
+              icon: Icons.casino_outlined,
+              label: 'Dice / random',
+              onTap: () => Navigator.pop(sheetCtx, 'dice'),
+            ),
+            _AttachTile(
+              icon: Icons.event_available_outlined,
+              label: 'Meeting',
+              onTap: () => Navigator.pop(sheetCtx, 'meeting'),
+            ),
+            _AttachTile(
+              icon: Icons.person_add_alt_1_outlined,
+              label: 'Share contact',
+              onTap: () => Navigator.pop(sheetCtx, 'contact'),
             ),
             _AttachTile(
               icon: Icons.mic_none_outlined,
@@ -921,6 +1049,22 @@ class _ChatScreenState extends State<ChatScreen> {
       await _showCreatePollDialog();
       return;
     }
+    if (choice == 'dice') {
+      await _showDicePicker();
+      return;
+    }
+    if (choice == 'meeting') {
+      await _showCreateMeetingDialog();
+      return;
+    }
+    if (choice == 'contact') {
+      await _shareContact();
+      return;
+    }
+    if (choice == 'gallery_album') {
+      await _sendAlbum();
+      return;
+    }
     if (choice == 'payment') {
       await _showPaymentSheet();
       return;
@@ -938,6 +1082,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final chat = context.read<ChatProvider>();
     final messenger = ScaffoldMessenger.of(context);
     final viewOnce = choice.startsWith('view_once_');
+    final hasSpoiler = choice.startsWith('spoiler_');
 
     EncryptedAttachmentUpload? pending;
     VoiceNoteRecording? voiceNote;
@@ -949,6 +1094,9 @@ class _ChatScreenState extends State<ChatScreen> {
         'view_once_image' => await attachmentService.pickImageForOutbox(
           onProgress: _setAttachmentUploadProgress,
         ),
+        'spoiler_image' => await attachmentService.pickImageForOutbox(
+          onProgress: _setAttachmentUploadProgress,
+        ),
         'camera_image' => await attachmentService.pickImageForOutbox(
           fromCamera: true,
           onProgress: _setAttachmentUploadProgress,
@@ -957,6 +1105,9 @@ class _ChatScreenState extends State<ChatScreen> {
           onProgress: _setAttachmentUploadProgress,
         ),
         'view_once_video' => await attachmentService.pickVideoForOutbox(
+          onProgress: _setAttachmentUploadProgress,
+        ),
+        'spoiler_video' => await attachmentService.pickVideoForOutbox(
           onProgress: _setAttachmentUploadProgress,
         ),
         'file' => await attachmentService.pickFileForOutbox(
@@ -972,6 +1123,7 @@ class _ChatScreenState extends State<ChatScreen> {
           return attachmentService.prepareVoiceNoteForOutbox(
             note.file,
             duration: note.duration,
+            waveform: note.waveform,
             onProgress: _setAttachmentUploadProgress,
           );
         })(),
@@ -1005,6 +1157,7 @@ class _ChatScreenState extends State<ChatScreen> {
         convID: conv.id,
         attachment: pending,
         viewOnce: viewOnce,
+        hasSpoiler: hasSpoiler,
         onProgress: _setAttachmentUploadProgress,
       );
       if (sent) {
@@ -1019,6 +1172,172 @@ class _ChatScreenState extends State<ChatScreen> {
       messenger.showSnackBar(SnackBar(content: Text(e.toString())));
     } finally {
       _clearAttachmentUploadProgress();
+    }
+  }
+
+  Future<void> _sendAlbum() async {
+    final attachmentService = AttachmentService(context.read<ApiService>());
+    final chat = context.read<ChatProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    List<EncryptedAttachmentUpload> items;
+    try {
+      items = await attachmentService.pickImagesForAlbum(
+        onProgress: _setAttachmentUploadProgress,
+      );
+    } catch (e) {
+      _clearAttachmentUploadProgress();
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+      }
+      return;
+    }
+    if (items.isEmpty || !mounted) {
+      _clearAttachmentUploadProgress();
+      return;
+    }
+    var ok = 0;
+    try {
+      _setAttachmentUploadProgress(
+        const AttachmentUploadProgress(stage: AttachmentUploadStage.sending),
+      );
+      for (final item in items) {
+        try {
+          if (await chat.sendPreparedAttachment(
+            convID: conv.id,
+            attachment: item,
+          )) {
+            ok++;
+          }
+        } catch (_) {}
+      }
+    } finally {
+      _clearAttachmentUploadProgress();
+    }
+    if (!mounted) return;
+    if (ok > 0) {
+      _scrollToBottom();
+    } else {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not send photos')),
+      );
+    }
+  }
+
+  Future<void> _showDicePicker() async {
+    const dice = ['🎲', '🎯', '🏀', '⚽', '🎳', '🎰', '🪙'];
+    final api = context.read<ApiService>();
+    final messenger = ScaffoldMessenger.of(context);
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const GlassSheetGrabber(),
+            const GlassSheetHeader(
+              icon: Icons.casino_outlined,
+              title: 'Roll something',
+              subtitle: 'The result is generated by the server — fair & final.',
+            ),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              children: [
+                for (final d in dice)
+                  IconButton(
+                    iconSize: 36,
+                    onPressed: () => Navigator.pop(sheetCtx, d),
+                    icon: Text(d, style: const TextStyle(fontSize: 34)),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            TextButton.icon(
+              icon: const Icon(Icons.verified_outlined),
+              label: const Text('Provably-fair game'),
+              onPressed: () => Navigator.pop(sheetCtx, '__game__'),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+    if (picked == null) return;
+    if (picked == '__game__') {
+      if (mounted) await showDiceGameSheet(context, conversationId: conv.id);
+      return;
+    }
+    try {
+      await api.rollDice(conv.id, picked);
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Roll failed: $e')));
+    }
+  }
+
+  Future<void> _shareContact() async {
+    final me = context.read<AuthProvider>().currentUser;
+    final candidates = <User>[
+      ?me,
+      ...conv.members
+          .map((m) => m.user)
+          .whereType<User>()
+          .where((u) => u.id != me?.id),
+    ];
+    if (candidates.isEmpty) return;
+    final chosen = await showModalBottomSheet<User>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const GlassSheetGrabber(),
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: Text(
+                'Share a contact',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+              ),
+            ),
+            for (final u in candidates)
+              GlassListTile(
+                leading: CircleAvatar(
+                  child: Text(
+                    u.username.isNotEmpty ? u.username[0].toUpperCase() : '?',
+                  ),
+                ),
+                title: Text(u.id == me?.id ? '${u.displayName} (You)' : u.displayName),
+                subtitle: Text('@${u.username}'),
+                onTap: () => Navigator.pop(sheetCtx, u),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (chosen == null || !mounted) return;
+    final contact = MessageContact(
+      userId: chosen.id,
+      username: chosen.username,
+      displayName: chosen.displayName,
+      publicKey: chosen.publicKey,
+      fingerprint: chosen.keyFingerprint,
+    );
+    final messenger = ScaffoldMessenger.of(context);
+    final sent = await context.read<ChatProvider>().sendMessage(
+      convID: conv.id,
+      plaintext: jsonEncode({'text': '', 'contact': contact.toJson()}),
+      messageType: 'contact',
+    );
+    if (!mounted) return;
+    if (sent) {
+      _scrollToBottom();
+    } else {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not send contact')),
+      );
     }
   }
 
@@ -1601,11 +1920,138 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  static String formatMeetingSlot(DateTime d) {
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    final local = d.toLocal();
+    final hh = local.hour.toString().padLeft(2, '0');
+    final mm = local.minute.toString().padLeft(2, '0');
+    return '${months[local.month - 1]} ${local.day} · $hh:$mm';
+  }
+
+  Future<void> _showCreateMeetingDialog() async {
+    final titleCtrl = TextEditingController();
+    final slots = <DateTime>[];
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogCtx) => StatefulBuilder(
+          builder: (dialogCtx, setDialog) {
+            Future<void> addSlot() async {
+              final date = await showDatePicker(
+                context: dialogCtx,
+                firstDate: DateTime.now(),
+                lastDate: DateTime.now().add(const Duration(days: 365)),
+                initialDate: DateTime.now(),
+              );
+              if (date == null) return;
+              if (!dialogCtx.mounted) return;
+              final time = await showTimePicker(
+                context: dialogCtx,
+                initialTime: TimeOfDay.now(),
+              );
+              if (time == null) return;
+              setDialog(
+                () => slots.add(
+                  DateTime(
+                    date.year,
+                    date.month,
+                    date.day,
+                    time.hour,
+                    time.minute,
+                  ),
+                ),
+              );
+            }
+
+            Future<void> submit() async {
+              final title = titleCtrl.text.trim();
+              if (title.isEmpty || slots.length < 2) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Title and at least 2 time slots required'),
+                  ),
+                );
+                return;
+              }
+              Navigator.pop(dialogCtx);
+              slots.sort();
+              try {
+                final sent = await context.read<ChatProvider>().sendPoll(
+                  convID: conv.id,
+                  question: '📅 $title',
+                  options: slots
+                      .map((d) => d.toUtc().toIso8601String())
+                      .toList(),
+                  meeting: true,
+                  isAnonymous: false,
+                  silent: _sendSilent,
+                );
+                if (sent && mounted) _scrollToBottom();
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text(e.toString())));
+              }
+            }
+
+            return GlassAlertDialog(
+              title: const Text('New meeting'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: titleCtrl,
+                      decoration: const InputDecoration(labelText: 'Title'),
+                    ),
+                    const SizedBox(height: 8),
+                    for (var i = 0; i < slots.length; i++)
+                      ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.schedule),
+                        title: Text(formatMeetingSlot(slots[i])),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => setDialog(() => slots.removeAt(i)),
+                        ),
+                      ),
+                    TextButton.icon(
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add time slot'),
+                      onPressed: addSlot,
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogCtx),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(onPressed: submit, child: const Text('Send')),
+              ],
+            );
+          },
+        ),
+      );
+    } finally {
+      titleCtrl.dispose();
+    }
+  }
+
   Future<void> _showCreatePollDialog() async {
     final questionCtrl = TextEditingController();
     final optionCtrls = [TextEditingController(), TextEditingController()];
+    final explanationCtrl = TextEditingController();
     var anonymous = true;
     var multiple = false;
+    var quiz = false;
+    var correctOption = 0;
 
     try {
       await showDialog<void>(
@@ -1633,6 +2079,11 @@ class _ChatScreenState extends State<ChatScreen> {
                   isAnonymous: anonymous,
                   allowsMultipleAnswers: multiple,
                   silent: _sendSilent,
+                  quiz: quiz,
+                  correctOptionId: quiz
+                      ? correctOption.clamp(0, options.length - 1)
+                      : null,
+                  explanation: quiz ? explanationCtrl.text : null,
                 );
                 if (sent && mounted) _scrollToBottom();
               } catch (e) {
@@ -1658,12 +2109,34 @@ class _ChatScreenState extends State<ChatScreen> {
                     for (var i = 0; i < optionCtrls.length; i++)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 8),
-                        child: TextField(
-                          controller: optionCtrls[i],
-                          decoration: InputDecoration(
-                            labelText: 'Option ${i + 1}',
-                          ),
-                          textInputAction: TextInputAction.next,
+                        child: Row(
+                          children: [
+                            if (quiz)
+                              IconButton(
+                                tooltip: 'Mark correct',
+                                icon: Icon(
+                                  i == correctOption
+                                      ? Icons.radio_button_checked
+                                      : Icons.radio_button_unchecked,
+                                  color: i == correctOption
+                                      ? Theme.of(context).colorScheme.primary
+                                      : null,
+                                ),
+                                onPressed: () =>
+                                    setDialog(() => correctOption = i),
+                              ),
+                            Expanded(
+                              child: TextField(
+                                controller: optionCtrls[i],
+                                decoration: InputDecoration(
+                                  labelText: quiz && i == correctOption
+                                      ? 'Option ${i + 1} (correct)'
+                                      : 'Option ${i + 1}',
+                                ),
+                                textInputAction: TextInputAction.next,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     Row(
@@ -1702,19 +2175,50 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                       onTap: () => setDialog(() => anonymous = !anonymous),
                     ),
+                    if (!quiz)
+                      GlassListTile(
+                        title: const Text(
+                          'Multiple answers',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        trailing: GlassSwitch(
+                          value: multiple,
+                          onChanged: (v) => setDialog(() => multiple = v),
+                          activeColor: Theme.of(context).colorScheme.primary,
+                          enableHaptics: true,
+                        ),
+                        onTap: () => setDialog(() => multiple = !multiple),
+                      ),
                     GlassListTile(
                       title: const Text(
-                        'Multiple answers',
+                        'Quiz mode',
                         style: TextStyle(fontWeight: FontWeight.w600),
                       ),
+                      subtitle: const Text('One correct answer, revealed after voting'),
                       trailing: GlassSwitch(
-                        value: multiple,
-                        onChanged: (v) => setDialog(() => multiple = v),
+                        value: quiz,
+                        onChanged: (v) => setDialog(() {
+                          quiz = v;
+                          if (v) multiple = false;
+                        }),
                         activeColor: Theme.of(context).colorScheme.primary,
                         enableHaptics: true,
                       ),
-                      onTap: () => setDialog(() => multiple = !multiple),
+                      onTap: () => setDialog(() {
+                        quiz = !quiz;
+                        if (quiz) multiple = false;
+                      }),
                     ),
+                    if (quiz) ...[
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: explanationCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Explanation (optional)',
+                        ),
+                        maxLines: 2,
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1731,6 +2235,7 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     } finally {
       questionCtrl.dispose();
+      explanationCtrl.dispose();
       for (final ctrl in optionCtrls) {
         ctrl.dispose();
       }
@@ -1775,6 +2280,19 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Groups let the user pick the call backend: P2P mesh, or the premium SFU.
   /// 1:1 chats are always P2P (no chooser).
   void _onCallPressed({required bool isVideo}) {
+    // Calls use UDP media that can't be tunnelled through a TCP SOCKS proxy;
+    // with the strict toggle on, refuse rather than leak the real IP.
+    if (ProxyService.instance.callsBlocked) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Calls are disabled while a proxy is active (strict mode). '
+            'Turn off the proxy or disable strict mode to call.',
+          ),
+        ),
+      );
+      return;
+    }
     if (!conv.isGroup) {
       _startCall(isVideo: isVideo);
       return;
@@ -1833,6 +2351,20 @@ class _ChatScreenState extends State<ChatScreen> {
                   }
                 },
               ),
+              GlassActionTile(
+                icon: Icons.podcasts_rounded,
+                label: 'Voice stage room',
+                subtitle: 'Audio room with speakers, listeners & raise-hand',
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute<void>(
+                      builder: (_) => StageRoomScreen(conversation: conv),
+                    ),
+                  );
+                },
+              ),
               const SizedBox(height: 10),
             ],
           ),
@@ -1867,6 +2399,21 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_locked && !_unlocked) {
+      return Scaffold(
+        appBar: const GlassAppBar(title: Text('Locked')),
+        extendBodyBehindAppBar: true,
+        body: PinLockGate(
+          title: conv.displayName(context.read<AuthProvider>().currentUser?.id ?? ''),
+          onVerify: (pin) => context
+              .read<SecureStorageService>()
+              .verifyConversationPin(conv.id, pin),
+          onBiometric: () =>
+              LocalAuthentication().authenticate(localizedReason: 'Unlock this chat'),
+          onUnlocked: () => setState(() => _unlocked = true),
+        ),
+      );
+    }
     final auth = context.watch<AuthProvider>();
     final chat = context.watch<ChatProvider>();
     final messages = chat.messagesFor(conv.id);
@@ -2138,7 +2685,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   _TypingIndicator(
                     label: _typingLabel(typingUsers, currentUserID),
                   ),
-                _buildInputBar(context, currentUserID),
+                if (conv.locked)
+                  const _BurnerExpiredBar()
+                else
+                  _buildInputBar(context, currentUserID),
               ],
             ),
           ),
@@ -2465,7 +3015,10 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                     overflow: TextOverflow.ellipsis,
                   ),
-                  ConversationEncryptionStatus(conversation: conv),
+                  if (conv.isBurner && !conv.locked)
+                    _BurnerCountdownLabel(expiresAt: conv.expiresAt!)
+                  else
+                    ConversationEncryptionStatus(conversation: conv),
                 ],
               ),
             ),
@@ -2685,6 +3238,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _buildInputBar(BuildContext context, String currentUserID) {
     final scheme = Theme.of(context).colorScheme;
     final mentionSuggestions = _mentionSuggestions(currentUserID);
+    final specialMentions = _specialMentionSuggestions();
     // The composer is an active control, so it lives in the Liquid Glass layer:
     // a free-floating capsule hovering above the bottom boundary with the chat
     // canvas peeking around it.
@@ -2700,10 +3254,12 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (mentionSuggestions.isNotEmpty)
+              if (mentionSuggestions.isNotEmpty || specialMentions.isNotEmpty)
                 MentionAutocompletePanel(
                   members: mentionSuggestions,
+                  specialMentions: specialMentions,
                   onSelected: _insertMention,
+                  onSpecialSelected: _insertSpecialMention,
                 ),
               if (_replyingTo != null) _buildReplyPreview(context),
               Row(
@@ -2856,6 +3412,58 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  static const List<String> _fullReactionEmojis = [
+    '👍', '👎', '❤️', '🔥', '🎉', '👀', '😂', '🤣', '😊', '😍',
+    '😮', '😢', '😡', '🙏', '👏', '🙌', '💯', '✅', '❌', '⭐',
+    '🥳', '🤔', '😴', '🤯', '😎', '🥰', '😅', '😭', '🤩', '😇',
+    '🤝', '💪', '🫡', '🤌', '👌', '✌️', '🤞', '🫶', '💔', '💕',
+    '🚀', '⚡', '🌟', '🎯', '🏆', '🎁', '☕', '🍻', '🍕', '🤖',
+  ];
+
+  Future<void> _showFullReactionPicker(Message msg) async {
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const GlassSheetGrabber(),
+            const Padding(
+              padding: EdgeInsets.all(10),
+              child: Text(
+                'React',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+              ),
+            ),
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(sheetCtx).height * 0.4,
+              ),
+              child: GridView.count(
+                crossAxisCount: 8,
+                shrinkWrap: true,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                children: [
+                  for (final emoji in _fullReactionEmojis)
+                    GestureDetector(
+                      onTap: () => Navigator.pop(sheetCtx, emoji),
+                      child: Center(
+                        child: Text(emoji, style: const TextStyle(fontSize: 26)),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (picked != null && mounted) _toggleReaction(msg, picked);
+  }
+
   void _showReactionMenu(BuildContext context, Message msg, Offset anchor) {
     if (msg.type == MessageType.system) return;
     const emojis = ['👍', '❤️', '😂', '🔥', '🎉', '👀'];
@@ -2894,7 +3502,11 @@ class _ChatScreenState extends State<ChatScreen> {
                     emojis: emojis,
                     onSelected: (emoji) {
                       Navigator.pop(ctx);
-                      _toggleReaction(msg, emoji);
+                      if (emoji == '+') {
+                        _showFullReactionPicker(msg);
+                      } else {
+                        _toggleReaction(msg, emoji);
+                      }
                     },
                   ),
                 ),
@@ -2931,6 +3543,15 @@ class _ChatScreenState extends State<ChatScreen> {
             icon: Icons.reply_rounded,
             label: 'Reply',
           ),
+        if (!isSystem &&
+            !isMe &&
+            msg.sender != null &&
+            (conv.isGroup || conv.isChannel))
+          const MessageActionSheetItem(
+            value: 'reply_private',
+            icon: Icons.lock_outline_rounded,
+            label: 'Reply privately',
+          ),
         if (msg.effectiveReplyTo != null)
           const MessageActionSheetItem(
             value: 'jump_reply',
@@ -2943,12 +3564,18 @@ class _ChatScreenState extends State<ChatScreen> {
             icon: Icons.copy_rounded,
             label: 'Copy text',
           ),
-        if (msg.type == MessageType.text && hasCopyableText)
+        if (msg.type == MessageType.text && hasCopyableText) ...[
           const MessageActionSheetItem(
             value: 'forward',
             icon: Icons.forward_rounded,
             label: 'Forward',
           ),
+          const MessageActionSheetItem(
+            value: 'forward_anon',
+            icon: Icons.fast_forward_rounded,
+            label: 'Forward anonymously',
+          ),
+        ],
         if (hasCopyableText || canDownloadMessageAttachment(msg))
           const MessageActionSheetItem(
             value: 'share',
@@ -2960,6 +3587,12 @@ class _ChatScreenState extends State<ChatScreen> {
           icon: Icons.link_rounded,
           label: 'Copy message link',
         ),
+        if (msg.reactions.isNotEmpty)
+          const MessageActionSheetItem(
+            value: 'reactions',
+            icon: Icons.emoji_emotions_outlined,
+            label: 'Who reacted',
+          ),
         if (!isSystem)
           const MessageActionSheetItem(
             value: 'remind',
@@ -3017,14 +3650,20 @@ class _ChatScreenState extends State<ChatScreen> {
     switch (selected) {
       case 'reply':
         setState(() => _replyingTo = msg);
+      case 'reply_private':
+        await _replyPrivately(msg);
       case 'jump_reply':
         await _jumpToReply(msg);
       case 'copy_text':
         await _copyMessageText(msg);
       case 'copy_link':
         await _copyMessageLink(msg);
+      case 'reactions':
+        await _showReactors(msg);
       case 'forward':
         await _forwardMessage(msg);
+      case 'forward_anon':
+        await _forwardMessage(msg, anonymous: true);
       case 'share':
         await _shareMessage(msg);
       case 'remind':
@@ -3224,17 +3863,118 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _forwardMessage(Message msg) async {
+  Future<void> _forwardMessage(Message msg, {bool anonymous = false}) async {
     final text = msg.decryptedContent ?? '';
     if (text.isEmpty) return;
     final target = await _pickForwardTarget();
     if (target == null || !mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     final chat = context.read<ChatProvider>();
-    final sent = await chat.sendMessage(convID: target.id, plaintext: text);
+    final from = msg.sender?.username;
+    // Attributed forward carries "forwarded from @x"; anonymous sends content
+    // only (no chain of custody) — fits the metadata-minimization model.
+    final plaintext = (!anonymous && from != null && from.isNotEmpty)
+        ? jsonEncode({'text': text, 'forwarded_from': '@$from'})
+        : text;
+    final sent = await chat.sendMessage(convID: target.id, plaintext: plaintext);
     if (!mounted) return;
     messenger.showSnackBar(
       SnackBar(content: Text(sent ? 'Forwarded' : 'Could not forward message')),
+    );
+  }
+
+  Future<void> _replyPrivately(Message msg) async {
+    final sender = msg.sender;
+    if (sender == null) return;
+    final chat = context.read<ChatProvider>();
+    final settings = context.read<SettingsProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    final Conversation dm;
+    try {
+      dm = await chat.openDM(sender.id);
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Could not open DM: $e')));
+      return;
+    }
+    if (!mounted) return;
+    // Pre-fill the DM composer with a quote of the group message (the original
+    // isn't in the DM, so the snippet travels as text).
+    final quoted = (msg.decryptedContent ?? '').trim();
+    if (quoted.isNotEmpty) {
+      final block = quoted.split('\n').map((l) => '> $l').join('\n');
+      await settings.setMessageDraft(dm.id, '$block\n\n');
+    }
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => ChatScreen(conversation: dm)),
+    );
+  }
+
+  Future<void> _showReactors(Message msg) async {
+    final messenger = ScaffoldMessenger.of(context);
+    List<Map<String, dynamic>> reactors;
+    try {
+      reactors = await context.read<ApiService>().getMessageReactors(msg.id);
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not load reactions: $e')),
+      );
+      return;
+    }
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const GlassSheetGrabber(),
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: Text(
+                'Reactions',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+              ),
+            ),
+            if (reactors.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('No reactions'),
+              )
+            else
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final r in reactors)
+                      _reactorTile(r),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _reactorTile(Map<String, dynamic> r) {
+    final username = (r['username'] as String?) ?? 'unknown';
+    final display = (r['display_name'] as String?);
+    final title = (display != null && display.isNotEmpty) ? display : '@$username';
+    return GlassListTile(
+      leading: CircleAvatar(
+        child: Text(username.isNotEmpty ? username[0].toUpperCase() : '?'),
+      ),
+      title: Text(title),
+      subtitle: Text('@$username'),
+      trailing: Text(
+        (r['emoji'] as String?) ?? '',
+        style: const TextStyle(fontSize: 22),
+      ),
     );
   }
 
@@ -4307,6 +5047,19 @@ class _ReactionPopup extends StatelessWidget {
                 child: Text(emoji, style: const TextStyle(fontSize: 26)),
               ),
             ),
+          // "+" opens the full emoji picker (any emoji, not just the quick set).
+          GestureDetector(
+            onTap: () => onSelected('+'),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+              child: Icon(
+                Icons.add_circle_outline_rounded,
+                size: 26,
+                color: Theme.of(context).colorScheme.onSurface
+                    .withValues(alpha: 0.7),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -4477,6 +5230,112 @@ class _ReminderChoiceTile extends StatelessWidget {
 
 /// Top-of-chat banner shown when a group has a live SFU call and the local user
 /// isn't already in it — tapping joins (premium-gated).
+/// App-bar subtitle for an active "burner" group: a live countdown to its
+/// auto-destruct time, in place of the usual encryption-status line.
+class _BurnerCountdownLabel extends StatefulWidget {
+  const _BurnerCountdownLabel({required this.expiresAt});
+
+  final DateTime expiresAt;
+
+  @override
+  State<_BurnerCountdownLabel> createState() => _BurnerCountdownLabelState();
+}
+
+class _BurnerCountdownLabelState extends State<_BurnerCountdownLabel> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => setState(() {}),
+    );
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  String _remaining() {
+    final left = widget.expiresAt.difference(DateTime.now());
+    if (left.isNegative) return 'Expiring…';
+    if (left.inDays >= 1) return 'Expires in ${left.inDays}d';
+    if (left.inHours >= 1) return 'Expires in ${left.inHours}h';
+    if (left.inMinutes >= 1) return 'Expires in ${left.inMinutes}m';
+    return 'Expires in <1m';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          Icons.local_fire_department_rounded,
+          size: 12,
+          color: scheme.error,
+        ),
+        const SizedBox(width: 3),
+        Text(
+          _remaining(),
+          style: TextStyle(
+            fontSize: 12,
+            color: scheme.error.withValues(alpha: 0.9),
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Replaces the composer once a "burner" group/channel has expired: the chat is
+/// frozen and its messages have been purged server- and client-side.
+class _BurnerExpiredBar extends StatelessWidget {
+  const _BurnerExpiredBar();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        child: GlassContainer(
+          shape: LiquidRoundedSuperellipse(borderRadius: 20),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.local_fire_department_rounded,
+                  color: scheme.error,
+                  size: 20,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'This group has expired. Messages were permanently deleted.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: scheme.onSurface.withValues(alpha: 0.8),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _GroupCallBanner extends StatelessWidget {
   const _GroupCallBanner({required this.conversation});
 

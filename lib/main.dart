@@ -12,8 +12,11 @@ import 'providers/group_call_presence_provider.dart';
 import 'providers/chat_provider.dart';
 import 'providers/key_provider.dart';
 import 'providers/settings_provider.dart';
+import 'providers/smp_provider.dart';
+import 'providers/stage_room_provider.dart';
 import 'services/api_service.dart';
 import 'services/background_ws_service.dart';
+import 'services/call_history_service.dart';
 import 'services/call_service.dart';
 import 'services/call_signal_codec.dart';
 import 'services/sfu_call_controller.dart';
@@ -22,7 +25,10 @@ import 'services/local_private_state_service.dart';
 import 'services/mls_service.dart';
 import 'services/notification_service.dart';
 import 'services/push_notification_service.dart';
+import 'services/network_service.dart';
+import 'services/proxy_service.dart';
 import 'services/secure_storage_service.dart';
+import 'services/security_service.dart';
 import 'services/websocket_service.dart';
 import 'utils/local_conversation_preferences.dart';
 
@@ -85,6 +91,14 @@ void main() async {
   );
   // Configure the background WS service isolate; must run before any UI.
   await BackgroundWsService.configure();
+  // Apply the persisted screenshot-prevention setting as early as possible so
+  // FLAG_SECURE / the iOS secure layer is in place before the first frame.
+  await SecureStorageService().getScreenSecurity().then(
+    SecurityService.instance.setGlobalSecure,
+  );
+  // Install the proxy (HttpOverrides) BEFORE any HTTP/WS client is built so all
+  // traffic is routed from the first request.
+  await ProxyService.instance.load(SecureStorageService());
   runApp(
     LiquidGlassWidgets.wrap(
       // Adaptive quality: benchmarks the device on first launch and adjusts
@@ -108,11 +122,17 @@ class _Providers extends StatelessWidget {
       ws,
       api,
       signalCodec: PrivacyCallSignalCodec(api, storage, mls),
+      storage: storage,
     );
+    final callHistory = CallHistoryService(storage);
 
     return MultiProvider(
       providers: [
         Provider<SecureStorageService>.value(value: storage),
+        ChangeNotifierProvider<NetworkService>(
+          create: (_) => NetworkService()..init(),
+        ),
+        Provider<CallHistoryService>.value(value: callHistory),
         Provider<ApiService>.value(value: api),
         Provider<MlsService>.value(value: mls),
         ChangeNotifierProvider<WebSocketService>.value(value: ws),
@@ -126,8 +146,20 @@ class _Providers extends StatelessWidget {
           create: (ctx) =>
               ChatProvider(api, storage, ws, ctx.read<SettingsProvider>(), mls),
         ),
-        ChangeNotifierProvider(create: (_) => CallProvider(callService)),
+        ChangeNotifierProxyProvider<ChatProvider, SmpProvider>(
+          create: (ctx) => SmpProvider(
+            chat: ctx.read<ChatProvider>(),
+            storage: storage,
+          ),
+          update: (_, _, previous) => previous!,
+        ),
+        ChangeNotifierProvider(
+          create: (_) => CallProvider(callService, callHistory: callHistory),
+        ),
         ChangeNotifierProvider(create: (_) => SfuCallController(api, ws)),
+        ChangeNotifierProvider(
+          create: (_) => StageRoomProvider(api, ws, storage),
+        ),
         ChangeNotifierProvider(
           create: (_) => GroupCallPresenceProvider(ws, api),
         ),

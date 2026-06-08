@@ -20,6 +20,8 @@ import '../../widgets/glass.dart';
 import '../../widgets/conversation_notification_controls_sheet.dart';
 import '../../widgets/stories_strip.dart';
 import '../channels/channel_screen.dart';
+import '../broadcast/broadcast_lists_screen.dart';
+import '../call/call_history_screen.dart';
 import '../chat/chat_screen.dart';
 import '../profile/user_profile_screen.dart';
 import '../settings/settings_screen.dart';
@@ -147,6 +149,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       appBar: GlassAppBar(
         title: const Text('Chats'),
         actions: [
+          IconButton(
+            tooltip: 'Calls',
+            icon: const Icon(Icons.call_outlined),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const CallHistoryScreen()),
+            ),
+          ),
           IconButton(
             tooltip: 'Search',
             icon: const Icon(Icons.search_rounded),
@@ -741,6 +751,19 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 },
               ),
               _SheetTile(
+                icon: Icons.campaign_outlined,
+                label: 'Broadcast lists',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const BroadcastListsScreen(),
+                    ),
+                  );
+                },
+              ),
+              _SheetTile(
                 icon: Icons.group_outlined,
                 label: 'New Group',
                 onTap: () {
@@ -774,31 +797,83 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   Future<void> _showCreateGroup(BuildContext context) async {
     final nameCtrl = TextEditingController();
+    // null = permanent; otherwise the burner lifetime in seconds.
+    int? ttlSeconds;
+    const ttlOptions = <String, int?>{
+      'Permanent': null,
+      '1 hour': 3600,
+      '1 day': 86400,
+      '1 week': 604800,
+      '1 month': 2592000,
+    };
     final result = await showDialog<String>(
       context: context,
-      builder: (ctx) => GlassAlertDialog(
-        title: const Text('New Group'),
-        content: TextField(
-          controller: nameCtrl,
-          decoration: const InputDecoration(labelText: 'Group name'),
-          autofocus: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => GlassAlertDialog(
+          title: const Text('New Group'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(labelText: 'Group name'),
+                autofocus: true,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  const Icon(Icons.local_fire_department_outlined, size: 18),
+                  const SizedBox(width: 8),
+                  const Text('Auto-destruct'),
+                  const Spacer(),
+                  DropdownButton<int?>(
+                    value: ttlSeconds,
+                    onChanged: (v) => setLocal(() => ttlSeconds = v),
+                    items: [
+                      for (final entry in ttlOptions.entries)
+                        DropdownMenuItem<int?>(
+                          value: entry.value,
+                          child: Text(entry.key),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+              if (ttlSeconds != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'This group and its messages are permanently deleted '
+                    'when the timer ends.',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Theme.of(
+                        ctx,
+                      ).colorScheme.onSurface.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, nameCtrl.text),
+              child: const Text('Create'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, nameCtrl.text),
-            child: const Text('Create'),
-          ),
-        ],
       ),
     );
     if (result != null && result.isNotEmpty && context.mounted) {
       final conv = await context.read<ChatProvider>().createGroup(
         name: result,
         memberIDs: [],
+        expiresInSeconds: ttlSeconds,
       );
       if (context.mounted) {
         Navigator.push(
@@ -1907,6 +1982,7 @@ class _ConversationTile extends StatelessWidget {
                         name: name,
                         isGroup: conversation.isGroup,
                         isChannel: conversation.isChannel,
+                        isSelf: conversation.isSelf,
                         hasUnread: hasUnread,
                       ),
                     ),
@@ -2152,6 +2228,7 @@ class _ConvAvatar extends StatelessWidget {
   final String name;
   final bool isGroup;
   final bool isChannel;
+  final bool isSelf;
   final bool hasUnread;
 
   const _ConvAvatar({
@@ -2159,6 +2236,7 @@ class _ConvAvatar extends StatelessWidget {
     required this.name,
     required this.isGroup,
     required this.isChannel,
+    this.isSelf = false,
     required this.hasUnread,
   });
 
@@ -2168,12 +2246,20 @@ class _ConvAvatar extends StatelessWidget {
 
     Widget avatar = CircleAvatar(
       radius: 26,
-      backgroundColor: scheme.surfaceContainerHighest,
+      backgroundColor: isSelf
+          ? scheme.primary.withValues(alpha: 0.15)
+          : scheme.surfaceContainerHighest,
       backgroundImage: avatarUrl != null
           ? CachedNetworkImageProvider(ApiConfig.resolveMedia(avatarUrl!))
           : null,
       child: avatarUrl == null
-          ? (isGroup || isChannel
+          ? (isSelf
+                ? Icon(
+                    Icons.bookmark_rounded,
+                    size: 22,
+                    color: scheme.primary,
+                  )
+                : isGroup || isChannel
                 ? Icon(
                     isChannel ? Icons.campaign_rounded : Icons.group_rounded,
                     size: 22,

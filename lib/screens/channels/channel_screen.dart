@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart' as lg;
 import 'package:provider/provider.dart';
 import '../../config/api_config.dart';
 import '../../models/channel_pinned_message.dart';
@@ -19,6 +20,7 @@ import '../../providers/chat_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/attachment_service.dart';
+import 'channel_paywall_sheet.dart';
 import '../../services/mls_service.dart';
 import '../../services/offline_outbox_service.dart';
 import '../../services/secure_storage_service.dart';
@@ -1146,8 +1148,32 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }
 
   Future<void> _subscribe() async {
+    final api = context.read<ApiService>();
+    // Paid channels gate access behind a subscription plan — show the paywall
+    // instead of the free subscribe path when a plan exists.
     try {
-      final result = await context.read<ApiService>().subscribeChannel(
+      final subInfo = await api.getChannelSubscription(channel.id);
+      final plans = (subInfo['plans'] as List?) ?? const [];
+      final alreadySubscribed = subInfo['subscription'] != null;
+      final isOwner = subInfo['is_owner'] == true;
+      if (plans.isNotEmpty && !alreadySubscribed && !isOwner) {
+        if (!mounted) return;
+        final subscribed = await showChannelPaywall(
+          context,
+          channelId: channel.id,
+          channelName: channel.name ?? 'this channel',
+        );
+        if (subscribed && mounted) {
+          setState(() => _isSubscribed = true);
+          context.read<ChatProvider>().loadConversations();
+        }
+        return;
+      }
+    } catch (_) {
+      // Fall through to the free subscribe path if the plan lookup fails.
+    }
+    try {
+      final result = await api.subscribeChannel(
         channel.id,
       );
       if (result['join_request'] == 'pending') {
@@ -2025,6 +2051,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                         : Icons.lock_open_outlined,
                   ChannelSettingsAction.deleteOwnMessages =>
                     Icons.delete_sweep_outlined,
+                  ChannelSettingsAction.subscriptionPlan =>
+                    Icons.workspace_premium_outlined,
                 },
                 label: switch (item) {
                   ChannelSettingsAction.appearance => 'Chat appearance',
@@ -2039,6 +2067,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   ChannelSettingsAction.encryption => 'Encryption mode',
                   ChannelSettingsAction.deleteOwnMessages =>
                     'Delete my messages',
+                  ChannelSettingsAction.subscriptionPlan =>
+                    'Subscription price',
                 },
                 color: item == ChannelSettingsAction.deleteOwnMessages
                     ? Colors.red
@@ -2090,6 +2120,106 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         _setEncryption();
       case ChannelSettingsAction.deleteOwnMessages:
         _deleteOwnChannelMessages();
+      case ChannelSettingsAction.subscriptionPlan:
+        _setSubscriptionPrice();
+    }
+  }
+
+  Future<void> _setSubscriptionPrice() async {
+    final providerCtrl = ValueNotifier<String>('btc');
+    final priceCtrl = TextEditingController();
+    final daysCtrl = TextEditingController(text: '30');
+    // Prefill from an existing plan if present.
+    try {
+      final info = await context.read<ApiService>().getChannelSubscription(
+        channel.id,
+      );
+      final plans = ((info['plans'] as List?) ?? const [])
+          .cast<Map<String, dynamic>>();
+      if (plans.isNotEmpty) {
+        providerCtrl.value = plans.first['provider'] as String? ?? 'btc';
+        priceCtrl.text = (plans.first['price'] as num?)?.toString() ?? '';
+        daysCtrl.text =
+            (plans.first['period_days'] as int?)?.toString() ?? '30';
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    final save = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => GlassAlertDialog(
+        title: const Text('Subscription price'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ValueListenableBuilder<String>(
+              valueListenable: providerCtrl,
+              builder: (_, provider, _) => Row(
+                children: [
+                  for (final p in const ['btc', 'xmr'])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: lg.GlassChip(
+                        label: p.toUpperCase(),
+                        selected: provider == p,
+                        onTap: () => providerCtrl.value = p,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: priceCtrl,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'Price'),
+            ),
+            TextField(
+              controller: daysCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Period (days)'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (save != true || !mounted) return;
+    final price = double.tryParse(priceCtrl.text.trim()) ?? 0;
+    final days = int.tryParse(daysCtrl.text.trim()) ?? 0;
+    if (price <= 0 || days < 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a valid price and period')),
+      );
+      return;
+    }
+    try {
+      await context.read<ApiService>().setChannelSubscriptionPlan(
+        channel.id,
+        provider: providerCtrl.value,
+        price: price,
+        periodDays: days,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Subscription price saved')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed: $e')));
+      }
     }
   }
 

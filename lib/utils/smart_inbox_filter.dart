@@ -106,6 +106,8 @@ int compareConversationsForInbox(
   required Map<String, MessageDraft> drafts,
   required Set<String> pinnedConversationIds,
 }) {
+  // Saved Messages (self) is always pinned to the very top.
+  if (a.isSelf != b.isSelf) return a.isSelf ? -1 : 1;
   final aPinned = pinnedConversationIds.contains(a.id);
   final bPinned = pinnedConversationIds.contains(b.id);
   if (aPinned != bPinned) return aPinned ? -1 : 1;

@@ -27,6 +27,57 @@ class ActiveMentionQuery {
 final _mentionPattern = RegExp(r'@[A-Za-z0-9_]{3,32}');
 final _wordCharPattern = RegExp(r'[A-Za-z0-9_]');
 
+/// A broadcast mention (@everyone / @all / @admins) — not tied to one member.
+class SpecialMention {
+  final String handle; // 'everyone' | 'all' | 'admins'
+  final String label;
+  final String description;
+  const SpecialMention({
+    required this.handle,
+    required this.label,
+    required this.description,
+  });
+}
+
+const List<SpecialMention> kSpecialMentions = [
+  SpecialMention(
+    handle: 'everyone',
+    label: '@everyone',
+    description: 'Notify everyone',
+  ),
+  SpecialMention(handle: 'all', label: '@all', description: 'Notify everyone'),
+  SpecialMention(
+    handle: 'admins',
+    label: '@admins',
+    description: 'Notify admins & moderators',
+  ),
+];
+
+/// Special mentions matching the active query, when the user is allowed to use
+/// them (groups/channels). Returns [] for DMs or no active query.
+List<SpecialMention> specialMentionSuggestions({
+  required ActiveMentionQuery? active,
+  required bool allowed,
+}) {
+  if (active == null || !allowed) return const [];
+  final q = active.query.toLowerCase();
+  return kSpecialMentions
+      .where((m) => q.isEmpty || m.handle.startsWith(q))
+      .toList();
+}
+
+/// True if the text contains an @everyone / @all broadcast mention.
+bool textMentionsBroadcast(String text) {
+  return findMentionRanges(text).any((r) {
+    final h = r.handle.toLowerCase();
+    return h == 'everyone' || h == 'all';
+  });
+}
+
+/// True if the text contains an @admins mention.
+bool textMentionsAdmins(String text) =>
+    findMentionRanges(text).any((r) => r.handle.toLowerCase() == 'admins');
+
 List<MentionRange> findMentionRanges(String text) {
   final ranges = <MentionRange>[];
   for (final match in _mentionPattern.allMatches(text)) {

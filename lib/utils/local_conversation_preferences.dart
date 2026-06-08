@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'mention_utils.dart';
+
 const mutedConversationsPreferenceKey = 'muted_conversations';
 const conversationNotificationPreferencesPreferenceKey =
     'conversation_notification_preferences_v1';
@@ -14,6 +16,10 @@ class ConversationNotificationPreference {
   final int? quietHoursStartMinute;
   final int? quietHoursEndMinute;
 
+  /// Per-chat notification sound id (see [messageNotificationSounds]). Null/empty
+  /// uses the default sound.
+  final String? customSoundId;
+
   const ConversationNotificationPreference({
     this.mode = ConversationNotificationMode.all,
     this.mutedUntil,
@@ -21,6 +27,7 @@ class ConversationNotificationPreference {
     this.priority = false,
     this.quietHoursStartMinute,
     this.quietHoursEndMinute,
+    this.customSoundId,
   });
 
   const ConversationNotificationPreference.all()
@@ -29,7 +36,8 @@ class ConversationNotificationPreference {
       keywords = const [],
       priority = false,
       quietHoursStartMinute = null,
-      quietHoursEndMinute = null;
+      quietHoursEndMinute = null,
+      customSoundId = null;
 
   const ConversationNotificationPreference.mutedForever()
     : mode = ConversationNotificationMode.muted,
@@ -37,7 +45,8 @@ class ConversationNotificationPreference {
       keywords = const [],
       priority = false,
       quietHoursStartMinute = null,
-      quietHoursEndMinute = null;
+      quietHoursEndMinute = null,
+      customSoundId = null;
 
   const ConversationNotificationPreference.mentionsOnly()
     : mode = ConversationNotificationMode.mentionsOnly,
@@ -45,7 +54,8 @@ class ConversationNotificationPreference {
       keywords = const [],
       priority = false,
       quietHoursStartMinute = null,
-      quietHoursEndMinute = null;
+      quietHoursEndMinute = null,
+      customSoundId = null;
 
   bool isMutedAt(DateTime now) =>
       mode == ConversationNotificationMode.muted &&
@@ -90,6 +100,8 @@ class ConversationNotificationPreference {
     int? quietHoursStartMinute,
     int? quietHoursEndMinute,
     bool clearQuietHours = false,
+    String? customSoundId,
+    bool clearCustomSound = false,
   }) {
     return ConversationNotificationPreference(
       mode: mode ?? this.mode,
@@ -102,6 +114,9 @@ class ConversationNotificationPreference {
       quietHoursEndMinute: clearQuietHours
           ? null
           : quietHoursEndMinute ?? this.quietHoursEndMinute,
+      customSoundId: clearCustomSound
+          ? null
+          : customSoundId ?? this.customSoundId,
     );
   }
 
@@ -115,6 +130,8 @@ class ConversationNotificationPreference {
       'quiet_hours_start_minute': quietHoursStartMinute,
     if (quietHoursEndMinute != null)
       'quiet_hours_end_minute': quietHoursEndMinute,
+    if (customSoundId != null && customSoundId!.isNotEmpty)
+      'custom_sound_id': customSoundId,
   };
 
   factory ConversationNotificationPreference.fromJson(
@@ -142,6 +159,7 @@ class ConversationNotificationPreference {
       priority: json['priority'] as bool? ?? false,
       quietHoursStartMinute: json['quiet_hours_start_minute'] as int?,
       quietHoursEndMinute: json['quiet_hours_end_minute'] as int?,
+      customSoundId: json['custom_sound_id'] as String?,
     );
   }
 
@@ -154,7 +172,8 @@ class ConversationNotificationPreference {
           _sameKeywords(other.keywords, keywords) &&
           other.priority == priority &&
           other.quietHoursStartMinute == quietHoursStartMinute &&
-          other.quietHoursEndMinute == quietHoursEndMinute;
+          other.quietHoursEndMinute == quietHoursEndMinute &&
+          other.customSoundId == customSoundId;
 
   @override
   int get hashCode => Object.hash(
@@ -164,8 +183,26 @@ class ConversationNotificationPreference {
     priority,
     quietHoursStartMinute,
     quietHoursEndMinute,
+    customSoundId,
   );
 }
+
+/// Catalog of bundled per-chat notification sounds: id → display name. The id
+/// 'default' uses the system default. Other ids map to:
+///   * Android: a `messages_<id>` channel with raw resource `res/raw/<id>`,
+///   * iOS/macOS: a bundled `<id>.caf` sound file.
+/// NOTE: the actual audio asset files must be bundled per platform; until then
+/// non-default selections fall back to the default sound at runtime.
+const Map<String, String> messageNotificationSounds = {
+  'default': 'Default',
+  'chime': 'Chime',
+  'bell': 'Bell',
+  'pop': 'Pop',
+  'pebble': 'Pebble',
+};
+
+String messageNotificationSoundLabel(String? id) =>
+    messageNotificationSounds[id ?? 'default'] ?? 'Default';
 
 List<String> normalizeNotificationKeywords(Iterable<String> raw) {
   final seen = <String>{};
@@ -247,7 +284,11 @@ bool shouldNotifyForConversation({
   if (preference.mode != ConversationNotificationMode.mentionsOnly) {
     return true;
   }
-  if (mentionedForCurrentUser) return true;
+  // @everyone / @all reach mentions-only members too (when decrypted text is
+  // available — the server push itself is contentless by design).
+  if (mentionedForCurrentUser || textMentionsBroadcast(notificationText)) {
+    return true;
+  }
   return false;
 }
 

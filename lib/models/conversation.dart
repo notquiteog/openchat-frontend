@@ -1,7 +1,7 @@
 import 'message.dart';
 import 'user.dart';
 
-enum ConversationType { dm, group, channel }
+enum ConversationType { dm, group, channel, self }
 
 enum EncryptionMode { plaintext, pgp, mls }
 
@@ -56,6 +56,17 @@ class Conversation {
   final bool joinApprovalRequired;
   final bool topicsEnabled;
   final bool businessSuiteEnabled;
+
+  /// Join policy: 'open' or 'web_of_trust' (a current member must vouch for the
+  /// candidate's key before they can join).
+  final String membershipPolicy;
+
+  /// "Burner" group/channel auto-destruct time. Null = permanent. Once passed,
+  /// the server locks the conversation and purges its messages.
+  final DateTime? expiresAt;
+
+  /// True once a burner conversation has expired (frozen, messages purged).
+  final bool locked;
   final DateTime createdAt;
   final String createdBy;
   final List<ConversationMember> members;
@@ -83,6 +94,9 @@ class Conversation {
     this.joinApprovalRequired = false,
     this.topicsEnabled = false,
     this.businessSuiteEnabled = false,
+    this.membershipPolicy = 'open',
+    this.expiresAt,
+    this.locked = false,
     required this.createdAt,
     required this.createdBy,
     this.members = const [],
@@ -95,6 +109,7 @@ class Conversation {
     type: switch (json['type'] as String?) {
       'group' => ConversationType.group,
       'channel' => ConversationType.channel,
+      'self' => ConversationType.self,
       _ => ConversationType.dm,
     },
     name: json['name'] as String?,
@@ -117,6 +132,11 @@ class Conversation {
     joinApprovalRequired: json['join_approval_required'] as bool? ?? false,
     topicsEnabled: json['topics_enabled'] as bool? ?? false,
     businessSuiteEnabled: json['business_suite_enabled'] as bool? ?? false,
+    membershipPolicy: json['membership_policy'] as String? ?? 'open',
+    expiresAt: json['expires_at'] != null
+        ? DateTime.parse(json['expires_at'] as String)
+        : null,
+    locked: json['locked'] as bool? ?? false,
     createdAt: DateTime.parse(json['created_at'] as String),
     createdBy: json['created_by'] as String,
     members: (json['members'] as List? ?? [])
@@ -131,7 +151,14 @@ class Conversation {
   bool get isGroup => type == ConversationType.group;
   bool get isDM => type == ConversationType.dm;
   bool get isChannel => type == ConversationType.channel;
+  bool get isSelf => type == ConversationType.self;
   bool get isArchived => archivedAt != null;
+
+  /// A "burner" conversation with a scheduled auto-destruct time.
+  bool get isBurner => expiresAt != null;
+
+  /// Joining requires a current member to vouch for the candidate's key.
+  bool get isWebOfTrust => membershipPolicy == 'web_of_trust';
   bool get isEncrypted => encryptionMode.isEncrypted;
   bool get usesPgp => encryptionMode == EncryptionMode.pgp;
   bool get usesMls => encryptionMode == EncryptionMode.mls;
@@ -157,6 +184,7 @@ class Conversation {
 
   /// For DMs, returns the other participant's name; groups/channels use [name].
   String displayName(String currentUserID) {
+    if (isSelf) return 'Saved Messages';
     if (isGroup) return name ?? 'Group';
     if (isChannel) return name ?? 'Channel';
     if (members.isEmpty) return 'Unknown';
@@ -168,6 +196,7 @@ class Conversation {
   }
 
   String? displayAvatar(String currentUserID) {
+    if (isSelf) return null; // UI renders a bookmark glyph instead
     if (isGroup || isChannel) return avatarUrl;
     if (members.isEmpty) return null;
     final other = members.firstWhere(
@@ -206,6 +235,9 @@ class Conversation {
     bool? topicsEnabled,
     bool? businessSuiteEnabled,
     String? backgroundUrl,
+    DateTime? expiresAt,
+    bool? locked,
+    String? membershipPolicy,
   }) => Conversation(
     id: id,
     type: type,
@@ -228,6 +260,9 @@ class Conversation {
     joinApprovalRequired: joinApprovalRequired ?? this.joinApprovalRequired,
     topicsEnabled: topicsEnabled ?? this.topicsEnabled,
     businessSuiteEnabled: businessSuiteEnabled ?? this.businessSuiteEnabled,
+    membershipPolicy: membershipPolicy ?? this.membershipPolicy,
+    expiresAt: expiresAt ?? this.expiresAt,
+    locked: locked ?? this.locked,
     createdAt: createdAt,
     createdBy: createdBy,
     members: members ?? this.members,

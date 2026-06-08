@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
@@ -10,8 +11,10 @@ import '../config/api_config.dart';
 import '../crypto/pgp_service.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
+import '../providers/key_provider.dart';
 import '../services/api_service.dart';
 import '../services/secure_storage_service.dart';
+import 'conversation_health_panel.dart';
 import 'glass.dart';
 
 class ConversationInfoPanel extends StatefulWidget {
@@ -60,6 +63,155 @@ class _ConversationInfoPanelState extends State<ConversationInfoPanel>
     super.dispose();
   }
 
+  Future<void> _manageChatLock() async {
+    final storage = context.read<SecureStorageService>();
+    final messenger = ScaffoldMessenger.of(context);
+    final locked = await storage.hasConversationPin(widget.conversation.id);
+    if (!mounted) return;
+    if (locked) {
+      final remove = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Remove chat lock?'),
+          content: const Text('This chat will no longer require a PIN.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Remove'),
+            ),
+          ],
+        ),
+      );
+      if (remove == true) {
+        await storage.removeConversationPin(widget.conversation.id);
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Chat lock removed')),
+        );
+      }
+      return;
+    }
+    final pinCtrl = TextEditingController();
+    final set = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Set a chat PIN'),
+        content: TextField(
+          controller: pinCtrl,
+          autofocus: true,
+          obscureText: true,
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          decoration: const InputDecoration(hintText: 'PIN (4+ digits)'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Lock'),
+          ),
+        ],
+      ),
+    );
+    final pin = pinCtrl.text.trim();
+    pinCtrl.dispose();
+    if (set == true && pin.length >= 4) {
+      await storage.setConversationPin(widget.conversation.id, pin);
+      messenger.showSnackBar(const SnackBar(content: Text('Chat locked')));
+    } else if (set == true) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('PIN must be at least 4 digits')),
+      );
+    }
+  }
+
+  Future<void> _toggleWebOfTrust() async {
+    final api = context.read<ApiService>();
+    final messenger = ScaffoldMessenger.of(context);
+    final next = widget.conversation.isWebOfTrust ? 'open' : 'web_of_trust';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          next == 'web_of_trust'
+              ? 'Require a voucher to join?'
+              : 'Open up joining?',
+        ),
+        content: Text(
+          next == 'web_of_trust'
+              ? 'New members will need a current member to vouch for their key '
+                    'before they can join.'
+              : 'Anyone with an invite will be able to join again.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Apply'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await api.setMembershipPolicy(widget.conversation.id, next);
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            next == 'web_of_trust'
+                ? 'Joining now requires a voucher'
+                : 'Joining is now open',
+          ),
+        ),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+    }
+  }
+
+  Future<void> _vouchForMember() async {
+    final api = context.read<ApiService>();
+    final keys = context.read<KeyProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    final others = widget.conversation.members
+        .where((m) => m.userId != widget.currentUserId)
+        .toList();
+    if (others.isEmpty) return;
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Vouch for whose key?'),
+        children: [
+          for (final m in others)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, m.userId),
+              child: Text('@${m.user?.username ?? m.userId}'),
+            ),
+        ],
+      ),
+    );
+    if (picked == null) return;
+    final ok = await keys.vouchForMember(
+      api: api,
+      convID: widget.conversation.id,
+      candidateUserId: picked,
+    );
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(ok ? 'Vouch submitted' : 'Could not vouch (key locked?)'),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final name = widget.conversation.displayName(widget.currentUserId);
@@ -75,148 +227,183 @@ class _ConversationInfoPanelState extends State<ConversationInfoPanel>
 
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 520),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Container(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: scheme.primary.withValues(alpha: 0.22),
-                  blurRadius: 24,
-                  offset: const Offset(0, 8),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: scheme.primary.withValues(alpha: 0.22),
+                    blurRadius: 24,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: CircleAvatar(
+                key: const Key('conversation-info-avatar'),
+                radius: 42,
+                backgroundImage: avatar != null && avatar.isNotEmpty
+                    ? CachedNetworkImageProvider(ApiConfig.resolveMedia(avatar))
+                    : null,
+                child: avatar == null || avatar.isEmpty
+                    ? Icon(
+                        widget.conversation.isChannel
+                            ? Icons.campaign
+                            : widget.conversation.isGroup
+                            ? Icons.group
+                            : Icons.person,
+                        size: 34,
+                      )
+                    : null,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              textAlign: TextAlign.center,
+            ),
+            if (description != null && description.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                description,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: scheme.onSurface.withValues(alpha: 0.60),
                 ),
+              ),
+            ],
+            const SizedBox(height: 10),
+            Text(
+              '${widget.conversation.members.length} member${widget.conversation.members.length == 1 ? '' : 's'}',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: scheme.onSurface.withValues(alpha: 0.50),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextButton.icon(
+              icon: const Icon(Icons.health_and_safety_outlined, size: 18),
+              label: const Text('Conversation health'),
+              onPressed: () => showConversationHealth(
+                context,
+                conversation: widget.conversation,
+                currentUserId: widget.currentUserId,
+              ),
+            ),
+            TextButton.icon(
+              icon: const Icon(Icons.lock_outline_rounded, size: 18),
+              label: const Text('Lock chat with PIN'),
+              onPressed: _manageChatLock,
+            ),
+            if ((widget.conversation.isGroup ||
+                    widget.conversation.isChannel) &&
+                widget.conversation.createdBy == widget.currentUserId)
+              TextButton.icon(
+                icon: const Icon(Icons.hub_outlined, size: 18),
+                label: Text(
+                  widget.conversation.isWebOfTrust
+                      ? 'Joining: web of trust (tap to open)'
+                      : 'Require a voucher to join',
+                ),
+                onPressed: _toggleWebOfTrust,
+              ),
+            if (widget.conversation.isWebOfTrust)
+              TextButton.icon(
+                icon: const Icon(Icons.verified_user_outlined, size: 18),
+                label: const Text('Vouch for a member\'s key'),
+                onPressed: _vouchForMember,
+              ),
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Shared content',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: scheme.onSurface.withValues(alpha: 0.86),
+                    ),
+                  ),
+                ),
+                if (widget.onSharedSectionOpen != null)
+                  TextButton.icon(
+                    onPressed: () {
+                      final section = _sections[_tabController.index];
+                      widget.onSharedSectionOpen!(section);
+                    },
+                    icon: const Icon(Icons.open_in_full_rounded, size: 16),
+                    label: const Text('View all'),
+                  ),
               ],
             ),
-            child: CircleAvatar(
-              key: const Key('conversation-info-avatar'),
-              radius: 42,
-              backgroundImage: avatar != null && avatar.isNotEmpty
-                  ? CachedNetworkImageProvider(ApiConfig.resolveMedia(avatar))
-                  : null,
-              child: avatar == null || avatar.isEmpty
-                  ? Icon(
-                      widget.conversation.isChannel
-                          ? Icons.campaign
-                          : widget.conversation.isGroup
-                          ? Icons.group
-                          : Icons.person,
-                      size: 34,
-                    )
-                  : null,
+            const SizedBox(height: 10),
+            Container(
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest.withValues(alpha: 0.26),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(
+                  color: scheme.outlineVariant.withValues(alpha: 0.36),
+                ),
+              ),
+              child: TabBar(
+                controller: _tabController,
+                isScrollable: true,
+                tabAlignment: TabAlignment.start,
+                dividerHeight: 0,
+                indicatorSize: TabBarIndicatorSize.tab,
+                indicator: BoxDecoration(
+                  color: scheme.primary.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                labelColor: scheme.primary,
+                unselectedLabelColor: scheme.onSurface.withValues(alpha: 0.62),
+                labelStyle: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+                unselectedLabelStyle: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+                tabs: [
+                  for (final section in _sections)
+                    Tab(
+                      child: _SharedTabLabel(
+                        section: section,
+                        count: grouped[section]!.length,
+                      ),
+                    ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 14),
-          Text(
-            name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-            textAlign: TextAlign.center,
-          ),
-          if (description != null && description.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Text(
-              description,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                color: scheme.onSurface.withValues(alpha: 0.60),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: sharedHeight,
+              child: TabBarView(
+                controller: _tabController,
+                children: [
+                  for (final section in _sections)
+                    _SharedItemsList(
+                      section: section,
+                      items: grouped[section]!,
+                      onTap: widget.onMessageSelected,
+                    ),
+                ],
               ),
             ),
           ],
-          const SizedBox(height: 10),
-          Text(
-            '${widget.conversation.members.length} member${widget.conversation.members.length == 1 ? '' : 's'}',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: scheme.onSurface.withValues(alpha: 0.50),
-            ),
-          ),
-          const SizedBox(height: 18),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Shared content',
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: scheme.onSurface.withValues(alpha: 0.86),
-                  ),
-                ),
-              ),
-              if (widget.onSharedSectionOpen != null)
-                TextButton.icon(
-                  onPressed: () {
-                    final section = _sections[_tabController.index];
-                    widget.onSharedSectionOpen!(section);
-                  },
-                  icon: const Icon(Icons.open_in_full_rounded, size: 16),
-                  label: const Text('View all'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Container(
-            decoration: BoxDecoration(
-              color: scheme.surfaceContainerHighest.withValues(alpha: 0.26),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(
-                color: scheme.outlineVariant.withValues(alpha: 0.36),
-              ),
-            ),
-            child: TabBar(
-              controller: _tabController,
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
-              dividerHeight: 0,
-              indicatorSize: TabBarIndicatorSize.tab,
-              indicator: BoxDecoration(
-                color: scheme.primary.withValues(alpha: 0.18),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              labelColor: scheme.primary,
-              unselectedLabelColor: scheme.onSurface.withValues(alpha: 0.62),
-              labelStyle: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-              ),
-              unselectedLabelStyle: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-              tabs: [
-                for (final section in _sections)
-                  Tab(
-                    child: _SharedTabLabel(
-                      section: section,
-                      count: grouped[section]!.length,
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            height: sharedHeight,
-            child: TabBarView(
-              controller: _tabController,
-              children: [
-                for (final section in _sections)
-                  _SharedItemsList(
-                    section: section,
-                    items: grouped[section]!,
-                    onTap: widget.onMessageSelected,
-                  ),
-              ],
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -941,7 +1128,10 @@ class _SharedContentSheetState extends State<_SharedContentSheet>
                 ? null
                 : () => unawaited(_loadMore(section)),
             icon: state.loadingMore
-                ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
+                ? const GlassProgressIndicator.circular(
+                    size: 16,
+                    strokeWidth: 2,
+                  )
                 : const Icon(Icons.expand_more_rounded),
             label: Text(state.loadingMore ? 'Loading' : 'Load more'),
           ),

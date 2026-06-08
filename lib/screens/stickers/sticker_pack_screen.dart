@@ -6,6 +6,8 @@ import '../../config/api_config.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
 import '../../widgets/glass.dart';
+import 'sticker_discover_screen.dart';
+import 'sticker_editor_screen.dart';
 
 const _stickerPackNameMax = 128;
 const _stickerPackDescriptionMax = 2048;
@@ -121,6 +123,16 @@ class _StickerPackScreenState extends State<StickerPackScreen> {
       appBar: GlassAppBar(
         title: const Text('Sticker Packs'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.search_rounded),
+            tooltip: 'Discover packs',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => const StickerDiscoverScreen(),
+              ),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.add),
             tooltip: 'New pack',
@@ -545,6 +557,21 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
         actions: isOwner
             ? [
                 IconButton(
+                  icon: const Icon(Icons.auto_fix_high_rounded),
+                  tooltip: 'Create from photo',
+                  onPressed: () async {
+                    final added = await Navigator.push<bool>(
+                      context,
+                      MaterialPageRoute<bool>(
+                        builder: (_) => StickerEditorScreen(
+                          packId: _pack['id'] as String,
+                        ),
+                      ),
+                    );
+                    if (added == true) await _reload();
+                  },
+                ),
+                IconButton(
                   icon: const Icon(Icons.image_outlined),
                   tooltip: 'Set cover image',
                   onPressed: _setCoverImage,
@@ -621,6 +648,35 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                           ),
                         ),
                 ),
+                if (isOwner)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: GlassListTile(
+                      leading: const Icon(Icons.search_rounded),
+                      title: const Text('Show in search'),
+                      subtitle: const Text(
+                        'Let anyone discover and add this pack',
+                      ),
+                      trailing: GlassSwitch(
+                        value: _pack['is_discoverable'] == true,
+                        onChanged: (v) async {
+                          final api = context.read<ApiService>();
+                          final messenger = ScaffoldMessenger.of(context);
+                          try {
+                            await api.updateStickerPack(
+                              _pack['id'] as String,
+                              isDiscoverable: v,
+                            );
+                            await _reload();
+                          } catch (e) {
+                            messenger.showSnackBar(
+                              SnackBar(content: Text('Failed: $e')),
+                            );
+                          }
+                        },
+                      ),
+                    ),
+                  ),
                 Expanded(
                   child: stickers.isEmpty
                       ? Center(

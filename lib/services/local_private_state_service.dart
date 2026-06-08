@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/broadcast_list.dart';
 import '../models/chat_folder.dart';
 import '../models/contact_bundle.dart';
 import '../utils/local_conversation_preferences.dart';
@@ -15,6 +16,8 @@ const localPrivateStatePreferenceKey = 'local_private_state_v1';
 const privateStateConversationNotificationPreferencesKey =
     'conversation_notification_preferences';
 const privateStateChatFoldersKey = 'chat_folders';
+const privateStateBroadcastListsKey = 'broadcast_lists';
+const privateStateCloseFriendsKey = 'close_friends';
 const privateStateNotificationSettingsKey = 'notification_settings';
 const privateStateMessageDraftsKey = 'message_drafts';
 const privateStatePinnedChannelMessagesKey = 'pinned_channel_messages';
@@ -92,6 +95,22 @@ List<ChatFolder> decodePrivateChatFolders(Object? raw) {
       .where((folder) => folder.id.isNotEmpty && folder.name.trim().isNotEmpty)
       .toList();
 }
+
+List<BroadcastList> decodePrivateBroadcastLists(Object? raw) {
+  if (raw is! List) return const [];
+  return raw
+      .whereType<Map>()
+      .map((item) => BroadcastList.fromJson(Map<String, dynamic>.from(item)))
+      .where((list) => list.id.isNotEmpty && list.name.trim().isNotEmpty)
+      .toList();
+}
+
+List<Map<String, dynamic>> encodePrivateBroadcastLists(
+  Iterable<BroadcastList> lists,
+) => lists
+    .where((list) => list.id.isNotEmpty && list.name.trim().isNotEmpty)
+    .map((list) => list.toJson())
+    .toList();
 
 List<Map<String, dynamic>> encodePrivateChatFolders(
   Iterable<ChatFolder> folders,

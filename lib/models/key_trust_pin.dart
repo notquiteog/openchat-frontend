@@ -6,6 +6,11 @@ class KeyTrustPin {
   final String? warning;
   final DateTime pinnedAt;
 
+  /// How this key was verified, e.g. 'smp' (Socialist Millionaire Protocol).
+  /// Null for a trust-on-first-use pin.
+  final String? verifiedVia;
+  final DateTime? verifiedAt;
+
   const KeyTrustPin({
     required this.userId,
     required this.fingerprint,
@@ -13,10 +18,15 @@ class KeyTrustPin {
     this.eventHash,
     this.warning,
     required this.pinnedAt,
+    this.verifiedVia,
+    this.verifiedAt,
   });
+
+  bool get isVerified => verifiedVia != null && verifiedVia!.isNotEmpty;
 
   factory KeyTrustPin.fromJson(Map<String, dynamic> json) {
     final pinnedAtMs = json['pinned_at_ms'] as int?;
+    final verifiedAtMs = json['verified_at_ms'] as int?;
     return KeyTrustPin(
       userId: json['user_id']?.toString() ?? '',
       fingerprint: json['fingerprint']?.toString() ?? '',
@@ -29,6 +39,13 @@ class KeyTrustPin {
               pinnedAtMs,
               isUtc: true,
             ).toLocal(),
+      verifiedVia: json['verified_via'] as String?,
+      verifiedAt: verifiedAtMs == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(
+              verifiedAtMs,
+              isUtc: true,
+            ).toLocal(),
     );
   }
 
@@ -39,5 +56,8 @@ class KeyTrustPin {
     if (eventHash != null) 'event_hash': eventHash,
     if (warning != null) 'warning': warning,
     'pinned_at_ms': pinnedAt.toUtc().millisecondsSinceEpoch,
+    if (verifiedVia != null) 'verified_via': verifiedVia,
+    if (verifiedAt != null)
+      'verified_at_ms': verifiedAt!.toUtc().millisecondsSinceEpoch,
   };
 }

@@ -24,6 +24,7 @@ enum ChannelSettingsAction {
   autoDelete,
   encryption,
   deleteOwnMessages,
+  subscriptionPlan,
 }
 
 class ChannelActionPlacement {
@@ -100,6 +101,7 @@ class ChannelActionPolicy {
 
     if (managesInfo) {
       settings.add(ChannelSettingsAction.edit);
+      settings.add(ChannelSettingsAction.subscriptionPlan);
     }
     if (managesInvites) {
       settings.add(ChannelSettingsAction.inviteLinks);

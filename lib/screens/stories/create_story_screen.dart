@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../models/message.dart';
+import '../../models/user.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/chat_provider.dart';
+import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/attachment_service.dart';
 import '../../widgets/glass.dart';
@@ -69,6 +73,17 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
           : pending.messageType == MessageType.file
           ? 'file'
           : 'image';
+      final closeFriends = context
+          .read<SettingsProvider>()
+          .closeFriendIds
+          .toList();
+      if (_privacy == 'close_friends' && closeFriends.isEmpty) {
+        setState(() {
+          _posting = false;
+          _error = 'Add close friends first.';
+        });
+        return;
+      }
       await context.read<ApiService>().createStory(
         attachmentId: pending.attachmentId,
         fileName: pending.fileName,
@@ -78,7 +93,8 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
         fileNonce: pending.fileNonce,
         mediaType: mediaType,
         caption: _captionCtrl.text.trim(),
-        privacy: _privacy,
+        privacy: _privacy == 'close_friends' ? 'selected' : _privacy,
+        allowUserIds: _privacy == 'close_friends' ? closeFriends : const [],
         expiresInSeconds: _durationSeconds,
       );
       if (mounted) Navigator.pop(context, true);
@@ -87,6 +103,77 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
     } finally {
       if (mounted) setState(() => _posting = false);
     }
+  }
+
+  Future<void> _pickCloseFriends() async {
+    final me = context.read<AuthProvider>().currentUser?.id ?? '';
+    final chat = context.read<ChatProvider>();
+    final settings = context.read<SettingsProvider>();
+    final contacts = <User>[];
+    final seen = <String>{};
+    for (final c in chat.conversations.where((c) => c.isDM)) {
+      final u = c.otherUser(me);
+      if (u != null && seen.add(u.id)) contacts.add(u);
+    }
+    final selected = <String>{...settings.closeFriendIds};
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (sheetCtx, setSheet) => GlassBottomSheetFrame(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const GlassSheetGrabber(),
+              const Padding(
+                padding: EdgeInsets.all(12),
+                child: Text(
+                  'Close friends',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                ),
+              ),
+              if (contacts.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text('Start a DM with someone first to add them.'),
+                )
+              else
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final u in contacts)
+                        CheckboxListTile(
+                          value: selected.contains(u.id),
+                          onChanged: (v) => setSheet(() {
+                            if (v == true) {
+                              selected.add(u.id);
+                            } else {
+                              selected.remove(u.id);
+                            }
+                          }),
+                          title: Text(u.displayName),
+                          subtitle: Text('@${u.username}'),
+                        ),
+                    ],
+                  ),
+                ),
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: GlassButtonWidget(
+                  onPressed: () => Navigator.pop(sheetCtx),
+                  child: const Text('Done'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await settings.setCloseFriends(selected);
+    if (mounted) setState(() {});
   }
 
   @override
@@ -139,6 +226,11 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
                   label: Text('Contacts'),
                 ),
                 ButtonSegment(
+                  value: 'close_friends',
+                  icon: Icon(Icons.star_outline_rounded),
+                  label: Text('Close'),
+                ),
+                ButtonSegment(
                   value: 'public',
                   icon: Icon(Icons.public),
                   label: Text('Public'),
@@ -147,8 +239,29 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
               selected: {_privacy},
               onSelectionChanged: _posting
                   ? null
-                  : (value) => setState(() => _privacy = value.first),
+                  : (value) {
+                      final v = value.first;
+                      setState(() => _privacy = v);
+                      if (v == 'close_friends') _pickCloseFriends();
+                    },
             ),
+            if (_privacy == 'close_friends')
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Row(
+                  children: [
+                    Text(
+                      '${context.watch<SettingsProvider>().closeFriendIds.length} close friends',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: _pickCloseFriends,
+                      child: const Text('Edit'),
+                    ),
+                  ],
+                ),
+              ),
             const SizedBox(height: 12),
             DropdownButtonFormField<int>(
               initialValue: _durationSeconds,

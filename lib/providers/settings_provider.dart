@@ -3,8 +3,10 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import '../models/broadcast_list.dart';
 import '../models/channel_pinned_message.dart';
 import '../models/chat_folder.dart';
+import '../services/network_service.dart' show NetworkClass;
 import '../models/contact_bundle.dart';
 import '../models/message.dart';
 import '../models/message_reminder.dart';
@@ -173,6 +175,10 @@ class SettingsProvider extends ChangeNotifier {
   static const _kNotifSensitive = 'notification_sensitive_content';
   static const _kStrictPrivacyMode = 'strict_privacy_mode';
   static const _kLinkPreviewsEnabled = 'link_previews_enabled';
+  static const _kMessageFontScale = 'message_font_scale';
+  static const _kAutoDlWifi = 'auto_download_wifi';
+  static const _kAutoDlMobile = 'auto_download_mobile';
+  static const _kAutoDlMaxMb = 'auto_download_max_mb';
   static const _kReduceTransparency = 'reduce_transparency';
   static const _kSmartInboxFilter = 'smart_inbox_filter';
   static const _kPinnedConversations = 'pinned_conversations';
@@ -202,13 +208,19 @@ class SettingsProvider extends ChangeNotifier {
   bool _notifSensitive = false;
   bool _strictPrivacyMode = false;
   bool _linkPreviewsEnabled = true;
+  double _messageFontScale = 1.0;
+  bool _autoDownloadWifi = true;
+  bool _autoDownloadMobile = true;
+  int _autoDownloadMaxMb = 0; // 0 = no size cap
   bool _reduceTransparency = false;
   SmartInboxFilter _smartInboxFilter = SmartInboxFilter.all;
   final Map<String, MessageDraft> _messageDrafts = {};
   final Map<String, List<ChannelPinnedMessage>> _pinnedChannelMessages = {};
   final Set<String> _pinnedConversationIds = {};
+  final Set<String> _closeFriendIds = {};
   final Set<String> _archivedConversationIds = {};
   final List<ChatFolder> _chatFolders = [];
+  final List<BroadcastList> _broadcastLists = [];
   final Map<String, ContactBundle> _privateContacts = {};
   final Map<String, String> _unreadMentionMessageIds = {};
   final Set<String> _privacyOnboardingViewedUserIds = {};
@@ -234,9 +246,11 @@ class SettingsProvider extends ChangeNotifier {
       );
   Set<String> get pinnedConversationIds =>
       Set.unmodifiable(_pinnedConversationIds);
+  Set<String> get closeFriendIds => Set.unmodifiable(_closeFriendIds);
   Set<String> get archivedConversationIds =>
       Set.unmodifiable(_archivedConversationIds);
   List<ChatFolder> get chatFolders => List.unmodifiable(_chatFolders);
+  List<BroadcastList> get broadcastLists => List.unmodifiable(_broadcastLists);
   Map<String, ContactBundle> get privateContacts =>
       Map.unmodifiable(_privateContacts);
   Map<String, String> get unreadMentionMessageIds =>
@@ -276,6 +290,31 @@ class SettingsProvider extends ChangeNotifier {
   bool get linkPreviewsEnabled =>
       _strictPrivacyMode ? false : _linkPreviewsEnabled;
 
+  /// Message text scale factor (0.8–1.5, default 1.0). Applied to chat bubbles.
+  double get messageFontScale => _messageFontScale;
+  static const double minMessageFontScale = 0.8;
+  static const double maxMessageFontScale = 1.5;
+
+  // Auto-download policy (Batch 5.3). Defaults preserve the prior behaviour
+  // (download everywhere, no cap); users opt into restrictions.
+  bool get autoDownloadWifi => _autoDownloadWifi;
+  bool get autoDownloadMobile => _autoDownloadMobile;
+  int get autoDownloadMaxMb => _autoDownloadMaxMb;
+
+  /// Whether media of [sizeBytes] may auto-download on the current [net].
+  bool allowAutoDownload(NetworkClass net, {int? sizeBytes}) {
+    final allowedForNetwork = switch (net) {
+      NetworkClass.wifi => _autoDownloadWifi,
+      NetworkClass.mobile => _autoDownloadMobile,
+      NetworkClass.none => false,
+    };
+    if (!allowedForNetwork) return false;
+    if (_autoDownloadMaxMb > 0 && sizeBytes != null && sizeBytes > 0) {
+      return sizeBytes <= _autoDownloadMaxMb * 1024 * 1024;
+    }
+    return true;
+  }
+
   Future<void> load() {
     _loadFuture ??= _load();
     return _loadFuture!;
@@ -306,6 +345,13 @@ class SettingsProvider extends ChangeNotifier {
     _notifSensitive = notificationSettings.sensitiveContent;
     _strictPrivacyMode = _prefs!.getBool(_kStrictPrivacyMode) ?? false;
     _linkPreviewsEnabled = _prefs!.getBool(_kLinkPreviewsEnabled) ?? true;
+    _messageFontScale = (_prefs!.getDouble(_kMessageFontScale) ?? 1.0).clamp(
+      minMessageFontScale,
+      maxMessageFontScale,
+    );
+    _autoDownloadWifi = _prefs!.getBool(_kAutoDlWifi) ?? true;
+    _autoDownloadMobile = _prefs!.getBool(_kAutoDlMobile) ?? true;
+    _autoDownloadMaxMb = _prefs!.getInt(_kAutoDlMaxMb) ?? 0;
     _reduceTransparency = _prefs!.getBool(_kReduceTransparency) ?? false;
     _smartInboxFilter = smartInboxFilterFromName(
       _prefs!.getString(_kSmartInboxFilter),
@@ -315,6 +361,13 @@ class SettingsProvider extends ChangeNotifier {
       ..addAll(
         _stringListFromPrivateState(
           privateState[privateStatePinnedConversationsKey],
+        ),
+      );
+    _closeFriendIds
+      ..clear()
+      ..addAll(
+        _stringListFromPrivateState(
+          privateState[privateStateCloseFriendsKey],
         ),
       );
     _archivedConversationIds
@@ -338,6 +391,11 @@ class SettingsProvider extends ChangeNotifier {
         decodePrivateChatFolders(privateState[privateStateChatFoldersKey]),
       );
     _sortChatFolders(_chatFolders);
+    _broadcastLists
+      ..clear()
+      ..addAll(
+        decodePrivateBroadcastLists(privateState[privateStateBroadcastListsKey]),
+      );
     _privateContacts
       ..clear()
       ..addAll(
@@ -399,6 +457,30 @@ class SettingsProvider extends ChangeNotifier {
   }
 
   Future<void> resetSeedColor() => setSeedColor(const Color(defaultSeed));
+
+  Future<void> setMessageFontScale(double value) async {
+    _messageFontScale = value.clamp(minMessageFontScale, maxMessageFontScale);
+    notifyListeners();
+    await _prefs?.setDouble(_kMessageFontScale, _messageFontScale);
+  }
+
+  Future<void> setAutoDownloadWifi(bool value) async {
+    _autoDownloadWifi = value;
+    notifyListeners();
+    await _prefs?.setBool(_kAutoDlWifi, value);
+  }
+
+  Future<void> setAutoDownloadMobile(bool value) async {
+    _autoDownloadMobile = value;
+    notifyListeners();
+    await _prefs?.setBool(_kAutoDlMobile, value);
+  }
+
+  Future<void> setAutoDownloadMaxMb(int value) async {
+    _autoDownloadMaxMb = value < 0 ? 0 : value;
+    notifyListeners();
+    await _prefs?.setInt(_kAutoDlMaxMb, _autoDownloadMaxMb);
+  }
 
   Future<void> setChannelsOwnTab(bool value) async {
     _channelsOwnTab = value;
@@ -478,6 +560,37 @@ class SettingsProvider extends ChangeNotifier {
     final before = _chatFolders.length;
     _chatFolders.removeWhere((folder) => folder.id == folderId);
     if (_chatFolders.length == before) return;
+    notifyListeners();
+    await _persistPrivateLocalState();
+  }
+
+  Future<BroadcastList> saveBroadcastList(BroadcastList list) async {
+    await load();
+    final index = _broadcastLists.indexWhere((item) => item.id == list.id);
+    if (index == -1) {
+      _broadcastLists.add(list);
+    } else {
+      _broadcastLists[index] = list;
+    }
+    notifyListeners();
+    await _persistPrivateLocalState();
+    return list;
+  }
+
+  Future<void> removeBroadcastList(String listId) async {
+    await load();
+    final before = _broadcastLists.length;
+    _broadcastLists.removeWhere((list) => list.id == listId);
+    if (_broadcastLists.length == before) return;
+    notifyListeners();
+    await _persistPrivateLocalState();
+  }
+
+  Future<void> setCloseFriends(Iterable<String> userIds) async {
+    await load();
+    _closeFriendIds
+      ..clear()
+      ..addAll(userIds.where((id) => id.isNotEmpty));
     notifyListeners();
     await _persistPrivateLocalState();
   }
@@ -777,6 +890,9 @@ class SettingsProvider extends ChangeNotifier {
             _conversationNotificationPreferences,
           ),
       privateStateChatFoldersKey: encodePrivateChatFolders(_chatFolders),
+      privateStateBroadcastListsKey: encodePrivateBroadcastLists(
+        _broadcastLists,
+      ),
       privateStateMessageDraftsKey: _encodePrivateDrafts(_messageDrafts),
       privateStatePinnedChannelMessagesKey: _encodePrivatePinnedChannelMessages(
         _pinnedChannelMessages,
@@ -784,6 +900,7 @@ class SettingsProvider extends ChangeNotifier {
       privateStatePinnedConversationsKey: _sortedStringList(
         _pinnedConversationIds,
       ),
+      privateStateCloseFriendsKey: _sortedStringList(_closeFriendIds),
       privateStateArchivedConversationsKey: _sortedStringList(
         _archivedConversationIds,
       ),

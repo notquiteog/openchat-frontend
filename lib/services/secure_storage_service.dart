@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
@@ -66,6 +67,10 @@ class SecureStorageService {
   static const _keyRefreshToken = 'refresh_token';
   static const _keyBiometricEnabled = 'biometric_enabled';
   static const _keyAppLockEnabled = 'app_lock_enabled';
+  static const _keyForceTurn = 'force_turn_calls';
+  static const _keyScreenSecurity = 'screen_security_enabled';
+  static const _keyProxyConfig = 'proxy_config_v1';
+  static const _keyConversationPins = 'conversation_pins_v1';
   static const _keySearchIndexKey = 'search_index_key_v1';
   static const _keyOutboxKey = 'offline_outbox_key_v1';
   static const _keyLocalPrivateStateKey = 'local_private_state_key_v1';
@@ -592,6 +597,83 @@ class SecureStorageService {
     key: _keyAppLockEnabled,
     value: enabled ? 'true' : 'false',
   );
+
+  // Force-TURN: route all call media through the relay so peers never see each
+  // other's IP (defeats IP discovery; requires TURN to be configured).
+  Future<bool> getForceTurn() async {
+    final v = await _readOrNull(_keyForceTurn);
+    return v == 'true';
+  }
+
+  Future<void> setForceTurn(bool enabled) =>
+      _storage.write(key: _keyForceTurn, value: enabled ? 'true' : 'false');
+
+  // Screenshot prevention: global toggle that applies FLAG_SECURE / the iOS
+  // secure layer to the whole app. Sensitive screens force it on regardless.
+  Future<bool> getScreenSecurity() async {
+    final v = await _readOrNull(_keyScreenSecurity);
+    return v == 'true';
+  }
+
+  Future<void> setScreenSecurity(bool enabled) =>
+      _storage.write(
+        key: _keyScreenSecurity,
+        value: enabled ? 'true' : 'false',
+      );
+
+  // Proxy / SOCKS5 / Tor routing — stored as a small JSON blob.
+  Future<String?> getProxyConfig() => _readOrNull(_keyProxyConfig);
+
+  Future<void> setProxyConfig(String json) =>
+      _storage.write(key: _keyProxyConfig, value: json);
+
+  // ── Per-conversation PIN lock ──────────────────────────────────────────────
+  // A salted SHA-256 of the PIN per conversation, stored only on this device.
+  Future<Map<String, String>> _conversationPins() async {
+    final raw = await _readOrNull(_keyConversationPins);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        return decoded.map((k, v) => MapEntry(k.toString(), v.toString()));
+      }
+    } catch (_) {}
+    return {};
+  }
+
+  Future<bool> hasConversationPin(String convID) async =>
+      (await _conversationPins()).containsKey(convID);
+
+  Future<List<String>> lockedConversationIds() async =>
+      (await _conversationPins()).keys.toList();
+
+  Future<void> setConversationPin(String convID, String pin) async {
+    final pins = await _conversationPins();
+    final rand = Random.secure();
+    final salt = base64Encode(
+      List<int>.generate(16, (_) => rand.nextInt(256)),
+    );
+    final hash = sha256.convert(utf8.encode('$salt:$pin')).toString();
+    pins[convID] = '$salt:$hash';
+    await _storage.write(key: _keyConversationPins, value: jsonEncode(pins));
+  }
+
+  Future<bool> verifyConversationPin(String convID, String pin) async {
+    final stored = (await _conversationPins())[convID];
+    if (stored == null) return false;
+    final idx = stored.indexOf(':');
+    if (idx < 0) return false;
+    final salt = stored.substring(0, idx);
+    final hash = stored.substring(idx + 1);
+    return sha256.convert(utf8.encode('$salt:$pin')).toString() == hash;
+  }
+
+  Future<void> removeConversationPin(String convID) async {
+    final pins = await _conversationPins();
+    if (pins.remove(convID) != null) {
+      await _storage.write(key: _keyConversationPins, value: jsonEncode(pins));
+    }
+  }
 
   /// Message encryption/decryption needs the private key during normal app use.
   /// Biometric key unlock only protects explicit private-key export.

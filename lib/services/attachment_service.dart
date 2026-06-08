@@ -39,6 +39,7 @@ class PendingAttachment {
   Map<String, dynamic> toPayloadJson({
     String caption = '',
     bool viewOnce = false,
+    bool hasSpoiler = false,
   }) => {
     'text': caption,
     'attachment_id': attachmentId,
@@ -47,6 +48,7 @@ class PendingAttachment {
     'mime_type': mimeType,
     if (durationMs != null) 'duration_ms': durationMs,
     if (viewOnce) 'view_once': true,
+    if (hasSpoiler) 'has_spoiler': true,
     'file_key': fileKey,
     'file_nonce': fileNonce,
   };
@@ -60,6 +62,7 @@ class EncryptedAttachmentUpload {
   final String mimeType;
   final MessageType messageType;
   final int? durationMs;
+  final List<double>? waveform;
   final String fileKey;
   final String fileNonce;
 
@@ -71,6 +74,7 @@ class EncryptedAttachmentUpload {
     required this.mimeType,
     required this.messageType,
     this.durationMs,
+    this.waveform,
     required this.fileKey,
     required this.fileNonce,
   });
@@ -82,6 +86,7 @@ class EncryptedAttachmentUpload {
     'mime_type': mimeType,
     'message_type': messageType.name,
     if (durationMs != null) 'duration_ms': durationMs,
+    if (waveform != null && waveform!.isNotEmpty) 'waveform': waveform,
     'file_key': fileKey,
     'file_nonce': fileNonce,
   };
@@ -102,6 +107,9 @@ class EncryptedAttachmentUpload {
         orElse: () => MessageType.file,
       ),
       durationMs: json['duration_ms'] as int?,
+      waveform: (json['waveform'] as List?)
+          ?.map((e) => (e as num).toDouble())
+          .toList(),
       fileKey: json['file_key'] as String? ?? '',
       fileNonce: json['file_nonce'] as String? ?? '',
     );
@@ -111,6 +119,7 @@ class EncryptedAttachmentUpload {
     required String attachmentId,
     String caption = '',
     bool viewOnce = false,
+    bool hasSpoiler = false,
   }) => {
     'text': caption,
     'attachment_id': attachmentId,
@@ -118,7 +127,9 @@ class EncryptedAttachmentUpload {
     'file_size': fileSize,
     'mime_type': mimeType,
     if (durationMs != null) 'duration_ms': durationMs,
+    if (waveform != null && waveform!.isNotEmpty) 'waveform': waveform,
     if (viewOnce) 'view_once': true,
+    if (hasSpoiler) 'has_spoiler': true,
     'file_key': fileKey,
     'file_nonce': fileNonce,
   };
@@ -279,6 +290,30 @@ class AttachmentService {
     return encryptPreparedAttachment(prepared, onProgress: onProgress);
   }
 
+  /// Picks several photos at once and returns one encrypted upload per image,
+  /// for sending a multi-photo album.
+  Future<List<EncryptedAttachmentUpload>> pickImagesForAlbum({
+    AttachmentUploadProgressCallback? onProgress,
+  }) async {
+    final files = <File>[];
+    if (_isDesktop) {
+      final picked = await fs.openFiles(acceptedTypeGroups: [_imageTypeGroup]);
+      files.addAll(picked.map((p) => File(p.path)));
+    } else {
+      final picked = await _imagePicker.pickMultiImage(imageQuality: 85);
+      files.addAll(picked.map((x) => File(x.path)));
+    }
+    final out = <EncryptedAttachmentUpload>[];
+    for (final file in files) {
+      onProgress?.call(
+        const AttachmentUploadProgress(stage: AttachmentUploadStage.preparing),
+      );
+      final prepared = await prepareGalleryPhotoForUpload(file);
+      out.add(await encryptPreparedAttachment(prepared));
+    }
+    return out;
+  }
+
   Future<PendingAttachment?> pickVideo({
     bool fromCamera = false,
     AttachmentUploadProgressCallback? onProgress,
@@ -416,6 +451,7 @@ class AttachmentService {
   Future<EncryptedAttachmentUpload> prepareVoiceNoteForOutbox(
     File file, {
     Duration? duration,
+    List<double>? waveform,
     AttachmentUploadProgressCallback? onProgress,
   }) async {
     onProgress?.call(
@@ -433,6 +469,7 @@ class AttachmentService {
         originalFileSize: prepared.originalFileSize,
       ),
       durationMs: duration?.inMilliseconds,
+      waveform: waveform,
       onProgress: onProgress,
     );
   }
@@ -513,6 +550,7 @@ class AttachmentService {
   Future<EncryptedAttachmentUpload> encryptPreparedAttachment(
     PreparedAttachmentInput prepared, {
     int? durationMs,
+    List<double>? waveform,
     AttachmentUploadProgressCallback? onProgress,
   }) async {
     final bytes = prepared.bytes;
@@ -548,6 +586,7 @@ class AttachmentService {
       mimeType: mimeType,
       messageType: msgType,
       durationMs: durationMs,
+      waveform: waveform,
       fileKey: keyB64,
       fileNonce: nonceB64,
     );

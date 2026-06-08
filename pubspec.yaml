@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.5.35+111
+version: 0.5.36+112
 publish_to: 'none'
 
 environment:
@@ -119,6 +119,9 @@ dependencies:
     git:
       url: https://github.com/notquiteog/openmls_dart.git
       ref: openmls_frb-1.6.0
+  socks5_proxy: ^2.1.1
+  connectivity_plus: ^7.1.1
+  image_cropper: ^12.2.1
 
 flutter:
   uses-material-design: true

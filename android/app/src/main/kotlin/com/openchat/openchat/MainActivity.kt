@@ -1,12 +1,15 @@
 package com.openchat.openchat
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
+import android.view.WindowManager
+import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.android.FlutterFragmentActivity
@@ -20,6 +23,10 @@ class MainActivity : FlutterFragmentActivity() {
     private var callForegroundActionsReady = false
     private val pendingCallForegroundActions = mutableListOf<String>()
     private var selectedCallAudioRoute: String? = null
+    private var securityChannel: MethodChannel? = null
+    // Activity.ScreenCaptureCallback (API 34+); held as Any? so the class still
+    // loads on older devices where the type is absent at runtime.
+    private var screenCaptureCallback: Any? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -117,7 +124,64 @@ class MainActivity : FlutterFragmentActivity() {
                 else -> result.notImplemented()
             }
         }
+        val security = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "openchat/security",
+        )
+        securityChannel = security
+        security.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "setScreenSecure" -> {
+                    val secure = call.argument<Boolean>("secure") ?: false
+                    runOnUiThread { applyScreenSecure(secure) }
+                    result.success(true)
+                }
+                "startScreenshotDetection" -> result.success(startScreenshotDetection())
+                "stopScreenshotDetection" -> {
+                    stopScreenshotDetection()
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
         dispatchCallForegroundIntent(intent)
+    }
+
+    private fun applyScreenSecure(secure: Boolean) {
+        if (secure) {
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_SECURE,
+                WindowManager.LayoutParams.FLAG_SECURE,
+            )
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
+
+    // Screenshot detection is only available on Android 14 (API 34) and up.
+    // Returns true if a callback was actually registered.
+    private fun startScreenshotDetection(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return false
+        registerScreenCapture()
+        return true
+    }
+
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private fun registerScreenCapture() {
+        val existing = screenCaptureCallback as? Activity.ScreenCaptureCallback
+        if (existing != null) return
+        val cb = Activity.ScreenCaptureCallback {
+            securityChannel?.invokeMethod("screenshotTaken", null)
+        }
+        screenCaptureCallback = cb
+        registerScreenCaptureCallback(mainExecutor, cb)
+    }
+
+    private fun stopScreenshotDetection() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
+        val cb = screenCaptureCallback as? Activity.ScreenCaptureCallback ?: return
+        unregisterScreenCaptureCallback(cb)
+        screenCaptureCallback = null
     }
 
     override fun onNewIntent(intent: Intent) {

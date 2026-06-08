@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:uuid/uuid.dart';
 import '../crypto/pgp_service.dart';
+import '../crypto/smp_service.dart';
 import '../models/chat_folder.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
@@ -156,8 +157,24 @@ class ChatProvider extends ChangeNotifier {
 
   List<ChatFolder> get chatFolders => List.unmodifiable(_chatFolders);
 
-  List<Message> messagesFor(String convID) =>
-      List.unmodifiable(_messages[convID] ?? []);
+  List<Message> messagesFor(String convID) => List.unmodifiable(
+    (_messages[convID] ?? const <Message>[]).where((m) => !m.isHiddenControl),
+  );
+
+  /// In-band SMP control messages, routed to the SMP provider rather than shown.
+  final StreamController<SmpInbound> _smpController =
+      StreamController<SmpInbound>.broadcast();
+  Stream<SmpInbound> get smpMessages => _smpController.stream;
+
+  /// Send one SMP step to [convID] as a hidden `system` control message.
+  Future<void> sendSmpStep(String convID, Map<String, dynamic> payload) async {
+    final body = jsonEncode({'openchat_smp': 1, ...payload});
+    await _sendEncryptedPayload(
+      convID: convID,
+      plaintextPayload: body,
+      messageType: 'system',
+    );
+  }
 
   int get pendingOutboxCount => _outboxItems.length;
 
@@ -846,6 +863,7 @@ class ChatProvider extends ChangeNotifier {
       attachment.toPayloadJson(
         caption: data['caption'] as String? ?? '',
         viewOnce: data['view_once'] as bool? ?? false,
+        hasSpoiler: data['has_spoiler'] as bool? ?? false,
       ),
     );
     final sent = await _prepareAndSendOutboxPayload(
@@ -979,9 +997,14 @@ class ChatProvider extends ChangeNotifier {
     required PendingAttachment attachment,
     String caption = '',
     bool viewOnce = false,
+    bool hasSpoiler = false,
   }) async {
     final payloadJson = jsonEncode(
-      attachment.toPayloadJson(caption: caption, viewOnce: viewOnce),
+      attachment.toPayloadJson(
+        caption: caption,
+        viewOnce: viewOnce,
+        hasSpoiler: hasSpoiler,
+      ),
     );
     return _sendEncryptedPayload(
       convID: convID,
@@ -996,6 +1019,7 @@ class ChatProvider extends ChangeNotifier {
     required EncryptedAttachmentUpload attachment,
     String caption = '',
     bool viewOnce = false,
+    bool hasSpoiler = false,
     AttachmentUploadProgressCallback? onProgress,
   }) async {
     try {
@@ -1005,6 +1029,7 @@ class ChatProvider extends ChangeNotifier {
           attachment: attachment,
           caption: caption,
           viewOnce: viewOnce,
+          hasSpoiler: hasSpoiler,
         );
         return true;
       }
@@ -1016,6 +1041,7 @@ class ChatProvider extends ChangeNotifier {
         attachment: uploaded,
         caption: caption,
         viewOnce: viewOnce,
+        hasSpoiler: hasSpoiler,
       );
     } catch (e) {
       if (_shouldRetryOutboxError(e)) {
@@ -1024,6 +1050,7 @@ class ChatProvider extends ChangeNotifier {
           attachment: attachment,
           caption: caption,
           viewOnce: viewOnce,
+          hasSpoiler: hasSpoiler,
         );
         return true;
       }
@@ -1036,6 +1063,7 @@ class ChatProvider extends ChangeNotifier {
     required EncryptedAttachmentUpload attachment,
     String caption = '',
     bool viewOnce = false,
+    bool hasSpoiler = false,
   }) async {
     final conv = _conversations[convID];
     if (conv == null) {
@@ -1062,6 +1090,7 @@ class ChatProvider extends ChangeNotifier {
         attachmentId: pendingAttachmentID,
         caption: caption,
         viewOnce: viewOnce,
+        hasSpoiler: hasSpoiler,
       ),
     );
     final now = DateTime.now();
@@ -1102,6 +1131,7 @@ class ChatProvider extends ChangeNotifier {
           'ciphertext_path': ciphertextPath,
           'caption': caption,
           if (viewOnce) 'view_once': true,
+          if (hasSpoiler) 'has_spoiler': true,
           'is_encrypted': conv.isEncrypted,
           'auto_delete_seconds': conv.messageTtlSeconds,
           if (pending.autoDeleteExpiresAt != null)
@@ -1284,6 +1314,10 @@ class ChatProvider extends ChangeNotifier {
     bool isAnonymous = true,
     bool allowsMultipleAnswers = false,
     bool silent = false,
+    bool quiz = false,
+    bool meeting = false,
+    int? correctOptionId,
+    String? explanation,
   }) async {
     final conv = _conversations[convID];
     if (conv?.isEncrypted == true) {
@@ -1294,6 +1328,10 @@ class ChatProvider extends ChangeNotifier {
         isAnonymous: isAnonymous,
         allowsMultipleAnswers: allowsMultipleAnswers,
         silent: silent,
+        quiz: quiz,
+        meeting: meeting,
+        correctOptionId: correctOptionId,
+        explanation: explanation,
       );
     }
     final userID = await _storage.getUserID() ?? '';
@@ -1309,6 +1347,10 @@ class ChatProvider extends ChangeNotifier {
       isAnonymous: isAnonymous,
       allowsMultipleAnswers: allowsMultipleAnswers,
       silent: silent,
+      quiz: quiz,
+      meeting: meeting,
+      correctOptionId: correctOptionId,
+      explanation: explanation,
     );
     _hydrateMessageSender(msg);
     final list = _messages[convID] ?? [];
@@ -1329,7 +1371,13 @@ class ChatProvider extends ChangeNotifier {
     required bool isAnonymous,
     required bool allowsMultipleAnswers,
     required bool silent,
+    bool quiz = false,
+    bool meeting = false,
+    int? correctOptionId,
+    String? explanation,
   }) async {
+    final pollEffectiveMultiple = meeting ? true : allowsMultipleAnswers;
+    final pollType = quiz ? 'quiz' : (meeting ? 'meeting' : 'regular');
     final userID = await _storage.getUserID() ?? '';
     if (userID.isEmpty) {
       throw const ChatSendException(
@@ -1351,12 +1399,15 @@ class ChatProvider extends ChangeNotifier {
     final localPoll = Poll(
       id: pollID,
       question: cleanQuestion,
-      type: 'regular',
+      type: pollType,
       isAnonymous: isAnonymous,
-      allowsMultipleAnswers: allowsMultipleAnswers,
-      allowsRevoting: true,
+      allowsMultipleAnswers: pollEffectiveMultiple,
+      allowsRevoting: !quiz,
       isClosed: false,
       totalVoterCount: 0,
+      correctOptionIds:
+          quiz && correctOptionId != null ? [correctOptionId] : const [],
+      explanation: quiz ? explanation : null,
       options: [
         for (var i = 0; i < cleanOptions.length; i++)
           PollOption(
@@ -1372,10 +1423,10 @@ class ChatProvider extends ChangeNotifier {
       'poll': {
         'id': pollID,
         'question': cleanQuestion,
-        'type': 'regular',
+        'type': pollType,
         'is_anonymous': isAnonymous,
-        'allows_multiple_answers': allowsMultipleAnswers,
-        'allows_revoting': true,
+        'allows_multiple_answers': pollEffectiveMultiple,
+        'allows_revoting': !quiz,
         'options': [
           for (var i = 0; i < cleanOptions.length; i++)
             {
@@ -1419,9 +1470,13 @@ class ChatProvider extends ChangeNotifier {
         encryptedPayload: prepared.encryptedPayload,
         postToken: prepared.postToken ?? '',
         isAnonymous: isAnonymous,
-        allowsMultipleAnswers: allowsMultipleAnswers,
-        allowsRevoting: true,
+        allowsMultipleAnswers: pollEffectiveMultiple,
+        allowsRevoting: !quiz,
         silent: silent,
+        quiz: quiz,
+        meeting: meeting,
+        correctOptionId: correctOptionId,
+        explanation: explanation,
       );
       _replacePendingWithConfirmed(
         convID: convID,
@@ -1500,6 +1555,22 @@ class ChatProvider extends ChangeNotifier {
       plaintextPayload: payload,
       messageType: 'system',
     );
+  }
+
+  /// Notify the conversation that the local user captured a screenshot of a
+  /// view-once / disappearing attachment. Travels E2E as a `system` artifact —
+  /// no server-readable metadata — and renders as a system note for everyone.
+  Future<void> postScreenshotNotice({required String convID}) async {
+    final payload = jsonEncode({'screenshot_notice': true});
+    try {
+      await _sendEncryptedPayload(
+        convID: convID,
+        plaintextPayload: payload,
+        messageType: 'system',
+      );
+    } catch (_) {
+      // Best-effort: never throw from a screenshot handler.
+    }
   }
 
   /// Re-encrypt and replace the body of a message the user sent. Encryption is
@@ -2687,11 +2758,13 @@ class ChatProvider extends ChangeNotifier {
     required String name,
     String? description,
     required List<String> memberIDs,
+    int? expiresInSeconds,
   }) async {
     final conv = await _api.createGroup(
       name: name,
       description: description,
       memberIDs: memberIDs,
+      expiresInSeconds: expiresInSeconds,
     );
     _conversations[conv.id] = conv;
     notifyListeners();
@@ -2871,6 +2944,13 @@ class ChatProvider extends ChangeNotifier {
         // the fresh conversation + members so it updates without a manual refresh.
         final convID = event.data['conversation_id'] as String?;
         if (convID != null) {
+          // A "burner" group/channel just expired: the server has locked it and
+          // purged its messages. Mirror that locally — wipe the encrypted cache
+          // and in-memory list so nothing lingers on-device.
+          if (event.data['expired'] == true || event.data['locked'] == true) {
+            unawaited(_cache.deleteConversation(convID));
+            _messages.remove(convID);
+          }
           unawaited(refreshConversationsSilently());
           if (_conversations.containsKey(convID)) {
             loadConversationMembers(convID);
@@ -3110,6 +3190,21 @@ class ChatProvider extends ChangeNotifier {
     await _promoteDeliveredSealedScheduledMessage(msg);
     final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
     await _tryDecrypt(msg, privateKey);
+
+    // SMP verification traffic is consumed by the SMP provider, never shown.
+    final smp = msg.smpControl;
+    if (smp != null) {
+      if (msg.senderId != _selfId) {
+        _smpController.add(
+          SmpInbound(
+            conversationId: msg.conversationId,
+            senderId: msg.senderId,
+            payload: smp,
+          ),
+        );
+      }
+      return;
+    }
 
     // Realtime events don't carry sender profile info, so backfill from the
     // loaded members before the message reaches the bubble/avatar UI.

@@ -12,8 +12,14 @@ import 'glass.dart';
 class VoiceNoteRecording {
   final File file;
   final Duration duration;
+  // Downsampled amplitude samples (0..1) for the playback waveform.
+  final List<double> waveform;
 
-  const VoiceNoteRecording({required this.file, required this.duration});
+  const VoiceNoteRecording({
+    required this.file,
+    required this.duration,
+    this.waveform = const [],
+  });
 }
 
 Future<VoiceNoteRecording?> showVoiceNoteRecorder(BuildContext context) {
@@ -35,6 +41,8 @@ class VoiceNoteRecorderSheet extends StatefulWidget {
 class _VoiceNoteRecorderSheetState extends State<VoiceNoteRecorderSheet> {
   final _recorder = AudioRecorder();
   final List<double> _levels = List.filled(18, 0.08);
+  // Every amplitude sample for the whole recording, downsampled on send.
+  final List<double> _allLevels = [];
   Timer? _ticker;
   StreamSubscription<Amplitude>? _amplitudeSub;
   DateTime? _startedAt;
@@ -99,6 +107,7 @@ class _VoiceNoteRecorderSheetState extends State<VoiceNoteRecorderSheet> {
           .listen((amp) {
             if (!mounted || !_recording) return;
             final normalized = ((amp.current + 55) / 55).clamp(0.06, 1.0);
+            _allLevels.add(normalized.toDouble());
             setState(() {
               _levels
                 ..removeAt(0)
@@ -168,7 +177,34 @@ class _VoiceNoteRecorderSheetState extends State<VoiceNoteRecorderSheet> {
   Future<void> _send() async {
     final file = _file;
     if (file == null || _busy) return;
-    Navigator.pop(context, VoiceNoteRecording(file: file, duration: _elapsed));
+    Navigator.pop(
+      context,
+      VoiceNoteRecording(
+        file: file,
+        duration: _elapsed,
+        waveform: _buildWaveform(48),
+      ),
+    );
+  }
+
+  /// Downsamples the per-frame amplitudes to [buckets] averaged samples.
+  List<double> _buildWaveform(int buckets) {
+    if (_allLevels.isEmpty) return const [];
+    final n = math.min(buckets, _allLevels.length);
+    final size = _allLevels.length / n;
+    final out = <double>[];
+    for (var i = 0; i < n; i++) {
+      final start = (i * size).floor();
+      final end = math.min(((i + 1) * size).floor(), _allLevels.length);
+      var sum = 0.0;
+      var count = 0;
+      for (var j = start; j < end; j++) {
+        sum += _allLevels[j];
+        count++;
+      }
+      out.add(count > 0 ? sum / count : 0.08);
+    }
+    return out;
   }
 
   String _durationLabel(Duration duration) {

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart' as lg;
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
@@ -21,6 +22,12 @@ class _WalletScreenState extends State<WalletScreen> {
   List<Map<String, dynamic>> _transfers = const [];
   List<Map<String, dynamic>> _withdrawals = const [];
   double _feeRate = 0.03;
+  _WalletCategory _historyFilter = _WalletCategory.all;
+
+  // Sentinel "deleted user" (backend migration 002): a counterparty who wiped
+  // their account. Their side of a transaction is repointed here so this user's
+  // own history survives.
+  static const String _deletedUserId = '00000000-0000-0000-0000-0000000000de';
 
   @override
   void initState() {
@@ -219,16 +226,30 @@ class _WalletScreenState extends State<WalletScreen> {
     final out = <_WalletHistoryItem>[];
     for (final dep in _deposits) {
       final provider = dep['provider'] as String? ?? '';
+      final purpose = dep['purpose'] as String? ?? 'topup';
+      // A peer / subscription deposit also produces a peer transfer once
+      // confirmed; skip it there to avoid double-counting (it shows as the
+      // transfer). A still-pending one (no transfer yet) is kept so the user
+      // can see the incoming payment.
+      if (purpose != 'topup' && dep['peer_transfer_id'] != null) continue;
+      final isSub = purpose == 'channel_sub';
       final amount = _asDouble(
         dep['detected_amount'] ?? dep['expected_amount'],
       );
       out.add(
         _WalletHistoryItem(
           date: _parseDate(dep['updated_at'] ?? dep['created_at']),
-          icon: Icons.arrow_downward,
-          title: 'Deposit ${provider.toUpperCase()}',
+          icon: isSub
+              ? Icons.workspace_premium_outlined
+              : Icons.arrow_downward,
+          title: isSub
+              ? 'Channel subscription ${provider.toUpperCase()}'
+              : 'Deposit ${provider.toUpperCase()}',
           amount: amount > 0 ? '+${_formatCrypto(amount, provider)}' : null,
           subtitle: (dep['status'] as String? ?? '').replaceAll('_', ' '),
+          category: isSub
+              ? _WalletCategory.subscriptions
+              : _WalletCategory.deposits,
         ),
       );
     }
@@ -245,22 +266,45 @@ class _WalletScreenState extends State<WalletScreen> {
               '-${_formatCrypto(_asDouble(withdrawal['amount']), provider)}',
           subtitle:
               '${(withdrawal['status'] as String? ?? '').replaceAll('_', ' ')} - fee ${_formatCrypto(_asDouble(withdrawal['fee_amount']), provider)}',
+          category: _WalletCategory.withdrawals,
         ),
       );
     }
     for (final transfer in _transfers) {
       final provider = transfer['provider'] as String? ?? '';
+      final purpose = transfer['purpose'] as String? ?? 'peer';
       final incoming = transfer['to_user_id'] == currentUserID;
+      final isSub = purpose == 'channel_sub';
+      final counterparty =
+          (incoming ? transfer['from_user_id'] : transfer['to_user_id'])
+              as String?;
+      final note = transfer['note'] as String? ?? '';
+      final parts = <String>[
+        if (counterparty == _deletedUserId)
+          incoming ? 'from deleted user' : 'to deleted user',
+        if (note.isNotEmpty) note,
+      ];
       out.add(
         _WalletHistoryItem(
           date: _parseDate(transfer['created_at']),
-          icon: incoming ? Icons.call_received : Icons.call_made,
-          title: incoming
-              ? 'Received ${provider.toUpperCase()}'
-              : 'Sent ${provider.toUpperCase()}',
+          icon: isSub
+              ? Icons.workspace_premium_outlined
+              : (incoming ? Icons.call_received : Icons.call_made),
+          title: isSub
+              ? (incoming
+                    ? 'Subscriber payment ${provider.toUpperCase()}'
+                    : 'Channel subscription ${provider.toUpperCase()}')
+              : (incoming
+                    ? 'Received ${provider.toUpperCase()}'
+                    : 'Sent ${provider.toUpperCase()}'),
           amount:
               '${incoming ? '+' : '-'}${_formatCrypto(_asDouble(transfer['amount']), provider)}',
-          subtitle: transfer['note'] as String? ?? '',
+          subtitle: parts.join(' · '),
+          category: isSub
+              ? _WalletCategory.subscriptions
+              : (incoming
+                    ? _WalletCategory.received
+                    : _WalletCategory.sent),
         ),
       );
     }
@@ -272,6 +316,10 @@ class _WalletScreenState extends State<WalletScreen> {
   Widget build(BuildContext context) {
     final currentUserID = context.watch<AuthProvider>().currentUser?.id;
     final theme = Theme.of(context);
+    final allItems = _historyItems(currentUserID);
+    final filteredItems = _historyFilter == _WalletCategory.all
+        ? allItems
+        : allItems.where((it) => it.category == _historyFilter).toList();
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: const GlassAppBar(title: Text('Wallet')),
@@ -373,7 +421,30 @@ class _WalletScreenState extends State<WalletScreen> {
                       ),
                     ),
                   ),
-                  if (_historyItems(currentUserID).isEmpty)
+                  // Category filter — keeps deposits, peer payments, channel
+                  // subscriptions and withdrawals visually separate.
+                  if (allItems.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            for (final cat in _WalletCategory.values)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: lg.GlassChip(
+                                  label: cat.label,
+                                  selected: _historyFilter == cat,
+                                  onTap: () =>
+                                      setState(() => _historyFilter = cat),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  if (allItems.isEmpty)
                     GlassCard(
                       padding: const EdgeInsets.all(18),
                       child: Row(
@@ -396,16 +467,35 @@ class _WalletScreenState extends State<WalletScreen> {
                         ],
                       ),
                     )
+                  else if (filteredItems.isEmpty)
+                    GlassCard(
+                      padding: const EdgeInsets.all(18),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.filter_list_off,
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.40,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            'No ${_historyFilter.label.toLowerCase()} transactions',
+                            style: TextStyle(
+                              color: theme.colorScheme.onSurface.withValues(
+                                alpha: 0.55,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
                   else
                     GlassCard(
                       padding: EdgeInsets.zero,
                       child: Column(
                         children: [
-                          for (
-                            var i = 0;
-                            i < _historyItems(currentUserID).length;
-                            i++
-                          ) ...[
+                          for (var i = 0; i < filteredItems.length; i++) ...[
                             if (i > 0)
                               Divider(
                                 height: 1,
@@ -431,7 +521,7 @@ class _WalletScreenState extends State<WalletScreen> {
                                           .withValues(alpha: 0.10),
                                     ),
                                     child: Icon(
-                                      _historyItems(currentUserID)[i].icon,
+                                      filteredItems[i].icon,
                                       size: 18,
                                       color: theme.colorScheme.primary,
                                     ),
@@ -444,20 +534,16 @@ class _WalletScreenState extends State<WalletScreen> {
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
                                         Text(
-                                          _historyItems(currentUserID)[i].title,
+                                          filteredItems[i].title,
                                           style: const TextStyle(
                                             fontWeight: FontWeight.w600,
                                             fontSize: 14,
                                           ),
                                         ),
                                         Text(
-                                          _historyItems(
-                                                currentUserID,
-                                              )[i].subtitle.isEmpty
-                                              ? _historyItems(
-                                                  currentUserID,
-                                                )[i].dateLabel
-                                              : '${_historyItems(currentUserID)[i].subtitle} — ${_historyItems(currentUserID)[i].dateLabel}',
+                                          filteredItems[i].subtitle.isEmpty
+                                              ? filteredItems[i].dateLabel
+                                              : '${filteredItems[i].subtitle} — ${filteredItems[i].dateLabel}',
                                           style: TextStyle(
                                             fontSize: 12,
                                             color: theme.colorScheme.onSurface
@@ -467,10 +553,9 @@ class _WalletScreenState extends State<WalletScreen> {
                                       ],
                                     ),
                                   ),
-                                  if (_historyItems(currentUserID)[i].amount !=
-                                      null)
+                                  if (filteredItems[i].amount != null)
                                     Text(
-                                      _historyItems(currentUserID)[i].amount!,
+                                      filteredItems[i].amount!,
                                       style: const TextStyle(
                                         fontSize: 13,
                                         fontWeight: FontWeight.w600,
@@ -490,12 +575,25 @@ class _WalletScreenState extends State<WalletScreen> {
   }
 }
 
+enum _WalletCategory {
+  all('All'),
+  deposits('Deposits'),
+  sent('Sent'),
+  received('Received'),
+  subscriptions('Subs'),
+  withdrawals('Withdrawals');
+
+  const _WalletCategory(this.label);
+  final String label;
+}
+
 class _WalletHistoryItem {
   final DateTime date;
   final IconData icon;
   final String title;
   final String? amount;
   final String subtitle;
+  final _WalletCategory category;
 
   const _WalletHistoryItem({
     required this.date,
@@ -503,6 +601,7 @@ class _WalletHistoryItem {
     required this.title,
     required this.amount,
     required this.subtitle,
+    required this.category,
   });
 
   String get dateLabel => date.toLocal().toString().split('.').first;

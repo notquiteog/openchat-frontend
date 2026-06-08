@@ -523,6 +523,20 @@ class NotificationService {
     for (final channel in _androidChannels) {
       await android.createNotificationChannel(channel);
     }
+    // One channel per bundled message sound (Android binds sound at channel
+    // creation, so per-sound routing needs per-sound channels).
+    for (final id in messageNotificationSounds.keys) {
+      if (id == 'default') continue;
+      await android.createNotificationChannel(
+        AndroidNotificationChannel(
+          'messages_$id',
+          'Messages (${messageNotificationSounds[id]})',
+          description: 'New messages with the ${messageNotificationSounds[id]} sound',
+          importance: Importance.high,
+          sound: RawResourceAndroidNotificationSound(id),
+        ),
+      );
+    }
   }
 
   /// Explicitly request notification permissions. Call this when the user
@@ -591,16 +605,31 @@ class NotificationService {
     if (_activeConversationId == conversationId) return;
     await init();
     if (!_available) return;
+    // Per-chat custom notification sound (Batch 5.2): Android routes to a
+    // per-sound channel; iOS/macOS name the bundled sound file directly.
+    final soundId =
+        _conversationNotificationPreferences[conversationId]?.customSoundId;
+    final hasCustomSound =
+        soundId != null && soundId.isNotEmpty && soundId != 'default';
     final details = NotificationDetails(
       android: AndroidNotificationDetails(
-        'messages',
-        'Messages',
+        hasCustomSound ? 'messages_$soundId' : 'messages',
+        hasCustomSound
+            ? 'Messages (${messageNotificationSoundLabel(soundId)})'
+            : 'Messages',
         channelDescription: 'Notifications for new messages',
         importance: Importance.high,
         priority: Priority.high,
+        sound: hasCustomSound
+            ? RawResourceAndroidNotificationSound(soundId)
+            : null,
       ),
-      iOS: DarwinNotificationDetails(),
-      macOS: DarwinNotificationDetails(),
+      iOS: DarwinNotificationDetails(
+        sound: hasCustomSound ? '$soundId.caf' : null,
+      ),
+      macOS: DarwinNotificationDetails(
+        sound: hasCustomSound ? '$soundId.caf' : null,
+      ),
       linux: LinuxNotificationDetails(),
       windows: WindowsNotificationDetails(),
     );

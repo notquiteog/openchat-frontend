@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../services/call_audio.dart';
 import '../services/call_foreground_service.dart';
+import '../services/call_history_service.dart';
 import '../services/call_media_permissions.dart';
 import '../services/call_service.dart';
 import '../services/notification_service.dart';
@@ -15,7 +16,12 @@ class CallProvider extends ChangeNotifier {
   final CallAudioController _audio;
   final CallForegroundController _foreground;
   final CallMediaPermissionGate _mediaPermissionGate;
+  final CallHistoryService? _callHistory;
   final DateTime Function() _now;
+  // The most recent active (outgoing or accepted) session, retained so the
+  // call-history record on end can attribute peer + direction (CallEndedEvent
+  // alone doesn't carry them).
+  CallSession? _historySession;
   Timer? _durationTicker;
   bool _isCallMinimized = false;
   bool _micMuted = false;
@@ -160,10 +166,13 @@ class CallProvider extends ChangeNotifier {
     CallAudioController? audio,
     CallForegroundController? foreground,
     CallMediaPermissionGate? mediaPermissionGate,
+    CallHistoryService? callHistory,
     DateTime Function()? now,
   }) : _audio = audio ?? CallAudio(),
        _foreground = foreground ?? const CallForegroundService(),
        _mediaPermissionGate = mediaPermissionGate ?? ensureCallMediaPermissions,
+       // ignore: prefer_initializing_formals
+       _callHistory = callHistory,
        _now = now ?? DateTime.now {
     CallForegroundService.init();
     _foregroundActionSub = CallForegroundService.actions.listen(
@@ -171,6 +180,9 @@ class CallProvider extends ChangeNotifier {
     );
     _sessionSub = _callService.sessionStream.listen((_) {
       final s = session;
+      if (s != null && s.state != CallState.ended) {
+        _historySession = s;
+      }
       if (s == null || s.state == CallState.ended) {
         _incomingCall = null;
         unawaited(NotificationService.cancelIncomingCall());
@@ -237,7 +249,53 @@ class CallProvider extends ChangeNotifier {
 
   void _onCallEnded(CallEndedEvent ev) {
     _lastEndedCall = ev;
+    final hs = _historySession;
+    if (hs != null) {
+      _recordHistory(
+        id: hs.callId,
+        conversationId: ev.conversationId,
+        peerUserId: hs.remoteUserId,
+        peerUsername: hs.remoteUsername,
+        isVideo: ev.isVideo,
+        direction:
+            hs.isIncoming ? CallDirection.incoming : CallDirection.outgoing,
+        outcome: ev.answered ? CallOutcomeKind.answered : CallOutcomeKind.missed,
+        startedAt: _now().subtract(Duration(seconds: ev.durationSecs)),
+        durationSecs: ev.durationSecs,
+      );
+      _historySession = null;
+    }
     notifyListeners();
+  }
+
+  void _recordHistory({
+    required String id,
+    String? conversationId,
+    String? peerUserId,
+    String? peerUsername,
+    required bool isVideo,
+    required CallDirection direction,
+    required CallOutcomeKind outcome,
+    required DateTime startedAt,
+    int durationSecs = 0,
+  }) {
+    final svc = _callHistory;
+    if (svc == null) return;
+    unawaited(
+      svc.record(
+        CallHistoryEntry(
+          id: id,
+          conversationId: conversationId,
+          peerUserId: peerUserId,
+          peerUsername: peerUsername,
+          isVideo: isVideo,
+          direction: direction,
+          outcome: outcome,
+          startedAt: startedAt,
+          durationSecs: durationSecs,
+        ),
+      ),
+    );
   }
 
   /// Called by the app once it has recorded the ended call as a DM event.
@@ -262,6 +320,16 @@ class CallProvider extends ChangeNotifier {
     // supported) plus an in-app banner driven off [lastMissedCall].
     _incomingCall = null;
     _lastMissedCall = missed;
+    _recordHistory(
+      id: missed.callId,
+      conversationId: missed.conversationId,
+      peerUserId: missed.remoteUserId,
+      peerUsername: missed.remoteUsername,
+      isVideo: missed.isVideo,
+      direction: CallDirection.incoming,
+      outcome: CallOutcomeKind.missed,
+      startedAt: _now(),
+    );
     final kind = missed.isVideo ? 'video' : 'voice';
     final from = missed.remoteUsername != null
         ? ' from @${missed.remoteUsername}'
@@ -317,6 +385,16 @@ class CallProvider extends ChangeNotifier {
     final incoming = _incomingCall;
     if (incoming == null) return;
     _incomingCall = null;
+    _recordHistory(
+      id: incoming.callId,
+      conversationId: incoming.conversationId,
+      peerUserId: incoming.remoteUserId,
+      peerUsername: incoming.remoteUsername,
+      isVideo: incoming.isVideo,
+      direction: CallDirection.incoming,
+      outcome: CallOutcomeKind.declined,
+      startedAt: _now(),
+    );
     _callService.rejectCall(incoming);
     unawaited(NotificationService.cancelIncomingCall());
     _syncAudio();

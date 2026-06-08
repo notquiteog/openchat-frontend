@@ -332,6 +332,43 @@ class BotInlineKeyboardMarkup {
 }
 
 /// Parsed content for media messages. Text messages just use [text] directly.
+/// A shared contact card (`MessageType.contact`) — identity + PGP key so the
+/// recipient can add and verify the person without a server intermediary.
+class MessageContact {
+  final String? userId;
+  final String username;
+  final String? displayName;
+  final String? publicKey;
+  final String? fingerprint;
+
+  const MessageContact({
+    this.userId,
+    required this.username,
+    this.displayName,
+    this.publicKey,
+    this.fingerprint,
+  });
+
+  factory MessageContact.fromJson(Map<String, dynamic> json) => MessageContact(
+    userId: json['user_id'] as String?,
+    username: json['username'] as String? ?? '',
+    displayName: json['display_name'] as String?,
+    publicKey: json['public_key'] as String?,
+    fingerprint: json['fingerprint'] as String?,
+  );
+
+  Map<String, dynamic> toJson() => {
+    if (userId != null) 'user_id': userId,
+    'username': username,
+    if (displayName != null) 'display_name': displayName,
+    if (publicKey != null) 'public_key': publicKey,
+    if (fingerprint != null) 'fingerprint': fingerprint,
+  };
+
+  String get displayLabel =>
+      (displayName != null && displayName!.isNotEmpty) ? displayName! : username;
+}
+
 class MessageContent {
   final String text;
   final List<CustomEmojiEntity> entities;
@@ -342,7 +379,17 @@ class MessageContent {
   final int? durationMs;
   final LinkPreview? linkPreview;
   final bool viewOnce;
+  // Tap-to-reveal: media is rendered blurred until the viewer taps it.
+  final bool hasSpoiler;
+  // Don't generate/fetch a link preview for URLs in this message (privacy).
+  final bool suppressLinkPreview;
+  // Voice-note amplitude samples (0..1), rendered as the playback waveform.
+  final List<double>? waveform;
   final BotInlineKeyboardMarkup? replyMarkup;
+  // Shared contact card (MessageType.contact).
+  final MessageContact? contact;
+  // "Forwarded from @username" attribution (null for anonymous forwards).
+  final String? forwardedFrom;
   // AES-256-GCM key/nonce — included only inside the PGP-encrypted payload,
   // never stored on the server or exposed in plaintext.
   final String? fileKey;
@@ -358,7 +405,12 @@ class MessageContent {
     this.durationMs,
     this.linkPreview,
     this.viewOnce = false,
+    this.hasSpoiler = false,
+    this.suppressLinkPreview = false,
+    this.waveform,
     this.replyMarkup,
+    this.contact,
+    this.forwardedFrom,
     this.fileKey,
     this.fileNonce,
   });
@@ -384,6 +436,15 @@ class MessageContent {
           )
         : null,
     viewOnce: json['view_once'] as bool? ?? false,
+    hasSpoiler: json['has_spoiler'] as bool? ?? false,
+    suppressLinkPreview: json['suppress_link_preview'] as bool? ?? false,
+    waveform: _parseWaveform(json['waveform']),
+    contact: json['contact'] is Map
+        ? MessageContact.fromJson(
+            Map<String, dynamic>.from(json['contact'] as Map),
+          )
+        : null,
+    forwardedFrom: json['forwarded_from'] as String?,
     replyMarkup: BotInlineKeyboardMarkup.tryParse(json['reply_markup']),
     fileKey: json['file_key'] as String?,
     fileNonce: json['file_nonce'] as String?,
@@ -418,10 +479,24 @@ class MessageContent {
     if (durationMs != null) 'duration_ms': durationMs,
     if (linkPreview != null) 'link_preview': linkPreview!.toJson(),
     if (viewOnce) 'view_once': true,
+    if (hasSpoiler) 'has_spoiler': true,
+    if (suppressLinkPreview) 'suppress_link_preview': true,
+    if (waveform != null && waveform!.isNotEmpty) 'waveform': waveform,
+    if (contact != null) 'contact': contact!.toJson(),
+    if (forwardedFrom != null) 'forwarded_from': forwardedFrom,
     if (replyMarkup != null) 'reply_markup': replyMarkup!.toJson(),
     if (fileKey != null) 'file_key': fileKey,
     if (fileNonce != null) 'file_nonce': fileNonce,
   };
+
+  static List<double>? _parseWaveform(Object? raw) {
+    if (raw is! List || raw.isEmpty) return null;
+    final out = <double>[];
+    for (final v in raw) {
+      if (v is num) out.add(v.toDouble().clamp(0.0, 1.0));
+    }
+    return out.isEmpty ? null : out;
+  }
 
   static int? _parseInt(Object? raw) {
     if (raw is int) return raw;
@@ -435,7 +510,9 @@ class MessageContent {
       if (decoded is! Map<String, dynamic>) return null;
       if (!decoded.containsKey('entities') &&
           !decoded.containsKey('link_preview') &&
-          !decoded.containsKey('reply_markup')) {
+          !decoded.containsKey('reply_markup') &&
+          !decoded.containsKey('suppress_link_preview') &&
+          !decoded.containsKey('forwarded_from')) {
         return null;
       }
       return MessageContent.fromJson(decoded);
@@ -523,6 +600,41 @@ class ChatArtifact {
     } catch (_) {
       return null;
     }
+  }
+}
+
+/// A server-authoritative dice / randomiser roll.
+class DiceContent {
+  final String emoji;
+  final int value;
+  final int max;
+
+  const DiceContent({
+    required this.emoji,
+    required this.value,
+    required this.max,
+  });
+
+  static DiceContent? tryParse(String raw) {
+    if (!raw.contains('dice')) return null;
+    try {
+      final json = jsonDecode(raw) as Map<String, dynamic>;
+      final dice = json['dice'];
+      if (dice is! Map) return null;
+      return DiceContent(
+        emoji: dice['emoji']?.toString() ?? '🎲',
+        value: (dice['value'] as num?)?.toInt() ?? 1,
+        max: (dice['max'] as num?)?.toInt() ?? 6,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// A friendly outcome label, e.g. "Heads" for a coin or "6 / 6" for a die.
+  String get label {
+    if (emoji == '🪙') return value == 1 ? 'Heads' : 'Tails';
+    return '$value / $max';
   }
 }
 
@@ -736,6 +848,46 @@ class Message {
     return CallEventInfo.tryParse(_content!.text);
   }
 
+  /// True if this is a `system` screenshot-notice message (someone captured a
+  /// view-once / disappearing attachment).
+  bool get isScreenshotNotice {
+    if (type != MessageType.system || _content == null) return false;
+    final text = _content!.text;
+    if (!text.contains('screenshot_notice')) return false;
+    try {
+      return (jsonDecode(text) as Map<String, dynamic>)['screenshot_notice'] ==
+          true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Parsed SMP control payload if this is an in-band SMP verification message,
+  /// else null. SMP messages are carried as `system` messages and are never
+  /// shown in the chat — the SMP provider consumes them.
+  Map<String, dynamic>? get smpControl {
+    if (type != MessageType.system || _content == null) return null;
+    final text = _content!.text;
+    if (!text.contains('openchat_smp')) return null;
+    try {
+      final json = jsonDecode(text) as Map<String, dynamic>;
+      if (json['openchat_smp'] == 1) return json;
+    } catch (_) {}
+    return null;
+  }
+
+  /// True for any system control message that must not render in the chat list.
+  bool get isHiddenControl => smpControl != null;
+
+  /// Parsed server-rolled dice/randomiser, or null. The value is set by the
+  /// server (the client only animates to it), so it's read from the plaintext
+  /// payload of this non-encrypted message type.
+  DiceContent? get dice {
+    if (type != MessageType.dice) return null;
+    final raw = decryptedContent ?? decryptedPayload ?? encryptedPayload;
+    return DiceContent.tryParse(raw);
+  }
+
   /// One-line text for conversation list previews. Call events render as their
   /// label (e.g. "Missed voice call") rather than the raw JSON payload.
   String get listPreview {
@@ -759,6 +911,7 @@ class Message {
     }
     final ev = callEvent;
     if (ev != null) return ev.label;
+    if (isScreenshotNotice) return 'Screenshot taken';
     return isDecrypted ? (decryptedContent ?? '') : '🔒 Encrypted';
   }
 
@@ -926,6 +1079,10 @@ class Poll {
   final int totalVoterCount;
   final List<PollOption> options;
   final List<String> voterOptionIds;
+  // Quiz mode (type == 'quiz'): the correct option index(es) + an optional
+  // explanation, typically revealed by the server only after the user votes.
+  final List<int> correctOptionIds;
+  final String? explanation;
 
   const Poll({
     required this.id,
@@ -940,6 +1097,8 @@ class Poll {
     required this.totalVoterCount,
     required this.options,
     this.voterOptionIds = const [],
+    this.correctOptionIds = const [],
+    this.explanation,
   });
 
   factory Poll.fromJson(Map<String, dynamic> json) => Poll(
@@ -959,7 +1118,17 @@ class Poll {
     voterOptionIds: (json['voter_option_ids'] as List? ?? [])
         .map((e) => e.toString())
         .toList(),
+    correctOptionIds: (json['correct_option_ids'] as List? ?? [])
+        .map((e) => (e as num).toInt())
+        .toList(),
+    explanation: json['explanation'] as String?,
   );
+
+  bool get isQuiz => type == 'quiz';
+  bool get isMeeting => type == 'meeting';
+
+  /// The correct option (quiz mode), once the server has revealed it.
+  bool isCorrectOption(int index) => correctOptionIds.contains(index);
 
   bool isSelected(String optionId) => voterOptionIds.contains(optionId);
 
@@ -981,6 +1150,8 @@ class Poll {
     totalVoterCount: totalVoterCount,
     options: options ?? this.options,
     voterOptionIds: voterOptionIds ?? this.voterOptionIds,
+    correctOptionIds: correctOptionIds,
+    explanation: explanation,
   );
 }
 

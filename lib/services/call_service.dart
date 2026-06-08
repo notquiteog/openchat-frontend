@@ -7,6 +7,7 @@ import '../config/api_config.dart';
 import '../services/api_service.dart';
 import '../services/call_platform_controls.dart';
 import '../services/call_signal_codec.dart';
+import '../services/secure_storage_service.dart';
 import '../services/websocket_service.dart';
 
 enum CallState {
@@ -192,13 +193,18 @@ class CallService {
     for (final e in _peers.entries) e.key: e.value.renderer,
   };
 
+  final SecureStorageService? _storage;
+
   CallService(
     this._ws,
     this._api, {
     CallSignalCodec? signalCodec,
     CallPlatformControls? platformControls,
+    SecureStorageService? storage,
   }) : _signalCodec = signalCodec ?? const PlainCallSignalCodec(),
-       _platformControls = platformControls ?? const CallPlatformControls() {
+       _platformControls = platformControls ?? const CallPlatformControls(),
+       // ignore: prefer_initializing_formals
+       _storage = storage {
     _wsSub = _ws.events.listen(_handleWsEvent);
   }
 
@@ -678,6 +684,7 @@ class CallService {
   // ── Peer connection factory ─────────────────────────────────────────────────
 
   Future<RTCPeerConnection> _createPeerConnection() async {
+    final forceTurn = await (_storage?.getForceTurn() ?? Future.value(false));
     final config = <String, dynamic>{
       'iceServers': [
         if (_iceServers.isNotEmpty)
@@ -685,7 +692,8 @@ class CallService {
         else
           {'urls': 'stun:stun.l.google.com:19302'},
       ],
-      'iceTransportPolicy': 'all',
+      // 'relay' forces all media through TURN so the peer never sees our IP.
+      'iceTransportPolicy': forceTurn ? 'relay' : 'all',
       'sdpSemantics': 'unified-plan',
     };
     return createPeerConnection(config);

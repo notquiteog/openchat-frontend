@@ -338,11 +338,14 @@ class ApiService {
       return;
     }
 
-    final explained = events.any(
-      (event) => event.explainsRotation(
-        oldFingerprint: pin.fingerprint,
-        newFingerprint: normalizedFingerprint,
-      ),
+    // Cryptographically verify continuity (old key signed the rotation + new
+    // key signed the crossover) rather than merely trusting that the server
+    // returned a matching event.
+    final explained = await verifyRotationContinuity(
+      events: events,
+      userId: userID,
+      oldFingerprint: pin.fingerprint,
+      newFingerprint: normalizedFingerprint,
     );
     await _storage.saveKeyTrustPin(
       KeyTrustPin(
@@ -374,11 +377,14 @@ class ApiService {
     required String publicKey,
     required String fingerprint,
     required String signature,
+    String? crossoverSignature,
   }) async {
     await _put('/api/v1/users/me/public-key', {
       'public_key': publicKey,
       'key_fingerprint': fingerprint,
       'signature': signature,
+      if (crossoverSignature != null && crossoverSignature.isNotEmpty)
+        'crossover_signature': crossoverSignature,
     });
   }
 
@@ -474,11 +480,14 @@ class ApiService {
     required String name,
     String? description,
     required List<String> memberIDs,
+    int? expiresInSeconds,
   }) async {
     final resp = await _post('/api/v1/conversations', {
       'name': name,
       'description': ?description,
       'member_ids': memberIDs,
+      if (expiresInSeconds != null && expiresInSeconds > 0)
+        'expires_in_seconds': expiresInSeconds,
     });
     return Conversation.fromJson(resp['data'] as Map<String, dynamic>);
   }
@@ -497,6 +506,92 @@ class ApiService {
 
   Future<void> addMember(String convID, String userID) async {
     await _post('/api/v1/conversations/$convID/members', {'user_id': userID});
+  }
+
+  /// Web-of-trust: set a group's join policy ('open' or 'web_of_trust').
+  Future<void> setMembershipPolicy(String convID, String policy) async {
+    await _put('/api/v1/conversations/$convID/membership-policy', {
+      'policy': policy,
+    });
+  }
+
+  /// Web-of-trust: submit a vouch (PGP signature over the candidate's key).
+  Future<void> vouchForMember(
+    String convID,
+    String candidateUserID,
+    String signature,
+  ) async {
+    await _post('/api/v1/conversations/$convID/vouch', {
+      'candidate_user_id': candidateUserID,
+      'signature': signature,
+    });
+  }
+
+  /// Roll a server-authoritative dice/randomiser. The server picks the value.
+  Future<void> rollDice(String convID, String emoji) async {
+    await _post('/api/v1/conversations/$convID/dice', {'emoji': emoji});
+  }
+
+  // ── Provably-fair dice game (fun mode) ─────────────────────────────────────
+  Future<Map<String, dynamic>> createGameRound(String convID) async {
+    final resp = await _post('/api/v1/conversations/$convID/games', {});
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> placeGameBet(
+    String convID,
+    String roundID,
+    int selection,
+  ) async {
+    final resp = await _post(
+      '/api/v1/conversations/$convID/games/$roundID/bets',
+      {'selection': selection},
+    );
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> revealGameRound(
+    String convID,
+    String roundID,
+  ) async {
+    final resp = await _post(
+      '/api/v1/conversations/$convID/games/$roundID/reveal',
+      {},
+    );
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  // ── Voice Stage Rooms ──────────────────────────────────────────────────────
+  Future<Map<String, dynamic>> joinStage(String convID) async {
+    final resp = await _post('/api/v1/conversations/$convID/stage/join', {});
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<void> leaveStage(String convID) async {
+    await _post('/api/v1/conversations/$convID/stage/leave', {});
+  }
+
+  Future<void> raiseStageHand(String convID) async {
+    await _post('/api/v1/conversations/$convID/stage/raise-hand', {});
+  }
+
+  Future<void> lowerStageHand(String convID) async {
+    await _post('/api/v1/conversations/$convID/stage/lower-hand', {});
+  }
+
+  Future<void> inviteStageSpeaker(String convID, String userID) async {
+    await _post('/api/v1/conversations/$convID/stage/speakers', {
+      'user_id': userID,
+    });
+  }
+
+  Future<void> removeStageSpeaker(String convID, String userID) async {
+    await _delete('/api/v1/conversations/$convID/stage/speakers/$userID');
+  }
+
+  Future<Map<String, dynamic>> getStageState(String convID) async {
+    final resp = await _get('/api/v1/conversations/$convID/stage');
+    return resp['data'] as Map<String, dynamic>;
   }
 
   Future<void> removeMember(String convID, String userID) async {
@@ -593,6 +688,52 @@ class ApiService {
 
   Future<void> unsubscribeChannel(String chanID) async {
     await _delete('/api/v1/channels/$chanID/subscribe');
+  }
+
+  // ---- Paid channel access (subscription plans + ledger) ----
+
+  /// Returns {plans, subscriber_count, is_owner, subscription?, periods?}.
+  Future<Map<String, dynamic>> getChannelSubscription(String chanID) async {
+    final resp = await _get('/api/v1/channels/$chanID/subscription');
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> setChannelSubscriptionPlan(
+    String chanID, {
+    required String provider,
+    required double price,
+    required int periodDays,
+    bool isActive = true,
+  }) async {
+    final resp = await _post('/api/v1/channels/$chanID/subscription-plan', {
+      'provider': provider,
+      'price': price,
+      'period_days': periodDays,
+      'is_active': isActive,
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  /// [source] is 'wallet' (instant) or 'external' (returns a deposit address).
+  Future<Map<String, dynamic>> subscribePaidChannel(
+    String chanID, {
+    required String provider,
+    required String source,
+  }) async {
+    final resp = await _post('/api/v1/channels/$chanID/subscribe-paid', {
+      'provider': provider,
+      'source': source,
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<void> setChannelSubscriptionAutoRenew(
+    String chanID,
+    bool autoRenew,
+  ) async {
+    await _post('/api/v1/channels/$chanID/subscription/auto-renew', {
+      'auto_renew': autoRenew,
+    });
   }
 
   Future<List<Message>> getChannelPosts(
@@ -1189,13 +1330,25 @@ class ApiService {
     bool allowsMultipleAnswers = false,
     bool allowsRevoting = true,
     bool silent = false,
+    bool quiz = false,
+    bool meeting = false,
+    int? correctOptionId,
+    String? explanation,
   }) async {
     final resp = await _post('/api/v1/conversations/$convID/polls', {
       'question': question,
       'options': options,
       'is_anonymous': isAnonymous,
-      'allows_multiple_answers': allowsMultipleAnswers,
-      'allows_revoting': allowsRevoting,
+      // Quiz mode is single-answer with no revoting (reveal after voting);
+      // meeting mode is multi-answer (pick all times that work).
+      'allows_multiple_answers':
+          meeting ? true : (quiz ? false : allowsMultipleAnswers),
+      'allows_revoting': quiz ? false : allowsRevoting,
+      if (quiz) 'type': 'quiz' else if (meeting) 'type': 'meeting',
+      if (quiz && correctOptionId != null)
+        'correct_option_ids': [correctOptionId],
+      if (quiz && explanation != null && explanation.trim().isNotEmpty)
+        'explanation': explanation.trim(),
       if (silent) 'silent': true,
     });
     final message = Message.fromJson(resp['data'] as Map<String, dynamic>);
@@ -1213,6 +1366,10 @@ class ApiService {
     bool allowsMultipleAnswers = false,
     bool allowsRevoting = true,
     bool silent = false,
+    bool quiz = false,
+    bool meeting = false,
+    int? correctOptionId,
+    String? explanation,
   }) async {
     final resp = await _post('/api/v1/conversations/$convID/polls', {
       'poll_id': pollID,
@@ -1222,6 +1379,11 @@ class ApiService {
       'is_anonymous': isAnonymous,
       'allows_multiple_answers': allowsMultipleAnswers,
       'allows_revoting': allowsRevoting,
+      if (quiz) 'type': 'quiz' else if (meeting) 'type': 'meeting',
+      if (quiz && correctOptionId != null)
+        'correct_option_ids': [correctOptionId],
+      if (quiz && explanation != null && explanation.trim().isNotEmpty)
+        'explanation': explanation.trim(),
       if (silent) 'silent': true,
     });
     final message = Message.fromJson(resp['data'] as Map<String, dynamic>);
@@ -1263,6 +1425,14 @@ class ApiService {
     await _delete(
       '/api/v1/messages/$msgID/reactions?emoji=${Uri.encodeComponent(emoji)}',
     );
+  }
+
+  /// Who reacted to a message: list of {user_id, username, display_name?,
+  /// avatar_url?, emoji}.
+  Future<List<Map<String, dynamic>>> getMessageReactors(String msgID) async {
+    final resp = await _get('/api/v1/messages/$msgID/reactions');
+    return ((resp['data'] as List?) ?? const [])
+        .cast<Map<String, dynamic>>();
   }
 
   Future<void> sendBotCallback({
@@ -1520,6 +1690,7 @@ class ApiService {
     required String mediaType,
     String caption = '',
     String privacy = 'contacts',
+    List<String> allowUserIds = const [],
     String? conversationId,
     int expiresInSeconds = 24 * 60 * 60,
     bool pinned = false,
@@ -1537,6 +1708,7 @@ class ApiService {
       'caption': caption,
       'entities': entities,
       'privacy': privacy,
+      if (allowUserIds.isNotEmpty) 'allow_user_ids': allowUserIds,
       'conversation_id': ?conversationId,
       'expires_in_seconds': expiresInSeconds,
       if (pinned) 'pinned': true,
@@ -1942,12 +2114,26 @@ class ApiService {
   Future<Map<String, dynamic>> createStickerPack({
     required String name,
     String? description,
+    bool isDiscoverable = false,
   }) async {
     final resp = await _post('/api/v1/stickers/packs', {
       'name': name,
       'description': ?description,
+      'is_discoverable': isDiscoverable,
     });
     return resp['data'] as Map<String, dynamic>;
+  }
+
+  /// Search publicly discoverable sticker packs.
+  Future<List<dynamic>> discoverStickerPacks(String query) async {
+    final resp = await _get('/api/v1/discover/stickers?q=${Uri.encodeQueryComponent(query)}');
+    return resp['data'] as List? ?? const [];
+  }
+
+  /// Search publicly discoverable custom-emoji packs.
+  Future<List<dynamic>> discoverCustomEmojiPacks(String query) async {
+    final resp = await _get('/api/v1/discover/custom-emoji?q=${Uri.encodeQueryComponent(query)}');
+    return resp['data'] as List? ?? const [];
   }
 
   Future<Map<String, dynamic>> addStickerToPack({
@@ -1975,11 +2161,13 @@ class ApiService {
     String? name,
     String? description,
     String? coverUrl,
+    bool? isDiscoverable,
   }) async {
     await _put('/api/v1/stickers/packs/$packID', {
       'name': ?name,
       'description': ?description,
       'cover_url': ?coverUrl,
+      'is_discoverable': ?isDiscoverable,
     });
   }
 
@@ -2011,10 +2199,12 @@ class ApiService {
   Future<Map<String, dynamic>> createCustomEmojiPack({
     required String name,
     String? description,
+    bool isDiscoverable = false,
   }) async {
     final resp = await _post('/api/v1/custom-emoji/packs', {
       'name': name,
       'description': ?description,
+      'is_discoverable': isDiscoverable,
     });
     return resp['data'] as Map<String, dynamic>;
   }
@@ -2044,11 +2234,13 @@ class ApiService {
     String? name,
     String? description,
     String? coverUrl,
+    bool? isDiscoverable,
   }) async {
     await _put('/api/v1/custom-emoji/packs/$packID', {
       'name': ?name,
       'description': ?description,
       'cover_url': ?coverUrl,
+      'is_discoverable': ?isDiscoverable,
     });
   }
 

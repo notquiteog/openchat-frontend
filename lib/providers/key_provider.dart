@@ -153,10 +153,23 @@ class KeyProvider extends ChangeNotifier {
         ),
         privateKeyArmored: oldPrivateKey,
       );
+      // Crossover: sign with the NEW key, binding it to the old key/identity, so
+      // contacts verify continuity without trusting the server.
+      final oldPublicKey = _publicKey ?? await _storage.getPublicKey() ?? '';
+      final crossoverSignature = await PgpService.sign(
+        data: keyCrossoverSignatureData(
+          userId: userId,
+          newFingerprint: newPair.fingerprint,
+          oldFingerprint: oldFingerprint,
+          oldPublicKey: oldPublicKey,
+        ),
+        privateKeyArmored: newPair.privateKeyArmored,
+      );
       await api.rotatePublicKey(
         publicKey: newPair.publicKeyArmored,
         fingerprint: newPair.fingerprint,
         signature: signature,
+        crossoverSignature: crossoverSignature,
       );
       final events = await api
           .getKeyTransparencyEvents(userId)
@@ -189,6 +202,36 @@ class KeyProvider extends ChangeNotifier {
       _publicKey = newPair.publicKeyArmored;
       _fingerprint = newPair.fingerprint;
       notifyListeners();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Web-of-trust: certify [candidateUserId]'s current key for [convID] by
+  /// signing the canonical vouch statement with our own key and submitting it.
+  /// Returns false if our key is locked or the candidate has no key.
+  Future<bool> vouchForMember({
+    required ApiService api,
+    required String convID,
+    required String candidateUserId,
+  }) async {
+    try {
+      final privateKey = await _storage.getPrivateKey();
+      if (privateKey == null || privateKey.isEmpty) return false;
+      final candidateKey = await api.getUserPublicKey(candidateUserId);
+      if (candidateKey == null || candidateKey.isEmpty) return false;
+      final keyHash = crypto.sha256
+          .convert(utf8.encode(candidateKey.trim()))
+          .toString()
+          .toUpperCase();
+      final statement =
+          'openchat-wot-vouch-v1:$convID:$candidateUserId:$keyHash';
+      final signature = await PgpService.sign(
+        data: statement,
+        privateKeyArmored: privateKey,
+      );
+      await api.vouchForMember(convID, candidateUserId, signature);
       return true;
     } catch (_) {
       return false;
