@@ -884,8 +884,17 @@ class Message {
   /// payload of this non-encrypted message type.
   DiceContent? get dice {
     if (type != MessageType.dice) return null;
-    final raw = decryptedContent ?? decryptedPayload ?? encryptedPayload;
-    return DiceContent.tryParse(raw);
+    // Try each source and return the first that actually parses. The decrypted
+    // *content* text is empty for a dice (MessageContent.fromJson finds no
+    // "text" field), so a plain `decryptedContent ?? ...` chain stops at "" and
+    // never reaches the real payload — leaving the bubble blank. The raw dice
+    // JSON always lives in decryptedPayload / encryptedPayload.
+    for (final raw in [decryptedPayload, encryptedPayload, decryptedContent]) {
+      if (raw == null || raw.isEmpty) continue;
+      final parsed = DiceContent.tryParse(raw);
+      if (parsed != null) return parsed;
+    }
+    return null;
   }
 
   /// One-line text for conversation list previews. Call events render as their

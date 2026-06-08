@@ -957,7 +957,23 @@ class _CollapsibleTextState extends State<_CollapsibleText> {
           maxLines: _collapsedMaxLines,
           textScaler: textScaler,
           textDirection: Directionality.of(context),
-        )..layout(maxWidth: constraints.maxWidth);
+        );
+        // Inline custom emoji are WidgetSpans. A bare TextPainter throws on the
+        // first placeholder unless its dimensions are supplied before layout()
+        // — and a throw here would swap the whole bubble for a gray ErrorBox.
+        final placeholderCount = _countPlaceholderSpans(textSpan);
+        if (placeholderCount > 0) {
+          painter.setPlaceholderDimensions(
+            List<PlaceholderDimensions>.filled(
+              placeholderCount,
+              const PlaceholderDimensions(
+                size: Size(24, 22),
+                alignment: PlaceholderAlignment.middle,
+              ),
+            ),
+          );
+        }
+        painter.layout(maxWidth: constraints.maxWidth);
         final overflows = painter.didExceedMaxLines;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -991,6 +1007,17 @@ class _CollapsibleTextState extends State<_CollapsibleText> {
       },
     );
   }
+}
+
+/// Counts the placeholder (WidgetSpan) leaves in [span] so a manual
+/// [TextPainter] can be given matching [PlaceholderDimensions] before layout.
+int _countPlaceholderSpans(InlineSpan span) {
+  var count = 0;
+  span.visitChildren((InlineSpan s) {
+    if (s is WidgetSpan) count += 1;
+    return true;
+  });
+  return count;
 }
 
 class _BotInlineKeyboard extends StatelessWidget {
