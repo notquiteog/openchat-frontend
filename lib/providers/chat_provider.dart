@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -18,6 +19,7 @@ import '../services/message_cache_service.dart';
 import '../services/mls_service.dart';
 import '../services/notification_service.dart';
 import '../services/offline_outbox_service.dart';
+import '../services/push_notification_service.dart';
 import '../services/secure_storage_service.dart';
 import '../services/websocket_service.dart';
 import '../utils/mention_utils.dart';
@@ -28,6 +30,17 @@ class ChatSendException implements Exception {
 
   @override
   String toString() => message;
+}
+
+/// A pre-fetched single-use sealed post token plus the time it was issued, so
+/// stale tokens (near the server's TTL) can be discarded before use.
+class _PooledPostToken {
+  final String token;
+  final DateTime fetchedAt;
+  const _PooledPostToken(this.token, this.fetchedAt);
+
+  bool isStale(Duration maxAge) =>
+      DateTime.now().difference(fetchedAt) >= maxAge;
 }
 
 class _ActiveLiveLocationShare {
@@ -375,6 +388,11 @@ class ChatProvider extends ChangeNotifier {
         _conversations
           ..clear()
           ..addAll(next);
+        // Keep the opaque push-routing map current so notifications for newly
+        // joined conversations resolve to the right chat.
+        if (PushNotificationService.isRegistered) {
+          unawaited(PushNotificationService.refreshPushRoutes(_api));
+        }
       }
     } finally {
       if (!silent) {
@@ -2253,12 +2271,65 @@ class ChatProvider extends ChangeNotifier {
     });
   }
 
+  // Per-conversation pool of pre-fetched, single-use sealed post tokens, each
+  // tagged with when it was issued. Pre-fetching (and refilling with jitter)
+  // decouples the *authenticated* token issuance from the *anonymous* sealed
+  // post that follows: without it the server sees an issuance for user X
+  // immediately before a sealed message in the same conversation, which largely
+  // defeats sealed-sender anonymity through timing correlation.
+  final Map<String, List<_PooledPostToken>> _postTokenPool = {};
+  final Set<String> _postTokenRefilling = {};
+  static const int _postTokenPoolTarget = 3;
+  // Stay well under the server's 15-minute token TTL.
+  static const Duration _postTokenMaxAge = Duration(minutes: 10);
+
   Future<String> _sealedPostToken(String convID, String privateKey) async {
+    final pool = _postTokenPool[convID];
+    String? token;
+    if (pool != null) {
+      // Drop expired tokens, then take the freshest still-valid one.
+      pool.removeWhere((t) => t.isStale(_postTokenMaxAge));
+      if (pool.isNotEmpty) {
+        token = pool.removeLast().token;
+      }
+    }
+    token ??= await _fetchSealedPostToken(convID, privateKey);
+    // Top the pool back up in the background, on a jittered schedule.
+    unawaited(_refillPostTokenPool(convID, privateKey));
+    return token;
+  }
+
+  Future<String> _fetchSealedPostToken(String convID, String privateKey) async {
     final encrypted = await _api.getEncryptedSealedPostToken(convID);
     return PgpService.decrypt(
       encryptedArmor: encrypted,
       privateKeyArmored: privateKey,
     );
+  }
+
+  Future<void> _refillPostTokenPool(String convID, String privateKey) async {
+    if (_postTokenRefilling.contains(convID)) return;
+    _postTokenRefilling.add(convID);
+    final rng = Random.secure();
+    try {
+      while (true) {
+        final pool = _postTokenPool[convID] ??= [];
+        pool.removeWhere((t) => t.isStale(_postTokenMaxAge));
+        if (pool.length >= _postTokenPoolTarget) break;
+        // Jitter each fetch so issuances don't cluster around send time.
+        await Future.delayed(Duration(milliseconds: 500 + rng.nextInt(2500)));
+        try {
+          final token = await _fetchSealedPostToken(convID, privateKey);
+          (_postTokenPool[convID] ??= []).add(
+            _PooledPostToken(token, DateTime.now()),
+          );
+        } catch (_) {
+          break; // back off on error; the next send retries
+        }
+      }
+    } finally {
+      _postTokenRefilling.remove(convID);
+    }
   }
 
   Future<String?> _verifiedPgpSenderId(
@@ -2641,33 +2712,39 @@ class ChatProvider extends ChangeNotifier {
 
       if (member.userId == selfId) continue;
 
+      PgpRecipient? recipient;
       try {
         final freshKey = await _api.getFreshUserPublicKeyEntry(member.userId);
         if (freshKey != null && freshKey.publicKey.trim().isNotEmpty) {
-          keysByUser[member.userId] = PgpRecipient(
+          recipient = PgpRecipient(
             userId: member.userId,
             publicKeyArmored: freshKey.publicKey,
             keyFingerprint: freshKey.fingerprint,
           );
-          continue;
         }
-        continue;
       } catch (_) {
         final embeddedKey = member.user?.publicKey ?? '';
         final embeddedFingerprint = member.user?.keyFingerprint ?? '';
         if (embeddedKey.trim().isNotEmpty &&
             embeddedFingerprint.trim().isNotEmpty) {
-          keysByUser[member.userId] = PgpRecipient(
+          recipient = PgpRecipient(
             userId: member.userId,
             publicKeyArmored: embeddedKey,
             keyFingerprint: embeddedFingerprint,
           );
-          continue;
+        } else {
+          throw const ChatSendException(
+            'Could not load every recipient key. Refresh the chat and try again.',
+          );
         }
-        throw const ChatSendException(
-          'Could not load every recipient key. Refresh the chat and try again.',
-        );
       }
+      if (recipient == null) continue;
+      // Fail closed on an unexplained key replacement (active-MITM defense).
+      // Done outside the catch above so the trust block can't be swallowed by
+      // the network-fallback path. Fetching the fresh key already refreshed the
+      // trust pin (TOFU + rotation continuity).
+      await _assertRecipientKeyTrusted(member.userId);
+      keysByUser[member.userId] = recipient;
     }
 
     if (selfId.isNotEmpty &&
@@ -2683,6 +2760,23 @@ class ChatProvider extends ChangeNotifier {
     final out = keysByUser.values.toList()
       ..sort((a, b) => a.userId.compareTo(b.userId));
     return out;
+  }
+
+  /// Throws when a recipient's pinned key carries an unexplained-replacement
+  /// warning and has not been re-verified. This turns the (previously
+  /// detect-only) key-transparency layer into a preventive gate: a malicious or
+  /// compromised server that swaps a contact's public key can no longer get the
+  /// client to silently encrypt the next message to the attacker's key — the
+  /// user must re-verify the contact (e.g. via SMP in the Trust Center) first.
+  Future<void> _assertRecipientKeyTrusted(String userID) async {
+    final pin = await _storage.getKeyTrustPin(userID);
+    if (pin != null && (pin.warning?.isNotEmpty ?? false) && !pin.isVerified) {
+      throw const ChatSendException(
+        'A recipient\'s encryption key changed unexpectedly. Open the Trust '
+        'Center and re-verify them before sending — this protects you from a '
+        'server swapping their key.',
+      );
+    }
   }
 
   Future<List<ConversationMember>> _loadMembersForEncryption(
@@ -3614,10 +3708,14 @@ class ChatProvider extends ChangeNotifier {
           raw,
           verifiedSenderId,
         );
-        if (msg.sealedSender && verifiedSenderId == null) {
-          // Transient PQC-verify failure in the openpgp fork: re-verify the
-          // already-decrypted plaintext shortly so the message self-heals
-          // instead of staying "Unable to decrypt" until a manual reopen.
+        if (verifiedSenderId == null) {
+          // Fail closed on the in-payload sender proof for EVERY encrypted
+          // message, not just those the server flagged sealed_sender. Encrypted
+          // conversations always post through the sealed endpoint, so a real
+          // message always carries a verifiable proof; a server that sets
+          // sealed_sender:false with a chosen sender_id must not be able to
+          // spoof attribution. A transient PQC-verify failure self-heals via
+          // the retry below instead of showing an unverified sender.
           _scheduleVerifyRetry(msg, raw, conv);
           msg.markDecryptionFailed();
           return;
@@ -3645,10 +3743,14 @@ class ChatProvider extends ChangeNotifier {
           msg.conversationId,
           conv,
         );
-        if (msg.sealedSender && verifiedSenderId == null) {
-          // Transient PQC-verify failure in the openpgp fork: re-verify the
-          // already-decrypted plaintext shortly so the message self-heals
-          // instead of staying "Unable to decrypt" until a manual reopen.
+        if (verifiedSenderId == null) {
+          // Fail closed on the in-payload sender proof for EVERY encrypted
+          // message, not just those the server flagged sealed_sender. Encrypted
+          // conversations always post through the sealed endpoint, so a real
+          // message always carries a verifiable proof; a server that sets
+          // sealed_sender:false with a chosen sender_id must not be able to
+          // spoof attribution. A transient PQC-verify failure self-heals via
+          // the retry below instead of showing an unverified sender.
           _scheduleVerifyRetry(msg, raw, conv);
           msg.markDecryptionFailed();
           return;
@@ -3672,7 +3774,15 @@ class ChatProvider extends ChangeNotifier {
   Future<void> deleteMessage(String convID, String msgID) async {
     try {
       await _stopLiveLocationShare(msgID, shouldNotify: false);
-      await _api.deleteMessage(convID, msgID);
+      // For a sealed message the author proves ownership with its control token.
+      String? controlToken;
+      for (final m in _messages[convID] ?? const <Message>[]) {
+        if (m.id == msgID) {
+          controlToken = m.controlToken;
+          break;
+        }
+      }
+      await _api.deleteMessage(convID, msgID, controlToken: controlToken);
       final list = _messages[convID] ?? [];
       _messages[convID] = list.where((m) => m.id != msgID).toList();
       _deleteSearchMessage(msgID);

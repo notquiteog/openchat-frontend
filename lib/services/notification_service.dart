@@ -126,6 +126,8 @@ class NotificationService {
           'calls',
           'Calls',
           channelDescription: 'Notifications for incoming calls',
+          icon: '@drawable/ic_launcher_foreground',
+          largeIcon: DrawableResourceAndroidBitmap('@mipmap/launcher_icon'),
           importance: Importance.max,
           priority: Priority.max,
           actions: [
@@ -472,7 +474,13 @@ class NotificationService {
       DarwinNotificationCategory(_messageReminderCategory, actions: const []),
     ];
     final settings = InitializationSettings(
-      android: const AndroidInitializationSettings('@mipmap/launcher_icon'),
+      // Status-bar (small) icon. Android masks the small icon to its alpha
+      // channel, so we use the transparent logo foreground — the opaque
+      // launcher icon would render as a solid white square. The full-color app
+      // icon is shown via largeIcon on each notification instead.
+      android: const AndroidInitializationSettings(
+        '@drawable/ic_launcher_foreground',
+      ),
       iOS: DarwinInitializationSettings(
         requestAlertPermission: false,
         requestBadgePermission: false,
@@ -618,6 +626,8 @@ class NotificationService {
             ? 'Messages (${messageNotificationSoundLabel(soundId)})'
             : 'Messages',
         channelDescription: 'Notifications for new messages',
+        icon: '@drawable/ic_launcher_foreground',
+        largeIcon: const DrawableResourceAndroidBitmap('@mipmap/launcher_icon'),
         importance: Importance.high,
         priority: Priority.high,
         sound: hasCustomSound
@@ -679,7 +689,8 @@ class NotificationService {
         'active_calls',
         'Active calls',
         channelDescription: 'Ongoing OpenChat voice and video calls',
-        icon: '@mipmap/launcher_icon',
+        icon: '@drawable/ic_launcher_foreground',
+        largeIcon: const DrawableResourceAndroidBitmap('@mipmap/launcher_icon'),
         importance: Importance.low,
         priority: Priority.low,
         ongoing: true,

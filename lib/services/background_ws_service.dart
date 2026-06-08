@@ -173,7 +173,9 @@ class BackgroundWsService {
     final notif = FlutterLocalNotificationsPlugin();
     await notif.initialize(
       settings: const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/launcher_icon'),
+        // Transparent logo foreground for the (alpha-masked) status-bar icon;
+        // the full-color app icon is shown via largeIcon per notification.
+        android: AndroidInitializationSettings('@drawable/ic_launcher_foreground'),
         iOS: DarwinInitializationSettings(),
       ),
     );
@@ -343,6 +345,8 @@ class BackgroundWsService {
               'Background Messages',
               channelDescription:
                   'Messages received while the app is in the background',
+              icon: '@drawable/ic_launcher_foreground',
+              largeIcon: DrawableResourceAndroidBitmap('@mipmap/launcher_icon'),
               importance: Importance.high,
               priority: Priority.high,
             ),

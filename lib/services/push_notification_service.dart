@@ -7,6 +7,7 @@ import '../firebase_options.dart';
 import '../utils/local_conversation_preferences.dart';
 import 'api_service.dart';
 import 'background_notification_intent.dart';
+import 'local_private_state_service.dart';
 import 'notification_service.dart';
 
 enum PushNotificationInitFailure {
@@ -55,6 +56,44 @@ class PushNotificationService {
   _foregroundIncomingCallHandler;
   static void Function(String conversationId)? _notificationOpenedHandler;
   static String? _lastOpenedMessageKey;
+
+  // Opaque push routing: maps a route token -> conversation id. Push payloads
+  // carry only the route, so this lets the foreground isolate resolve a
+  // notification to its conversation without the real id passing through FCM.
+  static Map<String, String> _routeToConversation = {};
+
+  /// Loads the persisted route map into memory (foreground isolate).
+  static Future<void> loadRouteMap() async {
+    try {
+      final state = await LocalPrivateStateService().readState();
+      _routeToConversation = decodePushRouteMap(
+        state[privateStatePushRouteMapKey],
+      );
+    } catch (_) {}
+  }
+
+  /// Fetches the latest route map from the backend and persists it (so both the
+  /// foreground and background-isolate handlers can resolve routes). Best-effort.
+  static Future<void> refreshPushRoutes(ApiService api) async {
+    try {
+      final map = await api.getPushRoutes();
+      _routeToConversation = map;
+      final svc = LocalPrivateStateService();
+      final state = await svc.readState();
+      await svc.writeState({...state, privateStatePushRouteMapKey: map});
+    } catch (_) {}
+  }
+
+  /// Resolves a push data payload to a conversation id: prefers an explicit
+  /// conversation_id (back-compat) and otherwise maps the opaque route token.
+  /// Returns null when neither resolves (caller shows a generic notification).
+  static String? conversationIdForData(Map<String, dynamic> data) {
+    final explicit = data['conversation_id'] as String?;
+    if (explicit != null && explicit.isNotEmpty) return explicit;
+    final route = data['route'] as String?;
+    if (route == null || route.isEmpty) return null;
+    return _routeToConversation[route];
+  }
 
   /// Push notifications are supported only on Android and iOS.
   /// Desktop platforms use the in-app WebSocket connection instead, and
@@ -189,7 +228,7 @@ class PushNotificationService {
       switch (intent.kind) {
         case NotificationIntentKind.message:
           NotificationService.showMessage(
-            conversationId: msg.data['conversation_id'] as String? ?? 'push',
+            conversationId: conversationIdForData(msg.data) ?? 'push',
             title: intent.title,
             body: intent.body,
             showSensitive:
@@ -208,6 +247,11 @@ class PushNotificationService {
     _openedSub = FirebaseMessaging.onMessageOpenedApp.listen(
       _handleOpenedMessage,
     );
+    // Load the opaque push-routing map so notifications can resolve to the right
+    // conversation, then refresh it from the backend in the background.
+    await loadRouteMap();
+    unawaited(refreshPushRoutes(api));
+
     final initialMessage = await messaging.getInitialMessage();
     if (initialMessage != null) {
       _handleOpenedMessage(initialMessage);
@@ -267,7 +311,7 @@ class PushNotificationService {
       return;
     }
     if (type == 'new_message') {
-      final conversationId = msg.data['conversation_id'] as String? ?? '';
+      final conversationId = conversationIdForData(msg.data) ?? '';
       if (conversationId.isEmpty) return;
       _notificationOpenedHandler?.call(conversationId);
     }
@@ -308,7 +352,11 @@ class PushNotificationService {
       );
     }
     if (type == 'new_message') {
-      final conversationId = msg.data['conversation_id'] as String? ?? 'push';
+      // Resolve the opaque route to a conversation id and backfill it so the
+      // mute/rule logic downstream works unchanged.
+      final resolvedData = Map<String, dynamic>.from(msg.data);
+      final conversationId = conversationIdForData(resolvedData) ?? 'push';
+      resolvedData['conversation_id'] = conversationId;
       final preferences = <String, ConversationNotificationPreference>{
         ...conversationNotificationPreferences,
         for (final id in mutedConversationIds)
@@ -332,7 +380,7 @@ class PushNotificationService {
       }
       return notificationIntentFromEvent(
         type: 'new_message',
-        data: msg.data,
+        data: resolvedData,
         showSensitive: true,
         mutedConversationIds: mutedConversationIds,
         conversationNotificationPreferences:

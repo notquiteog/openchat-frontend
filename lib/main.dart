@@ -50,7 +50,7 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
     );
   } else if (message.notification == null &&
       message.data['type'] == 'new_message') {
-    final conversationId = message.data['conversation_id'] as String? ?? 'push';
+    final conversationId = await _resolveConversationId(message.data);
     if (!await _shouldShowMessageNotification(conversationId)) {
       return;
     }
@@ -60,6 +60,24 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
       title: 'OpenChat',
       body: 'New message',
     );
+  }
+}
+
+/// Resolves a push payload to a conversation id. Push payloads carry only an
+/// opaque `route` token (the real conversation id never reaches FCM/APNs); this
+/// background isolate maps it back via the persisted route map. Falls back to a
+/// generic id when the route is unknown (still shows a notification).
+Future<String> _resolveConversationId(Map<String, dynamic> data) async {
+  final explicit = data['conversation_id'] as String?;
+  if (explicit != null && explicit.isNotEmpty) return explicit;
+  final route = data['route'] as String?;
+  if (route == null || route.isEmpty) return 'push';
+  try {
+    final state = await LocalPrivateStateService().readState();
+    final map = decodePushRouteMap(state[privateStatePushRouteMapKey]);
+    return map[route] ?? 'push';
+  } catch (_) {
+    return 'push';
   }
 }
 

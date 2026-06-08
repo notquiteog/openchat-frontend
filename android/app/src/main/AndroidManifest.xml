@@ -73,6 +73,17 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- Notification status-bar icon for FCM messages the system displays
+             while the app is backgrounded. Android renders the small icon by its
+             alpha channel, so we use the app's transparent logo foreground (the
+             full-color launcher icon would show as a solid white square). The
+             accent tint matches the brand color. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_launcher_foreground" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_color" />
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:exported="false"

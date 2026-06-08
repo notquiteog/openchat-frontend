@@ -17,6 +17,10 @@ const privateStateConversationNotificationPreferencesKey =
     'conversation_notification_preferences';
 const privateStateChatFoldersKey = 'chat_folders';
 const privateStateBroadcastListsKey = 'broadcast_lists';
+// Maps opaque push route tokens -> conversation ids, so the (foreground and
+// background-isolate) push handlers can resolve a notification's `route` to a
+// conversation without the real id ever passing through FCM/APNs.
+const privateStatePushRouteMapKey = 'push_route_map';
 const privateStateCloseFriendsKey = 'close_friends';
 const privateStateNotificationSettingsKey = 'notification_settings';
 const privateStateMessageDraftsKey = 'message_drafts';
@@ -135,6 +139,17 @@ List<Map<String, dynamic>> encodePrivateContacts(
     .where((contact) => contact.isUsable)
     .map((contact) => contact.toJson())
     .toList();
+
+/// Decodes the persisted opaque push routing map (route token -> conversation
+/// id). Returns an empty map when absent or malformed.
+Map<String, String> decodePushRouteMap(Object? raw) {
+  if (raw is! Map) return {};
+  final out = <String, String>{};
+  raw.forEach((key, value) {
+    if (key is String && value != null) out[key] = value.toString();
+  });
+  return out;
+}
 
 /// Encrypts small local-only app state that should not be visible to the
 /// server or stored as plaintext SharedPreferences.

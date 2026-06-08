@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#FFFFFF</color>
+    <!-- Accent applied by the system to the (monochrome) notification status-bar
+         icon. Matches the app's brand seed color. -->
+    <color name="notification_color">#3D5AFE</color>
 </resources>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status-bar icon for the flutter_background_service foreground notification
+     (the persistent "OpenChat — waiting for messages" one). The plugin looks up
+     a drawable named ic_bg_service_small; aliasing it to the app's transparent
+     logo foreground brands that notification with the app icon instead of the
+     plugin's generic default. Android masks the small icon to its alpha channel,
+     so the transparent foreground (not the opaque launcher icon) is correct. -->
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:src="@drawable/ic_launcher_foreground"
+    android:gravity="center" />

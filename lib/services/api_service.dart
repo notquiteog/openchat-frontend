@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
@@ -543,11 +544,20 @@ class ApiService {
     String roundID,
     int selection,
   ) async {
+    // Contribute fresh client-side entropy so neither the server (which committed
+    // to its seed before this bet) nor any player can grind the provably-fair
+    // outcome: it's HMAC(server_seed, combined client seeds).
     final resp = await _post(
       '/api/v1/conversations/$convID/games/$roundID/bets',
-      {'selection': selection},
+      {'selection': selection, 'client_seed': _randomClientSeed()},
     );
     return resp['data'] as Map<String, dynamic>;
+  }
+
+  String _randomClientSeed() {
+    final rng = Random.secure();
+    final bytes = List<int>.generate(16, (_) => rng.nextInt(256));
+    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 
   Future<Map<String, dynamic>> revealGameRound(
@@ -1450,8 +1460,18 @@ class ApiService {
     return Conversation.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
-  Future<void> deleteMessage(String convID, String msgID) async {
-    await _delete('/api/v1/conversations/$convID/messages/$msgID');
+  Future<void> deleteMessage(
+    String convID,
+    String msgID, {
+    String? controlToken,
+  }) async {
+    var path = '/api/v1/conversations/$convID/messages/$msgID';
+    // Sealed-sender messages have no recorded author, so deletion is authorized
+    // by the per-message control token (same capability used for edits).
+    if (controlToken != null && controlToken.isNotEmpty) {
+      path += '?control_token=${Uri.encodeQueryComponent(controlToken)}';
+    }
+    await _delete(path);
   }
 
   Future<void> deleteOwnMessages(String convID) async {
@@ -2678,6 +2698,27 @@ class ApiService {
 
   Future<void> removeDeviceToken() async {
     await _delete('/api/v1/users/me/device-token');
+  }
+
+  /// Returns the caller's opaque push routing map: each entry is
+  /// {conversation_id, route}. Push payloads carry only the `route`, so the
+  /// client uses this to resolve a notification back to its conversation
+  /// without the real id ever passing through FCM/APNs.
+  Future<Map<String, String>> getPushRoutes() async {
+    final resp = await _get('/api/v1/me/push-routes');
+    final data = resp['data'] as Map<String, dynamic>?;
+    final routes = (data?['routes'] as List?) ?? const [];
+    final map = <String, String>{};
+    for (final entry in routes) {
+      if (entry is Map) {
+        final route = entry['route']?.toString();
+        final convID = entry['conversation_id']?.toString();
+        if (route != null && route.isNotEmpty && convID != null && convID.isNotEmpty) {
+          map[route] = convID;
+        }
+      }
+    }
+    return map;
   }
 
   // ---- HTTP helpers ----
