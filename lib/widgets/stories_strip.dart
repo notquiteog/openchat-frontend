@@ -8,6 +8,26 @@ import '../services/api_service.dart';
 import '../screens/stories/create_story_screen.dart';
 import '../screens/stories/story_viewer_screen.dart';
 
+/// A compact, Instagram-style row of story circles shown at the top of the
+/// chats list. The avatars are deliberately small (much smaller than the iOS
+/// Messages pinned row) so they read as a secondary "updates" affordance rather
+/// than dominating the inbox.
+const double _kAvatar = 46;
+const double _kRing = 56;
+const double _kGap =
+    51; // diameter of the bg "gap" circle between ring + avatar
+const double _kTile = 64;
+const double _kStripHeight = 96;
+
+/// The classic Instagram story gradient — signals an unseen story at a glance.
+const List<Color> _kStoryGradient = [
+  Color(0xFFFEDA77),
+  Color(0xFFF58529),
+  Color(0xFFDD2A7B),
+  Color(0xFF8134AF),
+  Color(0xFF515BD4),
+];
+
 class StoriesStrip extends StatefulWidget {
   const StoriesStrip({super.key});
 
@@ -55,14 +75,14 @@ class _StoriesStripState extends State<StoriesStrip> {
   Widget build(BuildContext context) {
     final currentUserId = context.watch<AuthProvider>().currentUser?.id ?? '';
     return SizedBox(
-      height: 108,
+      height: _kStripHeight,
       child: FutureBuilder<List<Story>>(
         future: _future,
         builder: (context, snap) {
           final stories = snap.data ?? const <Story>[];
           return ListView.separated(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
             itemCount: stories.length + 1,
             separatorBuilder: (_, _) => const SizedBox(width: 12),
             itemBuilder: (context, index) {
@@ -84,6 +104,41 @@ class _StoriesStripState extends State<StoriesStrip> {
   }
 }
 
+/// Shared circular avatar layer used by both the add tile and story tiles.
+class _StoryAvatar extends StatelessWidget {
+  final String? avatarUrl;
+  final String fallback;
+
+  const _StoryAvatar({this.avatarUrl, required this.fallback});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ClipOval(
+      child: Container(
+        width: _kAvatar,
+        height: _kAvatar,
+        color: scheme.surfaceContainerHighest,
+        child: avatarUrl != null
+            ? CachedNetworkImage(
+                imageUrl: ApiConfig.resolveMedia(avatarUrl!),
+                fit: BoxFit.cover,
+              )
+            : Center(
+                child: Text(
+                  fallback.isNotEmpty ? fallback[0].toUpperCase() : '?',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+      ),
+    );
+  }
+}
+
 class _StoryAddTile extends StatelessWidget {
   final VoidCallback onTap;
 
@@ -92,59 +147,62 @@ class _StoryAddTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final user = context.watch<AuthProvider>().currentUser;
     return SizedBox(
-      width: 72,
+      width: _kTile,
       child: GestureDetector(
         onTap: onTap,
+        behavior: HitTestBehavior.opaque,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                // Avatar circle with glass border
-                Container(
-                  width: 60,
-                  height: 60,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.20),
-                      width: 0.7,
-                    ),
-                  ),
-                  child: Icon(
-                    Icons.person_outline_rounded,
-                    color: scheme.onSurfaceVariant,
-                    size: 26,
-                  ),
-                ),
-                Positioned(
-                  right: -2,
-                  bottom: -2,
-                  child: Container(
-                    width: 22,
-                    height: 22,
+            SizedBox(
+              width: _kRing,
+              height: _kRing,
+              child: Stack(
+                clipBehavior: Clip.none,
+                alignment: Alignment.center,
+                children: [
+                  // Faint hairline ring so the add tile aligns with story tiles.
+                  Container(
+                    width: _kRing,
+                    height: _kRing,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: scheme.primary,
                       border: Border.all(
-                        color: Theme.of(context).scaffoldBackgroundColor,
-                        width: 2,
+                        color: scheme.onSurface.withValues(alpha: 0.12),
+                        width: 1,
                       ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: scheme.primary.withValues(alpha: 0.38),
-                          blurRadius: 8,
-                          offset: const Offset(0, 3),
-                        ),
-                      ],
                     ),
-                    child: const Icon(Icons.add, color: Colors.white, size: 14),
                   ),
-                ),
-              ],
+                  _StoryAvatar(
+                    avatarUrl: user?.avatarUrl,
+                    fallback: user?.avatarInitial ?? '?',
+                  ),
+                  // "+" badge, Instagram-style.
+                  Positioned(
+                    right: -1,
+                    bottom: -1,
+                    child: Container(
+                      width: 19,
+                      height: 19,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: scheme.primary,
+                        border: Border.all(
+                          color: Theme.of(context).scaffoldBackgroundColor,
+                          width: 2,
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.add,
+                        color: Colors.white,
+                        size: 13,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 6),
             Text(
@@ -154,7 +212,7 @@ class _StoryAddTile extends StatelessWidget {
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 11,
-                color: scheme.onSurface.withValues(alpha: 0.65),
+                color: scheme.onSurface.withValues(alpha: 0.6),
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -179,80 +237,58 @@ class _StoryTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = Theme.of(context).scaffoldBackgroundColor;
     final avatar = story.displayAvatar(currentUserId);
     final title = story.displayTitle(currentUserId);
     final unread = !story.viewerHasViewed && story.userId != currentUserId;
 
     return SizedBox(
-      width: 72,
+      width: _kTile,
       child: GestureDetector(
         onTap: onTap,
+        behavior: HitTestBehavior.opaque,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Stack(
-              alignment: Alignment.center,
-              children: [
-                // Gradient ring for unread; glass hairline for viewed
-                if (unread)
+            SizedBox(
+              width: _kRing,
+              height: _kRing,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  // Outer ring: Instagram gradient when unseen, hairline once viewed.
                   Container(
-                    width: 64,
-                    height: 64,
+                    width: _kRing,
+                    height: _kRing,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      gradient: SweepGradient(
-                        colors: [
-                          scheme.primary,
-                          scheme.tertiary,
-                          const Color(0xFF00D4FF),
-                          scheme.primary,
-                        ],
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: scheme.primary.withValues(alpha: 0.35),
-                          blurRadius: 12,
-                          spreadRadius: -2,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                  )
-                else
-                  Container(
-                    width: 64,
-                    height: 64,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: Colors.white.withValues(
-                          alpha: isDark ? 0.14 : 0.30,
-                        ),
-                        width: 1,
-                      ),
-                    ),
-                  ),
-                // Avatar inside a white-bordered circle
-                ClipOval(
-                  child: Container(
-                    width: 56,
-                    height: 56,
-                    color: scheme.surfaceContainerHighest,
-                    child: avatar != null
-                        ? CachedNetworkImage(
-                            imageUrl: ApiConfig.resolveMedia(avatar),
-                            fit: BoxFit.cover,
-                          )
-                        : Center(
-                            child: Text(
-                              title.isNotEmpty ? title[0].toUpperCase() : '?',
-                              style: const TextStyle(fontSize: 20),
+                      gradient: unread
+                          ? const LinearGradient(
+                              begin: Alignment.topRight,
+                              end: Alignment.bottomLeft,
+                              colors: _kStoryGradient,
+                            )
+                          : null,
+                      border: unread
+                          ? null
+                          : Border.all(
+                              color: scheme.onSurface.withValues(alpha: 0.12),
+                              width: 1,
                             ),
-                          ),
+                    ),
                   ),
-                ),
-              ],
+                  // Background gap circle (separates the ring from the avatar).
+                  Container(
+                    width: _kGap,
+                    height: _kGap,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: bg,
+                    ),
+                  ),
+                  _StoryAvatar(avatarUrl: avatar, fallback: title),
+                ],
+              ),
             ),
             const SizedBox(height: 6),
             Text(
@@ -264,7 +300,7 @@ class _StoryTile extends StatelessWidget {
                 fontSize: 11,
                 fontWeight: unread ? FontWeight.w600 : FontWeight.w500,
                 color: unread
-                    ? scheme.onSurface.withValues(alpha: 0.90)
+                    ? scheme.onSurface.withValues(alpha: 0.9)
                     : scheme.onSurface.withValues(alpha: 0.55),
               ),
             ),

@@ -41,4 +41,27 @@ void main() {
       expect(msg.dice!.label, '1 / 5');
     });
   });
+
+  group('game message', () {
+    Message gameMessage() => Message.fromJson({
+      'id': 'aaaaaaaa-0000-0000-0000-000000000000',
+      'conversation_id': 'bbbbbbbb-0000-0000-0000-000000000000',
+      'message_type': 'game',
+      'encrypted_payload':
+          '{"game":{"round_id":"cccccccc-0000-0000-0000-000000000000"}}',
+      'is_encrypted': false,
+      'created_at': '2026-06-08T22:09:35.921233Z',
+    });
+
+    test('type parses to game', () {
+      expect(gameMessage().type, MessageType.game);
+    });
+
+    test('exposes the round id (before and after decrypt)', () {
+      final msg = gameMessage();
+      expect(msg.gameRoundId, 'cccccccc-0000-0000-0000-000000000000');
+      msg.setDecryptedContent(msg.encryptedPayload);
+      expect(msg.gameRoundId, 'cccccccc-0000-0000-0000-000000000000');
+    });
+  });
 }

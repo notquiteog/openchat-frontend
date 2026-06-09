@@ -122,6 +122,7 @@ class ScheduledMessage {
       MessageType.venue => 'Venue',
       MessageType.contact => 'Contact',
       MessageType.dice => 'Dice',
+      MessageType.game => 'Game',
       MessageType.checklist => 'Checklist',
       MessageType.invoice => 'Invoice',
       MessageType.paymentRequest => 'Payment request',

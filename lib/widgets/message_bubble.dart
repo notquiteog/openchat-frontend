@@ -53,6 +53,9 @@ class MessageBubble extends StatelessWidget {
   // sender bubble color remains authoritative for incoming messages.
   final Color? meBubbleColor;
   final double bubbleRadius;
+  // True when this bubble belongs to a channel, so interactive cards (e.g. the
+  // game card) route their API calls to the /channels surface.
+  final bool isChannel;
 
   const MessageBubble({
     super.key,
@@ -71,6 +74,7 @@ class MessageBubble extends StatelessWidget {
     this.readByOthers = false,
     this.meBubbleColor,
     this.bubbleRadius = 18,
+    this.isChannel = false,
   });
 
   /// Resolved background color for this bubble.
@@ -113,6 +117,16 @@ class MessageBubble extends StatelessWidget {
     final dice = message.dice;
     if (dice != null) {
       return _DiceBubble(dice: dice, isMe: isMe);
+    }
+
+    final gameRoundId = message.gameRoundId;
+    if (gameRoundId != null) {
+      return _GameBubble(
+        conversationId: message.conversationId,
+        roundId: gameRoundId,
+        isMe: isMe,
+        isChannel: isChannel,
+      );
     }
 
     return Padding(
@@ -655,6 +669,322 @@ class _DiceBubbleState extends State<_DiceBubble>
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Live in-chat card for a provably-fair game round. Renders the commitment and
+/// bet controls while open, the verifiable outcome + payout once revealed, and a
+/// refund notice for an abandoned real-money round. State comes from
+/// ChatProvider (seeded by the API + game_updated WS events).
+class _GameBubble extends StatefulWidget {
+  final String conversationId;
+  final String roundId;
+  final bool isMe;
+  final bool isChannel;
+  const _GameBubble({
+    required this.conversationId,
+    required this.roundId,
+    required this.isMe,
+    required this.isChannel,
+  });
+
+  @override
+  State<_GameBubble> createState() => _GameBubbleState();
+}
+
+class _GameBubbleState extends State<_GameBubble> {
+  bool _busy = false;
+  bool _requested = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _requested) return;
+      final chat = context.read<ChatProvider>();
+      if (chat.gameRound(widget.roundId) == null) {
+        _requested = true;
+        chat.loadGameRound(
+          widget.conversationId,
+          widget.roundId,
+          isChannel: widget.isChannel,
+        );
+      }
+    });
+  }
+
+  String _faceLabel(String emoji, int selection) {
+    if (emoji == '🪙') return selection == 1 ? 'Heads' : 'Tails';
+    return '$selection';
+  }
+
+  String _amount(Object? v) => v is num ? v.toString() : (v?.toString() ?? '0');
+
+  Future<void> _run(Future<void> Function() action) async {
+    setState(() => _busy = true);
+    try {
+      await action();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final chat = context.watch<ChatProvider>();
+    final round = chat.gameRound(widget.roundId);
+    return Align(
+      alignment: widget.isMe ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 320),
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: scheme.primary.withValues(alpha: 0.25)),
+        ),
+        child: round == null
+            ? const SizedBox(
+                height: 40,
+                child: Center(
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+            : _content(context, round, chat.selfId, scheme),
+      ),
+    );
+  }
+
+  Widget _content(
+    BuildContext context,
+    Map<String, dynamic> round,
+    String? selfId,
+    ColorScheme scheme,
+  ) {
+    final emoji = round['game_type'] as String? ?? '🎲';
+    final faces = (round['faces'] as num?)?.toInt() ?? 6;
+    final provider = round['provider'] as String? ?? 'fun';
+    final status = round['status'] as String? ?? 'open';
+    final isReal = provider != 'fun';
+    final stake = _amount(round['stake']);
+    final bets = (round['bets'] as List?) ?? const [];
+    Map<String, dynamic>? myBet;
+    for (final b in bets) {
+      if (b is Map && b['user_id'] == selfId) {
+        myBet = Map<String, dynamic>.from(b);
+        break;
+      }
+    }
+
+    final children = <Widget>[
+      Row(
+        children: [
+          Text(emoji, style: const TextStyle(fontSize: 26)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Provably-fair game',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+                Text(
+                  isReal
+                      ? 'Ante $stake ${provider.toUpperCase()} · winners split the pot'
+                      : 'No stakes · verify the result yourself',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: scheme.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 10),
+    ];
+
+    if (status == 'refunded') {
+      children.add(
+        Text(
+          'Round expired — all antes were refunded.',
+          style: TextStyle(color: scheme.error),
+        ),
+      );
+    } else if (status == 'revealed') {
+      final outcome = (round['outcome'] as num?)?.toInt() ?? 0;
+      children.add(
+        Center(
+          child: Column(
+            children: [
+              Text(
+                '$emoji  ${_faceLabel(emoji, outcome)}',
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              if (myBet != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  _resultLine(myBet, provider),
+                  style: TextStyle(
+                    color: scheme.primary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+      children.add(const SizedBox(height: 8));
+      children.add(
+        _commit('Server seed (revealed)', round['server_seed'] as String? ?? ''),
+      );
+      children.add(const SizedBox(height: 4));
+      children.add(
+        Text(
+          'Verify: SHA-256(server seed) must equal the commitment, and the roll '
+          'is HMAC-SHA256(server seed, client seed) over $faces faces.',
+          style: TextStyle(
+            fontSize: 10,
+            color: scheme.onSurface.withValues(alpha: 0.55),
+          ),
+        ),
+      );
+    } else {
+      children.add(_commit('Commitment', round['server_seed_hash'] as String? ?? ''));
+      children.add(const SizedBox(height: 10));
+      if (isReal) {
+        children.add(
+          Text(
+            'Pot: ${bets.length} × $stake ${provider.toUpperCase()} · ${bets.length} player(s)',
+            style: TextStyle(
+              fontSize: 12,
+              color: scheme.onSurface.withValues(alpha: 0.7),
+            ),
+          ),
+        );
+        children.add(const SizedBox(height: 8));
+      }
+      if (myBet != null) {
+        children.add(
+          Text(
+            'Your pick: ${_faceLabel(emoji, (myBet['selection'] as num).toInt())}',
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+        );
+        children.add(const SizedBox(height: 8));
+      }
+      // Real-money bettors can't change their ante; fun bettors can re-pick.
+      if (myBet == null || !isReal) {
+        children.add(const Text('Pick:'));
+        children.add(const SizedBox(height: 6));
+        children.add(
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (var n = 1; n <= (faces <= 12 ? faces : 12); n++)
+                ChoiceChip(
+                  label: Text(_faceLabel(emoji, n)),
+                  selected:
+                      myBet != null &&
+                      (myBet['selection'] as num).toInt() == n,
+                  onSelected: _busy
+                      ? null
+                      : (_) => _run(
+                          () => context.read<ChatProvider>().placeGameBet(
+                            widget.conversationId,
+                            widget.roundId,
+                            n,
+                            isChannel: widget.isChannel,
+                          ),
+                        ),
+                ),
+            ],
+          ),
+        );
+        children.add(const SizedBox(height: 10));
+      }
+      children.add(
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.tonal(
+            onPressed: _busy
+                ? null
+                : () => _run(
+                    () => context.read<ChatProvider>().revealGame(
+                      widget.conversationId,
+                      widget.roundId,
+                      isChannel: widget.isChannel,
+                    ),
+                  ),
+            child: _busy
+                ? const SizedBox(
+                    height: 16,
+                    width: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('Reveal outcome'),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: children,
+    );
+  }
+
+  String _resultLine(Map<String, dynamic> myBet, String provider) {
+    final status = myBet['status'] as String? ?? '';
+    final payout = _amount(myBet['payout']);
+    switch (status) {
+      case 'won':
+        return provider == 'fun'
+            ? 'You won! 🎉'
+            : 'You won $payout ${provider.toUpperCase()} 🎉';
+      case 'refunded':
+        return 'Refunded';
+      default:
+        return provider == 'fun' ? 'No win this time' : 'You lost your ante';
+    }
+  }
+
+  Widget _commit(String label, String value) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            color: scheme.primary,
+          ),
+        ),
+        SelectableText(
+          value,
+          maxLines: 2,
+          style: const TextStyle(fontSize: 10, fontFamily: 'monospace'),
+        ),
+      ],
     );
   }
 }

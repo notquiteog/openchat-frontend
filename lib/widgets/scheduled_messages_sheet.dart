@@ -638,6 +638,7 @@ IconData _iconForType(MessageType type) {
     MessageType.venue => Icons.storefront_outlined,
     MessageType.contact => Icons.person_pin_outlined,
     MessageType.dice => Icons.casino_outlined,
+    MessageType.game => Icons.casino_outlined,
     MessageType.checklist => Icons.checklist_rounded,
     MessageType.invoice => Icons.receipt_long_outlined,
     MessageType.paymentRequest => Icons.request_quote_outlined,

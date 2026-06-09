@@ -203,6 +203,17 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                   bottom: MediaQuery.paddingOf(context).bottom + 8,
                 ),
                 children: [
+                  // Instagram-style stories row pinned to the top of the inbox.
+                  if (selectedFolder == null) ...[
+                    const StoriesStrip(),
+                    Container(
+                      height: 0.5,
+                      margin: const EdgeInsets.only(bottom: 2),
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.onSurface.withValues(alpha: 0.07),
+                    ),
+                  ],
                   if (selectedFolder != null ||
                       selectedFilter != SmartInboxFilter.all)
                     _ActiveInboxScopeBar(
@@ -247,6 +258,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                         index: index,
                         child: _ConversationTile(
                           conversation: conversations[index],
+                          showDivider: index < conversations.length - 1,
                           draft: drafts[conversations[index].id],
                           isPinned: pinnedConversationIds.contains(
                             conversations[index].id,
@@ -326,12 +338,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                 label: 'Folders',
                 subtitle: 'Create focused inboxes and automatic rules',
                 onTap: () => runAfterClose(() => _showFolderManager(context)),
-              ),
-              GlassActionTile(
-                icon: Icons.auto_stories_outlined,
-                label: 'Stories',
-                subtitle: 'View recent updates from your contacts',
-                onTap: () => runAfterClose(() => _showStoriesSheet(context)),
               ),
               GlassActionTile(
                 icon: Icons.settings_outlined,
@@ -984,47 +990,6 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
               const SizedBox(height: 12),
             ],
           ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _showStoriesSheet(BuildContext context) async {
-    await GlassModalSheet.show<void>(
-      context: context,
-      initialState: SheetState.half,
-      halfSize: 0.30,
-      enableInteractionGlow: true,
-      builder: (sheetContext) => SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 10, 10, 0),
-              child: Row(
-                children: [
-                  const Icon(Icons.auto_stories_outlined, size: 20),
-                  const SizedBox(width: 10),
-                  Text(
-                    'Stories',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    tooltip: 'Close',
-                    icon: const Icon(Icons.close_rounded),
-                    onPressed: () => Navigator.pop(sheetContext),
-                  ),
-                ],
-              ),
-            ),
-            const StoriesStrip(),
-            const SizedBox(height: 8),
-          ],
         ),
       ),
     );
@@ -1912,6 +1877,7 @@ class _ConversationTile extends StatelessWidget {
   final Conversation conversation;
   final MessageDraft? draft;
   final bool isPinned;
+  final bool showDivider;
   final ConversationNotificationPreference notificationPreference;
   final String? unreadMentionMessageId;
   final String currentUserID;
@@ -1923,6 +1889,7 @@ class _ConversationTile extends StatelessWidget {
     required this.conversation,
     this.draft,
     this.isPinned = false,
+    this.showDivider = false,
     this.notificationPreference =
         const ConversationNotificationPreference.all(),
     this.unreadMentionMessageId,
@@ -1935,6 +1902,7 @@ class _ConversationTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final name = conversation.displayName(currentUserID);
     final avatar = conversation.displayAvatar(currentUserID);
     final last = conversation.lastMessage;
@@ -1949,276 +1917,248 @@ class _ConversationTile extends StatelessWidget {
         notificationPreference.mode ==
         ConversationNotificationMode.mentionsOnly;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: GlassContainer(
-        shape: const LiquidRoundedSuperellipse(borderRadius: 24),
-        allowElevation: hasUnread || isPinned,
-        glowIntensity: hasUnread ? 0.07 : 0.025,
-        padding: EdgeInsets.zero,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: onTap,
-              onLongPress: onLongPress,
-              borderRadius: BorderRadius.circular(24),
-              splashColor: scheme.primary.withValues(alpha: 0.08),
-              highlightColor: scheme.primary.withValues(alpha: 0.04),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 10,
-                ),
-                child: Row(
-                  children: [
-                    // Hero wraps the avatar so it morphs smoothly into the chat
-                    // header avatar when the conversation is opened.
-                    Hero(
-                      tag: 'avatar_${conversation.id}',
-                      child: _ConvAvatar(
-                        avatarUrl: avatar,
-                        name: name,
-                        isGroup: conversation.isGroup,
-                        isChannel: conversation.isChannel,
-                        isSelf: conversation.isSelf,
-                        hasUnread: hasUnread,
-                      ),
+    return Column(
+      children: [
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            onLongPress: onLongPress,
+            splashColor: scheme.primary.withValues(alpha: 0.06),
+            highlightColor: scheme.primary.withValues(alpha: 0.03),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 9, 16, 9),
+              child: Row(
+                children: [
+                  // Hero wraps the avatar so it morphs smoothly into the chat
+                  // header avatar when the conversation is opened.
+                  Hero(
+                    tag: 'avatar_${conversation.id}',
+                    child: _ConvAvatar(
+                      avatarUrl: avatar,
+                      name: name,
+                      isGroup: conversation.isGroup,
+                      isChannel: conversation.isChannel,
+                      isSelf: conversation.isSelf,
                     ),
-                    const SizedBox(width: 14),
-                    // Content
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Row(
-                            children: [
-                              if (conversation.isChannel)
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 4),
-                                  child: Icon(
-                                    Icons.campaign_rounded,
-                                    size: 14,
-                                    color: scheme.onSurface.withValues(
-                                      alpha: 0.44,
-                                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            if (conversation.isChannel)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 4),
+                                child: Icon(
+                                  Icons.campaign_rounded,
+                                  size: 14,
+                                  color: scheme.onSurface.withValues(
+                                    alpha: 0.44,
                                   ),
                                 ),
-                              if (isBot)
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 4),
-                                  child: Icon(
-                                    Icons.smart_toy_outlined,
-                                    size: 13,
-                                    color: scheme.onSurface.withValues(
-                                      alpha: 0.44,
-                                    ),
+                              ),
+                            if (isBot)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 4),
+                                child: Icon(
+                                  Icons.smart_toy_outlined,
+                                  size: 13,
+                                  color: scheme.onSurface.withValues(
+                                    alpha: 0.44,
                                   ),
                                 ),
-                              if (isPinned)
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 4),
-                                  child: Icon(
-                                    Icons.push_pin_rounded,
-                                    size: 13,
-                                    color: scheme.primary.withValues(
-                                      alpha: 0.72,
-                                    ),
+                              ),
+                            if (isPinned)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 4),
+                                child: Icon(
+                                  Icons.push_pin_rounded,
+                                  size: 13,
+                                  color: scheme.primary.withValues(alpha: 0.72),
+                                ),
+                              ),
+                            if (isMuted)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 4),
+                                child: Icon(
+                                  Icons.notifications_off_outlined,
+                                  size: 13,
+                                  color: scheme.onSurface.withValues(
+                                    alpha: 0.38,
                                   ),
                                 ),
-                              if (isMuted)
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 4),
-                                  child: Icon(
-                                    Icons.notifications_off_outlined,
-                                    size: 13,
-                                    color: scheme.onSurface.withValues(
-                                      alpha: 0.38,
-                                    ),
-                                  ),
+                              ),
+                            if (isPriority)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 4),
+                                child: Icon(
+                                  Icons.star_outline_rounded,
+                                  size: 13,
+                                  color: scheme.primary.withValues(alpha: 0.70),
                                 ),
-                              if (isPriority)
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 4),
-                                  child: Icon(
-                                    Icons.star_outline_rounded,
-                                    size: 13,
-                                    color: scheme.primary.withValues(
-                                      alpha: 0.70,
-                                    ),
-                                  ),
+                              ),
+                            if (isMentionsOnly)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 4),
+                                child: Icon(
+                                  Icons.notification_important_outlined,
+                                  size: 13,
+                                  color: scheme.primary.withValues(alpha: 0.70),
                                 ),
-                              if (isMentionsOnly)
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 4),
-                                  child: Icon(
-                                    Icons.notification_important_outlined,
-                                    size: 13,
-                                    color: scheme.primary.withValues(
-                                      alpha: 0.70,
-                                    ),
-                                  ),
-                                ),
-                              if (hasUnreadMention)
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 4),
-                                  child: Tooltip(
-                                    message: 'Jump to mention',
-                                    child: Semantics(
-                                      button: true,
-                                      label: 'Jump to unread mention',
-                                      child: GestureDetector(
-                                        behavior: HitTestBehavior.opaque,
-                                        onTap: onUnreadMentionTap == null
-                                            ? null
-                                            : () => onUnreadMentionTap!(
-                                                unreadMentionMessageId!,
-                                              ),
-                                        child: SizedBox.square(
-                                          dimension: 22,
-                                          child: Center(
-                                            child: Icon(
-                                              Icons.alternate_email_rounded,
-                                              size: 14,
-                                              color: scheme.primary,
+                              ),
+                            if (hasUnreadMention)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 4),
+                                child: Tooltip(
+                                  message: 'Jump to mention',
+                                  child: Semantics(
+                                    button: true,
+                                    label: 'Jump to unread mention',
+                                    child: GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: onUnreadMentionTap == null
+                                          ? null
+                                          : () => onUnreadMentionTap!(
+                                              unreadMentionMessageId!,
                                             ),
+                                      child: SizedBox.square(
+                                        dimension: 22,
+                                        child: Center(
+                                          child: Icon(
+                                            Icons.alternate_email_rounded,
+                                            size: 14,
+                                            color: scheme.primary,
                                           ),
                                         ),
                                       ),
                                     ),
                                   ),
                                 ),
-                              Flexible(
-                                child: Text(
-                                  name,
-                                  style: TextStyle(
-                                    fontWeight: hasUnread
-                                        ? FontWeight.w700
-                                        : FontWeight.w600,
-                                    fontSize: 15,
-                                    letterSpacing: 0,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
+                              ),
+                            Expanded(
+                              child: Text(
+                                name,
+                                style: TextStyle(
+                                  fontWeight: hasUnread
+                                      ? FontWeight.w700
+                                      : FontWeight.w600,
+                                  fontSize: 16.5,
+                                  letterSpacing: -0.2,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            if (hasDraft || last != null) ...[
+                              const SizedBox(width: 8),
+                              Text(
+                                timeago.format(
+                                  hasDraft ? draft!.updatedAt : last!.createdAt,
+                                  locale: 'en_short',
+                                ),
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: hasDraft
+                                      ? scheme.error.withValues(alpha: 0.74)
+                                      : isMuted
+                                      ? scheme.onSurface.withValues(alpha: 0.36)
+                                      : hasUnread
+                                      ? scheme.primary
+                                      : scheme.onSurface.withValues(alpha: 0.4),
+                                  fontWeight: hasUnread
+                                      ? FontWeight.w600
+                                      : FontWeight.w400,
                                 ),
                               ),
                             ],
-                          ),
-                          if (hasDraft || last != null) ...[
-                            const SizedBox(height: 2),
-                            Text.rich(
-                              TextSpan(
-                                children: [
-                                  if (hasDraft)
-                                    TextSpan(
-                                      text: 'Draft: ',
-                                      style: TextStyle(
-                                        color: scheme.error.withValues(
-                                          alpha: 0.82,
-                                        ),
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  TextSpan(
-                                    text: hasDraft
-                                        ? draftPreview
-                                        : last?.listPreview ?? '',
-                                  ),
-                                ],
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: hasDraft
-                                    ? scheme.onSurface.withValues(alpha: 0.65)
-                                    : hasUnread
-                                    ? scheme.onSurface.withValues(alpha: 0.75)
-                                    : scheme.onSurface.withValues(alpha: 0.45),
-                                fontSize: 13,
-                                fontWeight: hasUnread && !hasDraft
-                                    ? FontWeight.w500
-                                    : FontWeight.w400,
-                              ),
-                            ),
                           ],
-                        ],
-                      ),
-                    ),
-                    // Trailing: time + unread badge
-                    const SizedBox(width: 10),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (hasDraft || last != null)
-                          Text(
-                            timeago.format(
-                              hasDraft ? draft!.updatedAt : last!.createdAt,
-                              locale: 'en_short',
-                            ),
-                            style: TextStyle(
-                              fontSize: 11.5,
-                              color: hasDraft
-                                  ? scheme.error.withValues(alpha: 0.74)
-                                  : isMuted
-                                  ? scheme.onSurface.withValues(alpha: 0.36)
-                                  : hasUnread
-                                  ? scheme.primary
-                                  : scheme.onSurface.withValues(alpha: 0.38),
-                              fontWeight: hasUnread
-                                  ? FontWeight.w600
-                                  : FontWeight.w400,
-                            ),
-                          ),
-                        if (hasUnread) ...[
-                          const SizedBox(height: 5),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 7,
-                              vertical: 3,
-                            ),
-                            decoration: BoxDecoration(
-                              color: isMuted
-                                  ? scheme.onSurface.withValues(alpha: 0.24)
-                                  : scheme.primary,
-                              borderRadius: BorderRadius.circular(12),
-                              boxShadow: [
-                                BoxShadow(
-                                  color:
-                                      (isMuted
-                                              ? scheme.onSurface
-                                              : scheme.primary)
-                                          .withValues(
-                                            alpha: isMuted ? 0.12 : 0.40,
-                                          ),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 3),
+                        ),
+                        if (hasDraft || last != null) ...[
+                          const SizedBox(height: 3),
+                          Text.rich(
+                            TextSpan(
+                              children: [
+                                if (hasDraft)
+                                  TextSpan(
+                                    text: 'Draft: ',
+                                    style: TextStyle(
+                                      color: scheme.error.withValues(
+                                        alpha: 0.82,
+                                      ),
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                TextSpan(
+                                  text: hasDraft
+                                      ? draftPreview
+                                      : last?.listPreview ?? '',
                                 ),
                               ],
                             ),
-                            child: Text(
-                              conversation.unreadCount > 99
-                                  ? '99+'
-                                  : '${conversation.unreadCount}',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 11.5,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 0,
-                              ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              height: 1.25,
+                              color: hasDraft
+                                  ? scheme.onSurface.withValues(alpha: 0.6)
+                                  : hasUnread
+                                  ? scheme.onSurface.withValues(alpha: 0.72)
+                                  : scheme.onSurface.withValues(alpha: 0.5),
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.w400,
                             ),
                           ),
                         ],
                       ],
                     ),
+                  ),
+                  // Compact unread count, vertically centred against the avatar.
+                  if (hasUnread) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      constraints: const BoxConstraints(minWidth: 18),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 1,
+                      ),
+                      decoration: BoxDecoration(
+                        // iOS systemGray for muted badges keeps white text
+                        // legible in both themes.
+                        color: isMuted
+                            ? const Color(0xFF8E8E93)
+                            : scheme.primary,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        conversation.unreadCount > 99
+                            ? '99+'
+                            : '${conversation.unreadCount}',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                          height: 1.3,
+                          letterSpacing: 0,
+                        ),
+                      ),
+                    ),
                   ],
-                ),
+                ],
               ),
             ),
           ),
         ),
-      ),
+        if (showDivider)
+          Container(
+            margin: const EdgeInsets.only(left: 82),
+            height: 0.5,
+            color: scheme.onSurface.withValues(alpha: isDark ? 0.14 : 0.1),
+          ),
+      ],
     );
   }
 }
@@ -2229,7 +2169,6 @@ class _ConvAvatar extends StatelessWidget {
   final bool isGroup;
   final bool isChannel;
   final bool isSelf;
-  final bool hasUnread;
 
   const _ConvAvatar({
     this.avatarUrl,
@@ -2237,15 +2176,14 @@ class _ConvAvatar extends StatelessWidget {
     required this.isGroup,
     required this.isChannel,
     this.isSelf = false,
-    required this.hasUnread,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
 
-    Widget avatar = CircleAvatar(
-      radius: 26,
+    return CircleAvatar(
+      radius: 27,
       backgroundColor: isSelf
           ? scheme.primary.withValues(alpha: 0.15)
           : scheme.surfaceContainerHighest,
@@ -2254,46 +2192,22 @@ class _ConvAvatar extends StatelessWidget {
           : null,
       child: avatarUrl == null
           ? (isSelf
-                ? Icon(
-                    Icons.bookmark_rounded,
-                    size: 22,
-                    color: scheme.primary,
-                  )
+                ? Icon(Icons.bookmark_rounded, size: 23, color: scheme.primary)
                 : isGroup || isChannel
                 ? Icon(
                     isChannel ? Icons.campaign_rounded : Icons.group_rounded,
-                    size: 22,
+                    size: 23,
                     color: scheme.onSurfaceVariant,
                   )
                 : Text(
                     name.isNotEmpty ? name[0].toUpperCase() : '?',
                     style: const TextStyle(
                       fontWeight: FontWeight.w700,
-                      fontSize: 17,
+                      fontSize: 18,
                     ),
                   ))
           : null,
     );
-
-    if (hasUnread) {
-      return Container(
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border: Border.all(color: scheme.primary, width: 2),
-          boxShadow: [
-            BoxShadow(
-              color: scheme.primary.withValues(alpha: 0.35),
-              blurRadius: 10,
-              spreadRadius: -2,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: avatar,
-      );
-    }
-
-    return avatar;
   }
 }
 

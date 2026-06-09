@@ -5,13 +5,24 @@ import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:provider/provider.dart';
 
 import '../../services/sfu_call_controller.dart';
+import '../../widgets/glass.dart';
 import 'call_glass.dart';
 
-/// Full-screen UI for a LiveKit SFU group call, in the same iOS-26 Liquid Glass
-/// style as the P2P CallScreen (shared widgets from call_glass.dart). Reads
-/// [SfuCallController] and pops itself when the call ends.
-class SfuCallScreen extends StatelessWidget {
+/// Full-screen UI for a LiveKit SFU group call, in the same iOS-26 / FaceTime
+/// Liquid Glass style as the P2P CallScreen (shared widgets from
+/// call_glass.dart). Reads [SfuCallController] and pops itself when the call
+/// ends. During a live video call, tapping the stage hides the chrome.
+class SfuCallScreen extends StatefulWidget {
   const SfuCallScreen({super.key});
+
+  @override
+  State<SfuCallScreen> createState() => _SfuCallScreenState();
+}
+
+class _SfuCallScreenState extends State<SfuCallScreen> {
+  bool _chromeVisible = true;
+
+  void _toggleChrome() => setState(() => _chromeVisible = !_chromeVisible);
 
   bool get _supportsScreenShare =>
       defaultTargetPlatform == TargetPlatform.android ||
@@ -22,6 +33,13 @@ class SfuCallScreen extends StatelessWidget {
   bool get _isMobile =>
       defaultTargetPlatform == TargetPlatform.android ||
       defaultTargetPlatform == TargetPlatform.iOS;
+
+  static bool _participantHasLiveVideo(lk.Participant p) {
+    final pubs = p.videoTrackPublications;
+    if (pubs.isEmpty) return false;
+    final pub = pubs.first;
+    return pub.track is lk.VideoTrack && !pub.muted;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -35,10 +53,16 @@ class SfuCallScreen extends StatelessWidget {
     }
 
     final participants = sfu.participants;
-    final width = MediaQuery.of(context).size.width;
+    final mq = MediaQuery.of(context);
+    final width = mq.size.width;
     final desktopLayout = width >= 720;
     final compactLayout = width < 430;
     final buttonSize = compactLayout ? 52.0 : 56.0;
+    final connecting = sfu.isConnecting && participants.length <= 1;
+    final hasLiveVideo =
+        sfu.isVideo && participants.any(_participantHasLiveVideo);
+    final chromeHideable = hasLiveVideo;
+    final showChrome = !chromeHideable || _chromeVisible;
 
     final secondary = <Widget>[
       CallControlButton(
@@ -67,8 +91,9 @@ class SfuCallScreen extends StatelessWidget {
         ),
       if (_supportsScreenShare)
         CallControlButton(
-          icon:
-              sfu.isScreenSharing ? Icons.stop_screen_share : Icons.screen_share,
+          icon: sfu.isScreenSharing
+              ? Icons.stop_screen_share
+              : Icons.screen_share,
           label: 'Share',
           active: sfu.isScreenSharing,
           activeColor: callAnswerColor,
@@ -77,51 +102,146 @@ class SfuCallScreen extends StatelessWidget {
         ),
     ];
 
+    final topInset = mq.padding.top + 84;
+    final bottomInset = mq.padding.bottom + (desktopLayout ? 188.0 : 208.0);
+
+    final stage = connecting
+        ? _Connecting(title: sfu.title ?? 'Group call')
+        : _SfuGrid(
+            participants: participants,
+            isVideo: sfu.isVideo,
+            topInset: topInset,
+            bottomInset: bottomInset,
+          );
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
+          if (!hasLiveVideo)
+            Positioned.fill(
+              child: CallBackground(username: sfu.title ?? 'Group call'),
+            ),
+
           Positioned.fill(
-            child: CallBackground(username: sfu.title ?? 'Group call'),
+            child: chromeHideable
+                ? GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _toggleChrome,
+                    child: stage,
+                  )
+                : stage,
           ),
-          SafeArea(
-            child: Column(
-              children: [
-                _SfuHeader(
-                  title: sfu.title ?? 'Group call',
-                  connecting: sfu.isConnecting,
-                  count: participants.length,
+
+          // ── Edge scrims (control legibility over bright video) ──────────────
+          if (hasLiveVideo) ...[
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 168,
+              child: AnimatedSlide(
+                offset: showChrome ? Offset.zero : const Offset(0, -1),
+                duration: const Duration(milliseconds: 240),
+                curve: Curves.easeOut,
+                child: const IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Color(0x80000000), Color(0x00000000)],
+                      ),
+                    ),
+                  ),
                 ),
-                Expanded(
-                  child: sfu.isConnecting && participants.length <= 1
-                      ? const _Connecting()
-                      : _SfuGrid(
-                          participants: participants,
-                          isVideo: sfu.isVideo,
+              ),
+            ),
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              height: 260,
+              child: AnimatedSlide(
+                offset: showChrome ? Offset.zero : const Offset(0, 1),
+                duration: const Duration(milliseconds: 240),
+                curve: Curves.easeOut,
+                child: const IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.bottomCenter,
+                        end: Alignment.topCenter,
+                        colors: [Color(0x8C000000), Color(0x00000000)],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+
+          // ── Header ─────────────────────────────────────────────────────────
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: AnimatedSlide(
+              offset: showChrome ? Offset.zero : const Offset(0, -1),
+              duration: const Duration(milliseconds: 240),
+              curve: Curves.easeOut,
+              child: IgnorePointer(
+                ignoring: !showChrome,
+                child: SafeArea(
+                  bottom: false,
+                  child: _SfuHeader(
+                    title: sfu.title ?? 'Group call',
+                    connecting: sfu.isConnecting,
+                    count: participants.length,
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // ── Controls ───────────────────────────────────────────────────────
+          Positioned(
+            bottom: 0,
+            left: 0,
+            right: 0,
+            child: AnimatedSlide(
+              offset: showChrome ? Offset.zero : const Offset(0, 1.3),
+              duration: const Duration(milliseconds: 240),
+              curve: Curves.easeOut,
+              child: IgnorePointer(
+                ignoring: !showChrome,
+                child: SafeArea(
+                  top: false,
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      desktopLayout ? 40 : 16,
+                      8,
+                      desktopLayout ? 40 : 16,
+                      16,
+                    ),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: desktopLayout ? 560 : double.infinity,
                         ),
-                ),
-                Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    desktopLayout ? 40 : 16,
-                    8,
-                    desktopLayout ? 40 : 16,
-                    16,
-                  ),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxWidth: desktopLayout ? 560 : double.infinity,
-                    ),
-                    child: CallControlsPanel(
-                      secondaryControls: secondary,
-                      onHangup: () => sfu.leave(),
-                      buttonSize: buttonSize,
-                      desktopLayout: desktopLayout,
-                      compactLayout: compactLayout,
-                      endLabel: 'Leave',
+                        child: CallControlsPanel(
+                          secondaryControls: secondary,
+                          onHangup: () => sfu.leave(),
+                          buttonSize: buttonSize,
+                          desktopLayout: desktopLayout,
+                          compactLayout: compactLayout,
+                          endLabel: 'Leave',
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ],
+              ),
             ),
           ),
         ],
@@ -143,9 +263,13 @@ class _SfuHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final subtitle = connecting
+        ? 'Connecting…'
+        : '$count ${count == 1 ? 'person' : 'people'}';
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
           Text(
             title,
@@ -154,14 +278,37 @@ class _SfuHeader extends StatelessWidget {
             textAlign: TextAlign.center,
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 20,
+              fontSize: 21,
               fontWeight: FontWeight.w700,
+              letterSpacing: -0.3,
             ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            connecting ? 'Connecting…' : '$count in call · SFU',
-            style: const TextStyle(color: Colors.white70, fontSize: 13),
+          const SizedBox(height: 8),
+          // Glass status capsule (people count / connecting).
+          GlassContainer(
+            shape: const LiquidRoundedSuperellipse(borderRadius: 999),
+            useOwnLayer: true,
+            quality: GlassQuality.standard,
+            padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  connecting ? Icons.cloud_sync_rounded : Icons.groups_rounded,
+                  color: Colors.white70,
+                  size: 14,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -170,17 +317,26 @@ class _SfuHeader extends StatelessWidget {
 }
 
 class _Connecting extends StatelessWidget {
-  const _Connecting();
+  const _Connecting({required this.title});
+
+  final String title;
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
+    return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          CircularProgressIndicator(),
-          SizedBox(height: 16),
-          Text('Connecting…', style: TextStyle(color: Colors.white70)),
+          PulsingGlowAvatar(username: title, size: 132),
+          const SizedBox(height: 30),
+          const Text(
+            'Connecting…',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
         ],
       ),
     );
@@ -188,17 +344,30 @@ class _Connecting extends StatelessWidget {
 }
 
 class _SfuGrid extends StatelessWidget {
-  const _SfuGrid({required this.participants, required this.isVideo});
+  const _SfuGrid({
+    required this.participants,
+    required this.isVideo,
+    this.topInset = 96,
+    this.bottomInset = 208,
+  });
 
   final List<lk.Participant> participants;
   final bool isVideo;
+  final double topInset;
+  final double bottomInset;
 
   @override
   Widget build(BuildContext context) {
     final n = participants.length;
-    final cols = n <= 1 ? 1 : (n <= 4 ? 2 : 3);
+    final width = MediaQuery.sizeOf(context).width;
+    final cols = n <= 1
+        ? 1
+        : n <= 4
+        ? 2
+        : (width >= 900 ? 4 : 3);
     return GridView.builder(
-      padding: const EdgeInsets.all(10),
+      physics: const ClampingScrollPhysics(),
+      padding: EdgeInsets.fromLTRB(12, topInset, 12, bottomInset),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: cols,
         childAspectRatio: 0.82,
@@ -224,8 +393,10 @@ class _SfuTile extends StatelessWidget {
     final pub = pubs.isNotEmpty ? pubs.first : null;
     final track = pub?.track;
     final videoMuted = pub?.muted ?? true;
-    final name =
-        participant.name.isNotEmpty ? participant.name : participant.identity;
+    final speaking = participant.isSpeaking;
+    final name = participant.name.isNotEmpty
+        ? participant.name
+        : participant.identity;
 
     Widget content;
     if (isVideo && track is lk.VideoTrack && !videoMuted) {
@@ -234,8 +405,9 @@ class _SfuTile extends StatelessWidget {
       content = Center(child: GlowAvatar(username: name, size: 96));
     }
 
+    final radius = BorderRadius.circular(20);
     return ClipRRect(
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: radius,
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -249,6 +421,22 @@ class _SfuTile extends StatelessWidget {
               name: name,
               muted: !participant.isMicrophoneEnabled(),
               compact: false,
+            ),
+          ),
+          // Hairline ring, or a green ring while the participant is speaking.
+          Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: radius,
+                  border: Border.all(
+                    color: speaking
+                        ? callAnswerColor.withValues(alpha: 0.85)
+                        : Colors.white.withValues(alpha: 0.14),
+                    width: speaking ? 2.5 : 1,
+                  ),
+                ),
+              ),
             ),
           ),
         ],

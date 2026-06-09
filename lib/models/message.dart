@@ -18,6 +18,7 @@ enum MessageType {
   venue,
   contact,
   dice,
+  game,
   checklist,
   invoice,
   paymentRequest,
@@ -897,6 +898,23 @@ class Message {
     return null;
   }
 
+  /// The provably-fair game round this message hosts, or null. The payload is
+  /// {"game":{"round_id":"..."}}; the live round state is fetched/streamed by id.
+  String? get gameRoundId {
+    if (type != MessageType.game) return null;
+    for (final raw in [decryptedPayload, encryptedPayload, decryptedContent]) {
+      if (raw == null || raw.isEmpty) continue;
+      try {
+        final json = jsonDecode(raw);
+        if (json is Map && json['game'] is Map) {
+          final id = (json['game'] as Map)['round_id'];
+          if (id is String && id.isNotEmpty) return id;
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
   /// One-line text for conversation list previews. Call events render as their
   /// label (e.g. "Missed voice call") rather than the raw JSON payload.
   String get listPreview {
@@ -908,6 +926,12 @@ class Message {
     }
     if (type == MessageType.checklist) {
       return 'Checklist';
+    }
+    if (type == MessageType.dice) {
+      return '🎲 Dice roll';
+    }
+    if (type == MessageType.game) {
+      return '🎲 Game';
     }
     if (type == MessageType.invoice ||
         type == MessageType.paymentRequest ||
@@ -939,6 +963,7 @@ class Message {
     'venue' => MessageType.venue,
     'contact' => MessageType.contact,
     'dice' => MessageType.dice,
+    'game' => MessageType.game,
     'checklist' => MessageType.checklist,
     'invoice' => MessageType.invoice,
     'payment_request' => MessageType.paymentRequest,

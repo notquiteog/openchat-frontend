@@ -87,8 +87,9 @@ class GlowAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final initial =
-        username.isNotEmpty ? username.substring(0, 1).toUpperCase() : '?';
+    final initial = username.isNotEmpty
+        ? username.substring(0, 1).toUpperCase()
+        : '?';
     return Container(
       width: size,
       height: size,
@@ -121,6 +122,78 @@ class GlowAvatar extends StatelessWidget {
                   ),
                 ),
               ),
+      ),
+    );
+  }
+}
+
+/// [GlowAvatar] wrapped in two expanding "sonar" rings — the FaceTime ringing /
+/// connecting affordance. Plain widget (no glass), safe over [CallBackground].
+/// Shared by the incoming-call modal and the SFU connecting state.
+class PulsingGlowAvatar extends StatefulWidget {
+  final String? avatarUrl;
+  final String username;
+  final double size;
+
+  const PulsingGlowAvatar({
+    super.key,
+    this.avatarUrl,
+    required this.username,
+    this.size = 128,
+  });
+
+  @override
+  State<PulsingGlowAvatar> createState() => _PulsingGlowAvatarState();
+}
+
+class _PulsingGlowAvatarState extends State<PulsingGlowAvatar>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2400),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  Widget _ring(double phase) {
+    final scale = 1.0 + 0.46 * phase;
+    final opacity = ((1.0 - phase) * 0.4).clamp(0.0, 1.0);
+    return Container(
+      width: widget.size * scale,
+      height: widget.size * scale,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: Colors.white.withValues(alpha: opacity),
+          width: 1.5,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: widget.size * 1.7,
+      height: widget.size * 1.7,
+      child: AnimatedBuilder(
+        animation: _pulse,
+        builder: (context, child) {
+          final t = _pulse.value;
+          return Stack(
+            alignment: Alignment.center,
+            children: [_ring(t), _ring((t + 0.5) % 1.0), child!],
+          );
+        },
+        child: GlowAvatar(
+          avatarUrl: widget.avatarUrl,
+          username: widget.username,
+          size: widget.size,
+        ),
       ),
     );
   }
@@ -171,8 +244,8 @@ class CallControlButton extends StatelessWidget {
           style: TextStyle(
             color: active
                 ? (activeColor == Colors.white
-                    ? Colors.white
-                    : activeColor.withValues(alpha: 0.90))
+                      ? Colors.white
+                      : activeColor.withValues(alpha: 0.90))
                 : Colors.white70,
             fontSize: 12,
             fontWeight: FontWeight.w500,
@@ -247,8 +320,11 @@ class CallControlsPanel extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.call_end_rounded,
-                    color: Colors.white, size: 24),
+                const Icon(
+                  Icons.call_end_rounded,
+                  color: Colors.white,
+                  size: 24,
+                ),
                 const SizedBox(width: 10),
                 Text(
                   endLabel,

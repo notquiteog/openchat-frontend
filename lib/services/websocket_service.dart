@@ -33,6 +33,7 @@ enum WsEventType {
   groupCallLeave,
   groupCallState,
   stageState,
+  gameUpdated,
   error,
   unknown,
 }
@@ -406,6 +407,7 @@ class WebSocketService extends ChangeNotifier {
     'group_call_leave' => WsEventType.groupCallLeave,
     'group_call_state' => WsEventType.groupCallState,
     'stage_state' => WsEventType.stageState,
+    'game_updated' => WsEventType.gameUpdated,
     'error' => WsEventType.error,
     _ => WsEventType.unknown,
   };

@@ -12,7 +12,6 @@ import 'call_glass.dart';
 
 const _callEndColor = callEndColor;
 const _callAnswerColor = callAnswerColor;
-const _callDismissColor = Color(0xFF8E8E93);
 
 @visibleForTesting
 bool shouldUseCallVideoRenderersForTesting(CallSession? session) {
@@ -48,6 +47,13 @@ class CallScreen extends StatefulWidget {
 
 class _CallScreenState extends State<CallScreen> {
   bool _audioPickerOpen = false;
+  // FaceTime-style: during a live video call, tapping the stage hides the
+  // chrome (top bar + controls) for an unobstructed view; tap again to restore.
+  bool _chromeVisible = true;
+
+  void _toggleChrome() {
+    setState(() => _chromeVisible = !_chromeVisible);
+  }
 
   @override
   void initState() {
@@ -86,9 +92,9 @@ class _CallScreenState extends State<CallScreen> {
       await cp.startScreenShare();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Screen share failed: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Screen share failed: $e')));
     }
   }
 
@@ -202,6 +208,10 @@ class _CallScreenState extends State<CallScreen> {
     ];
 
     final controlsBottomInset = desktopLayout ? 188.0 : 208.0;
+    // Chrome is only hideable when there's live video to reveal; a voice call
+    // keeps the controls visible at all times.
+    final chromeHideable = hasLiveVideo;
+    final showChrome = !chromeHideable || _chromeVisible;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -214,91 +224,157 @@ class _CallScreenState extends State<CallScreen> {
             ),
 
           Positioned.fill(
-            child: _ParticipantStage(
-              participants: participants,
-              isVideo: isVideo,
-              controlsBottomInset: controlsBottomInset,
-            ),
+            child: chromeHideable
+                ? GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _toggleChrome,
+                    child: _ParticipantStage(
+                      participants: participants,
+                      isVideo: isVideo,
+                      controlsBottomInset: controlsBottomInset,
+                    ),
+                  )
+                : _ParticipantStage(
+                    participants: participants,
+                    isVideo: isVideo,
+                    controlsBottomInset: controlsBottomInset,
+                  ),
           ),
+
+          // ── Edge scrims (control legibility over bright video) ──────────────
+          if (hasLiveVideo) ...[
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 168,
+              child: AnimatedSlide(
+                offset: showChrome ? Offset.zero : const Offset(0, -1),
+                duration: const Duration(milliseconds: 240),
+                curve: Curves.easeOut,
+                child: const IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Color(0x80000000), Color(0x00000000)],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              height: 260,
+              child: AnimatedSlide(
+                offset: showChrome ? Offset.zero : const Offset(0, 1),
+                duration: const Duration(milliseconds: 240),
+                curve: Curves.easeOut,
+                child: const IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.bottomCenter,
+                        end: Alignment.topCenter,
+                        colors: [Color(0x8C000000), Color(0x00000000)],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
 
           // ── Top bar ────────────────────────────────────────────────────────
           Positioned(
             top: 0,
             left: 0,
             right: 0,
-            child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 8,
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
+            child: AnimatedSlide(
+              offset: showChrome ? Offset.zero : const Offset(0, -1),
+              duration: const Duration(milliseconds: 240),
+              curve: Curves.easeOut,
+              child: IgnorePointer(
+                ignoring: !showChrome,
+                child: SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        // Minimize button
-                        GlassIconButton(
-                          key: const Key('minimize-call-button'),
-                          icon: const Icon(
-                            Icons.keyboard_arrow_down_rounded,
-                          ),
-                          onPressed: _minimize,
-                          useOwnLayer: true,
-                          quality: GlassQuality.standard,
-                          size: 44,
+                        Row(
+                          children: [
+                            // Minimize button
+                            GlassIconButton(
+                              key: const Key('minimize-call-button'),
+                              icon: const Icon(
+                                Icons.keyboard_arrow_down_rounded,
+                              ),
+                              onPressed: _minimize,
+                              useOwnLayer: true,
+                              quality: GlassQuality.standard,
+                              size: 44,
+                            ),
+                            const Spacer(),
+                            // Status chip (shows duration once connected)
+                            GlassContainer(
+                              shape: const LiquidRoundedSuperellipse(
+                                borderRadius: 999,
+                              ),
+                              useOwnLayer: true,
+                              quality: GlassQuality.standard,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 7,
+                              ),
+                              child: Text(
+                                statusText,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            const Spacer(),
+                            const SizedBox(width: 44),
+                          ],
                         ),
-                        const Spacer(),
-                        // Status chip (shows duration once connected)
-                        GlassContainer(
-                          shape: const LiquidRoundedSuperellipse(
-                            borderRadius: 999,
-                          ),
-                          useOwnLayer: true,
-                          quality: GlassQuality.standard,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 7,
-                          ),
-                          child: Text(
-                            statusText,
+                        // Caller name + type (shown when no live video stream)
+                        if (!hasLiveVideo) ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            username,
                             style: const TextStyle(
                               color: Colors.white,
+                              fontSize: 24,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.3,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            isVideo ? 'Video call' : 'Voice call',
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.55),
                               fontSize: 13,
-                              fontWeight: FontWeight.w600,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
-                        ),
-                        const Spacer(),
-                        const SizedBox(width: 44),
+                        ],
                       ],
                     ),
-                    // Caller name + call type (shown when no live video stream)
-                    if (!hasLiveVideo) ...[
-                      const SizedBox(height: 10),
-                      Text(
-                        username,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 24,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: -0.3,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                        maxLines: 1,
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        isVideo ? 'Video call' : 'Voice call',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.55),
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -309,19 +385,27 @@ class _CallScreenState extends State<CallScreen> {
             bottom: 0,
             left: 0,
             right: 0,
-            child: SafeArea(
-              child: Padding(
-                padding: controlsPadding,
-                child: Center(
-                  child: ConstrainedBox(
-                    key: const Key('call-controls-bar'),
-                    constraints: BoxConstraints(maxWidth: controlsMaxWidth),
-                    child: CallControlsPanel(
-                      secondaryControls: secondaryControls,
-                      onHangup: _hangup,
-                      buttonSize: buttonSize,
-                      desktopLayout: desktopLayout,
-                      compactLayout: compactLayout,
+            child: AnimatedSlide(
+              offset: showChrome ? Offset.zero : const Offset(0, 1.3),
+              duration: const Duration(milliseconds: 240),
+              curve: Curves.easeOut,
+              child: IgnorePointer(
+                ignoring: !showChrome,
+                child: SafeArea(
+                  child: Padding(
+                    padding: controlsPadding,
+                    child: Center(
+                      child: ConstrainedBox(
+                        key: const Key('call-controls-bar'),
+                        constraints: BoxConstraints(maxWidth: controlsMaxWidth),
+                        child: CallControlsPanel(
+                          secondaryControls: secondaryControls,
+                          onHangup: _hangup,
+                          buttonSize: buttonSize,
+                          desktopLayout: desktopLayout,
+                          compactLayout: compactLayout,
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -575,37 +659,48 @@ class _ParticipantStage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final local = participants.where((p) => p.isLocal).firstOrNull;
-    final primaryRemote = participants
-        .where((p) => !p.isLocal && p.renderer != null)
-        .firstOrNull;
-    final usePiP =
-        isVideo &&
-        primaryRemote != null &&
-        participants.where((p) => !p.isLocal).length == 1;
+    final nonLocal = participants.where((p) => !p.isLocal).toList();
+    final primaryRemote = nonLocal.where((p) => p.renderer != null).firstOrNull;
+
+    // 1-on-1 voice call → a clean FaceTime hero avatar floating on the call
+    // background (the name + duration live in the top bar), instead of a boxed
+    // grid tile.
+    if (!isVideo && nonLocal.length <= 1) {
+      return _SoloAvatarStage(
+        participant: nonLocal.isNotEmpty ? nonLocal.first : participants.first,
+        controlsBottomInset: controlsBottomInset,
+      );
+    }
+
+    final usePiP = isVideo && primaryRemote != null && nonLocal.length == 1;
 
     if (usePiP) {
-      return Stack(
-        children: [
-          Positioned.fill(
-            child: _ParticipantTile(
-              participant: primaryRemote,
-              isVideoCall: true,
-              fullBleed: true,
-            ),
-          ),
-          if (local != null)
-            Positioned(
-              top: 72,
-              right: 16,
-              width: 112,
-              height: 152,
+      final desktop = _isDesktopCallLayout(context);
+      final pipSize = desktop ? const Size(148, 198) : const Size(112, 152);
+      return LayoutBuilder(
+        builder: (context, constraints) => Stack(
+          children: [
+            Positioned.fill(
               child: _ParticipantTile(
-                participant: local,
+                participant: primaryRemote,
                 isVideoCall: true,
-                compact: true,
+                fullBleed: true,
               ),
             ),
-        ],
+            if (local != null)
+              _DraggablePip(
+                stageSize: Size(constraints.maxWidth, constraints.maxHeight),
+                pipSize: pipSize,
+                bottomInset: controlsBottomInset,
+                child: _ParticipantTile(
+                  participant: local,
+                  isVideoCall: true,
+                  compact: true,
+                  floating: true,
+                ),
+              ),
+          ],
+        ),
       );
     }
 
@@ -613,6 +708,133 @@ class _ParticipantStage extends StatelessWidget {
       participants: participants,
       isVideoCall: isVideo,
       controlsBottomInset: controlsBottomInset,
+    );
+  }
+}
+
+/// FaceTime-style hero avatar for a 1-on-1 voice call — a glowing circular
+/// avatar centred on the call background (no boxed tile, no duplicate name).
+class _SoloAvatarStage extends StatelessWidget {
+  final _CallParticipantView participant;
+  final double controlsBottomInset;
+
+  const _SoloAvatarStage({
+    required this.participant,
+    required this.controlsBottomInset,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final size = (constraints.biggest.shortestSide * 0.44)
+            .clamp(128.0, 208.0)
+            .toDouble();
+        return Padding(
+          // Optically centre between the top bar and the controls panel.
+          padding: EdgeInsets.only(top: 96, bottom: controlsBottomInset),
+          child: Center(
+            child: GlowAvatar(
+              avatarUrl: participant.avatarUrl,
+              username: participant.name,
+              size: size,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// FaceTime-style draggable picture-in-picture tile. Follows the finger while
+/// dragging and springs to the nearest corner on release. It is a plain
+/// [AnimatedPositioned] (no glass) so it stays safe above the remote video
+/// texture.
+class _DraggablePip extends StatefulWidget {
+  final Widget child;
+  final Size stageSize;
+  final Size pipSize;
+  final double bottomInset;
+
+  const _DraggablePip({
+    required this.child,
+    required this.stageSize,
+    required this.pipSize,
+    required this.bottomInset,
+  });
+
+  @override
+  State<_DraggablePip> createState() => _DraggablePipState();
+}
+
+class _DraggablePipState extends State<_DraggablePip> {
+  static const double _margin = 16;
+  static const double _topMargin = 72;
+
+  Offset? _pos;
+  bool _dragging = false;
+
+  double get _bottomMargin => widget.bottomInset.clamp(96.0, 320.0);
+
+  List<Offset> _corners(Size stage) {
+    final w = widget.pipSize.width;
+    final h = widget.pipSize.height;
+    final right = stage.width - w - _margin;
+    final bottom = stage.height - h - _bottomMargin;
+    return [
+      Offset(right, _topMargin), // top-right (default)
+      Offset(right, bottom), // bottom-right
+      Offset(_margin, bottom), // bottom-left
+      Offset(_margin, _topMargin), // top-left
+    ];
+  }
+
+  Offset _clamp(Offset p, Size stage) {
+    final maxX = stage.width - widget.pipSize.width - _margin;
+    final maxY = stage.height - widget.pipSize.height - _margin;
+    return Offset(
+      p.dx.clamp(_margin, maxX < _margin ? _margin : maxX),
+      p.dy.clamp(_topMargin, maxY < _topMargin ? _topMargin : maxY),
+    );
+  }
+
+  Offset _nearestCorner(Size stage, Offset p) {
+    final half = Offset(widget.pipSize.width / 2, widget.pipSize.height / 2);
+    final center = p + half;
+    var best = _corners(stage).first;
+    var bestD = double.infinity;
+    for (final corner in _corners(stage)) {
+      final d = ((corner + half) - center).distanceSquared;
+      if (d < bestD) {
+        bestD = d;
+        best = corner;
+      }
+    }
+    return best;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final stage = widget.stageSize;
+    final pos = _clamp(_pos ?? _corners(stage).first, stage);
+    return AnimatedPositioned(
+      duration: _dragging ? Duration.zero : const Duration(milliseconds: 300),
+      curve: Curves.easeOutCubic,
+      left: pos.dx,
+      top: pos.dy,
+      width: widget.pipSize.width,
+      height: widget.pipSize.height,
+      child: GestureDetector(
+        onPanStart: (_) => setState(() => _dragging = true),
+        onPanUpdate: (details) => setState(() {
+          _pos = _clamp((_pos ?? _corners(stage).first) + details.delta, stage);
+        }),
+        onPanEnd: (_) => setState(() {
+          _dragging = false;
+          _pos = _nearestCorner(stage, _pos ?? _corners(stage).first);
+        }),
+        child: widget.child,
+      ),
     );
   }
 }
@@ -666,17 +888,24 @@ class _ParticipantTile extends StatelessWidget {
   final bool compact;
   final bool fullBleed;
 
+  /// Floating PiP treatment: larger corner radius, a white hairline, and a drop
+  /// shadow so the tile reads as lifted above the remote video.
+  final bool floating;
+
   const _ParticipantTile({
     required this.participant,
     required this.isVideoCall,
     this.compact = false,
     this.fullBleed = false,
+    this.floating = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final renderer = isVideoCall ? participant.renderer : null;
-    final radius = fullBleed ? BorderRadius.zero : BorderRadius.circular(8);
+    final radius = fullBleed
+        ? BorderRadius.zero
+        : BorderRadius.circular(floating ? 20 : 8);
     final content = renderer != null
         ? IgnorePointer(
             child: RTCVideoView(
@@ -687,7 +916,7 @@ class _ParticipantTile extends StatelessWidget {
           )
         : _ParticipantAvatarPanel(participant: participant, compact: compact);
 
-    return ClipRRect(
+    final tile = ClipRRect(
       borderRadius: radius,
       child: Stack(
         fit: StackFit.expand,
@@ -703,6 +932,21 @@ class _ParticipantTile extends StatelessWidget {
               compact: compact,
             ),
           ),
+          // Hairline ring (plain DecoratedBox — safe over a video texture).
+          if (floating && !participant.isSpeaking)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.55),
+                      width: 1,
+                    ),
+                    borderRadius: radius,
+                  ),
+                ),
+              ),
+            ),
           if (participant.isSpeaking)
             Positioned.fill(
               child: IgnorePointer(
@@ -719,6 +963,22 @@ class _ParticipantTile extends StatelessWidget {
             ),
         ],
       ),
+    );
+
+    if (!floating) return tile;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: radius,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.5),
+            blurRadius: 22,
+            spreadRadius: -2,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: tile,
     );
   }
 }
@@ -939,10 +1199,28 @@ class _MinimizedCallOverlay extends StatelessWidget {
 
 // ── Incoming call modal ───────────────────────────────────────────────────────
 
-/// Full-screen, iOS 26 Liquid Glass incoming-call prompt with the caller's
-/// avatar centered and Answer / Decline / Dismiss actions.
-class IncomingCallModal extends StatelessWidget {
+/// Full-screen, iOS 26 / FaceTime-style incoming-call prompt: the caller's
+/// avatar pulses in the upper third, with Decline / Answer anchored at the
+/// bottom and a secondary Dismiss above them.
+class IncomingCallModal extends StatefulWidget {
   const IncomingCallModal({super.key});
+
+  @override
+  State<IncomingCallModal> createState() => _IncomingCallModalState();
+}
+
+class _IncomingCallModalState extends State<IncomingCallModal>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _entrance = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 460),
+  )..forward();
+
+  @override
+  void dispose() {
+    _entrance.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -959,39 +1237,23 @@ class IncomingCallModal extends StatelessWidget {
     final avatarUrl = incoming.remoteAvatarUrl;
     final desktopLayout = _isDesktopCallLayout(context);
     final panelMaxWidth = desktopLayout ? 480.0 : double.infinity;
-    final panelPadding = EdgeInsets.symmetric(
-      horizontal: desktopLayout ? 24 : 32,
-      vertical: desktopLayout ? 28 : 40,
-    );
-    final actions = [
-      _CallAction(
-        icon: Icons.call_end_rounded,
-        label: 'Decline',
-        color: _callEndColor,
-        onTap: cp.rejectIncomingCall,
-      ),
-      _CallAction(
-        icon: Icons.close_rounded,
-        label: 'Dismiss',
-        color: _callDismissColor,
-        onTap: cp.dismissIncomingCall,
-      ),
-      _CallAction(
-        icon: incoming.isVideo ? Icons.videocam_rounded : Icons.call_rounded,
-        label: 'Answer',
-        color: _callAnswerColor,
-        onTap: () async {
-          try {
-            await cp.acceptIncomingCall();
-          } catch (error) {
-            if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Could not answer call: $error')),
-            );
-          }
-        },
-      ),
-    ];
+
+    final fade = CurvedAnimation(parent: _entrance, curve: Curves.easeOut);
+    final rise = Tween<Offset>(
+      begin: const Offset(0, 0.05),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _entrance, curve: Curves.easeOutCubic));
+
+    Future<void> answer() async {
+      try {
+        await cp.acceptIncomingCall();
+      } catch (error) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not answer call: $error')),
+        );
+      }
+    }
 
     return Material(
       type: MaterialType.transparency,
@@ -1004,86 +1266,182 @@ class IncomingCallModal extends StatelessWidget {
             ),
           ),
           Positioned.fill(
-            child: Container(color: Colors.black.withValues(alpha: 0.34)),
+            child: ColoredBox(color: Colors.black.withValues(alpha: 0.38)),
           ),
           SafeArea(
-            child: Center(
-              child: ConstrainedBox(
-                key: const Key('incoming-call-panel'),
-                constraints: BoxConstraints(maxWidth: panelMaxWidth),
-                child: SingleChildScrollView(
-                  padding: panelPadding,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      GlowAvatar(
-                        avatarUrl: avatarUrl,
-                        username: incoming.remoteUsername ?? '',
+            child: FadeTransition(
+              opacity: fade,
+              child: SlideTransition(
+                position: rise,
+                child: Center(
+                  child: ConstrainedBox(
+                    key: const Key('incoming-call-panel'),
+                    constraints: BoxConstraints(maxWidth: panelMaxWidth),
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: desktopLayout ? 24 : 28,
                       ),
-                      const SizedBox(height: 22),
-                      Text(
-                        name,
-                        style: const TextStyle(
-                          fontSize: 26,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                          letterSpacing: 0,
-                        ),
-                        textAlign: TextAlign.center,
-                        overflow: TextOverflow.ellipsis,
-                        maxLines: 1,
-                      ),
-                      const SizedBox(height: 8),
-                      // Kind badge — shader-based glass capsule
-                      GlassContainer(
-                        shape: const LiquidRoundedSuperellipse(
-                          borderRadius: 999,
-                        ),
-                        useOwnLayer: true,
-                        quality: GlassQuality.standard,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 6,
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              incoming.isVideo
-                                  ? Icons.videocam_rounded
-                                  : Icons.call_rounded,
-                              color: Colors.white70,
-                              size: 14,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              kind,
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500,
+                      child: Column(
+                        children: [
+                          // ── Caller (upper third) ─────────────────────────
+                          Expanded(
+                            flex: 5,
+                            child: Center(
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 360,
+                                  ),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      PulsingGlowAvatar(
+                                        avatarUrl: avatarUrl,
+                                        username: incoming.remoteUsername ?? '',
+                                        size: desktopLayout ? 120 : 128,
+                                      ),
+                                      const SizedBox(height: 28),
+                                      Text(
+                                        name,
+                                        style: const TextStyle(
+                                          fontSize: 28,
+                                          fontWeight: FontWeight.w700,
+                                          color: Colors.white,
+                                          letterSpacing: -0.3,
+                                        ),
+                                        textAlign: TextAlign.center,
+                                        overflow: TextOverflow.ellipsis,
+                                        maxLines: 1,
+                                      ),
+                                      const SizedBox(height: 12),
+                                      _KindBadge(
+                                        isVideo: incoming.isVideo,
+                                        label: kind,
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               ),
                             ),
-                          ],
-                        ),
+                          ),
+                          // ── Actions (lower third) ────────────────────────
+                          Flexible(
+                            flex: 4,
+                            fit: FlexFit.loose,
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                _DismissButton(onTap: cp.dismissIncomingCall),
+                                SizedBox(height: desktopLayout ? 26 : 32),
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceEvenly,
+                                  children: [
+                                    _CallAction(
+                                      icon: Icons.call_end_rounded,
+                                      label: 'Decline',
+                                      color: _callEndColor,
+                                      onTap: cp.rejectIncomingCall,
+                                      size: 78,
+                                    ),
+                                    _CallAction(
+                                      icon: incoming.isVideo
+                                          ? Icons.videocam_rounded
+                                          : Icons.call_rounded,
+                                      label: 'Answer',
+                                      color: _callAnswerColor,
+                                      onTap: answer,
+                                      size: 78,
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: desktopLayout ? 24 : 40),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                      SizedBox(height: desktopLayout ? 46 : 64),
-                      Wrap(
-                        alignment: WrapAlignment.center,
-                        runAlignment: WrapAlignment.center,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        spacing: desktopLayout ? 34 : 24,
-                        runSpacing: 18,
-                        children: actions,
-                      ),
-                      const SizedBox(height: 20),
-                    ],
+                    ),
                   ),
                 ),
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Shader-glass capsule describing the call type (voice/video).
+class _KindBadge extends StatelessWidget {
+  final bool isVideo;
+  final String label;
+
+  const _KindBadge({required this.isVideo, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassContainer(
+      shape: const LiquidRoundedSuperellipse(borderRadius: 999),
+      useOwnLayer: true,
+      quality: GlassQuality.standard,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isVideo ? Icons.videocam_rounded : Icons.call_rounded,
+            color: Colors.white70,
+            size: 14,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Secondary "silence the ringer" pill shown above the primary call actions.
+class _DismissButton extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _DismissButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: GlassContainer(
+        shape: const LiquidRoundedSuperellipse(borderRadius: 999),
+        useOwnLayer: true,
+        quality: GlassQuality.standard,
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.close_rounded, color: Colors.white70, size: 16),
+            SizedBox(width: 7),
+            Text(
+              'Dismiss',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1096,12 +1454,14 @@ class _CallAction extends StatelessWidget {
   final String label;
   final Color color;
   final VoidCallback onTap;
+  final double size;
 
   const _CallAction({
     required this.icon,
     required this.label,
     required this.color,
     required this.onTap,
+    this.size = 72,
   });
 
   @override
@@ -1110,16 +1470,18 @@ class _CallAction extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         GlassIconButton(
-          icon: Icon(icon, size: 30, color: Colors.white),
+          icon: Icon(icon, size: size * 0.4, color: Colors.white),
           onPressed: onTap,
-          size: 72,
+          size: size,
           useOwnLayer: true,
           quality: GlassQuality.standard,
           glowColor: color,
           glowRadius: 30,
-          settings: LiquidGlassSettings(glassColor: color.withValues(alpha: 0.55)),
+          settings: LiquidGlassSettings(
+            glassColor: color.withValues(alpha: 0.55),
+          ),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 11),
         Text(
           label,
           style: const TextStyle(

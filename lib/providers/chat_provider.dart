@@ -130,6 +130,9 @@ class ChatProvider extends ChangeNotifier {
   final List<ChatFolder> _chatFolders = [];
   final Map<String, Set<String>> _typingUsers = {};
   final Map<String, Map<String, String>> _readReceipts = {};
+  // Live provably-fair game rounds, keyed by round id (populated from the API
+  // and game_updated WS events) so the in-chat game cards render reactively.
+  final Map<String, Map<String, dynamic>> _gameRounds = {};
   final Map<String, _ActiveLiveLocationShare> _liveLocationShares = {};
   final Set<String> _mlsRefreshInFlight = {};
   List<OfflineOutboxItem> _outboxItems = const [];
@@ -2203,6 +2206,7 @@ class ChatProvider extends ChangeNotifier {
       MessageType.venue => 'venue',
       MessageType.contact => 'contact',
       MessageType.dice => 'dice',
+      MessageType.game => 'game',
       MessageType.checklist => 'checklist',
       MessageType.invoice => 'invoice',
       MessageType.paymentRequest => 'payment_request',
@@ -3030,6 +3034,9 @@ class ChatProvider extends ChangeNotifier {
       case WsEventType.pollUpdated:
         _handlePollUpdate(event.data);
 
+      case WsEventType.gameUpdated:
+        _ingestGameRound(event.data);
+
       case WsEventType.paymentRequestUpdated:
         unawaited(_handlePaymentRequestUpdate(event.data));
 
@@ -3769,6 +3776,79 @@ class ChatProvider extends ChangeNotifier {
           'conv=${msg.conversationId} sealed=${msg.sealedSender}: $e');
       msg.markDecryptionFailed();
     }
+  }
+
+  // ── Provably-fair games ────────────────────────────────────────────────────
+
+  /// The current user's id (used by game cards to find the viewer's own bet).
+  String? get selfId => _selfId;
+
+  /// Live round state for an in-chat game card, or null until loaded.
+  Map<String, dynamic>? gameRound(String roundId) => _gameRounds[roundId];
+
+  void _ingestGameRound(Map<String, dynamic> round) {
+    final id = round['id'] as String?;
+    if (id == null || id.isEmpty) return;
+    _gameRounds[id] = round;
+    notifyListeners();
+  }
+
+  /// Starts a game. mode: 'quick' (instant fun roll) | 'betting'.
+  /// provider: 'fun' | 'btc' | 'xmr'; stake is the per-bettor ante for real money.
+  /// isChannel routes to the /channels surface when the round lives in a channel.
+  Future<Map<String, dynamic>> createGame(
+    String convID, {
+    required String gameType,
+    required String mode,
+    required String provider,
+    double? stake,
+    bool isChannel = false,
+  }) async {
+    final round = await _api.createGameRound(
+      convID,
+      gameType: gameType,
+      mode: mode,
+      provider: provider,
+      stake: stake,
+      isChannel: isChannel,
+    );
+    _ingestGameRound(round);
+    return round;
+  }
+
+  Future<void> placeGameBet(
+    String convID,
+    String roundID,
+    int selection, {
+    bool isChannel = false,
+  }) async {
+    _ingestGameRound(
+      await _api.placeGameBet(convID, roundID, selection, isChannel: isChannel),
+    );
+  }
+
+  Future<void> revealGame(
+    String convID,
+    String roundID, {
+    bool isChannel = false,
+  }) async {
+    _ingestGameRound(
+      await _api.revealGameRound(convID, roundID, isChannel: isChannel),
+    );
+  }
+
+  /// Fetches a round the client hasn't seen yet (e.g. a card scrolled into view).
+  Future<void> loadGameRound(
+    String convID,
+    String roundID, {
+    bool isChannel = false,
+  }) async {
+    if (_gameRounds.containsKey(roundID)) return;
+    try {
+      _ingestGameRound(
+        await _api.getGameRound(convID, roundID, isChannel: isChannel),
+      );
+    } catch (_) {}
   }
 
   Future<void> deleteMessage(String convID, String msgID) async {

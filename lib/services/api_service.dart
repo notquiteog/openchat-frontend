@@ -533,22 +533,49 @@ class ApiService {
     await _post('/api/v1/conversations/$convID/dice', {'emoji': emoji});
   }
 
-  // ── Provably-fair dice game (fun mode) ─────────────────────────────────────
-  Future<Map<String, dynamic>> createGameRound(String convID) async {
-    final resp = await _post('/api/v1/conversations/$convID/games', {});
+  // ── Provably-fair games (fun + real-money pari-mutuel) ─────────────────────
+  // mode: 'quick' (instant fun roll) | 'betting'. provider: 'fun' | 'btc' | 'xmr'.
+  // Channels expose the same surface under /channels instead of /conversations.
+  String _gameBase(String convID, bool isChannel) =>
+      '/api/v1/${isChannel ? 'channels' : 'conversations'}/$convID/games';
+
+  Future<Map<String, dynamic>> createGameRound(
+    String convID, {
+    String gameType = '🎲',
+    String mode = 'quick',
+    String provider = 'fun',
+    double? stake,
+    bool isChannel = false,
+  }) async {
+    final resp = await _post(_gameBase(convID, isChannel), {
+      'game_type': gameType,
+      'mode': mode,
+      'provider': provider,
+      'stake': ?stake,
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> getGameRound(
+    String convID,
+    String roundID, {
+    bool isChannel = false,
+  }) async {
+    final resp = await _get('${_gameBase(convID, isChannel)}/$roundID');
     return resp['data'] as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> placeGameBet(
     String convID,
     String roundID,
-    int selection,
-  ) async {
+    int selection, {
+    bool isChannel = false,
+  }) async {
     // Contribute fresh client-side entropy so neither the server (which committed
     // to its seed before this bet) nor any player can grind the provably-fair
     // outcome: it's HMAC(server_seed, combined client seeds).
     final resp = await _post(
-      '/api/v1/conversations/$convID/games/$roundID/bets',
+      '${_gameBase(convID, isChannel)}/$roundID/bets',
       {'selection': selection, 'client_seed': _randomClientSeed()},
     );
     return resp['data'] as Map<String, dynamic>;
@@ -562,10 +589,11 @@ class ApiService {
 
   Future<Map<String, dynamic>> revealGameRound(
     String convID,
-    String roundID,
-  ) async {
+    String roundID, {
+    bool isChannel = false,
+  }) async {
     final resp = await _post(
-      '/api/v1/conversations/$convID/games/$roundID/reveal',
+      '${_gameBase(convID, isChannel)}/$roundID/reveal',
       {},
     );
     return resp['data'] as Map<String, dynamic>;
