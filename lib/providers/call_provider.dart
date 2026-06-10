@@ -33,6 +33,7 @@ class CallProvider extends ChangeNotifier {
   String? _activeCallNotificationSessionId;
   CallState? _activeCallNotificationState;
   bool? _activeCallNotificationMuted;
+  bool? _activeCallNotificationVideo;
   bool _disposed = false;
 
   static final bool _isDesktopPlatform =
@@ -82,6 +83,7 @@ class CallProvider extends ChangeNotifier {
         _activeCallNotificationSessionId = null;
         _activeCallNotificationState = null;
         _activeCallNotificationMuted = null;
+        _activeCallNotificationVideo = null;
         unawaited(_foreground.stop());
         unawaited(NotificationService.cancelActiveCall());
       }
@@ -91,11 +93,15 @@ class CallProvider extends ChangeNotifier {
     final shouldRefresh =
         _activeCallNotificationSessionId != s.callId ||
         _activeCallNotificationState != s.state ||
-        _activeCallNotificationMuted != _micMuted;
+        _activeCallNotificationMuted != _micMuted ||
+        // A mid-call video upgrade must restart the Android foreground
+        // service so it runs with the camera service type.
+        _activeCallNotificationVideo != s.isVideo;
     if (!shouldRefresh) return;
     _activeCallNotificationSessionId = s.callId;
     _activeCallNotificationState = s.state;
     _activeCallNotificationMuted = _micMuted;
+    _activeCallNotificationVideo = s.isVideo;
     final name = s.remoteUsername != null ? '@${s.remoteUsername}' : 'OpenChat';
     final kind = s.isVideo ? 'Video call' : 'Voice call';
     final connectedAtMillis = s.connectedAt?.millisecondsSinceEpoch;
@@ -475,6 +481,35 @@ class CallProvider extends ChangeNotifier {
     try {
       _callService.setCameraEnabled(enabled);
     } catch (_) {}
+    notifyListeners();
+  }
+
+  /// Whether the connected 1:1 voice call can be upgraded to video.
+  bool get canUpgradeToVideo =>
+      session?.isVideo == false && _callService.canUpgradeToVideo;
+
+  /// Whether the connected mesh group call can move to the SFU. The premium
+  /// gate is checked by the UI (and enforced server-side by the LiveKit
+  /// token endpoint).
+  bool get canEscalateToSfu =>
+      session?.isGroupCall == true && session?.state == CallState.connected;
+
+  /// Mesh calls that moved to the SFU — the app root joins the LiveKit room.
+  Stream<EscalatedCall> get escalatedCalls => _callService.escalatedCalls;
+
+  Future<void> escalateToSfu() => _callService.escalateToSfu();
+
+  /// Turns the camera on mid-call (upgrading a voice call to video). Asks for
+  /// camera permission first — the voice call never requested it.
+  Future<void> upgradeToVideo() async {
+    try {
+      await _mediaPermissionGate(isVideo: true);
+      await _callService.upgradeToVideo();
+      _cameraEnabled = true;
+    } catch (error) {
+      debugPrint('CallProvider: video upgrade failed: $error');
+    }
+    _syncActiveCallNotification();
     notifyListeners();
   }
 

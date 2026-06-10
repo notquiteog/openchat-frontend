@@ -3127,10 +3127,15 @@ class _PollBubbleState extends State<_PollBubble> {
             ),
             const SizedBox(height: 6),
           ],
-          if (poll.isMeeting && poll.options.isNotEmpty)
+          // Only meaningful once someone has picked a slot (the export uses
+          // the best-voted option). Foreground must follow the bubble's text
+          // color — the default primary-colored TextButton is invisible on
+          // the sender's own primary-colored bubble.
+          if (poll.isMeeting && poll.options.any((o) => o.voterCount > 0))
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
+                style: TextButton.styleFrom(foregroundColor: widget.textColor),
                 icon: const Icon(Icons.event_available, size: 16),
                 label: const Text('Add to calendar'),
                 onPressed: () => _addMeetingToCalendar(poll),

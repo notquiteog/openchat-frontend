@@ -16,6 +16,7 @@ import 'providers/smp_provider.dart';
 import 'providers/stage_room_provider.dart';
 import 'services/api_service.dart';
 import 'services/background_ws_service.dart';
+import 'services/badge_service.dart';
 import 'services/call_history_service.dart';
 import 'services/call_service.dart';
 import 'services/call_signal_codec.dart';
@@ -72,6 +73,11 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
       title: 'OpenChat',
       body: type == 'group_call' ? 'Call started' : 'New message',
     );
+    if (type == 'new_message') {
+      // Best-effort launcher badge bump while the app isn't running; the
+      // next foreground recompute replaces it with the authoritative count.
+      await BadgeService.incrementFromBackground();
+    }
   }
 }
 

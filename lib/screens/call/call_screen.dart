@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
+import '../../providers/auth_provider.dart';
 import '../../providers/call_provider.dart';
 import '../../services/call_service.dart';
 import '../../widgets/glass.dart';
@@ -185,6 +186,16 @@ class _CallScreenState extends State<CallScreen> {
           active: cameraOff,
           onTap: _toggleCamera,
           size: buttonSize,
+        )
+      else if (cp.canUpgradeToVideo)
+        // Voice call: turning the camera on upgrades the whole call to video
+        // (the remote side auto-shows it).
+        CallControlButton(
+          key: const Key('call-control-upgrade-video'),
+          icon: Icons.videocam_rounded,
+          label: 'Camera',
+          onTap: () => unawaited(cp.upgradeToVideo()),
+          size: buttonSize,
         ),
       if (isVideo && _isMobileCallPlatform())
         CallControlButton(
@@ -203,6 +214,19 @@ class _CallScreenState extends State<CallScreen> {
           label: cp.isScreenSharing ? 'Stop' : 'Share',
           active: cp.isScreenSharing,
           onTap: _toggleScreenShare,
+          size: buttonSize,
+        ),
+      // Mesh group calls can move everyone to the SFU mid-call. Premium-only
+      // (the LiveKit token endpoint enforces it server-side too).
+      if (cp.canEscalateToSfu &&
+          context.select<AuthProvider, bool>(
+            (auth) => auth.currentUser?.isPremium == true,
+          ))
+        CallControlButton(
+          key: const Key('call-control-escalate-sfu'),
+          icon: Icons.hub_outlined,
+          label: 'To SFU',
+          onTap: () => unawaited(cp.escalateToSfu()),
           size: buttonSize,
         ),
     ];

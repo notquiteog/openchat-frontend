@@ -24,6 +24,11 @@ class CallSignalPayload {
   final String? callerUsername;
   final String? callerAvatarUrl;
   final bool? isVideo;
+
+  /// Marks a renegotiation offer that ADDS video to a connected voice call.
+  /// Explicit flag (not SDP sniffing) so a pure ICE-restart renegotiation can
+  /// never be mistaken for a camera turn-on.
+  final bool videoUpgrade;
   // SDP offer or answer for P2P WebRTC signaling.
   final String? sdp;
   final List<String> participantUserIds;
@@ -37,6 +42,7 @@ class CallSignalPayload {
     this.callerUsername,
     this.callerAvatarUrl,
     this.isVideo,
+    this.videoUpgrade = false,
     this.sdp,
     this.participantUserIds = const [],
   });
@@ -47,6 +53,7 @@ class CallSignalPayload {
     'conversation_id': ?conversationId,
     'sdp': ?sdp,
     'is_video': ?isVideo,
+    if (videoUpgrade) 'video_upgrade': true,
     'caller_username': ?callerUsername,
     'caller_avatar': ?callerAvatarUrl,
     if (participantUserIds.isNotEmpty)
@@ -110,6 +117,7 @@ class PrivacyCallSignalCodec implements CallSignalCodec {
       'caller_username': ?(payload.callerUsername ?? callerProfile.username),
       'caller_avatar': ?(payload.callerAvatarUrl ?? callerProfile.avatarUrl),
       'is_video': payload.isVideo,
+      if (payload.videoUpgrade) 'video_upgrade': true,
       'sdp': ?payload.sdp,
       if (payload.participantUserIds.isNotEmpty)
         'participant_user_ids': payload.participantUserIds,
@@ -200,6 +208,7 @@ class PrivacyCallSignalCodec implements CallSignalCodec {
       'caller_username': ?callerProfile.username,
       'caller_avatar': ?callerProfile.avatarUrl,
       'is_video': payload['is_video'],
+      if (payload['video_upgrade'] == true) 'video_upgrade': true,
       'encryption_mode': mode.apiValue,
     };
     final sdp = payload['sdp'];

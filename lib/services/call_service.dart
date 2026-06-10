@@ -1,6 +1,11 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart'
-    show debugPrint, defaultTargetPlatform, kIsWeb, TargetPlatform;
+    show
+        debugPrint,
+        defaultTargetPlatform,
+        kIsWeb,
+        visibleForTesting,
+        TargetPlatform;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:uuid/uuid.dart';
 import '../config/api_config.dart';
@@ -26,7 +31,10 @@ class CallSession {
   final String? remoteAvatarUrl;
   final String? conversationId;
   final List<String> participantUserIds;
-  final bool isVideo;
+
+  /// Mutable: a connected voice call can be upgraded to video mid-call
+  /// (either side turning on their camera flips this on both ends).
+  bool isVideo;
   final bool isIncoming;
   CallState state;
 
@@ -60,6 +68,15 @@ class CallEndedEvent {
     required this.isVideo,
     required this.durationSecs,
   });
+}
+
+/// A mesh call that moved to the SFU — the listener joins the LiveKit room
+/// for [conversationId] and shows the SFU call UI.
+class EscalatedCall {
+  final String conversationId;
+  final bool isVideo;
+
+  const EscalatedCall({required this.conversationId, required this.isVideo});
 }
 
 class CallAudioOutput {
@@ -176,6 +193,13 @@ class CallService {
   Stream<CallSession> get cancelledCalls => _cancelledCallController.stream;
   Stream<CallEndedEvent> get callEnded => _callEndedController.stream;
 
+  final _escalatedCallController = StreamController<EscalatedCall>.broadcast();
+
+  /// Mesh calls that escalated to the SFU (locally or by a peer's request).
+  /// The mesh session is already torn down when this fires; the listener is
+  /// responsible for joining the LiveKit room.
+  Stream<EscalatedCall> get escalatedCalls => _escalatedCallController.stream;
+
   static const ringTimeout = Duration(seconds: 30);
   static const connectTimeout = Duration(seconds: 30);
   Timer? _ringTimer;
@@ -184,6 +208,18 @@ class CallService {
   StreamSubscription<WsEvent>? _wsSub;
 
   CallSession? get currentSession => _session;
+
+  /// Test seams: the real session/pending state is only reachable through
+  /// live WebRTC negotiation, which unit tests can't run.
+  @visibleForTesting
+  set debugSession(CallSession? session) => _session = session;
+  @visibleForTesting
+  set debugPendingIncoming(CallSession? pending) => _pendingIncoming = pending;
+  @visibleForTesting
+  CallSession? get debugPendingIncoming => _pendingIncoming;
+  @visibleForTesting
+  void debugHandleWsEvent(WsEvent event) => _handleWsEvent(event);
+
   bool get hasLocalMedia => _localStream != null;
   bool get usingFrontCamera => _usingFrontCamera;
   bool get isScreenSharing => _isScreenSharing;
@@ -496,6 +532,22 @@ class CallService {
         final hangupCallId = event.data['call_id']?.toString() ?? '';
         final hangupFromId = event.data['caller_id']?.toString() ?? '';
         final pending = _pendingIncoming;
+        // A hangup for a *pending* incoming call must dismiss its ring even
+        // while another call is active — otherwise the stale ring persists
+        // forever. Requires an explicit call-id match so an active group
+        // call's hangups can't be misrouted here.
+        if (_session != null &&
+            pending != null &&
+            hangupCallId.isNotEmpty &&
+            hangupCallId == pending.callId &&
+            hangupCallId != _session!.callId) {
+          _cancelRingTimer();
+          _pendingIncoming = null;
+          _pendingRemoteSdp = null;
+          _pendingRemoteCandidates.clear();
+          _missedCallController.add(pending);
+          break;
+        }
         if (_session == null && pending != null) {
           // Only the caller hanging up cancels the ring — another invitee
           // leaving a group call (or a stale call's hangup) does not.
@@ -515,6 +567,11 @@ class CallService {
           // peer (otherwise their connection and frozen tile leak until ICE
           // times out). Everyone else stays in the call.
           _removePeer(hangupFromId);
+        } else if (_session != null &&
+            hangupCallId.isNotEmpty &&
+            hangupCallId != _session!.callId) {
+          // Stale hangup from a previous call — must not end the active one.
+          debugPrint('CallService: hangup for stale call $hangupCallId ignored');
         } else {
           debugPrint('CallService: remote hangup signal -> cleanup');
           _cleanup();
@@ -539,20 +596,35 @@ class CallService {
 
       case WsEventType.callRinging:
         final s = _session;
+        final ringingCallId = event.data['call_id']?.toString() ?? '';
+        // Only an un-answered outgoing call may move to "ringing", and only
+        // for its own call id — a late/stale ringing event must never touch
+        // a connecting, connected, or unrelated session.
         if (s != null &&
-            (s.state == CallState.calling || s.state == CallState.ringing)) {
+            s.state == CallState.calling &&
+            (ringingCallId.isEmpty || ringingCallId == s.callId)) {
           s.state = CallState.ringing;
           _sessionController.add(s);
         }
+
+      case WsEventType.callEscalate:
+        unawaited(_handleCallEscalate(event.data));
 
       case WsEventType.callCancel:
         // This user answered or declined on ANOTHER device — stop ringing
         // here silently (it was handled, so it is not a missed call).
         final cancelId = event.data['call_id']?.toString() ?? '';
         final pendingCancel = _pendingIncoming;
+        // Dismiss the matching pending ring even while another call is
+        // active — answering the second call on a different device must stop
+        // this device's ring. With an active session an explicit, matching
+        // call id is required (an empty id is too ambiguous to act on).
         if (pendingCancel != null &&
-            _session == null &&
-            (cancelId.isEmpty || cancelId == pendingCancel.callId)) {
+            (_session == null
+                ? (cancelId.isEmpty || cancelId == pendingCancel.callId)
+                : (cancelId.isNotEmpty &&
+                      cancelId == pendingCancel.callId &&
+                      cancelId != _session!.callId))) {
           _cancelRingTimer();
           _pendingIncoming = null;
           _pendingRemoteSdp = null;
@@ -666,6 +738,53 @@ class CallService {
     }
   }
 
+  /// Asks every mesh peer to move this group call to the SFU, then tears the
+  /// local mesh down and reports the escalation for the SFU join. The server
+  /// gate (LiveKit token endpoint) still enforces premium per participant —
+  /// a peer who can't join simply errors out of the new room.
+  Future<void> escalateToSfu() async {
+    final s = _session;
+    final convId = s?.conversationId ?? '';
+    if (s == null || !s.isGroupCall || !s.wasConnected || convId.isEmpty) {
+      return;
+    }
+    debugPrint('CallService: escalating ${s.callId} to SFU');
+    for (final peer in _peers.values) {
+      try {
+        final data = await _signalCodec.encode(
+          CallSignalPayload(
+            kind: 'escalate',
+            targetUserId: peer.userId,
+            callId: s.callId,
+            conversationId: convId,
+          ),
+        );
+        _ws.sendCallEscalate(data);
+      } catch (e) {
+        debugPrint('CallService: escalate signal to ${peer.userId} failed: $e');
+      }
+    }
+    final escalated = EscalatedCall(conversationId: convId, isVideo: s.isVideo);
+    _cleanup(emitEndedEvent: false);
+    _escalatedCallController.add(escalated);
+  }
+
+  Future<void> _handleCallEscalate(Map<String, dynamic> data) async {
+    final decoded = await _decodeCallSignal(data);
+    if (decoded == null) return;
+    final callId = decoded['call_id']?.toString() ?? '';
+    final s = _session;
+    // Escalation only matters for the active mesh call; unknown or stale call
+    // ids are ignored (e.g. the escalate raced our own hangup).
+    if (s == null || callId.isEmpty || callId != s.callId) return;
+    final convId = s.conversationId ?? decoded['conversation_id']?.toString() ?? '';
+    if (convId.isEmpty) return;
+    debugPrint('CallService: peer escalated ${s.callId} to SFU');
+    final escalated = EscalatedCall(conversationId: convId, isVideo: s.isVideo);
+    _cleanup(emitEndedEvent: false);
+    _escalatedCallController.add(escalated);
+  }
+
   bool _handleIncomingCallPayload(Map<String, dynamic> data) {
     final callId = data['call_id'] as String? ?? '';
     final callerId = data['caller_id'] as String? ?? '';
@@ -679,6 +798,13 @@ class CallService {
       'true' => true,
       _ => false,
     };
+    // Renegotiation offer that adds video to this voice call. The explicit
+    // flag beats SDP sniffing; the m=video check is a fallback for peers on
+    // builds that predate the flag. Whether it changes anything is decided at
+    // the apply site (only a connected non-video session upgrades).
+    final videoUpgrade =
+        data['video_upgrade'] == true ||
+        (sdp != null && sdp.contains('\nm=video'));
 
     if (callId.isEmpty) return false;
 
@@ -695,7 +821,12 @@ class CallService {
           sdp != null &&
           callerId.isNotEmpty) {
         unawaited(
-          _applyRenegotiationOffer(callerId, sdp, conversationId ?? ''),
+          _applyRenegotiationOffer(
+            callerId,
+            sdp,
+            conversationId ?? '',
+            videoUpgrade: videoUpgrade,
+          ),
         );
       }
       return false;
@@ -919,6 +1050,97 @@ class CallService {
     if (!_isScreenSharing) {
       final videoTrack = _localStream?.getVideoTracks().firstOrNull;
       if (videoTrack != null) videoTrack.enabled = enabled;
+    }
+  }
+
+  /// Whether the connected 1:1 call can gain video right now — drives the
+  /// "turn on camera" button on voice calls.
+  bool get canUpgradeToVideo {
+    final s = _session;
+    return s != null &&
+        s.wasConnected &&
+        s.state == CallState.connected &&
+        !s.isGroupCall &&
+        _peers.length == 1;
+  }
+
+  /// Turns this device's camera on mid-call. On a voice call this upgrades
+  /// the whole call to video: a camera track is acquired, added to the peer
+  /// connection, and announced via a flagged renegotiation offer — the remote
+  /// side auto-accepts and renders it (their own camera stays off until they
+  /// press their camera button, which lands here too).
+  Future<void> upgradeToVideo() async {
+    final s = _session;
+    final peer = _peers.values.firstOrNull;
+    if (s == null || peer == null || !s.wasConnected || s.isGroupCall) return;
+
+    // Already have a camera track (e.g. remote upgraded first, then we
+    // toggled off/on, or this is an original video call): just re-enable.
+    if (_localStream?.getVideoTracks().isNotEmpty == true) {
+      s.isVideo = true;
+      setCameraEnabled(true);
+      _sessionController.add(s);
+      return;
+    }
+
+    debugPrint('CallService: upgrading ${s.callId} to video');
+    final cameraStream = await navigator.mediaDevices.getUserMedia({
+      'audio': false,
+      'video': {
+        'facingMode': _usingFrontCamera ? 'user' : 'environment',
+        'width': {'ideal': 1280},
+        'height': {'ideal': 720},
+        'frameRate': {'ideal': 30},
+      },
+    });
+    final videoTrack = cameraStream.getVideoTracks().firstOrNull;
+    if (videoTrack == null) {
+      await _stopLocalStream(cameraStream);
+      return;
+    }
+
+    final local = _localStream;
+    if (local != null) {
+      await local.addTrack(videoTrack);
+    } else {
+      _localStream = cameraStream;
+    }
+    await _initLocalRenderer();
+    _localRenderer.srcObject = _localStream;
+    for (final p in _peers.values) {
+      await p.pc.addTrack(videoTrack, _localStream ?? cameraStream);
+    }
+
+    s.isVideo = true;
+    _sessionController.add(s);
+
+    // Video calls default to speakerphone on mobile (matching video-call
+    // starts); an explicit user-chosen output is respected.
+    if (_isMobilePlatform && _selectedAudioOutputId == null) {
+      try {
+        await Helper.setSpeakerphoneOn(true);
+      } catch (_) {}
+    }
+
+    try {
+      final offer = await peer.pc.createOffer({'offerToReceiveVideo': 1});
+      await peer.pc.setLocalDescription(offer);
+      final offerData = await _signalCodec.encode(
+        CallSignalPayload(
+          kind: 'offer',
+          targetUserId: peer.userId,
+          callId: s.callId,
+          conversationId: s.conversationId ?? '',
+          isVideo: true,
+          videoUpgrade: true,
+          sdp: offer.sdp,
+          participantUserIds: s.participantUserIds,
+        ),
+      );
+      _ws.sendCallOfferPayload(offerData);
+      debugPrint('CallService: video-upgrade offer sent for ${s.callId}');
+    } catch (e) {
+      debugPrint('CallService: video-upgrade offer failed: $e');
     }
   }
 
@@ -1257,17 +1479,44 @@ class CallService {
     }());
   }
 
-  /// Remote side of an ICE restart: an offer arriving with the active call's
-  /// id while connected is a renegotiation — apply it and answer back.
+  /// Remote side of a renegotiation: an offer arriving with the active call's
+  /// id while connected is either an ICE restart or a video upgrade — apply
+  /// it and answer back.
   Future<void> _applyRenegotiationOffer(
     String callerId,
     String sdp,
-    String conversationId,
-  ) async {
+    String conversationId, {
+    bool videoUpgrade = false,
+  }) async {
     final s = _session;
     final peer = _peers[callerId] ?? _peers.values.firstOrNull;
     if (s == null || peer == null) return;
     try {
+      // Simultaneous-upgrade glare: if our own renegotiation offer is still
+      // in flight, the polite peer (the original callee) rolls its offer
+      // back and answers the remote one; the impolite peer ignores the
+      // incoming offer and waits for its own answer. Both sides want the
+      // same outcome, so either resolution converges.
+      final signalingState = peer.pc.signalingState;
+      if (signalingState ==
+          RTCSignalingState.RTCSignalingStateHaveLocalOffer) {
+        if (!s.isIncoming) {
+          debugPrint(
+            'CallService: renegotiation glare — impolite side ignoring offer',
+          );
+          return;
+        }
+        debugPrint('CallService: renegotiation glare — rolling back');
+        await peer.pc.setLocalDescription(RTCSessionDescription('', 'rollback'));
+      }
+      if (videoUpgrade && !s.isVideo) {
+        // The peer turned their camera on: render their video immediately.
+        // Our own camera stays off until the user enables it (auto-accept,
+        // Telegram-style — no consent dialog).
+        s.isVideo = true;
+        await _initLocalRenderer();
+        _sessionController.add(s);
+      }
       await peer.pc.setRemoteDescription(
         RTCSessionDescription(_ensureSdpTerminator(sdp), 'offer'),
       );
@@ -1448,6 +1697,7 @@ class CallService {
     _missedCallController.close();
     _cancelledCallController.close();
     _callEndedController.close();
+    _escalatedCallController.close();
     if (_localRendererInitialized) {
       unawaited(_localRenderer.dispose());
     }

@@ -4,6 +4,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart' as lg;
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
+import '../../widgets/deposit_progress_view.dart';
 import '../../widgets/glass.dart';
 
 class WalletScreen extends StatefulWidget {
@@ -118,11 +119,30 @@ class _WalletScreenState extends State<WalletScreen> {
 
   void _showDepositAddress(Map<String, dynamic> dep) {
     final address = dep['crypto_address'] as String? ?? '';
+    final depositId = (dep['id'] ?? '').toString();
     showDialog<void>(
       context: context,
       builder: (dialogCtx) => GlassAlertDialog(
         title: Text('Send ${dep['provider'].toString().toUpperCase()}'),
-        content: SelectableText(address),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SelectableText(address),
+            if (depositId.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              DepositProgressView(
+                depositId: depositId,
+                initialConfirmations:
+                    (dep['confirmations'] as num?)?.toInt() ?? 0,
+                requiredConfirmations:
+                    (dep['required_confirmations'] as num?)?.toInt() ?? 0,
+                initialStatus: dep['status']?.toString() ?? 'nothing_sent',
+                onConfirmed: _load,
+              ),
+            ],
+          ],
+        ),
         actions: [
           TextButton(
             onPressed: () async {

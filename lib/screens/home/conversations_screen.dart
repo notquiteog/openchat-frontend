@@ -7,15 +7,14 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
 import '../../models/chat_folder.dart';
 import '../../models/conversation.dart';
 import '../../models/message.dart';
-import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
-import '../../services/message_search_service.dart';
 import '../../config/api_config.dart';
 import '../../utils/local_conversation_preferences.dart';
 import '../../utils/smart_inbox_filter.dart';
+import '../../widgets/chat_search_results_view.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/conversation_notification_controls_sheet.dart';
 import '../../widgets/stories_strip.dart';
@@ -23,7 +22,6 @@ import '../channels/channel_screen.dart';
 import '../broadcast/broadcast_lists_screen.dart';
 import '../call/call_history_screen.dart';
 import '../chat/chat_screen.dart';
-import '../profile/user_profile_screen.dart';
 import '../settings/settings_screen.dart';
 
 class ConversationsScreen extends StatefulWidget {
@@ -32,8 +30,27 @@ class ConversationsScreen extends StatefulWidget {
   State<ConversationsScreen> createState() => _ConversationsScreenState();
 }
 
+/// Where a drag that ended at [offset] should settle when the stories strip
+/// occupies the first [extent] logical pixels of the inbox list: fully
+/// revealed (0.0), fully hidden ([extent]), or null when the offset is outside
+/// the strip and no snap applies. Top-level so it is unit-testable — the full
+/// screen can't be pumped in widget tests (ChatProvider opens sockets).
+double? storiesSnapTarget(double offset, double extent) {
+  if (offset <= 0 || offset >= extent) return null;
+  return offset < extent / 2 ? 0.0 : extent;
+}
+
 class _ConversationsScreenState extends State<ConversationsScreen> {
   String? _selectedFolderId;
+
+  /// StoriesStrip height (96) + its hairline divider (0.5 + 2 margin). The
+  /// list starts scrolled past this, so the strip hides above the fold until
+  /// the user pulls down on the inbox (Telegram-archive style reveal).
+  static const double _storiesRevealExtent = 98.5;
+  late final ScrollController _listCtrl = ScrollController(
+    initialScrollOffset: _storiesRevealExtent,
+  );
+  bool _snappingStories = false;
 
   @override
   void initState() {
@@ -43,6 +60,48 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       chat.loadConversations();
       chat.loadChatFolders();
     });
+  }
+
+  @override
+  void dispose() {
+    _listCtrl.dispose();
+    super.dispose();
+  }
+
+  /// Snaps the half-revealed stories strip fully open or fully hidden when a
+  /// drag ends inside its extent. Plain scrolls past the strip are untouched.
+  bool _onListScrollEnd(ScrollEndNotification notification) {
+    if (_snappingStories || !_listCtrl.hasClients) return false;
+    if (notification.metrics.axis != Axis.vertical) return false;
+    final target = storiesSnapTarget(_listCtrl.offset, _storiesRevealExtent);
+    if (target == null) return false;
+    _snappingStories = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (_listCtrl.hasClients) {
+        await _listCtrl.animateTo(
+          target,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+        );
+      }
+      _snappingStories = false;
+    });
+    return false;
+  }
+
+  /// The strip only exists in the unfiltered inbox. Entering a folder must
+  /// not leave the list scrolled past the (now absent) strip, and returning
+  /// to the inbox must re-hide it above the fold.
+  void _syncStoriesOffsetForFolder(String? folderId) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_listCtrl.hasClients) return;
+      _listCtrl.jumpTo(folderId == null ? _storiesRevealExtent : 0);
+    });
+  }
+
+  void _selectFolder(String? folderId) {
+    setState(() => _selectedFolderId = folderId);
+    _syncStoriesOffsetForFolder(folderId);
   }
 
   @override
@@ -157,11 +216,8 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
               MaterialPageRoute(builder: (_) => const CallHistoryScreen()),
             ),
           ),
-          IconButton(
-            tooltip: 'Search',
-            icon: const Icon(Icons.search_rounded),
-            onPressed: () => _showSearch(context),
-          ),
+          // Search moved to the bottom bar's morphing pill
+          // (GlassSearchableBottomBar in the home shell).
           IconButton(
             tooltip: 'Inbox view',
             icon: Badge(
@@ -188,15 +244,15 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           ),
         ],
       ),
+      // No pull-to-refresh: the inbox is WebSocket-driven (reconnect already
+      // resyncs), so the pull gesture is reserved for revealing the stories
+      // strip hidden above the fold.
       body: chat.isLoading
           ? const Center(child: GlassProgressIndicator.circular())
-          : RefreshIndicator(
-              onRefresh: () async {
-                await chat.loadConversations();
-                await chat.loadChatFolders();
-              },
-              displacement: MediaQuery.paddingOf(context).top + kToolbarHeight,
+          : NotificationListener<ScrollEndNotification>(
+              onNotification: _onListScrollEnd,
               child: ListView(
+                controller: _listCtrl,
                 physics: const AlwaysScrollableScrollPhysics(),
                 padding: EdgeInsets.only(
                   top: MediaQuery.paddingOf(context).top + kToolbarHeight,
@@ -235,7 +291,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                       ),
                       onClear: () {
                         if (selectedFolder != null) {
-                          setState(() => _selectedFolderId = null);
+                          _selectFolder(null);
                         } else {
                           settings.setSmartInboxFilter(SmartInboxFilter.all);
                         }
@@ -663,68 +719,18 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   Future<void> _showSearch(BuildContext context) async {
-    final api = context.read<ApiService>();
-    final chat = context.read<ChatProvider>();
-    final currentUserId = context.read<AuthProvider>().currentUser?.id ?? '';
-
-    final selection = await showSearch<_ChatSearchSelection?>(
+    final selection = await showSearch<ChatSearchSelection?>(
       context: context,
-      delegate: _ChatSearchDelegate(
-        api: api,
-        chat: chat,
-        currentUserId: currentUserId,
-      ),
+      delegate: _ChatSearchDelegate(),
     );
 
     if (!context.mounted || selection == null) return;
-    if (selection is _UserSearchSelection) {
-      try {
-        final conv = await chat.openDM(selection.userID);
-        if (!context.mounted) return;
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => ChatScreen(conversation: conv)),
-        );
-      } catch (error) {
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(_openDmErrorMessage(error))));
-      }
-      return;
-    }
-    if (selection is _ChannelSearchSelection) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => ChannelFeedScreen(channel: selection.channel),
-        ),
-      );
-      return;
-    }
-    if (selection is _MessageSearchSelection) {
-      var conv = chat.conversations
-          .where(
-            (conversation) =>
-                conversation.id == selection.result.conversationId,
-          )
-          .firstOrNull;
-      if (conv == null) {
-        await chat.loadConversations();
-        conv = chat.conversations
-            .where(
-              (conversation) =>
-                  conversation.id == selection.result.conversationId,
-            )
-            .firstOrNull;
-      }
-      if (!context.mounted || conv == null) return;
-      _openConversation(
-        context,
-        conv,
-        initialMessageId: selection.result.messageId,
-      );
-    }
+    await handleChatSearchSelection(
+      context,
+      selection,
+      openConversation: (conv, initialMessageId) =>
+          _openConversation(context, conv, initialMessageId: initialMessageId),
+    );
   }
 
   Future<void> _showNewConversation(BuildContext context) async {
@@ -919,14 +925,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     void selectFilter(BuildContext sheetContext, SmartInboxFilter filter) {
       Navigator.pop(sheetContext);
       if (!mounted) return;
-      setState(() => _selectedFolderId = null);
+      _selectFolder(null);
       settings.setSmartInboxFilter(filter);
     }
 
     void selectFolder(BuildContext sheetContext, ChatFolder folder) {
       Navigator.pop(sheetContext);
       if (!mounted) return;
-      setState(() => _selectedFolderId = folder.id);
+      _selectFolder(folder.id);
       settings.setSmartInboxFilter(SmartInboxFilter.all);
     }
 
@@ -1507,7 +1513,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           updatedAt: existing?.updatedAt,
         ),
       );
-      if (mounted) setState(() => _selectedFolderId = saved.id);
+      if (mounted) _selectFolder(saved.id);
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Folder failed: $e')));
     }
@@ -1541,7 +1547,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     try {
       await context.read<ChatProvider>().removeChatFolder(folder.id);
       if (mounted && _selectedFolderId == folder.id) {
-        setState(() => _selectedFolderId = null);
+        _selectFolder(null);
       }
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Delete failed: $e')));
@@ -1803,13 +1809,6 @@ String _smartInboxEmptyTitle(SmartInboxFilter filter) {
     SmartInboxFilter.mentions => 'No unread mentions',
     _ => 'No ${smartInboxFilterLabel(filter)} chats',
   };
-}
-
-String _openDmErrorMessage(Object error) {
-  if (error is ApiException) {
-    return 'Could not open DM (${error.statusCode} ${error.code}): ${error.message}';
-  }
-  return 'Could not open DM: $error';
 }
 
 // ── Animated conversation tile ────────────────────────────────────────────────
@@ -2212,40 +2211,9 @@ class _ConvAvatar extends StatelessWidget {
 
 // ── Search delegate ────────────────────────────────────────────────────────────
 
-sealed class _ChatSearchSelection {
-  const _ChatSearchSelection();
-}
-
-class _UserSearchSelection extends _ChatSearchSelection {
-  final String userID;
-
-  const _UserSearchSelection(this.userID);
-}
-
-class _ChannelSearchSelection extends _ChatSearchSelection {
-  final Conversation channel;
-
-  const _ChannelSearchSelection(this.channel);
-}
-
-class _MessageSearchSelection extends _ChatSearchSelection {
-  final MessageSearchResult result;
-
-  const _MessageSearchSelection(this.result);
-}
-
-class _ChatSearchDelegate extends SearchDelegate<_ChatSearchSelection?> {
-  final ApiService api;
-  final ChatProvider chat;
-  final String currentUserId;
-  MessageSearchCategory? _messageCategory;
-
-  _ChatSearchDelegate({
-    required this.api,
-    required this.chat,
-    required this.currentUserId,
-  });
-
+/// showSearch shell kept for flows that want a full-screen search route
+/// (e.g. "New Direct Message"); the body is the shared results view.
+class _ChatSearchDelegate extends SearchDelegate<ChatSearchSelection?> {
   @override
   List<Widget> buildActions(BuildContext context) => [
     IconButton(icon: const Icon(Icons.clear), onPressed: () => query = ''),
@@ -2258,265 +2226,12 @@ class _ChatSearchDelegate extends SearchDelegate<_ChatSearchSelection?> {
   );
 
   @override
-  Widget buildResults(BuildContext context) => _buildSuggestions(context);
+  Widget buildResults(BuildContext context) =>
+      ChatSearchResultsView(query: query, onSelect: (s) => close(context, s));
 
   @override
-  Widget buildSuggestions(BuildContext context) => _buildSuggestions(context);
-
-  Widget _buildSuggestions(BuildContext context) {
-    final q = query.trim();
-    if (q.length < 2) {
-      return const Center(
-        child: Text('Search users, channels, and local messages'),
-      );
-    }
-    final term = q.startsWith('@') ? q.substring(1) : q;
-    return FutureBuilder<_SearchResults>(
-      future: _search(term),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: GlassProgressIndicator.circular());
-        }
-        final results = snapshot.data;
-        if (results == null ||
-            (results.users.isEmpty &&
-                results.channels.isEmpty &&
-                results.messages.isEmpty)) {
-          return const Center(child: Text('No results'));
-        }
-        return ListView(
-          children: [
-            _MessageSearchFilters(
-              selected: _messageCategory,
-              onSelected: (category) {
-                _messageCategory = category;
-                showSuggestions(context);
-              },
-            ),
-            if (results.messages.isNotEmpty) ...[
-              _SearchSectionHeader(
-                label: _messageCategory == null
-                    ? 'Messages on this device'
-                    : '${_messageCategoryLabel(_messageCategory!)} on this device',
-              ),
-              for (final message in results.messages)
-                GlassListTile(
-                  leading: CircleAvatar(
-                    child: Icon(_messageCategoryIcon(message.category)),
-                  ),
-                  title: Text(
-                    message.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  subtitle: Text(
-                    _messageSubtitle(message),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: Text(
-                    timeago.format(message.createdAt),
-                    style: Theme.of(context).textTheme.labelSmall,
-                  ),
-                  onTap: () => close(context, _MessageSearchSelection(message)),
-                ),
-            ],
-            if (results.users.isNotEmpty)
-              const _SearchSectionHeader(label: 'People and bots'),
-            for (final u in results.users)
-              GlassListTile(
-                leading: CircleAvatar(
-                  backgroundImage: u.avatarUrl != null
-                      ? CachedNetworkImageProvider(
-                          ApiConfig.resolveMedia(u.avatarUrl!),
-                        )
-                      : null,
-                  child: u.avatarUrl == null
-                      ? Text(u.username[0].toUpperCase())
-                      : null,
-                ),
-                title: Row(
-                  children: [
-                    Flexible(child: Text('@${u.username}')),
-                    if (u.isBot)
-                      const Padding(
-                        padding: EdgeInsets.only(left: 6),
-                        child: Icon(
-                          Icons.smart_toy,
-                          size: 14,
-                          color: Colors.grey,
-                        ),
-                      ),
-                  ],
-                ),
-                subtitle: Text(u.isBot ? 'Bot' : 'Key: ${u.shortFingerprint}'),
-                trailing: IconButton(
-                  icon: const Icon(Icons.person_outline),
-                  tooltip: 'View profile',
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => UserProfileScreen(user: u),
-                    ),
-                  ),
-                ),
-                onTap: () => close(context, _UserSearchSelection(u.id)),
-              ),
-            if (results.channels.isNotEmpty)
-              const _SearchSectionHeader(label: 'Channels'),
-            for (final ch in results.channels)
-              GlassListTile(
-                leading: CircleAvatar(
-                  backgroundImage: ch.avatarUrl != null
-                      ? CachedNetworkImageProvider(
-                          ApiConfig.resolveMedia(ch.avatarUrl!),
-                        )
-                      : null,
-                  child: ch.avatarUrl == null
-                      ? const Icon(Icons.campaign)
-                      : null,
-                ),
-                title: Text(ch.name ?? 'Channel'),
-                subtitle: Text(
-                  ch.handle != null
-                      ? '@${ch.handle}'
-                      : (ch.description ?? 'Public channel'),
-                ),
-                trailing: const Icon(Icons.campaign_outlined),
-                onTap: () => close(context, _ChannelSearchSelection(ch)),
-              ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<_SearchResults> _search(String term) async {
-    final categories = _messageCategory == null
-        ? null
-        : <MessageSearchCategory>{_messageCategory!};
-    final results = await Future.wait([
-      api.searchUsers(term).catchError((_) => <User>[]),
-      api.searchChannels(term).catchError((_) => <Conversation>[]),
-      chat
-          .searchMessages(term, categories: categories, limit: 30)
-          .catchError((_) => <MessageSearchResult>[]),
-    ]);
-    return _SearchResults(
-      users: results[0] as List<User>,
-      channels: results[1] as List<Conversation>,
-      messages: results[2] as List<MessageSearchResult>,
-    );
-  }
-
-  String _messageSubtitle(MessageSearchResult message) {
-    final conv = chat.conversations
-        .where((conversation) => conversation.id == message.conversationId)
-        .firstOrNull;
-    final convName = conv?.displayName(currentUserId) ?? 'Conversation';
-    if (message.snippet.isEmpty) return convName;
-    return '$convName - ${message.snippet}';
-  }
-}
-
-class _SearchResults {
-  final List<User> users;
-  final List<Conversation> channels;
-  final List<MessageSearchResult> messages;
-  _SearchResults({
-    required this.users,
-    required this.channels,
-    required this.messages,
-  });
-}
-
-class _SearchSectionHeader extends StatelessWidget {
-  final String label;
-
-  const _SearchSectionHeader({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 18, 16, 6),
-      child: Text(
-        label,
-        style: Theme.of(context).textTheme.labelLarge?.copyWith(
-          color: Theme.of(
-            context,
-          ).colorScheme.onSurface.withValues(alpha: 0.58),
-          fontWeight: FontWeight.w800,
-        ),
-      ),
-    );
-  }
-}
-
-class _MessageSearchFilters extends StatelessWidget {
-  final MessageSearchCategory? selected;
-  final ValueChanged<MessageSearchCategory?> onSelected;
-
-  const _MessageSearchFilters({
-    required this.selected,
-    required this.onSelected,
-  });
-
-  static const _options = <(String, MessageSearchCategory?)>[
-    ('All', null),
-    ('Chats', MessageSearchCategory.messages),
-    ('Media', MessageSearchCategory.media),
-    ('Files', MessageSearchCategory.files),
-    ('Links', MessageSearchCategory.links),
-    ('Voice', MessageSearchCategory.voice),
-    ('Polls', MessageSearchCategory.polls),
-    ('Payments', MessageSearchCategory.payments),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
-      child: Row(
-        children: [
-          for (final (label, category) in _options) ...[
-            GlassChip(
-              label: label,
-              selected: selected == category,
-              onTap: () => onSelected(category),
-            ),
-            const SizedBox(width: 8),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-IconData _messageCategoryIcon(MessageSearchCategory category) {
-  return switch (category) {
-    MessageSearchCategory.media => Icons.photo_library_outlined,
-    MessageSearchCategory.files => Icons.insert_drive_file_outlined,
-    MessageSearchCategory.links => Icons.link_rounded,
-    MessageSearchCategory.voice => Icons.graphic_eq_rounded,
-    MessageSearchCategory.polls => Icons.poll_outlined,
-    MessageSearchCategory.payments => Icons.payments_outlined,
-    MessageSearchCategory.checklists => Icons.checklist_rounded,
-    MessageSearchCategory.messages => Icons.chat_bubble_outline_rounded,
-  };
-}
-
-String _messageCategoryLabel(MessageSearchCategory category) {
-  return switch (category) {
-    MessageSearchCategory.media => 'Media',
-    MessageSearchCategory.files => 'Files',
-    MessageSearchCategory.links => 'Links',
-    MessageSearchCategory.voice => 'Voice',
-    MessageSearchCategory.polls => 'Polls',
-    MessageSearchCategory.payments => 'Payments',
-    MessageSearchCategory.checklists => 'Lists',
-    MessageSearchCategory.messages => 'Messages',
-  };
+  Widget buildSuggestions(BuildContext context) =>
+      ChatSearchResultsView(query: query, onSelect: (s) => close(context, s));
 }
 
 class _SheetTile extends StatelessWidget {

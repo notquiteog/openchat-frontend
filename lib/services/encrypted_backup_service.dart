@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:cryptography/cryptography.dart';
 
+import 'api_service.dart';
 import 'local_private_state_service.dart';
 import 'secure_storage_service.dart';
 
@@ -101,6 +103,51 @@ class EncryptedBackupService {
         privateState.map((key, value) => MapEntry(key.toString(), value)),
       );
     }
+  }
+
+  /// Builds the encrypted bundle and stores it server-side as an opaque blob
+  /// (zero-knowledge: the passphrase/key never leaves this device). Replaces
+  /// any previous server backup.
+  Future<void> uploadToServer({
+    required ApiService api,
+    required String passphrase,
+  }) async {
+    final encoded = await exportBackup(passphrase: passphrase);
+    final bytes = utf8.encode(encoded);
+    final digest = crypto.sha256.convert(bytes).toString();
+    final grant = await api.requestBackupUpload(
+      size: bytes.length,
+      sha256: digest,
+    );
+    await api.uploadBytes(
+      grant['upload_url'] as String,
+      bytes,
+      'application/octet-stream',
+    );
+    await api.confirmBackupUpload(grant['object_key'] as String);
+  }
+
+  /// Downloads the server-stored blob and restores it with [importBackup]
+  /// (which enforces the format/KDF floors). Throws [StateError] when no
+  /// server backup exists.
+  Future<void> restoreFromServer({
+    required ApiService api,
+    required String passphrase,
+  }) async {
+    final meta = await api.getLatestBackup();
+    if (meta == null) {
+      throw StateError('No backup is stored on the server.');
+    }
+    final bytes = await api.downloadBytes(meta['download_url'] as String);
+    final expected = meta['sha256'] as String? ?? '';
+    if (expected.isNotEmpty &&
+        crypto.sha256.convert(bytes).toString() != expected) {
+      throw StateError('Backup download is corrupted (checksum mismatch).');
+    }
+    await importBackup(
+      encodedBackup: utf8.decode(bytes),
+      passphrase: passphrase,
+    );
   }
 
   Future<SecretKey> _deriveKey(

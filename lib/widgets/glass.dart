@@ -48,6 +48,8 @@ export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
         // Surfaces
         GlassBottomBar,
         GlassBottomBarTab,
+        GlassSearchableBottomBar,
+        GlassSearchBarConfig,
         GlassPage,
         GlassStatusBarStyle,
         GlassScrollEdgeEffect,
@@ -219,108 +221,11 @@ class GlassContainer extends StatelessWidget {
   }
 }
 
-// ── LiquidGlass ─────────────────────────────────────────────────────────────
-
-/// The primary iOS 26 Liquid Glass surface backed by the liquid_glass_widgets
-/// shader pipeline. On Impeller (iOS/Android) this renders real refraction
-/// distortion and chromatic aberration; on Skia/desktop it uses a lightweight
-/// fragment shader with BackdropFilter fallback.
-///
-/// Use this for any chrome that *floats* over the canvas: nav pills, the
-/// message composer, floating action controls. Edge-to-edge chrome (app bars,
-/// full-screen backgrounds) should use [GlassSurface] instead.
-class LiquidGlass extends StatelessWidget {
-  final Widget child;
-  final double blur;
-  final BorderRadius borderRadius;
-  final EdgeInsetsGeometry? padding;
-  final List<BoxShadow>? boxShadow;
-  final Color? tint;
-  final double stroke;
-
-  const LiquidGlass({
-    super.key,
-    required this.child,
-    this.blur = 64,
-    this.borderRadius = const BorderRadius.all(Radius.circular(28)),
-    this.padding,
-    this.boxShadow,
-    this.tint,
-    this.stroke = 0.7,
-  });
-
-  /// Full capsule (pill) geometry — the default for floating bars.
-  const LiquidGlass.capsule({
-    super.key,
-    required this.child,
-    this.blur = 64,
-    this.padding,
-    this.boxShadow,
-    this.tint,
-    this.stroke = 0.7,
-  }) : borderRadius = const BorderRadius.all(Radius.circular(999));
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isCapsule =
-        borderRadius == const BorderRadius.all(Radius.circular(999));
-    final cornerR = borderRadius.topLeft.x.clamp(0.0, 200.0);
-
-    // Map our borderRadius to the package's LiquidShape:
-    // – 999 → LiquidRoundedSuperellipse(999) (iOS squircle-capsule)
-    // – anything else → LiquidRoundedSuperellipse (Apple squircle)
-    // Note: LiquidOval maps to OvalBorder (a geometric ellipse) which looks
-    // wrong on non-square or wide widgets — use LiquidRoundedSuperellipse(999)
-    // for all capsule/pill shapes instead.
-    final shape = isCapsule
-        ? const LiquidRoundedSuperellipse(borderRadius: 999)
-        : LiquidRoundedSuperellipse(borderRadius: cornerR);
-
-    final shadow =
-        boxShadow ??
-        [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.42 : 0.10),
-            blurRadius: 32,
-            spreadRadius: -6,
-            offset: const Offset(0, 14),
-          ),
-        ];
-
-    Widget container = GlassContainer(
-      shape: shape,
-      padding: padding,
-      allowElevation: true,
-      glowIntensity: isDark ? 0.06 : 0.04,
-      child: child,
-    );
-
-    // Apply tint overlay when explicitly set (e.g. primary-coloured FAB).
-    if (tint != null) {
-      container = ColorFiltered(
-        colorFilter: ColorFilter.mode(
-          tint!.withValues(alpha: isDark ? 0.16 : 0.10),
-          BlendMode.srcATop,
-        ),
-        child: container,
-      );
-    }
-
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        boxShadow: shadow,
-        // A capsule needs a stadium radius here — with no radius the shadow is
-        // computed for a sharp rectangle and its square corners peek out from
-        // behind the capsule at low blur.
-        borderRadius: isCapsule
-            ? BorderRadius.circular(999)
-            : borderRadius,
-      ),
-      child: container,
-    );
-  }
-}
+// NOTE: the old app-level `LiquidGlass` wrapper (outer DecoratedBox shadow
+// around a GlassContainer) was removed with the 0.15.2+ upgrade: the package
+// now renders GPU SDF light-mode shadows from the merged glass geometry
+// (LiquidGlassSettings.shadowElevation / .shadow), so a widget-level outer
+// shadow would double up. It had no remaining call sites.
 
 // ── GlassSurface ─────────────────────────────────────────────────────────────
 
@@ -1211,6 +1116,9 @@ class GlassActionTile extends StatelessWidget {
   final String label;
   final String? subtitle;
   final VoidCallback? onTap;
+
+  /// Optional secondary action (e.g. variant pickers on attachment tiles).
+  final VoidCallback? onLongPress;
   final Color? color;
   final Widget? trailing;
   final bool selected;
@@ -1222,6 +1130,7 @@ class GlassActionTile extends StatelessWidget {
     required this.label,
     this.subtitle,
     this.onTap,
+    this.onLongPress,
     this.color,
     this.trailing,
     this.selected = false,
@@ -1243,6 +1152,7 @@ class GlassActionTile extends StatelessWidget {
         child: InkWell(
           borderRadius: radius,
           onTap: onTap,
+          onLongPress: onLongPress,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
             child: Row(

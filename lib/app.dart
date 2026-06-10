@@ -14,6 +14,9 @@ import 'providers/settings_provider.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/bots/bot_chats_screen.dart';
 import 'screens/call/call_screen.dart';
+import 'screens/call/sfu_call_screen.dart';
+import 'services/call_service.dart' show EscalatedCall;
+import 'services/sfu_call_controller.dart';
 import 'screens/channels/channel_screen.dart';
 import 'screens/chat/chat_screen.dart';
 import 'screens/home/conversations_screen.dart';
@@ -23,6 +26,8 @@ import 'screens/settings/pgp_keys_screen.dart';
 import 'services/api_service.dart';
 import 'services/app_access_gate.dart';
 import 'services/background_ws_service.dart';
+import 'services/badge_service.dart';
+import 'services/desktop_startup_service.dart';
 import 'services/mls_service.dart';
 import 'services/notification_service.dart';
 import 'services/push_notification_service.dart';
@@ -31,6 +36,7 @@ import 'services/websocket_service.dart';
 import 'theme/app_theme.dart';
 import 'utils/invite_links.dart';
 import 'utils/identity_qr.dart';
+import 'widgets/chat_search_results_view.dart';
 import 'widgets/glass.dart';
 
 class OpenChatApp extends StatelessWidget {
@@ -104,10 +110,24 @@ class OpenChatApp extends StatelessWidget {
                 padding: mq.padding.copyWith(top: mq.padding.top + extra),
               );
 
+        // Routes without a Material ancestor (Cupertino modal popups — e.g.
+        // showGlassActionSheet — render in the navigator Overlay, above any
+        // Scaffold) would otherwise inherit MaterialApp's debug fallback text
+        // style: monospace, red, yellow double underline. Give the whole
+        // navigator a sane DefaultTextStyle instead. Like the overlay wrappers
+        // below, DefaultTextStyle adds no render objects, so the liquid-glass
+        // BackdropFilter chain is unaffected (see the Material(transparency)
+        // warning further down).
+        final baseTextStyle =
+            Theme.of(context).textTheme.bodyMedium ?? const TextStyle();
+
         Widget appChrome = Stack(
           children: [
             // Screens — pushed down past both bars.
-            MediaQuery(data: withTop(callExtra + locExtra), child: child!),
+            MediaQuery(
+              data: withTop(callExtra + locExtra),
+              child: DefaultTextStyle(style: baseTextStyle, child: child!),
+            ),
             // Call bar — sees location offset so SafeArea places it below the
             // location bar when both are active.
             //
@@ -483,6 +503,8 @@ class _AppRootState extends State<_AppRoot> {
   StreamSubscription<SharedMedia>? _shareSub;
   String? _pendingShareText;
   bool _handlingShare = false;
+  StreamSubscription<EscalatedCall>? _escalatedCallSub;
+  final BadgeService _badgeService = BadgeService();
 
   @override
   void initState() {
@@ -494,6 +516,13 @@ class _AppRootState extends State<_AppRoot> {
       final settings = context.read<SettingsProvider>();
       _settings = settings;
       settings.addListener(_onSettingsChanged);
+      // Launcher/tray unread badge — client-computed (push payloads stay
+      // opaque, so the server never knows unread counts).
+      _badgeService.attach(context.read<ChatProvider>(), settings);
+      final tray = DesktopStartupService.tray;
+      if (tray != null) {
+        _badgeService.trayBadgeApplier = tray.setUnreadBadge;
+      }
       unawaited(
         settings.load().then((_) {
           if (mounted) _syncNotificationPreferences(settings);
@@ -504,6 +533,11 @@ class _AppRootState extends State<_AppRoot> {
       auth.initialize();
       context.read<KeyProvider>().load();
       context.read<CallProvider>().addListener(_onCallChanged);
+      // Mesh→SFU escalation: the mesh side is already torn down when this
+      // fires; join the LiveKit room and surface the SFU call UI.
+      _escalatedCallSub = context.read<CallProvider>().escalatedCalls.listen(
+        _onCallEscalated,
+      );
       PushNotificationService.setForegroundIncomingCallHandler((data) async {
         await context.read<CallProvider>().handleIncomingCallPush(data);
       });
@@ -898,8 +932,10 @@ class _AppRootState extends State<_AppRoot> {
 
   @override
   void dispose() {
+    _badgeService.dispose();
     _lifecycleListener?.dispose();
     _inviteLinkSub?.cancel();
+    _escalatedCallSub?.cancel();
     _shareSub?.cancel();
     _reminderTimer?.cancel();
     PushNotificationService.setForegroundIncomingCallHandler(null);
@@ -909,6 +945,35 @@ class _AppRootState extends State<_AppRoot> {
     context.read<AuthProvider>().removeListener(_onAuthChanged);
     context.read<CallProvider>().removeListener(_onCallChanged);
     super.dispose();
+  }
+
+  void _onCallEscalated(EscalatedCall escalated) {
+    if (!mounted) return;
+    final sfu = context.read<SfuCallController>();
+    final chat = context.read<ChatProvider>();
+    final conv = chat.conversations
+        .where((c) => c.id == escalated.conversationId)
+        .firstOrNull;
+    unawaited(
+      sfu
+          .join(
+            conversationId: escalated.conversationId,
+            title: conv?.name ?? 'Group call',
+            isVideo: escalated.isVideo,
+          )
+          .catchError((Object e) {
+            // Typically the server's premium gate on the LiveKit token.
+            OpenChatApp.scaffoldMessengerKey.currentState?.showSnackBar(
+              SnackBar(content: Text('Could not join the group call: $e')),
+            );
+          }),
+    );
+    OpenChatApp.navigatorKey.currentState?.push(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (_) => const SfuCallScreen(),
+      ),
+    );
   }
 
   void _onCallChanged() {
@@ -1139,13 +1204,23 @@ class _HomeShellState extends State<_HomeShell> {
   int _tab = 0;
   late final _pageController = PageController(initialPage: 0);
 
+  // Bottom-bar search (Apple Music-style morphing pill). The query drives the
+  // shared ChatSearchResultsView overlaid on the tab content.
+  bool _searchActive = false;
+  String _searchQuery = '';
+  final TextEditingController _searchCtrl = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
+
   @override
   void dispose() {
     _pageController.dispose();
+    _searchCtrl.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
   void _onTabSelected(int i) {
+    if (_searchActive) _setSearchActive(false);
     if (i == _tab) return;
     setState(() => _tab = i);
     _pageController.animateToPage(
@@ -1153,6 +1228,23 @@ class _HomeShellState extends State<_HomeShell> {
       duration: const Duration(milliseconds: 340),
       curve: Curves.easeOutCubic,
     );
+  }
+
+  void _setSearchActive(bool active) {
+    if (_searchActive == active) return;
+    setState(() {
+      _searchActive = active;
+      if (!active) {
+        _searchCtrl.clear();
+        _searchQuery = '';
+        _searchFocus.unfocus();
+      }
+    });
+  }
+
+  Future<void> _onSearchSelect(ChatSearchSelection selection) async {
+    _setSearchActive(false);
+    await handleChatSearchSelection(context, selection);
   }
 
   @override
@@ -1199,6 +1291,15 @@ class _HomeShellState extends State<_HomeShell> {
     // Clamp in case a tab was just turned off while it was selected.
     if (_tab >= screens.length) _tab = 0;
 
+    final tabContent = screens.length == 1
+        // Single screen — no paging overhead.
+        ? screens.first
+        : PageView(
+            controller: _pageController,
+            physics: const NeverScrollableScrollPhysics(),
+            children: screens,
+          );
+
     return Scaffold(
       // Let content flow behind the translucent glass bar.
       extendBody: true,
@@ -1206,36 +1307,64 @@ class _HomeShellState extends State<_HomeShell> {
         children: [
           if (user != null && user.isKeyExpired) _ExpiredKeyBanner(user: user),
           Expanded(
-            child: screens.length == 1
-                // Single screen — no paging overhead.
-                ? screens.first
-                : PageView(
-                    controller: _pageController,
-                    physics: const NeverScrollableScrollPhysics(),
-                    children: screens,
+            child: Stack(
+              children: [
+                tabContent,
+                // Search results replace the tab content while the bar's
+                // search pill is open. removeBottom: the searching bar
+                // reports a taller size with the keyboard up (package docs);
+                // without this the results list gets double bottom padding.
+                if (_searchActive)
+                  Positioned.fill(
+                    child: MediaQuery.removePadding(
+                      context: context,
+                      removeBottom: true,
+                      child: ColoredBox(
+                        color: Theme.of(context).colorScheme.surface,
+                        child: SafeArea(
+                          bottom: false,
+                          child: ChatSearchResultsView(
+                            query: _searchQuery,
+                            onSelect: (selection) =>
+                                unawaited(_onSearchSelect(selection)),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
+              ],
+            ),
           ),
         ],
       ),
-      // Single-tab apps don't need a bar at all.
-      bottomNavigationBar: tabs.length < 2
-          ? null
-          : SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                child: GlassBottomBar(
-                  tabs: tabs,
-                  selectedIndex: _tab,
-                  onTabSelected: _onTabSelected,
-                  // Physics + glow for the iOS 26 feel.
-                  glowBlurRadius: 18,
-                  glowSpreadRadius: 2,
-                  glowOpacity: 0.55,
-                  barBorderRadius: 999,
-                  barHeight: 60,
-                ),
-              ),
+      // The bar always shows: even single-tab setups host the search pill
+      // (the iOS 26 searchable-bottom-bar pattern).
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: GlassSearchableBottomBar(
+            tabs: tabs,
+            selectedIndex: _tab,
+            onTabSelected: _onTabSelected,
+            isSearchActive: _searchActive,
+            // Physics + glow for the iOS 26 feel.
+            glowBlurRadius: 18,
+            glowSpreadRadius: 2,
+            glowOpacity: 0.55,
+            barBorderRadius: 999,
+            barHeight: 60,
+            searchConfig: GlassSearchBarConfig(
+              hintText: 'Search',
+              controller: _searchCtrl,
+              focusNode: _searchFocus,
+              autoFocusOnExpand: true,
+              onSearchToggle: _setSearchActive,
+              onChanged: (q) => setState(() => _searchQuery = q),
+              onCancelTap: () => _setSearchActive(false),
             ),
+          ),
+        ),
+      ),
     );
   }
 }

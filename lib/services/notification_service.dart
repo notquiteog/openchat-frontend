@@ -859,19 +859,11 @@ class NotificationService {
   static int debugMessageReminderNotificationId(String reminderId) =>
       _messageReminderNotificationId(reminderId);
 
-  static String _liveLocationRemainingLabel(DateTime? endsAt) {
-    if (endsAt == null) return 'Live location shared';
-    final remaining = endsAt.difference(DateTime.now());
-    if (remaining.inSeconds <= 0) return 'Live location ended';
-    if (remaining.inHours >= 1) {
-      final hours = remaining.inHours;
-      final mins = remaining.inMinutes % 60;
-      if (mins == 0) return 'Ends in ${hours}h';
-      return 'Ends in ${hours}h ${mins}m';
-    }
-    if (remaining.inMinutes >= 1) return 'Ends in ${remaining.inMinutes}m';
-    return 'Ends in ${remaining.inSeconds}s';
-  }
+  /// Notification ids that currently have a live-location notification posted.
+  /// Re-showing an already-posted notification re-alerts on a backgrounded iOS
+  /// app (presentBanner/presentList only apply in the foreground), so the
+  /// per-tick update path must be idempotent.
+  static final Set<int> _liveLocationPosted = {};
 
   static Future<void> showLiveLocationNotification({
     required String messageId,
@@ -887,13 +879,22 @@ class NotificationService {
     // defers entirely to that one. iOS/macOS/desktop have no such service and
     // still rely on the notification built below.
     if (Platform.isAndroid) return;
+    final notificationId = _liveLocationNotificationId(
+      conversationId: conversationId,
+      messageId: messageId,
+    );
     if (await _shouldSuppressFocusedNotification()) {
+      // User is looking at the app — hide the indicator and re-arm so it is
+      // posted again (once) the next time a tick fires while backgrounded.
       await cancelLiveLocationNotification(
         messageId: messageId,
         conversationId: conversationId,
       );
       return;
     }
+    // Already visible: leave it alone. Re-posting every position tick spams
+    // alert banners on backgrounded iOS/macOS.
+    if (_liveLocationPosted.contains(notificationId)) return;
     await init();
     if (!_available) return;
     final details = NotificationDetails(
@@ -937,18 +938,26 @@ class NotificationService {
     );
 
     await _plugin.show(
-      id: _liveLocationNotificationId(
-        conversationId: conversationId,
-        messageId: messageId,
-      ),
+      id: notificationId,
       title: title,
-      body: _liveLocationRemainingLabel(endsAt),
+      // Static label (e.g. "Sharing until 14:32"): the notification is posted
+      // once per share, so a counting-down body would just go stale.
+      body: _liveLocationUntilLabel(endsAt),
       notificationDetails: details,
       payload: jsonEncode({
         'conversation_id': conversationId,
         'message_id': messageId,
       }),
     );
+    _liveLocationPosted.add(notificationId);
+  }
+
+  static String _liveLocationUntilLabel(DateTime? endsAt) {
+    if (endsAt == null) return 'Live location shared';
+    final local = endsAt.toLocal();
+    final hh = local.hour.toString().padLeft(2, '0');
+    final mm = local.minute.toString().padLeft(2, '0');
+    return 'Sharing until $hh:$mm';
   }
 
   static Future<void> cancelLiveLocationNotification({
@@ -959,11 +968,13 @@ class NotificationService {
     if (Platform.isAndroid) return; // never posted on Android (FGS owns it)
     await init();
     if (!_available) return;
+    final notificationId = _liveLocationNotificationId(
+      conversationId: conversationId,
+      messageId: messageId,
+    );
+    _liveLocationPosted.remove(notificationId);
     await _plugin.cancel(
-      id: _liveLocationNotificationId(
-        conversationId: conversationId,
-        messageId: messageId,
-      ),
+      id: notificationId,
       tag: _liveLocationNotificationTag(
         conversationId: conversationId,
         messageId: messageId,

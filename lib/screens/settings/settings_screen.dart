@@ -1172,6 +1172,92 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  /// Stores the encrypted recovery bundle on the server as an opaque blob —
+  /// zero-knowledge: only ciphertext leaves the device.
+  Future<void> _uploadBackupToServer() async {
+    final passphrase = await _promptBackupPassphrase(confirm: true);
+    if (passphrase == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final service = EncryptedBackupService(
+        storage: context.read<SecureStorageService>(),
+        privateState: LocalPrivateStateService(
+          storage: context.read<SecureStorageService>(),
+        ),
+      );
+      await service.uploadToServer(
+        api: context.read<ApiService>(),
+        passphrase: passphrase,
+      );
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Encrypted backup stored on server')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Backup failed: $e')));
+    }
+  }
+
+  Future<void> _restoreBackupFromServer() async {
+    final passphrase = await _promptBackupPassphrase(confirm: false);
+    if (passphrase == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final service = EncryptedBackupService(
+        storage: context.read<SecureStorageService>(),
+        privateState: LocalPrivateStateService(
+          storage: context.read<SecureStorageService>(),
+        ),
+      );
+      final keyProvider = context.read<KeyProvider>();
+      final settingsProvider = context.read<SettingsProvider>();
+      await service.restoreFromServer(
+        api: context.read<ApiService>(),
+        passphrase: passphrase,
+      );
+      await keyProvider.load();
+      await settingsProvider.reload();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Backup restored from server')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Restore failed: $e')));
+    }
+  }
+
+  Future<void> _deleteServerBackup() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => GlassAlertDialog(
+        icon: const Icon(Icons.delete_outline),
+        title: const Text('Delete server backup?'),
+        content: const Text(
+          'The encrypted backup blob is removed from the server. Local data '
+          'is not affected.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await context.read<ApiService>().deleteServerBackup();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Server backup deleted')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+    }
+  }
+
   Future<void> _importEncryptedBackup() async {
     if (kIsWeb) return;
     final messenger = ScaffoldMessenger.of(context);
@@ -1662,6 +1748,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     subtitle: 'Restore keys and encrypted local state',
                     onTap: _importEncryptedBackup,
                   ),
+                ],
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.cloud_upload_outlined,
+                  title: 'Store encrypted backup on server',
+                  subtitle:
+                      'Zero-knowledge: only the passphrase-encrypted blob '
+                      'leaves this device',
+                  onTap: _uploadBackupToServer,
+                ),
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.cloud_download_outlined,
+                  title: 'Restore from server backup',
+                  subtitle: 'Download and decrypt with your passphrase',
+                  onTap: _restoreBackupFromServer,
+                ),
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.cloud_off_outlined,
+                  title: 'Delete server backup',
+                  subtitle: 'Remove the stored blob from the server',
+                  onTap: _deleteServerBackup,
+                ),
+                if (!kIsWeb) ...[
                   _GlassDivider(),
                   _GlassTile(
                     icon: Icons.phonelink_lock_outlined,

@@ -184,6 +184,14 @@ class ChatProvider extends ChangeNotifier {
       StreamController<SmpInbound>.broadcast();
   Stream<SmpInbound> get smpMessages => _smpController.stream;
 
+  /// On-chain deposit confirmation progress for THIS user's deposits, straight
+  /// off the user-scoped `deposit_progress` WS event. Payload keys:
+  /// deposit_id, status, confirmations, required_confirmations.
+  final StreamController<Map<String, dynamic>> _depositProgressController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get depositProgress =>
+      _depositProgressController.stream;
+
   /// Send one SMP step to [convID] as a hidden `system` control message.
   Future<void> sendSmpStep(String convID, Map<String, dynamic> payload) async {
     final body = jsonEncode({'openchat_smp': 1, ...payload});
@@ -283,6 +291,9 @@ class ChatProvider extends ChangeNotifier {
     unawaited(_search.clearAll());
     unawaited(_outbox.clearAll());
     unawaited(_stopAllLiveLocationShares());
+    // The resume position belongs to this account; the next login must not
+    // try to resume another user's event stream.
+    unawaited(_ws.resetSequence());
     _ws.disconnect();
     notifyListeners();
   }
@@ -335,7 +346,14 @@ class ChatProvider extends ChangeNotifier {
   void _onWsConnectionChanged() {
     final monitoring = _ws.isMonitoring;
     if (monitoring && !_wasWsMonitoring) {
-      unawaited(_catchUpAfterReconnect());
+      if (_ws.lastSeq > 0) {
+        // The socket resumed from its last sequence number — the server
+        // replays the missed durable events (or sends resync_required, which
+        // triggers the full catch-up below). Only the outbox needs draining.
+        unawaited(drainOutbox());
+      } else {
+        unawaited(_catchUpAfterReconnect());
+      }
     }
     _wasWsMonitoring = monitoring;
   }
@@ -1571,8 +1589,33 @@ class ChatProvider extends ChangeNotifier {
     required String pollID,
     required List<String> optionIDs,
   }) async {
-    final updatedPoll = await _api.votePoll(pollID, optionIDs);
     final list = _messages[convID];
+    final pollMessage = list?.where((m) => m.poll?.id == pollID).firstOrNull;
+    final isAnonymous = pollMessage?.poll?.isAnonymous ?? false;
+
+    final Poll updatedPoll;
+    if (isAnonymous) {
+      // Blind-token vote: the server stores the choice against the token's
+      // hash, never this account. The raw token is issued once and cached so
+      // revoting (and "you voted X") keep working on this device.
+      var token = await _storage.getPollVoteToken(pollID);
+      if (token == null || token.isEmpty) {
+        token = await _api.requestPollVoteToken(pollID);
+        await _storage.savePollVoteToken(pollID, token);
+        // Decorrelate the (logged) issuance from the vote a little; the
+        // anonymity model itself is "the server doesn't store who voted".
+        await Future<void>.delayed(
+          Duration(milliseconds: 200 + Random().nextInt(1300)),
+        );
+      }
+      final voted = await _api.votePollAnonymous(pollID, token, optionIDs);
+      // The server can't attribute the vote, so it can't echo our selection —
+      // mark it locally for the "you voted X" UI state.
+      updatedPoll = voted.copyWith(voterOptionIds: List.of(optionIDs));
+    } else {
+      updatedPoll = await _api.votePoll(pollID, optionIDs);
+    }
+
     if (list == null) return;
     final idx = list.indexWhere((m) => m.poll?.id == pollID);
     if (idx == -1) return;
@@ -3193,11 +3236,23 @@ class ChatProvider extends ChangeNotifier {
       case WsEventType.pollUpdated:
         _handlePollUpdate(event.data);
 
+      case WsEventType.resyncRequired:
+        // The server's replay buffer couldn't bridge our last_seq — fall back
+        // to the full refetch (the pre-resume reconnect behavior).
+        unawaited(_catchUpAfterReconnect());
+
       case WsEventType.gameUpdated:
         _ingestGameRound(event.data);
 
       case WsEventType.paymentRequestUpdated:
         unawaited(_handlePaymentRequestUpdate(event.data));
+
+      case WsEventType.depositProgress:
+        // Owner-only confirmation progress; consumed by whichever payment UI
+        // (paywall sheet, wallet) is currently watching this deposit.
+        if (!_depositProgressController.isClosed) {
+          _depositProgressController.add(event.data);
+        }
 
       case WsEventType.conversationUpdated:
         // Name / description / avatar (and for channels, handle) changed. Pull
@@ -4053,6 +4108,7 @@ class ChatProvider extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _wsSub?.cancel();
+    _depositProgressController.close();
     NotificationService.setLiveLocationHandlers(onCancel: null);
     unawaited(_stopAllLiveLocationShares());
     _ws.removeListener(_onWsConnectionChanged);

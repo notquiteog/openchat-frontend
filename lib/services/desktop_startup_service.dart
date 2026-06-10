@@ -19,6 +19,10 @@ class DesktopStartupService {
   /// window event.
   static DesktopTrayService? _instance;
 
+  /// The live tray (null off-desktop / before startTray) — lets BadgeService
+  /// reflect unread state on the tray icon.
+  static DesktopTrayService? get tray => _instance;
+
   static bool get supported =>
       !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
 

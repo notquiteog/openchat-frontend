@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config/api_config.dart';
 import '../services/proxy_service.dart';
@@ -20,6 +22,8 @@ enum WsEventType {
   messageReaction,
   pollUpdated,
   paymentRequestUpdated,
+  // User-scoped on-chain deposit confirmation progress (owner only).
+  depositProgress,
   conversationDeleted,
   conversationUpdated,
   // WebRTC call signaling
@@ -31,11 +35,15 @@ enum WsEventType {
   callRinging,
   // Server-generated: this user answered/declined on another device.
   callCancel,
+  // A mesh-call participant asked everyone to move to the SFU.
+  callEscalate,
   groupCallJoin,
   groupCallLeave,
   groupCallState,
   stageState,
   gameUpdated,
+  // Server: the replay buffer can't bridge our last_seq — do a full refetch.
+  resyncRequired,
   error,
   unknown,
 }
@@ -43,7 +51,13 @@ enum WsEventType {
 class WsEvent {
   final WsEventType type;
   final Map<String, dynamic> data;
-  WsEvent({required this.type, required this.data});
+
+  /// Per-user monotonic sequence number for durable events (0 = ephemeral).
+  /// Used for reconnect resume and duplicate dropping only — live delivery
+  /// may be out of order across server instances.
+  final int seq;
+
+  WsEvent({required this.type, required this.data, this.seq = 0});
 }
 
 enum WsConnectionStatus { disconnected, connecting, connected }
@@ -65,6 +79,16 @@ class WebSocketService extends ChangeNotifier {
 
   static const int _maxPendingSends = 40;
   static const Duration _connectTimeout = Duration(seconds: 10);
+  static const String _lastSeqPrefsKey = 'ws_last_seq';
+  static const int _dedupeWindow = 256;
+
+  // Sequence-number resume state. lastSeq is the highest durable-event seq
+  // seen; on reconnect the server replays everything after it (or sends
+  // resync_required when its buffer can't bridge the gap).
+  int _lastSeq = 0;
+  bool _lastSeqLoaded = false;
+  final Queue<int> _recentSeqOrder = Queue<int>();
+  final Set<int> _recentSeqs = <int>{};
 
   final _eventStream = StreamController<WsEvent>.broadcast();
   Stream<WsEvent> get events => _eventStream.stream;
@@ -73,7 +97,65 @@ class WebSocketService extends ChangeNotifier {
   DateTime? get lastConnectedAt => _lastConnectedAt;
   DateTime? get lastEventAt => _lastEventAt;
 
+  /// Highest durable-event sequence number seen for this account.
+  int get lastSeq => _lastSeq;
+
   WebSocketService(this._storage);
+
+  Future<void> _ensureLastSeqLoaded() async {
+    if (_lastSeqLoaded) return;
+    _lastSeqLoaded = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _lastSeq = math.max(_lastSeq, prefs.getInt(_lastSeqPrefsKey) ?? 0);
+    } catch (_) {}
+  }
+
+  /// Forgets the resume position (logout / account switch) — the next
+  /// connect starts fresh instead of resuming another account's stream.
+  Future<void> resetSequence() async {
+    _lastSeq = 0;
+    _recentSeqs.clear();
+    _recentSeqOrder.clear();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_lastSeqPrefsKey);
+    } catch (_) {}
+  }
+
+  /// True when this seq was already delivered (duplicate from a replay
+  /// racing live delivery). Tracks a small recent window — live events can
+  /// arrive slightly out of order across server instances, so anything not
+  /// recently seen is accepted even if its seq is below lastSeq.
+  bool _isDuplicateSeq(int seq) {
+    if (seq <= 0) return false;
+    if (_recentSeqs.contains(seq)) return true;
+    _recentSeqs.add(seq);
+    _recentSeqOrder.addLast(seq);
+    while (_recentSeqOrder.length > _dedupeWindow) {
+      _recentSeqs.remove(_recentSeqOrder.removeFirst());
+    }
+    if (seq > _lastSeq) {
+      _lastSeq = seq;
+      unawaited(_persistLastSeq());
+    }
+    return false;
+  }
+
+  DateTime _lastSeqPersistedAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Future<void> _persistLastSeq() async {
+    // Throttle disk writes; the exact value only matters on the next launch,
+    // and an older persisted seq just replays a few duplicate events.
+    final now = DateTime.now();
+    if (now.difference(_lastSeqPersistedAt) < const Duration(seconds: 2)) {
+      return;
+    }
+    _lastSeqPersistedAt = now;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_lastSeqPrefsKey, _lastSeq);
+    } catch (_) {}
+  }
 
   Future<void> connect() async {
     if (_disposed) return;
@@ -130,6 +212,16 @@ class WebSocketService extends ChangeNotifier {
       _reconnectAttempt = 0;
       _lastConnectedAt = DateTime.now();
       _setStatus(WsConnectionStatus.connected);
+      // Resume FIRST: the server replays durable events missed while offline
+      // (or answers resync_required) before any queued sends go out. A fresh
+      // client (lastSeq 0) skips this — its initial REST load covers it.
+      await _ensureLastSeqLoaded();
+      if (_lastSeq > 0) {
+        _trySendNow({
+          'type': 'resume',
+          'data': {'last_seq': _lastSeq},
+        });
+      }
       _flushPendingSends();
     } catch (_) {
       if (channel != null && identical(_channel, channel)) {
@@ -152,14 +244,25 @@ class WebSocketService extends ChangeNotifier {
     if (!identical(_channel, channel)) return;
     if (raw is! String) return;
     _lastEventAt = DateTime.now();
+    handleRawFrame(raw);
+  }
+
+  /// Parses one WebSocket frame (possibly several newline-batched events)
+  /// into the event stream. Visible for tests — the network path can't run
+  /// in unit tests.
+  @visibleForTesting
+  void handleRawFrame(String raw) {
     try {
       for (final line in raw.split('\n')) {
         if (line.trim().isEmpty) continue;
         final json = jsonDecode(line) as Map<String, dynamic>;
         final type = _parseType(json['type'] as String?);
         final data = (json['data'] as Map<String, dynamic>?) ?? {};
+        final seq = (json['seq'] as num?)?.toInt() ?? 0;
+        // Replay racing live delivery can duplicate an event; drop repeats.
+        if (_isDuplicateSeq(seq)) continue;
         if (!_eventStream.isClosed) {
-          _eventStream.add(WsEvent(type: type, data: data));
+          _eventStream.add(WsEvent(type: type, data: data, seq: seq));
         }
       }
     } catch (_) {}
@@ -333,6 +436,12 @@ class WebSocketService extends ChangeNotifier {
     });
   }
 
+  /// Relays a mesh→SFU escalation signal to one mesh peer (encoded payload,
+  /// same per-target relay as hangup).
+  void sendCallEscalate(Map<String, dynamic> data) {
+    _send({'type': 'call_escalate', 'data': data});
+  }
+
   void sendCallRinging({
     required String targetUserId,
     required String conversationId,
@@ -400,6 +509,7 @@ class WebSocketService extends ChangeNotifier {
     'message_reaction' => WsEventType.messageReaction,
     'poll_updated' => WsEventType.pollUpdated,
     'payment_request_updated' => WsEventType.paymentRequestUpdated,
+    'deposit_progress' => WsEventType.depositProgress,
     'conversation_deleted' => WsEventType.conversationDeleted,
     'conversation_updated' => WsEventType.conversationUpdated,
     'call_offer' => WsEventType.callOffer,
@@ -409,11 +519,13 @@ class WebSocketService extends ChangeNotifier {
     'call_reject' => WsEventType.callReject,
     'call_ringing' => WsEventType.callRinging,
     'call_cancel' => WsEventType.callCancel,
+    'call_escalate' => WsEventType.callEscalate,
     'group_call_join' => WsEventType.groupCallJoin,
     'group_call_leave' => WsEventType.groupCallLeave,
     'group_call_state' => WsEventType.groupCallState,
     'stage_state' => WsEventType.stageState,
     'game_updated' => WsEventType.gameUpdated,
+    'resync_required' => WsEventType.resyncRequired,
     'error' => WsEventType.error,
     _ => WsEventType.unknown,
   };

@@ -32,6 +32,13 @@ set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
 # Use Unicode for all projects.
 add_definitions(-DUNICODE -D_UNICODE)
 
+# Several plugins (flutter_local_notifications_windows, local_auth_windows,
+# permission_handler_windows) still include <experimental/coroutine>, which
+# MSVC 14.5x turns into a hard C2338/STL1011 error. Applied globally (not in
+# APPLY_STANDARD_SETTINGS) so it reaches plugin targets pulled in via
+# generated_plugins.cmake.
+add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+
 # Compilation settings that should be applied to most targets.
 #
 # Be cautious about adding new options here, as plugins use this function by

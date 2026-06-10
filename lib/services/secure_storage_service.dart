@@ -82,6 +82,7 @@ class SecureStorageService {
   static const _keyMlsSignerSignaturePrefix = 'mls_signer_signature_v1';
   static const _keyMlsCredentialIdentityPrefix = 'mls_credential_identity_v1';
   static const _keyPgpPostTokenPrefix = 'pgp_post_token_v1';
+  static const _keyPollVoteTokenPrefix = 'poll_vote_token_v1';
   static const _keySealedScheduleControlsPrefix = 'sealed_schedule_controls_v1';
   static const _keySealedMessageControlsPrefix = 'sealed_message_controls_v1';
   static const _keyScheduledPlaintextPrefix = 'scheduled_plaintext_v1';
@@ -292,6 +293,20 @@ class SecureStorageService {
   Future<void> deletePgpPostToken(String conversationID) {
     return _storage.delete(
       key: _scopedKey(_keyPgpPostTokenPrefix, conversationID),
+    );
+  }
+
+  /// Blind vote token for an anonymous poll. Issued exactly once per poll —
+  /// it must be retained to revote, and it is the only link between this
+  /// device and its vote (the server stores just the token's hash).
+  Future<String?> getPollVoteToken(String pollID) {
+    return _readOrNull(_scopedKey(_keyPollVoteTokenPrefix, pollID));
+  }
+
+  Future<void> savePollVoteToken(String pollID, String token) {
+    return _storage.write(
+      key: _scopedKey(_keyPollVoteTokenPrefix, pollID),
+      value: token,
     );
   }
 

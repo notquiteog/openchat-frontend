@@ -72,8 +72,76 @@ void main() {
       expect(decoded?['is_video'], isTrue);
       expect(decoded?['sdp'], fakeSdp);
       expect(decoded?['participant_user_ids'], ['bob-id', 'carol-id']);
+      // No upgrade flag was sent — it must not appear out of thin air.
+      expect(decoded?.containsKey('video_upgrade'), isFalse);
     },
   );
+
+  test('video_upgrade flag survives the encrypted round trip', () async {
+    final keyPair = await PgpService.generateKeyPair(username: 'alice');
+    final storage = _FakeSecureStorage(
+      userId: 'alice-id',
+      privateKey: keyPair.privateKeyArmored,
+      publicKey: keyPair.publicKeyArmored,
+      fingerprint: keyPair.fingerprint,
+    );
+    final member = _member(
+      userId: 'alice-id',
+      username: 'alice',
+      publicKey: keyPair.publicKeyArmored,
+      fingerprint: keyPair.fingerprint,
+      avatarUrl: null,
+    );
+    final conversation = _conversation(
+      encryptionMode: EncryptionMode.pgp,
+      members: [member],
+    );
+    final codec = PrivacyCallSignalCodec(
+      _FakeApiService(storage, conversation: conversation, members: [member]),
+      storage,
+      _FakeMlsService(storage),
+    );
+
+    final encoded = await codec.encode(
+      CallSignalPayload(
+        kind: 'offer',
+        targetUserId: 'bob-id',
+        callId: 'call-1',
+        conversationId: conversation.id,
+        callerId: 'alice-id',
+        isVideo: true,
+        videoUpgrade: true,
+        sdp: 'v=0\r\n',
+      ),
+    );
+    // The flag rides inside the ciphertext, not the outer envelope.
+    expect(encoded.containsKey('video_upgrade'), isFalse);
+
+    final decoded = await codec.decode(encoded);
+    expect(decoded?['video_upgrade'], isTrue);
+  });
+
+  test('plain codec carries video_upgrade only when set', () async {
+    const codec = PlainCallSignalCodec();
+    final upgraded = await codec.encode(
+      const CallSignalPayload(
+        kind: 'offer',
+        targetUserId: 'bob-id',
+        callId: 'call-1',
+        videoUpgrade: true,
+      ),
+    );
+    expect(upgraded['video_upgrade'], isTrue);
+
+    final plain = await codec.encode(
+      const CallSignalPayload(
+        kind: 'offer',
+        targetUserId: 'bob-id',
+        callId: 'call-1',
+      ),
+    );
+    expect(plain.containsKey('video_upgrade'), isFalse);
+  });
 
   test(
     'locked key returns partial result so a ring notification still fires',

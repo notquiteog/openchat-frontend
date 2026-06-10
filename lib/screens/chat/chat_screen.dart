@@ -57,6 +57,29 @@ import '../../widgets/sticker_picker.dart';
 import '../../widgets/voice_note_recorder.dart';
 import '../profile/user_profile_screen.dart';
 
+/// (label, choice) pairs offered when an attachment tile is long-pressed.
+/// The choice strings feed the same dispatch as the directly-tapped tiles.
+/// Top-level so the mapping is unit-testable without pumping the chat screen.
+(String, List<(String, String)>) attachmentVariantActions(String variants) =>
+    switch (variants) {
+      'photo_variants' => (
+        'Send photo',
+        [
+          ('View-once photo', 'view_once_image'),
+          ('Spoiler photo', 'spoiler_image'),
+        ],
+      ),
+      'video_variants' => (
+        'Send video',
+        [
+          ('View-once video', 'view_once_video'),
+          ('Spoiler video', 'spoiler_video'),
+        ],
+      ),
+      'file_variants' => ('Send file', [('View-once file', 'view_once_file')]),
+      _ => ('', <(String, String)>[]),
+    };
+
 class ChatScreen extends StatefulWidget {
   final Conversation conversation;
   final String? initialMessageId;
@@ -930,7 +953,7 @@ class _ChatScreenState extends State<ChatScreen> {
         defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.iOS;
 
-    final choice = await showModalBottomSheet<String>(
+    var choice = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -942,38 +965,18 @@ class _ChatScreenState extends State<ChatScreen> {
             GlassSheetHeader(
               icon: Icons.add_rounded,
               title: 'Add to message',
-              subtitle: 'Send media, files, location, polls, or payments.',
+              subtitle:
+                  'Hold photo, video, file, or location for more ways '
+                  'to send.',
               onClose: () => Navigator.pop(sheetCtx),
             ),
             _AttachTile(
               icon: Icons.photo_library_outlined,
-              label: 'Photo from gallery',
-              onTap: () => Navigator.pop(sheetCtx, 'gallery_image'),
-            ),
-            _AttachTile(
-              icon: Icons.collections_outlined,
-              label: 'Photo album',
-              onTap: () => Navigator.pop(sheetCtx, 'gallery_album'),
-            ),
-            _AttachTile(
-              icon: Icons.visibility_off_outlined,
-              label: 'View-once photo',
-              onTap: () => Navigator.pop(sheetCtx, 'view_once_image'),
-            ),
-            _AttachTile(
-              icon: Icons.blur_on_rounded,
-              label: 'Spoiler photo',
-              onTap: () => Navigator.pop(sheetCtx, 'spoiler_image'),
-            ),
-            _AttachTile(
-              icon: Icons.share_location_outlined,
-              label: 'Share location',
-              onTap: () => Navigator.pop(sheetCtx, 'location_once'),
-            ),
-            _AttachTile(
-              icon: Icons.location_on_outlined,
-              label: 'Share live location',
-              onTap: () => Navigator.pop(sheetCtx, 'location_live'),
+              label: 'Photo',
+              // One picker for both: a single selection sends solo, several
+              // send as an album.
+              onTap: () => Navigator.pop(sheetCtx, 'gallery_photos'),
+              onLongPress: () => Navigator.pop(sheetCtx, 'photo_variants'),
             ),
             if (cameraSupported)
               _AttachTile(
@@ -983,28 +986,21 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             _AttachTile(
               icon: Icons.videocam_outlined,
-              label: 'Video from gallery',
+              label: 'Video',
               onTap: () => Navigator.pop(sheetCtx, 'gallery_video'),
-            ),
-            _AttachTile(
-              icon: Icons.hide_image_outlined,
-              label: 'View-once video',
-              onTap: () => Navigator.pop(sheetCtx, 'view_once_video'),
-            ),
-            _AttachTile(
-              icon: Icons.blur_on_rounded,
-              label: 'Spoiler video',
-              onTap: () => Navigator.pop(sheetCtx, 'spoiler_video'),
+              onLongPress: () => Navigator.pop(sheetCtx, 'video_variants'),
             ),
             _AttachTile(
               icon: Icons.attach_file_rounded,
               label: 'File',
               onTap: () => Navigator.pop(sheetCtx, 'file'),
+              onLongPress: () => Navigator.pop(sheetCtx, 'file_variants'),
             ),
             _AttachTile(
-              icon: Icons.no_encryption_gmailerrorred_outlined,
-              label: 'View-once file',
-              onTap: () => Navigator.pop(sheetCtx, 'view_once_file'),
+              icon: Icons.share_location_outlined,
+              label: 'Share location',
+              onTap: () => Navigator.pop(sheetCtx, 'location_once'),
+              onLongPress: () => Navigator.pop(sheetCtx, 'location_variants'),
             ),
             _AttachTile(
               icon: Icons.poll_outlined,
@@ -1043,6 +1039,12 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     if (choice == null || !mounted) return;
+    // Long-pressed tiles resolve to a concrete choice via a small variant
+    // sheet (view-once / spoiler / live) before the normal dispatch below.
+    if (choice.endsWith('_variants')) {
+      choice = await _resolveAttachmentVariant(choice);
+      if (choice == null || !mounted) return;
+    }
     if (choice == 'poll') {
       await _showCreatePollDialog();
       return;
@@ -1059,8 +1061,8 @@ class _ChatScreenState extends State<ChatScreen> {
       await _shareContact();
       return;
     }
-    if (choice == 'gallery_album') {
-      await _sendAlbum();
+    if (choice == 'gallery_photos') {
+      await _sendPhotos();
       return;
     }
     if (choice == 'payment') {
@@ -1086,9 +1088,6 @@ class _ChatScreenState extends State<ChatScreen> {
     VoiceNoteRecording? voiceNote;
     try {
       pending = switch (choice) {
-        'gallery_image' => await attachmentService.pickImageForOutbox(
-          onProgress: _setAttachmentUploadProgress,
-        ),
         'view_once_image' => await attachmentService.pickImageForOutbox(
           onProgress: _setAttachmentUploadProgress,
         ),
@@ -1173,7 +1172,30 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _sendAlbum() async {
+  /// Maps a long-pressed attachment tile to a concrete send variant via a
+  /// small glass action sheet. Returns null when dismissed.
+  Future<String?> _resolveAttachmentVariant(String variants) async {
+    if (variants == 'location_variants') {
+      // Only one variant — no sheet needed.
+      return 'location_live';
+    }
+    final (title, actions) = attachmentVariantActions(variants);
+    if (actions.isEmpty) return null;
+    String? picked;
+    await showGlassActionSheet<void>(
+      context: context,
+      title: title,
+      actions: [
+        for (final (label, value) in actions)
+          GlassActionSheetAction(label: label, onPressed: () => picked = value),
+      ],
+    );
+    return picked;
+  }
+
+  /// Unified photo send: one multi-select picker; a single selection sends
+  /// solo, several send as an album.
+  Future<void> _sendPhotos() async {
     final attachmentService = AttachmentService(context.read<ApiService>());
     final chat = context.read<ChatProvider>();
     final messenger = ScaffoldMessenger.of(context);
@@ -1203,6 +1225,7 @@ class _ChatScreenState extends State<ChatScreen> {
           if (await chat.sendPreparedAttachment(
             convID: conv.id,
             attachment: item,
+            onProgress: items.length == 1 ? _setAttachmentUploadProgress : null,
           )) {
             ok++;
           }
@@ -1260,7 +1283,9 @@ class _ChatScreenState extends State<ChatScreen> {
                     u.username.isNotEmpty ? u.username[0].toUpperCase() : '?',
                   ),
                 ),
-                title: Text(u.id == me?.id ? '${u.displayName} (You)' : u.displayName),
+                title: Text(
+                  u.id == me?.id ? '${u.displayName} (You)' : u.displayName,
+                ),
                 subtitle: Text('@${u.username}'),
                 onTap: () => Navigator.pop(sheetCtx, u),
               ),
@@ -1552,7 +1577,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   const SizedBox(height: 12),
                   GlassSegmentedControl(
                     segments: [for (final p in providers) p.toUpperCase()],
-                    selectedIndex: providers.indexOf(provider).clamp(0, providers.length - 1),
+                    selectedIndex: providers
+                        .indexOf(provider)
+                        .clamp(0, providers.length - 1),
                     onSegmentSelected: (i) => setSheet(() {
                       provider = providers[i];
                       if (payMode &&
@@ -1852,8 +1879,18 @@ class _ChatScreenState extends State<ChatScreen> {
 
   static String formatMeetingSlot(DateTime d) {
     const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     final local = d.toLocal();
     final hh = local.hour.toString().padLeft(2, '0');
@@ -2122,7 +2159,9 @@ class _ChatScreenState extends State<ChatScreen> {
                         'Quiz mode',
                         style: TextStyle(fontWeight: FontWeight.w600),
                       ),
-                      subtitle: const Text('One correct answer, revealed after voting'),
+                      subtitle: const Text(
+                        'One correct answer, revealed after voting',
+                      ),
                       trailing: GlassSwitch(
                         value: quiz,
                         onChanged: (v) => setDialog(() {
@@ -2225,72 +2264,83 @@ class _ChatScreenState extends State<ChatScreen> {
   void _showGroupCallChooser({required bool isVideo}) {
     final isPremium =
         context.read<AuthProvider>().currentUser?.isPremium == true;
+    // A P2P mesh gets CPU/bandwidth-bound fast: every participant uplinks to
+    // every other. Past ~3 remote participants, nudge toward the SFU by
+    // listing it first (still a free choice — P2P stays available).
+    final preferSfu = conv.members.length > 4 && isPremium;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (sheetCtx) => GlassBottomSheetFrame(
-        child: SafeArea(
-          top: false,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const GlassSheetGrabber(),
-              const GlassSheetHeader(
-                icon: Icons.call,
-                title: 'Start a group call',
-                subtitle: 'Choose how to connect',
-              ),
-              GlassActionTile(
-                icon: Icons.lan_outlined,
-                label: 'Call with P2P',
-                subtitle: 'Direct peer-to-peer mesh',
-                onTap: () {
-                  Navigator.pop(sheetCtx);
-                  _startCall(isVideo: isVideo);
-                },
-              ),
-              GlassActionTile(
-                icon: Icons.hub_outlined,
-                label: 'Call with SFU',
-                subtitle: isPremium
-                    ? 'Routed through the server — scales to larger groups'
-                    : 'Requires OpenChat Premium',
-                trailing: isPremium
-                    ? null
-                    : const Icon(Icons.workspace_premium_outlined, size: 20),
-                onTap: () {
-                  Navigator.pop(sheetCtx);
-                  if (isPremium) {
-                    _startSfuCall(isVideo: isVideo);
-                  } else {
-                    showAppToast(
+      builder: (sheetCtx) {
+        final p2pTile = GlassActionTile(
+          icon: Icons.lan_outlined,
+          label: 'Call with P2P',
+          subtitle: preferSfu
+              ? 'Direct peer-to-peer mesh — may struggle at this group size'
+              : 'Direct peer-to-peer mesh',
+          onTap: () {
+            Navigator.pop(sheetCtx);
+            _startCall(isVideo: isVideo);
+          },
+        );
+        final sfuTile = GlassActionTile(
+          icon: Icons.hub_outlined,
+          label: 'Call with SFU',
+          subtitle: !isPremium
+              ? 'Requires OpenChat Premium'
+              : preferSfu
+              ? 'Recommended for this group size'
+              : 'Routed through the server — scales to larger groups',
+          trailing: isPremium
+              ? null
+              : const Icon(Icons.workspace_premium_outlined, size: 20),
+          onTap: () {
+            Navigator.pop(sheetCtx);
+            if (isPremium) {
+              _startSfuCall(isVideo: isVideo);
+            } else {
+              showAppToast(
+                context,
+                'SFU group calls require OpenChat Premium',
+                isError: true,
+              );
+            }
+          },
+        );
+        return GlassBottomSheetFrame(
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const GlassSheetGrabber(),
+                const GlassSheetHeader(
+                  icon: Icons.call,
+                  title: 'Start a group call',
+                  subtitle: 'Choose how to connect',
+                ),
+                if (preferSfu) ...[sfuTile, p2pTile] else ...[p2pTile, sfuTile],
+                GlassActionTile(
+                  icon: Icons.podcasts_rounded,
+                  label: 'Voice stage room',
+                  subtitle: 'Audio room with speakers, listeners & raise-hand',
+                  onTap: () {
+                    Navigator.pop(sheetCtx);
+                    Navigator.push(
                       context,
-                      'SFU group calls require OpenChat Premium',
-                      isError: true,
+                      MaterialPageRoute<void>(
+                        builder: (_) => StageRoomScreen(conversation: conv),
+                      ),
                     );
-                  }
-                },
-              ),
-              GlassActionTile(
-                icon: Icons.podcasts_rounded,
-                label: 'Voice stage room',
-                subtitle: 'Audio room with speakers, listeners & raise-hand',
-                onTap: () {
-                  Navigator.pop(sheetCtx);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute<void>(
-                      builder: (_) => StageRoomScreen(conversation: conv),
-                    ),
-                  );
-                },
-              ),
-              const SizedBox(height: 10),
-            ],
+                  },
+                ),
+                const SizedBox(height: 10),
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -2304,9 +2354,13 @@ class _ChatScreenState extends State<ChatScreen> {
             isVideo: isVideo,
           )
           .catchError((Object e) {
-        if (!mounted) return;
-        showAppToast(context, 'Could not start SFU call: $e', isError: true);
-      }),
+            if (!mounted) return;
+            showAppToast(
+              context,
+              'Could not start SFU call: $e',
+              isError: true,
+            );
+          }),
     );
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -2323,12 +2377,15 @@ class _ChatScreenState extends State<ChatScreen> {
         appBar: const GlassAppBar(title: Text('Locked')),
         extendBodyBehindAppBar: true,
         body: PinLockGate(
-          title: conv.displayName(context.read<AuthProvider>().currentUser?.id ?? ''),
+          title: conv.displayName(
+            context.read<AuthProvider>().currentUser?.id ?? '',
+          ),
           onVerify: (pin) => context
               .read<SecureStorageService>()
               .verifyConversationPin(conv.id, pin),
-          onBiometric: () =>
-              LocalAuthentication().authenticate(localizedReason: 'Unlock this chat'),
+          onBiometric: () => LocalAuthentication().authenticate(
+            localizedReason: 'Unlock this chat',
+          ),
           onUnlocked: () => setState(() => _unlocked = true),
         ),
       );
@@ -3333,11 +3390,56 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   static const List<String> _fullReactionEmojis = [
-    '👍', '👎', '❤️', '🔥', '🎉', '👀', '😂', '🤣', '😊', '😍',
-    '😮', '😢', '😡', '🙏', '👏', '🙌', '💯', '✅', '❌', '⭐',
-    '🥳', '🤔', '😴', '🤯', '😎', '🥰', '😅', '😭', '🤩', '😇',
-    '🤝', '💪', '🫡', '🤌', '👌', '✌️', '🤞', '🫶', '💔', '💕',
-    '🚀', '⚡', '🌟', '🎯', '🏆', '🎁', '☕', '🍻', '🍕', '🤖',
+    '👍',
+    '👎',
+    '❤️',
+    '🔥',
+    '🎉',
+    '👀',
+    '😂',
+    '🤣',
+    '😊',
+    '😍',
+    '😮',
+    '😢',
+    '😡',
+    '🙏',
+    '👏',
+    '🙌',
+    '💯',
+    '✅',
+    '❌',
+    '⭐',
+    '🥳',
+    '🤔',
+    '😴',
+    '🤯',
+    '😎',
+    '🥰',
+    '😅',
+    '😭',
+    '🤩',
+    '😇',
+    '🤝',
+    '💪',
+    '🫡',
+    '🤌',
+    '👌',
+    '✌️',
+    '🤞',
+    '🫶',
+    '💔',
+    '💕',
+    '🚀',
+    '⚡',
+    '🌟',
+    '🎯',
+    '🏆',
+    '🎁',
+    '☕',
+    '🍻',
+    '🍕',
+    '🤖',
   ];
 
   Future<void> _showFullReactionPicker(Message msg) async {
@@ -3370,7 +3472,10 @@ class _ChatScreenState extends State<ChatScreen> {
                     GestureDetector(
                       onTap: () => Navigator.pop(sheetCtx, emoji),
                       child: Center(
-                        child: Text(emoji, style: const TextStyle(fontSize: 26)),
+                        child: Text(
+                          emoji,
+                          style: const TextStyle(fontSize: 26),
+                        ),
                       ),
                     ),
                 ],
@@ -3784,7 +3889,10 @@ class _ChatScreenState extends State<ChatScreen> {
     final plaintext = (!anonymous && from != null && from.isNotEmpty)
         ? jsonEncode({'text': text, 'forwarded_from': '@$from'})
         : text;
-    final sent = await chat.sendMessage(convID: target.id, plaintext: plaintext);
+    final sent = await chat.sendMessage(
+      convID: target.id,
+      plaintext: plaintext,
+    );
     if (!mounted) return;
     messenger.showSnackBar(
       SnackBar(content: Text(sent ? 'Forwarded' : 'Could not forward message')),
@@ -3856,10 +3964,7 @@ class _ChatScreenState extends State<ChatScreen> {
               Flexible(
                 child: ListView(
                   shrinkWrap: true,
-                  children: [
-                    for (final r in reactors)
-                      _reactorTile(r),
-                  ],
+                  children: [for (final r in reactors) _reactorTile(r)],
                 ),
               ),
             const SizedBox(height: 8),
@@ -3872,7 +3977,9 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _reactorTile(Map<String, dynamic> r) {
     final username = (r['username'] as String?) ?? 'unknown';
     final display = (r['display_name'] as String?);
-    final title = (display != null && display.isNotEmpty) ? display : '@$username';
+    final title = (display != null && display.isNotEmpty)
+        ? display
+        : '@$username';
     return GlassListTile(
       leading: CircleAvatar(
         child: Text(username.isNotEmpty ? username[0].toUpperCase() : '?'),
@@ -4958,8 +5065,9 @@ class _ReactionPopup extends StatelessWidget {
               child: Icon(
                 Icons.add_circle_outline_rounded,
                 size: 26,
-                color: Theme.of(context).colorScheme.onSurface
-                    .withValues(alpha: 0.7),
+                color: Theme.of(
+                  context,
+                ).colorScheme.onSurface.withValues(alpha: 0.7),
               ),
             ),
           ),
@@ -5103,16 +5211,22 @@ class _AttachTile extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
   const _AttachTile({
     required this.icon,
     required this.label,
     required this.onTap,
+    this.onLongPress,
   });
 
   @override
-  Widget build(BuildContext context) =>
-      GlassActionTile(icon: icon, label: label, onTap: onTap);
+  Widget build(BuildContext context) => GlassActionTile(
+    icon: icon,
+    label: label,
+    onTap: onTap,
+    onLongPress: onLongPress,
+  );
 }
 
 class _ReminderChoiceTile extends StatelessWidget {
@@ -5246,8 +5360,9 @@ class _GroupCallBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final info =
-        context.watch<GroupCallPresenceProvider>().infoFor(conversation.id);
+    final info = context.watch<GroupCallPresenceProvider>().infoFor(
+      conversation.id,
+    );
     final sfu = context.watch<SfuCallController>();
     final inThisCall = sfu.isActive && sfu.conversationId == conversation.id;
     if (info == null || !info.active || inThisCall) {
@@ -5309,9 +5424,9 @@ class _GroupCallBanner extends StatelessWidget {
             isVideo: false,
           )
           .catchError((Object e) {
-        if (!context.mounted) return;
-        showAppToast(context, 'Could not join call: $e', isError: true);
-      }),
+            if (!context.mounted) return;
+            showAppToast(context, 'Could not join call: $e', isError: true);
+          }),
     );
     Navigator.of(context).push(
       MaterialPageRoute<void>(

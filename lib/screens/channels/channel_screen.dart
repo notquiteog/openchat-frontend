@@ -216,9 +216,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
       ),
       body: Column(
         children: [
-          SizedBox(
-            height: MediaQuery.paddingOf(context).top + kToolbarHeight,
-          ),
+          SizedBox(height: MediaQuery.paddingOf(context).top + kToolbarHeight),
           Padding(
             padding: const EdgeInsets.all(12),
             child: TextField(
@@ -1174,9 +1172,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       // Fall through to the free subscribe path if the plan lookup fails.
     }
     try {
-      final result = await api.subscribeChannel(
-        channel.id,
-      );
+      final result = await api.subscribeChannel(channel.id);
       if (result['join_request'] == 'pending') {
         if (mounted) showAppToast(context, 'Join request sent');
         return;
@@ -2155,8 +2151,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             const SizedBox(height: 12),
             TextField(
               controller: priceCtrl,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               decoration: const InputDecoration(labelText: 'Price'),
             ),
             TextField(
@@ -3639,11 +3636,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               icon: Icons.share_location_outlined,
               label: 'Share location',
               onTap: () => Navigator.pop(context, 'location_once'),
-            ),
-            _ChanTile(
-              icon: Icons.location_on_outlined,
-              label: 'Share live location',
-              onTap: () => Navigator.pop(context, 'location_live'),
+              // Hold for live location — same gesture as the chat sheet.
+              onLongPress: () => Navigator.pop(context, 'location_live'),
             ),
             const SizedBox(height: 8),
           ],
@@ -3976,8 +3970,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       canViewAnalytics: _isAdmin,
     );
 
+    final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
     return Scaffold(
       extendBodyBehindAppBar: true,
+      // The wallpaper must stay fixed behind the keyboard (like the DM chat
+      // screen); content animates up via the AnimatedPadding below instead.
+      resizeToAvoidBottomInset: false,
       appBar: GlassAppBar(
         titleSpacing: 0,
         title: InkWell(
@@ -4042,175 +4040,186 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             TextButton(onPressed: _subscribe, child: const Text('Subscribe')),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          SizedBox(
-            height: MediaQuery.paddingOf(context).top + kToolbarHeight,
+          Positioned.fill(
+            child: DecoratedBox(decoration: _channelBackground()),
           ),
-          if (_archived || channel.isArchived)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 10,
+          AnimatedPadding(
+            padding: EdgeInsets.only(bottom: keyboardInset),
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            child: Column(
+              children: [
+                SizedBox(
+                  height: MediaQuery.paddingOf(context).top + kToolbarHeight,
                 ),
-                decoration: BoxDecoration(
-                  color: Theme.of(
-                    context,
-                  ).colorScheme.onSurface.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.onSurface.withValues(alpha: 0.16),
-                    width: 0.7,
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.archive_outlined,
-                      size: 15,
-                      color: Theme.of(
-                        context,
-                      ).colorScheme.onSurface.withValues(alpha: 0.55),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'This channel has been archived and is read-only.',
-                        style: TextStyle(
+                if (_archived || channel.isArchived)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.onSurface.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
                           color: Theme.of(
                             context,
-                          ).colorScheme.onSurface.withValues(alpha: 0.60),
-                          fontSize: 13,
+                          ).colorScheme.onSurface.withValues(alpha: 0.16),
+                          width: 0.7,
                         ),
                       ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          if (pinnedMessages.isNotEmpty)
-            _PinnedChannelMessagesBar(
-              latestPinnedMessage: pinnedMessages.first,
-              pinnedCount: pinnedMessages.length,
-              onTap: () => _jumpToPinnedMessage(pinnedMessages.first),
-              onShowAll: () =>
-                  _showPinnedMessagesSheet(pinnedMessages, canManagePins),
-            ),
-          Expanded(
-            child: DecoratedBox(
-              decoration: _channelBackground(),
-              child: _loading
-                  ? const Center(child: GlassProgressIndicator.circular())
-                  : _posts.isEmpty
-                  ? Center(
-                      child: GlassContainer(
-                        shape: LiquidRoundedSuperellipse(borderRadius: 999),
-                        allowElevation: true,
-                        glowIntensity: 0.05,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 20,
-                            vertical: 12,
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.archive_outlined,
+                            size: 15,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurface.withValues(alpha: 0.55),
                           ),
-                          child: Text(
-                            'No posts yet',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.onSurface.withValues(alpha: 0.55),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                      ),
-                    )
-                  : ListView.builder(
-                      controller: _scrollCtrl,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 8,
-                      ),
-                      itemCount: _posts.length,
-                      itemBuilder: (context, i) {
-                        final msg = _posts[i];
-                        final isMe = msg.senderId == currentUserId;
-                        final isPinned = settings.isChannelMessagePinned(
-                          channel.id,
-                          msg.id,
-                        );
-                        final showAvatar =
-                            !isMe &&
-                            (i == _posts.length - 1 ||
-                                _posts[i + 1].senderId != msg.senderId);
-                        final postKey = _postKeys.putIfAbsent(
-                          msg.id,
-                          GlobalKey.new,
-                        );
-                        return KeyedSubtree(
-                          key: postKey,
-                          child: _AnimatedChannelPost(
-                            id: msg.id,
-                            child: _PinnedChannelPostFrame(
-                              isPinned: isPinned,
-                              isHighlighted: _highlightedPostId == msg.id,
-                              isMe: isMe,
-                              child: MessageBubble(
-                                message: msg,
-                                isMe: isMe,
-                                isChannel: true,
-                                showAvatar: showAvatar,
-                                meBubbleColor: meBubbleColor,
-                                onTap: () => _showReactionMenu(msg),
-                                onReactionTap: (emoji) =>
-                                    _toggleReaction(msg, emoji),
-                                onLongPress: () => _showPostMenu(msg, isMe),
-                                onAvatarTap: msg.sender != null
-                                    ? () => _showChannelUserActions(msg)
-                                    : null,
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'This channel has been archived and is read-only.',
+                              style: TextStyle(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurface.withValues(alpha: 0.60),
+                                fontSize: 13,
                               ),
                             ),
                           ),
-                        );
-                      },
+                        ],
+                      ),
                     ),
+                  ),
+                if (pinnedMessages.isNotEmpty)
+                  _PinnedChannelMessagesBar(
+                    latestPinnedMessage: pinnedMessages.first,
+                    pinnedCount: pinnedMessages.length,
+                    onTap: () => _jumpToPinnedMessage(pinnedMessages.first),
+                    onShowAll: () =>
+                        _showPinnedMessagesSheet(pinnedMessages, canManagePins),
+                  ),
+                Expanded(
+                  child: _loading
+                      ? const Center(child: GlassProgressIndicator.circular())
+                      : _posts.isEmpty
+                      ? Center(
+                          child: GlassContainer(
+                            shape: LiquidRoundedSuperellipse(borderRadius: 999),
+                            allowElevation: true,
+                            glowIntensity: 0.05,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 12,
+                              ),
+                              child: Text(
+                                'No posts yet',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Theme.of(context).colorScheme.onSurface
+                                      .withValues(alpha: 0.55),
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ),
+                        )
+                      : ListView.builder(
+                          controller: _scrollCtrl,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 8,
+                          ),
+                          itemCount: _posts.length,
+                          itemBuilder: (context, i) {
+                            final msg = _posts[i];
+                            final isMe = msg.senderId == currentUserId;
+                            final isPinned = settings.isChannelMessagePinned(
+                              channel.id,
+                              msg.id,
+                            );
+                            final showAvatar =
+                                !isMe &&
+                                (i == _posts.length - 1 ||
+                                    _posts[i + 1].senderId != msg.senderId);
+                            final postKey = _postKeys.putIfAbsent(
+                              msg.id,
+                              GlobalKey.new,
+                            );
+                            return KeyedSubtree(
+                              key: postKey,
+                              child: _AnimatedChannelPost(
+                                id: msg.id,
+                                child: _PinnedChannelPostFrame(
+                                  isPinned: isPinned,
+                                  isHighlighted: _highlightedPostId == msg.id,
+                                  isMe: isMe,
+                                  child: MessageBubble(
+                                    message: msg,
+                                    isMe: isMe,
+                                    isChannel: true,
+                                    showAvatar: showAvatar,
+                                    meBubbleColor: meBubbleColor,
+                                    onTap: () => _showReactionMenu(msg),
+                                    onReactionTap: (emoji) =>
+                                        _toggleReaction(msg, emoji),
+                                    onLongPress: () => _showPostMenu(msg, isMe),
+                                    onAvatarTap: msg.sender != null
+                                        ? () => _showChannelUserActions(msg)
+                                        : null,
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+
+                if (_showCustomEmojis)
+                  CustomEmojiPicker(onEmojiSelected: _insertCustomEmoji),
+                if (_showStickers)
+                  StickerPicker(onStickerSelected: _sendSticker),
+                if (_attachmentUploadProgress != null)
+                  AttachmentUploadProgressChip(
+                    progress: _attachmentUploadProgress!,
+                  ),
+                // Admins can always post. When admin-only posting is OFF, any
+                // subscriber can post too. Archived channels are read-only.
+                if ((_canPostInBroadcastMode ||
+                        (!channel.ownerOnlyPost && _isSubscribed)) &&
+                    !_archived &&
+                    !channel.isArchived)
+                  ChannelPostBar(
+                    controller: _inputCtrl,
+                    showStickers: _showStickers,
+                    showCustomEmojis: _showCustomEmojis,
+                    onToggleCustomEmojis: () => setState(() {
+                      _showCustomEmojis = !_showCustomEmojis;
+                      if (_showCustomEmojis) _showStickers = false;
+                    }),
+                    onToggleStickers: () => setState(() {
+                      _showStickers = !_showStickers;
+                      if (_showStickers) _showCustomEmojis = false;
+                    }),
+                    onAttach: _showAttachmentPicker,
+                    onOptions: _showSendOptions,
+                    hasOptions: _sendSilent || _scheduledFor != null,
+                    mentionSuggestions: mentionSuggestions,
+                    onMentionSelected: _insertMention,
+                    onPost: _post,
+                  ),
+              ],
             ),
           ),
-
-          if (_showCustomEmojis)
-            CustomEmojiPicker(onEmojiSelected: _insertCustomEmoji),
-          if (_showStickers) StickerPicker(onStickerSelected: _sendSticker),
-          if (_attachmentUploadProgress != null)
-            AttachmentUploadProgressChip(progress: _attachmentUploadProgress!),
-          // Admins can always post. When admin-only posting is OFF, any
-          // subscriber can post too. Archived channels are read-only.
-          if ((_canPostInBroadcastMode ||
-                  (!channel.ownerOnlyPost && _isSubscribed)) &&
-              !_archived &&
-              !channel.isArchived)
-            ChannelPostBar(
-              controller: _inputCtrl,
-              showStickers: _showStickers,
-              showCustomEmojis: _showCustomEmojis,
-              onToggleCustomEmojis: () => setState(() {
-                _showCustomEmojis = !_showCustomEmojis;
-                if (_showCustomEmojis) _showStickers = false;
-              }),
-              onToggleStickers: () => setState(() {
-                _showStickers = !_showStickers;
-                if (_showStickers) _showCustomEmojis = false;
-              }),
-              onAttach: _showAttachmentPicker,
-              onOptions: _showSendOptions,
-              hasOptions: _sendSilent || _scheduledFor != null,
-              mentionSuggestions: mentionSuggestions,
-              onMentionSelected: _insertMention,
-              onPost: _post,
-            ),
         ],
       ),
     );
@@ -4583,12 +4592,14 @@ class _ChanTile extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
   final Color? color;
 
   const _ChanTile({
     required this.icon,
     required this.label,
     required this.onTap,
+    this.onLongPress,
     this.color,
   });
 
@@ -4615,6 +4626,7 @@ class _ChanTile extends StatelessWidget {
         ),
       ),
       onTap: onTap,
+      onLongPress: onLongPress,
     );
   }
 }

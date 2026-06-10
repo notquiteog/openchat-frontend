@@ -18,11 +18,15 @@ import 'notification_service.dart';
 class DesktopTrayService with WindowListener, TrayListener {
   static const _appName = 'OpenChat';
   static const _appIconAsset = 'assets/images/logo.png';
+  // Same logo with a red dot — tray_manager can only swap whole images, so
+  // the unread state is a pre-rendered icon variant plus a tooltip count.
+  static const _appIconUnreadAsset = 'assets/images/logo_unread.png';
 
   bool _initialized = false;
   bool _trayInitialized = false;
   bool _quitting = false;
   bool _hidingToTray = false;
+  bool _showingUnreadIcon = false;
 
   static bool get supported =>
       !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
@@ -70,6 +74,25 @@ class DesktopTrayService with WindowListener, TrayListener {
         'Close/minimize will fall back to taskbar minimize.',
       );
     }
+  }
+
+  /// Reflects the unread state on the tray: dot-badged icon variant plus a
+  /// "N unread" tooltip (tooltip is unsupported on Linux AppIndicator).
+  Future<void> setUnreadBadge(bool unread, int count) async {
+    if (!_trayInitialized) return;
+    try {
+      if (unread != _showingUnreadIcon) {
+        _showingUnreadIcon = unread;
+        await trayManager.setIcon(unread ? _appIconUnreadAsset : _appIconAsset);
+      }
+      try {
+        await trayManager.setToolTip(
+          unread ? '$_appName — $count unread' : _appName,
+        );
+      } catch (_) {
+        // Cosmetic only; not implemented on Linux.
+      }
+    } catch (_) {}
   }
 
   // ── TrayListener ──────────────────────────────────────────────────────────

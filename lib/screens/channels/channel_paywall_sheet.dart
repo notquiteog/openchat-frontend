@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/api_service.dart';
+import '../../widgets/deposit_progress_view.dart';
 import '../../widgets/glass.dart';
 
 /// Shows the paid-access paywall for a gated channel. Returns true if the caller
@@ -228,9 +229,24 @@ class _ChannelPaywallSheetState extends State<_ChannelPaywallSheet> {
             ],
           ),
         ),
+        const SizedBox(height: 14),
+        // Live confirmation progress (WS-pushed, polls only while offline).
+        if ((dep['id'] ?? '').toString().isNotEmpty)
+          DepositProgressView(
+            depositId: dep['id'].toString(),
+            initialConfirmations:
+                (dep['confirmations'] as num?)?.toInt() ?? 0,
+            requiredConfirmations:
+                (dep['required_confirmations'] as num?)?.toInt() ?? 0,
+            initialStatus: dep['status']?.toString() ?? 'nothing_sent',
+            onConfirmed: () {
+              if (mounted) Navigator.of(context).pop(true);
+            },
+          ),
         const SizedBox(height: 12),
         Text(
-          'Access unlocks automatically once the payment confirms on-chain.',
+          'Access unlocks automatically once the payment confirms on-chain. '
+          'You can close this — progress keeps tracking in the background.',
           style: TextStyle(
             fontSize: 13,
             color: theme.colorScheme.onSurface.withValues(alpha: 0.6),

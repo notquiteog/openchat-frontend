@@ -219,6 +219,10 @@ class PgpService {
   }) async {
     final slots = <Map<String, String>>[];
     final paddedPlaintext = _padStructuredPlaintext(plaintext);
+    // Hidden recipients: every slot's PKESK carries a wildcard (zeroed) key
+    // id, so a slot does not even name which key can open it. Combined with
+    // the slot shuffle below, the server sees only "N opaque ciphertexts".
+    final slotOptions = KeyOptions()..hiddenRecipients = true;
     for (final recipient in recipients) {
       final signer = Entity()
         ..privateKey = signingPrivateKeyArmored
@@ -228,6 +232,7 @@ class PgpService {
           () => OpenPGP.encrypt(
             paddedPlaintext,
             recipient.publicKeyArmored,
+            options: slotOptions,
             signed: signer,
           ),
         ),

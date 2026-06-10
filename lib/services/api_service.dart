@@ -1456,6 +1456,27 @@ class ApiService {
     return Poll.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
+  /// Issues this member's single blind vote token for an anonymous poll. The
+  /// raw token is returned exactly once — keep it to be able to revote.
+  Future<String> requestPollVoteToken(String pollID) async {
+    final resp = await _post('/api/v1/polls/$pollID/vote-token', {});
+    return (resp['data'] as Map<String, dynamic>)['vote_token'] as String;
+  }
+
+  /// Votes on an anonymous poll with a blind token — the server stores the
+  /// choice against the token's hash, never against this account.
+  Future<Poll> votePollAnonymous(
+    String pollID,
+    String token,
+    List<String> optionIDs,
+  ) async {
+    final resp = await _post('/api/v1/polls/$pollID/vote-anonymous', {
+      'token': token,
+      'option_ids': optionIDs,
+    });
+    return Poll.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
   Future<Poll> stopPoll(
     String pollID, {
     String? convID,
@@ -1832,6 +1853,54 @@ class ApiService {
   }
 
   // ---- Attachments ----
+
+  // ── Zero-knowledge encrypted backups ────────────────────────────────────
+  // One opaque, client-side-encrypted blob per user. The server never sees
+  // plaintext or keys — only size, hash, and timing.
+
+  Future<Map<String, dynamic>> requestBackupUpload({
+    required int size,
+    required String sha256,
+  }) async {
+    final resp = await _post('/api/v1/backups/request-upload', {
+      'size': size,
+      'sha256': sha256,
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<void> confirmBackupUpload(String objectKey) async {
+    await _post('/api/v1/backups/confirm', {'object_key': objectKey});
+  }
+
+  /// Metadata + presigned download URL for the stored backup, or null when
+  /// none exists.
+  Future<Map<String, dynamic>?> getLatestBackup() async {
+    try {
+      final resp = await _get('/api/v1/backups/latest');
+      return resp['data'] as Map<String, dynamic>;
+    } on ApiException catch (e) {
+      if (e.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  Future<void> deleteServerBackup() async {
+    await _delete('/api/v1/backups');
+  }
+
+  /// Downloads raw bytes from a presigned object-storage URL.
+  Future<Uint8List> downloadBytes(String url) async {
+    final response = await _httpClient.get(Uri.parse(url));
+    if (response.statusCode >= 400) {
+      throw ApiException(
+        response.statusCode,
+        'DOWNLOAD_FAILED',
+        'object storage download failed',
+      );
+    }
+    return response.bodyBytes;
+  }
 
   /// Request a presigned PUT URL and create an attachment record.
   Future<UploadRequest> requestUpload({
