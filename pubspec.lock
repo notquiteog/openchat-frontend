@@ -1349,11 +1349,11 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: "v3.12.5"
-      resolved-ref: ffcd0d25fa255a8b12ea9440d7d5d3680ef1532c
+      ref: "v3.13.1"
+      resolved-ref: c38187422659e76997407cbb44a468b767cabe13
       url: "https://github.com/notquiteog/flutter-openpgp.git"
     source: git
-    version: "3.12.5"
+    version: "3.13.1"
   package_config:
     dependency: transitive
     description:

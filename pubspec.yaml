@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.5.41+117
+version: 0.5.42+118
 publish_to: 'none'
 
 environment:
@@ -20,9 +20,9 @@ dependencies:
   openpgp:
     git:
       url: https://github.com/notquiteog/flutter-openpgp.git
-      # v3.13.0 adds KeyOptions.hiddenRecipients (anonymous wildcard PKESKs).
-      # Push the fork's main + v3.13.0 tag BEFORE running pub get.
-      ref: v3.13.0
+      # v3.13.1 = hiddenRecipients (anonymous wildcard PKESKs) with the
+      # CI-rebuilt binary set for every platform.
+      ref: v3.13.1
   pointycastle: ^4.0.0
   cryptography: ^2.9.0
   crypto: ^3.0.7
