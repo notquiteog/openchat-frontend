@@ -98,11 +98,12 @@ class _AdminAuditLogScreenState extends State<AdminAuditLogScreen> {
                     padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
                     itemBuilder: (context, index) {
                       final filter = _AuditFilter.values[index];
-                      return FilterChip(
-                        avatar: Icon(filter.icon, size: 18),
-                        label: Text(filter.label),
+                      return GlassChip(
+                        icon: Icon(filter.icon),
+                        iconSize: 18,
+                        label: filter.label,
                         selected: filter == _filter,
-                        onSelected: (_) => setState(() => _filter = filter),
+                        onTap: () => setState(() => _filter = filter),
                       );
                     },
                     separatorBuilder: (_, _) => const SizedBox(width: 8),

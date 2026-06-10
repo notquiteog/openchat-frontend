@@ -1576,11 +1576,10 @@ class _FolderRuleChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FilterChip(
+    return GlassChip(
       selected: selected,
-      showCheckmark: false,
-      label: Text(label),
-      onSelected: onSelected,
+      label: label,
+      onTap: () => onSelected(!selected),
     );
   }
 }
@@ -2481,10 +2480,10 @@ class _MessageSearchFilters extends StatelessWidget {
       child: Row(
         children: [
           for (final (label, category) in _options) ...[
-            ChoiceChip(
-              label: Text(label),
+            GlassChip(
+              label: label,
               selected: selected == category,
-              onSelected: (_) => onSelected(category),
+              onTap: () => onSelected(category),
             ),
             const SizedBox(width: 8),
           ],

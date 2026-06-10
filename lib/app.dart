@@ -1,8 +1,6 @@
 import 'dart:async';
 
 import 'package:app_links/app_links.dart';
-import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:provider/provider.dart';
@@ -25,7 +23,6 @@ import 'screens/settings/pgp_keys_screen.dart';
 import 'services/api_service.dart';
 import 'services/app_access_gate.dart';
 import 'services/background_ws_service.dart';
-import 'services/foreground_ws_notification_router.dart';
 import 'services/mls_service.dart';
 import 'services/notification_service.dart';
 import 'services/push_notification_service.dart';
@@ -470,7 +467,6 @@ class _AppRootState extends State<_AppRoot> {
   bool _appLockEnabled = false;
   bool _promptingAppUnlock = false;
   AppLifecycleListener? _lifecycleListener;
-  StreamSubscription<WsEvent>? _wsForegroundSub;
   StreamSubscription<Uri>? _inviteLinkSub;
   Timer? _reminderTimer;
   SettingsProvider? _settings;
@@ -519,9 +515,11 @@ class _AppRootState extends State<_AppRoot> {
       PushNotificationService.setNotificationOpenedHandler(
         _queuePushConversation,
       );
-      _wsForegroundSub = context.read<WebSocketService>().events.listen(
-        _onForegroundWsEvent,
-      );
+      // NOTE: no separate desktop WS→notification subscription here.
+      // ChatProvider (rich decrypted message previews) and CallProvider
+      // (incoming-call alerts) already post notifications for these events —
+      // a second subscriber double-fired and raced the generic "New message"
+      // banner against the decrypted one.
 
       // Cache the app-lock preference.
       final storage = context.read<SecureStorageService>();
@@ -626,49 +624,53 @@ class _AppRootState extends State<_AppRoot> {
     if (targets.isEmpty) return Future<Conversation?>.value(null);
     return showModalBottomSheet<Conversation>(
       context: sheetContext,
-      showDragHandle: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
       builder: (ctx) {
         final scheme = Theme.of(ctx).colorScheme;
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.fromLTRB(20, 4, 20, 8),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    'Share to',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+        return GlassBottomSheetFrame(
+          child: SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const GlassSheetGrabber(),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 4, 20, 8),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Share to',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                    ),
                   ),
                 ),
-              ),
-              Flexible(
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: targets.length,
-                  itemBuilder: (_, i) {
-                    final c = targets[i];
-                    final label = c.displayName(selfId);
-                    return ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: scheme.primaryContainer,
-                        child: Text(
-                          label.isNotEmpty ? label[0].toUpperCase() : '#',
-                          style: TextStyle(color: scheme.onPrimaryContainer),
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: targets.length,
+                    itemBuilder: (_, i) {
+                      final c = targets[i];
+                      final label = c.displayName(selfId);
+                      return ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: scheme.primaryContainer,
+                          child: Text(
+                            label.isNotEmpty ? label[0].toUpperCase() : '#',
+                            style: TextStyle(color: scheme.onPrimaryContainer),
+                          ),
                         ),
-                      ),
-                      title: Text(
-                        label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      onTap: () => Navigator.pop(ctx, c),
-                    );
-                  },
+                        title: Text(
+                          label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        onTap: () => Navigator.pop(ctx, c),
+                      );
+                    },
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },
@@ -825,6 +827,7 @@ class _AppRootState extends State<_AppRoot> {
 
   void _onBackground() {
     NotificationService.setAppFocused(false);
+    unawaited(BackgroundWsService.updateForegroundState(false));
     context.read<CallProvider>().refreshActiveCallNotification();
     unawaited(context.read<ChatProvider>().refreshLiveLocationNotifications());
     final storage = context.read<SecureStorageService>();
@@ -844,6 +847,7 @@ class _AppRootState extends State<_AppRoot> {
 
   void _onForeground() {
     NotificationService.setAppFocused(true);
+    unawaited(BackgroundWsService.updateForegroundState(true));
     context.read<CallProvider>().refreshActiveCallNotification();
     _surfaceDueReminders();
     if (context.read<AuthProvider>().state == AuthState.authenticated) {
@@ -895,7 +899,6 @@ class _AppRootState extends State<_AppRoot> {
   @override
   void dispose() {
     _lifecycleListener?.dispose();
-    _wsForegroundSub?.cancel();
     _inviteLinkSub?.cancel();
     _shareSub?.cancel();
     _reminderTimer?.cancel();
@@ -906,39 +909,6 @@ class _AppRootState extends State<_AppRoot> {
     context.read<AuthProvider>().removeListener(_onAuthChanged);
     context.read<CallProvider>().removeListener(_onCallChanged);
     super.dispose();
-  }
-
-  void _onForegroundWsEvent(WsEvent event) {
-    final isDesktop =
-        !kIsWeb &&
-        (defaultTargetPlatform == TargetPlatform.windows ||
-            defaultTargetPlatform == TargetPlatform.linux ||
-            defaultTargetPlatform == TargetPlatform.macOS);
-
-    final settings = context.read<SettingsProvider>();
-    final intent = ForegroundWsNotificationRouter.intentForEvent(
-      event,
-      showSensitive: settings.notificationSensitiveContent,
-      isDesktop: isDesktop,
-      mutedConversationIds: settings.mutedConversationIds,
-      conversationNotificationPreferences:
-          settings.conversationNotificationPreferences,
-    );
-    if (intent == null) return;
-
-    switch (intent.kind) {
-      case NotificationIntentKind.message:
-        NotificationService.showMessage(
-          conversationId: (event.data['conversation_id'] as String?) ?? 'ws',
-          title: intent.title,
-          body: intent.body,
-          showSensitive: true,
-        );
-        break;
-      case NotificationIntentKind.incomingCall:
-        NotificationService.showIncomingCall(body: intent.body);
-        break;
-    }
   }
 
   void _onCallChanged() {
@@ -1015,6 +985,16 @@ class _AppRootState extends State<_AppRoot> {
       unawaited(
         BackgroundWsService.updateSensitiveContent(
           settings.notificationSensitiveContent,
+        ),
+      );
+    }
+    // Server-side mute sync: FCM message pushes carry an OS-displayed
+    // Notification block, so muted chats must be skipped at the sender.
+    if (settings.pushNotificationsEnabled) {
+      unawaited(
+        PushNotificationService.syncMutedRoutes(
+          context.read<ApiService>(),
+          settings.mutedConversationIds,
         ),
       );
     }

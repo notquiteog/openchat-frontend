@@ -29,6 +29,8 @@ enum WsEventType {
   callHangup,
   callReject,
   callRinging,
+  // Server-generated: this user answered/declined on another device.
+  callCancel,
   groupCallJoin,
   groupCallLeave,
   groupCallState,
@@ -316,6 +318,7 @@ class WebSocketService extends ChangeNotifier {
     required String targetUserId,
     required String conversationId,
     required String callId,
+    String? reason,
   }) {
     if (conversationId.trim().isEmpty) return;
     _send({
@@ -324,6 +327,8 @@ class WebSocketService extends ChangeNotifier {
         'target_user_id': targetUserId,
         'conversation_id': conversationId,
         'call_id': callId,
+        // 'busy' vs absent (= declined) lets the caller tell the two apart.
+        'reason': ?reason,
       },
     });
   }
@@ -403,6 +408,7 @@ class WebSocketService extends ChangeNotifier {
     'call_hangup' => WsEventType.callHangup,
     'call_reject' => WsEventType.callReject,
     'call_ringing' => WsEventType.callRinging,
+    'call_cancel' => WsEventType.callCancel,
     'group_call_join' => WsEventType.groupCallJoin,
     'group_call_leave' => WsEventType.groupCallLeave,
     'group_call_state' => WsEventType.groupCallState,

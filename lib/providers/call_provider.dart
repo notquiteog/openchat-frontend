@@ -145,6 +145,7 @@ class CallProvider extends ChangeNotifier {
   StreamSubscription? _sessionSub;
   StreamSubscription? _incomingSub;
   StreamSubscription? _missedSub;
+  StreamSubscription? _cancelledSub;
   StreamSubscription? _endedSub;
   StreamSubscription<CallForegroundAction>? _foregroundActionSub;
 
@@ -215,6 +216,7 @@ class CallProvider extends ChangeNotifier {
     });
     _incomingSub = _callService.incomingCalls.listen(_onIncomingCall);
     _missedSub = _callService.missedCalls.listen(_onMissedCall);
+    _cancelledSub = _callService.cancelledCalls.listen(_onCancelledCall);
     _endedSub = _callService.callEnded.listen(_onCallEnded);
     NotificationService.setActiveCallHandlers(
       onEnd: hangup,
@@ -309,8 +311,22 @@ class CallProvider extends ChangeNotifier {
         ? ' from @${incoming.remoteUsername}'
         : '';
     unawaited(
-      NotificationService.showIncomingCall(body: 'Incoming $kind call$from'),
+      NotificationService.showIncomingCall(
+        body: 'Incoming $kind call$from',
+        conversationId: incoming.conversationId,
+      ),
     );
+    _syncAudio();
+    notifyListeners();
+  }
+
+  void _onCancelledCall(CallSession cancelled) {
+    // Answered/declined on another device — dismiss the ringing UI and its
+    // notification without recording a missed call.
+    if (_incomingCall?.callId == cancelled.callId) {
+      _incomingCall = null;
+    }
+    unawaited(NotificationService.cancelIncomingCall());
     _syncAudio();
     notifyListeners();
   }
@@ -548,6 +564,7 @@ class CallProvider extends ChangeNotifier {
     _sessionSub?.cancel();
     _incomingSub?.cancel();
     _missedSub?.cancel();
+    _cancelledSub?.cancel();
     _endedSub?.cancel();
     _foregroundActionSub?.cancel();
     _durationTicker?.cancel();

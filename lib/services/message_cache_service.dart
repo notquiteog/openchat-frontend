@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as p;
@@ -50,14 +51,17 @@ class MessageCacheService {
     if (kIsWeb) return null;
     try {
       final db = await _open();
-      final prefix = _payloadPrefix(encryptedPayload);
       final rows = db.select(
         'SELECT payload_prefix, data FROM message_cache WHERE message_id = ?',
         [messageId],
       );
       if (rows.isEmpty) return null;
       final row = rows.first;
-      if (row['payload_prefix'] as String != prefix) return null;
+      final stored = row['payload_prefix'] as String;
+      if (stored != _payloadFingerprint(encryptedPayload) &&
+          stored != _legacyPayloadPrefix(encryptedPayload)) {
+        return null;
+      }
       final data = await _decrypt(row['data'] as String);
       if (data == null) return null;
       final senderIdStr = data['sender_id'] as String? ?? '';
@@ -80,7 +84,7 @@ class MessageCacheService {
     if (kIsWeb) return;
     try {
       final db = await _open();
-      final prefix = _payloadPrefix(encryptedPayload);
+      final prefix = _payloadFingerprint(encryptedPayload);
       final encrypted = await _encrypt({
         'plaintext': plaintext,
         'sender_id': senderId ?? '',
@@ -179,7 +183,18 @@ class MessageCacheService {
       ''');
   }
 
-  static String _payloadPrefix(String encryptedPayload) =>
+  /// Full-payload fingerprint used to detect edits. A 48-char prefix was used
+  /// before, but the first ~36 decoded bytes of an MLS ciphertext are
+  /// structural (version/wire-format/group_id/epoch — constant within an
+  /// epoch), so an edited MLS message could match the stale entry and keep
+  /// rendering the pre-edit plaintext.
+  static String _payloadFingerprint(String encryptedPayload) =>
+      crypto.sha256.convert(utf8.encode(encryptedPayload)).toString();
+
+  /// Legacy prefix kept for matching rows written before the fingerprint
+  /// scheme; MLS plaintexts cannot be re-derived (one-time keys), so old
+  /// entries must keep matching rather than be invalidated wholesale.
+  static String _legacyPayloadPrefix(String encryptedPayload) =>
       encryptedPayload.length > 48
           ? encryptedPayload.substring(0, 48)
           : encryptedPayload;

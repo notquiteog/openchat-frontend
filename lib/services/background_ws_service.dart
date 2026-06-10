@@ -145,6 +145,17 @@ class BackgroundWsService {
     _service.invoke('setSensitive', {'sensitive': showSensitive});
   }
 
+  /// Tell the isolate whether the app is foregrounded. While foreground, the
+  /// main isolate handles notifications (with focus/active-chat suppression);
+  /// the background isolate posting too produced system notifications for the
+  /// chat the user was actively reading.
+  static Future<void> updateForegroundState(bool foreground) async {
+    if (!_mobileOnly) return;
+    try {
+      _service.invoke('setForeground', {'foreground': foreground});
+    } catch (_) {}
+  }
+
   static Future<void> updateConversationNotificationPreferences(
     Map<String, ConversationNotificationPreference> preferences,
   ) async {
@@ -197,6 +208,9 @@ class BackgroundWsService {
     WebSocketChannel? channel;
     Timer? reconnectTimer;
     bool stopped = false;
+    // While the app is foregrounded the MAIN isolate posts notifications (with
+    // focus + active-conversation suppression); this isolate stays silent.
+    bool appForeground = false;
 
     // Declare as late so the two closures can reference each other.
     late void Function() connect;
@@ -215,13 +229,16 @@ class BackgroundWsService {
           protocols: ['openchat.v1', 'openchat.jwt.$token'],
         );
         channel!.stream.listen(
-          (raw) => _handleRaw(
-            raw,
-            notif,
-            showSensitive,
-            mutedConversationIds,
-            conversationNotificationPreferences,
-          ),
+          (raw) {
+            if (appForeground) return;
+            _handleRaw(
+              raw,
+              notif,
+              showSensitive,
+              mutedConversationIds,
+              conversationNotificationPreferences,
+            );
+          },
           onError: (_) {
             channel = null;
             reconnect();
@@ -253,6 +270,10 @@ class BackgroundWsService {
 
     service.on('setSensitive').listen((data) {
       showSensitive = data?['sensitive'] as bool? ?? showSensitive;
+    });
+
+    service.on('setForeground').listen((data) {
+      appForeground = data?['foreground'] as bool? ?? false;
     });
 
     service.on('setConversationNotificationPreferences').listen((data) {

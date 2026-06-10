@@ -266,24 +266,36 @@ class _ConversationNotificationControlsSheetState
                     const Icon(Icons.music_note_outlined, size: 20),
                     const SizedBox(width: 12),
                     const Expanded(child: Text('Notification sound')),
-                    DropdownButton<String>(
-                      value: preference.customSoundId ?? 'default',
-                      underline: const SizedBox.shrink(),
-                      items: [
-                        for (final entry in messageNotificationSounds.entries)
-                          DropdownMenuItem(
-                            value: entry.key,
-                            child: Text(entry.value),
-                          ),
-                      ],
-                      onChanged: (id) {
-                        if (id == null) return;
-                        _setPreference(
-                          id == 'default'
-                              ? preference.copyWith(clearCustomSound: true)
-                              : preference.copyWith(customSoundId: id),
-                        );
-                      },
+                    GlassPicker(
+                      value: messageNotificationSoundLabel(
+                        preference.customSoundId,
+                      ),
+                      width: 116,
+                      height: 38,
+                      textStyle: TextStyle(
+                        fontSize: 15,
+                        color: scheme.onSurface,
+                      ),
+                      onTap: () => showGlassActionSheet<void>(
+                        context: context,
+                        title: 'Notification sound',
+                        actions: [
+                          for (final entry
+                              in messageNotificationSounds.entries)
+                            GlassActionSheetAction(
+                              label: entry.value,
+                              onPressed: () => _setPreference(
+                                entry.key == 'default'
+                                    ? preference.copyWith(
+                                        clearCustomSound: true,
+                                      )
+                                    : preference.copyWith(
+                                        customSoundId: entry.key,
+                                      ),
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -359,7 +371,7 @@ class _QuietHoursControls extends StatelessWidget {
             child: Row(
               children: [
                 Expanded(
-                  child: _MinuteDropdown(
+                  child: _MinutePicker(
                     label: 'From',
                     value: start,
                     onChanged: (value) => onChanged(value, end),
@@ -367,7 +379,7 @@ class _QuietHoursControls extends StatelessWidget {
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: _MinuteDropdown(
+                  child: _MinutePicker(
                     label: 'To',
                     value: end,
                     onChanged: (value) => onChanged(start, value),
@@ -381,42 +393,50 @@ class _QuietHoursControls extends StatelessWidget {
   }
 }
 
-class _MinuteDropdown extends StatelessWidget {
+class _MinutePicker extends StatelessWidget {
   final String label;
   final int value;
   final ValueChanged<int> onChanged;
 
-  const _MinuteDropdown({
+  const _MinutePicker({
     required this.label,
     required this.value,
     required this.onChanged,
   });
 
+  String _hourLabel(int minute) =>
+      '${(minute ~/ 60).toString().padLeft(2, '0')}:00';
+
   @override
   Widget build(BuildContext context) {
-    return InputDecorator(
-      decoration: InputDecoration(
-        labelText: label,
-        isDense: true,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<int>(
-          value: value,
-          isDense: true,
-          isExpanded: true,
-          items: [
-            for (var hour = 0; hour < 24; hour++)
-              DropdownMenuItem(
-                value: hour * 60,
-                child: Text('${hour.toString().padLeft(2, '0')}:00'),
-              ),
-          ],
-          onChanged: (value) {
-            if (value != null) onChanged(value);
-          },
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 4),
+          child: Text(label, style: Theme.of(context).textTheme.labelMedium),
         ),
-      ),
+        GlassPicker(
+          value: _hourLabel(value),
+          height: 40,
+          textStyle: TextStyle(
+            fontSize: 15,
+            color: Theme.of(context).colorScheme.onSurface,
+          ),
+          onTap: () => showGlassActionSheet<void>(
+            context: context,
+            title: '$label hour',
+            actions: [
+              for (var hour = 0; hour < 24; hour++)
+                GlassActionSheetAction(
+                  label: '${hour.toString().padLeft(2, '0')}:00',
+                  onPressed: () => onChanged(hour * 60),
+                ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

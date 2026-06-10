@@ -65,13 +65,12 @@ class _ConversationInfoPanelState extends State<ConversationInfoPanel>
 
   Future<void> _manageChatLock() async {
     final storage = context.read<SecureStorageService>();
-    final messenger = ScaffoldMessenger.of(context);
     final locked = await storage.hasConversationPin(widget.conversation.id);
     if (!mounted) return;
     if (locked) {
       final remove = await showDialog<bool>(
         context: context,
-        builder: (ctx) => AlertDialog(
+        builder: (ctx) => GlassAlertDialog(
           title: const Text('Remove chat lock?'),
           content: const Text('This chat will no longer require a PIN.'),
           actions: [
@@ -88,16 +87,14 @@ class _ConversationInfoPanelState extends State<ConversationInfoPanel>
       );
       if (remove == true) {
         await storage.removeConversationPin(widget.conversation.id);
-        messenger.showSnackBar(
-          const SnackBar(content: Text('Chat lock removed')),
-        );
+        if (mounted) showAppToast(context, 'Chat lock removed');
       }
       return;
     }
     final pinCtrl = TextEditingController();
     final set = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: const Text('Set a chat PIN'),
         content: TextField(
           controller: pinCtrl,
@@ -123,21 +120,20 @@ class _ConversationInfoPanelState extends State<ConversationInfoPanel>
     pinCtrl.dispose();
     if (set == true && pin.length >= 4) {
       await storage.setConversationPin(widget.conversation.id, pin);
-      messenger.showSnackBar(const SnackBar(content: Text('Chat locked')));
+      if (mounted) showAppToast(context, 'Chat locked');
     } else if (set == true) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('PIN must be at least 4 digits')),
-      );
+      if (mounted) {
+        showAppToast(context, 'PIN must be at least 4 digits', isError: true);
+      }
     }
   }
 
   Future<void> _toggleWebOfTrust() async {
     final api = context.read<ApiService>();
-    final messenger = ScaffoldMessenger.of(context);
     final next = widget.conversation.isWebOfTrust ? 'open' : 'web_of_trust';
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         title: Text(
           next == 'web_of_trust'
               ? 'Require a voucher to join?'
@@ -164,31 +160,29 @@ class _ConversationInfoPanelState extends State<ConversationInfoPanel>
     if (confirmed != true) return;
     try {
       await api.setMembershipPolicy(widget.conversation.id, next);
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            next == 'web_of_trust'
-                ? 'Joining now requires a voucher'
-                : 'Joining is now open',
-          ),
-        ),
-      );
+      if (mounted) {
+        showAppToast(
+          context,
+          next == 'web_of_trust'
+              ? 'Joining now requires a voucher'
+              : 'Joining is now open',
+        );
+      }
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+      if (mounted) showAppToast(context, 'Failed: $e', isError: true);
     }
   }
 
   Future<void> _vouchForMember() async {
     final api = context.read<ApiService>();
     final keys = context.read<KeyProvider>();
-    final messenger = ScaffoldMessenger.of(context);
     final others = widget.conversation.members
         .where((m) => m.userId != widget.currentUserId)
         .toList();
     if (others.isEmpty) return;
     final picked = await showDialog<String>(
       context: context,
-      builder: (ctx) => SimpleDialog(
+      builder: (ctx) => GlassSimpleDialog(
         title: const Text('Vouch for whose key?'),
         children: [
           for (final m in others)
@@ -205,11 +199,13 @@ class _ConversationInfoPanelState extends State<ConversationInfoPanel>
       convID: widget.conversation.id,
       candidateUserId: picked,
     );
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(ok ? 'Vouch submitted' : 'Could not vouch (key locked?)'),
-      ),
-    );
+    if (mounted) {
+      showAppToast(
+        context,
+        ok ? 'Vouch submitted' : 'Could not vouch (key locked?)',
+        isError: !ok,
+      );
+    }
   }
 
   @override

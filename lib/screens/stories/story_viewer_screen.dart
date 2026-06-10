@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -5,10 +6,12 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:video_player/video_player.dart';
 import '../../config/api_config.dart';
+import '../../crypto/pgp_service.dart';
 import '../../models/story.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/attachment_service.dart';
+import '../../services/secure_storage_service.dart';
 import '../../widgets/glass.dart';
 
 enum _StoryLoadState { idle, loading, done, error }
@@ -68,6 +71,28 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
     });
     try {
       final api = context.read<ApiService>();
+
+      // E2E stories carry their media key/caption inside a PGP envelope
+      // addressed to the audience — decrypt it before touching the media.
+      if (_story.needsMetaDecryption) {
+        final privateKey =
+            await context.read<SecureStorageService>().getPrivateKeyIfUnlocked() ??
+                '';
+        if (privateKey.isEmpty) {
+          throw StateError('PGP key locked');
+        }
+        final raw = await PgpService.decrypt(
+          encryptedArmor: _story.encryptedPayload!,
+          privateKeyArmored: privateKey,
+        );
+        final meta = jsonDecode(raw);
+        if (meta is! Map<String, dynamic> ||
+            meta['openchat_story_meta'] != 1) {
+          throw StateError('bad story meta');
+        }
+        _stories[_index] = _story.withDecryptedMeta(meta);
+      }
+
       final attachmentId = _story.attachmentId;
       if (attachmentId == null) throw StateError('missing attachment');
 

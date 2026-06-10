@@ -38,7 +38,19 @@ import 'utils/local_conversation_preferences.dart';
 /// calls so older servers still surface a local call notification.
 @pragma('vm:entry-point')
 Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
-  if (message.notification == null && message.data['type'] == 'incoming_call') {
+  final type = message.data['type'];
+  if (type == 'call_cancel') {
+    // The call was answered/declined elsewhere or the caller hung up —
+    // clear the displayed incoming-call notification.
+    await NotificationService.init();
+    await NotificationService.cancelIncomingCall();
+    return;
+  }
+  if (message.notification == null && type == 'incoming_call') {
+    // Per-chat mute / quiet hours apply to calls too (mentions-only doesn't —
+    // it's a message-volume control, not a call block).
+    final conversationId = await _resolveConversationId(message.data);
+    if (!await _shouldRingForCall(conversationId)) return;
     await NotificationService.init();
     final isVideo = message.data['is_video'];
     final body = isVideo == null
@@ -49,7 +61,7 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
       payload: jsonEncode(message.data),
     );
   } else if (message.notification == null &&
-      message.data['type'] == 'new_message') {
+      (type == 'new_message' || type == 'group_call')) {
     final conversationId = await _resolveConversationId(message.data);
     if (!await _shouldShowMessageNotification(conversationId)) {
       return;
@@ -58,8 +70,23 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
     await NotificationService.showMessage(
       conversationId: conversationId,
       title: 'OpenChat',
-      body: 'New message',
+      body: type == 'group_call' ? 'Call started' : 'New message',
     );
+  }
+}
+
+Future<bool> _shouldRingForCall(String conversationId) async {
+  try {
+    final privateState = await LocalPrivateStateService().readState();
+    final preferences = decodePrivateConversationNotificationPreferences(
+      privateState[privateStateConversationNotificationPreferencesKey],
+    );
+    final pref = preferences[conversationId];
+    if (pref == null) return true;
+    final now = DateTime.now();
+    return !pref.isMutedAt(now) && !pref.isQuietAt(now);
+  } catch (_) {
+    return true;
   }
 }
 

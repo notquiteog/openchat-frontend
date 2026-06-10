@@ -101,6 +101,48 @@ class _ModerationScreenState extends State<ModerationScreen> {
     }
   }
 
+  static const _cooldownOptions = <(int, String)>[
+    (0, 'Off'),
+    (60, '1 min'),
+    (300, '5 min'),
+    (3600, '1 hour'),
+    (86400, '1 day'),
+  ];
+
+  static const _mentionLimitOptions = <(int, String)>[
+    (0, 'Off'),
+    (1, '1'),
+    (3, '3'),
+    (5, '5'),
+    (10, '10'),
+    (25, '25'),
+  ];
+
+  String _optionLabel(List<(int, String)> options, int value) {
+    for (final opt in options) {
+      if (opt.$1 == value) return opt.$2;
+    }
+    return '$value';
+  }
+
+  Future<void> _pickAntiSpamOption({
+    required String title,
+    required List<(int, String)> options,
+    required ValueChanged<int> onSelected,
+  }) {
+    return showGlassActionSheet<void>(
+      context: context,
+      title: title,
+      actions: [
+        for (final opt in options)
+          GlassActionSheetAction(
+            label: opt.$2,
+            onPressed: () => onSelected(opt.$1),
+          ),
+      ],
+    );
+  }
+
   Future<void> _saveAntiSpamControls({
     int? newMemberCooldownSeconds,
     bool? blockLinks,
@@ -374,20 +416,25 @@ class _ModerationScreenState extends State<ModerationScreen> {
                   GlassListTile(
                     leading: const Icon(Icons.hourglass_bottom_rounded),
                     title: const Text('New-user cooldown'),
-                    trailing: DropdownButton<int>(
-                      value: _newMemberCooldownSeconds,
-                      underline: const SizedBox.shrink(),
-                      items: const [
-                        DropdownMenuItem(value: 0, child: Text('Off')),
-                        DropdownMenuItem(value: 60, child: Text('1 min')),
-                        DropdownMenuItem(value: 300, child: Text('5 min')),
-                        DropdownMenuItem(value: 3600, child: Text('1 hour')),
-                        DropdownMenuItem(value: 86400, child: Text('1 day')),
-                      ],
-                      onChanged: _savingAntiSpam
+                    trailing: GlassPicker(
+                      value: _optionLabel(
+                        _cooldownOptions,
+                        _newMemberCooldownSeconds,
+                      ),
+                      width: 112,
+                      height: 38,
+                      textStyle: TextStyle(
+                        fontSize: 15,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                      onTap: _savingAntiSpam
                           ? null
-                          : (value) => _saveAntiSpamControls(
-                              newMemberCooldownSeconds: value,
+                          : () => _pickAntiSpamOption(
+                              title: 'New-user cooldown',
+                              options: _cooldownOptions,
+                              onSelected: (value) => _saveAntiSpamControls(
+                                newMemberCooldownSeconds: value,
+                              ),
                             ),
                     ),
                   ),
@@ -426,21 +473,22 @@ class _ModerationScreenState extends State<ModerationScreen> {
                   GlassListTile(
                     leading: const Icon(Icons.alternate_email_rounded),
                     title: const Text('Mention limit'),
-                    trailing: DropdownButton<int>(
-                      value: _mentionLimit,
-                      underline: const SizedBox.shrink(),
-                      items: const [
-                        DropdownMenuItem(value: 0, child: Text('Off')),
-                        DropdownMenuItem(value: 1, child: Text('1')),
-                        DropdownMenuItem(value: 3, child: Text('3')),
-                        DropdownMenuItem(value: 5, child: Text('5')),
-                        DropdownMenuItem(value: 10, child: Text('10')),
-                        DropdownMenuItem(value: 25, child: Text('25')),
-                      ],
-                      onChanged: _savingAntiSpam
+                    trailing: GlassPicker(
+                      value: _optionLabel(_mentionLimitOptions, _mentionLimit),
+                      width: 92,
+                      height: 38,
+                      textStyle: TextStyle(
+                        fontSize: 15,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                      onTap: _savingAntiSpam
                           ? null
-                          : (value) =>
-                                _saveAntiSpamControls(mentionLimit: value),
+                          : () => _pickAntiSpamOption(
+                              title: 'Mention limit',
+                              options: _mentionLimitOptions,
+                              onSelected: (value) =>
+                                  _saveAntiSpamControls(mentionLimit: value),
+                            ),
                     ),
                   ),
                   const Divider(),

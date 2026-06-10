@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:openmls/openmls.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -222,6 +222,14 @@ class MlsService {
     return false;
   }
 
+  // Commits that failed to process, with attempt counts. A transient engine
+  // failure must NOT permanently mark the commit processed — that wedged the
+  // group ("unable to decrypt" while localEpoch < serverEpoch) until restart.
+  // After [_maxCommitAttempts] failures the commit is treated as poisoned and
+  // skipped so one bad payload can't block the queue forever.
+  final Map<String, int> _commitFailureCounts = {};
+  static const _maxCommitAttempts = 3;
+
   Future<void> _processCommits(
     MlsEngine engine,
     List<int> groupId,
@@ -240,8 +248,19 @@ class MlsService {
         }
         await engine.processMessage(groupIdBytes: groupId, messageBytes: bytes);
         _processedCommitIds.add(key);
-      } catch (_) {
-        _processedCommitIds.add(key);
+        _commitFailureCounts.remove(key);
+      } catch (e) {
+        final failures = (_commitFailureCounts[key] ?? 0) + 1;
+        _commitFailureCounts[key] = failures;
+        if (failures >= _maxCommitAttempts) {
+          // Poisoned (or already-merged) commit — skip it from now on.
+          _processedCommitIds.add(key);
+          _commitFailureCounts.remove(key);
+        }
+        debugPrint(
+          'MlsService: commit processing failed (attempt $failures/'
+          '$_maxCommitAttempts) conv=$conversationId: $e',
+        );
       }
     }
   }

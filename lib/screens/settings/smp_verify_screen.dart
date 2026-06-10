@@ -52,9 +52,15 @@ class _SmpVerifyScreenState extends State<SmpVerifyScreen> {
     ];
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: const GlassAppBar(title: Text('Verify a contact')),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.fromLTRB(
+          16,
+          MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
+          16,
+          16,
+        ),
         children: [
           GlassCard(
             child: Column(

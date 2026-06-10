@@ -412,18 +412,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             .toLowerCase()
                             .replaceFirst(RegExp(r'^@+'), '');
                         if (username.isEmpty) {
-                          messenger.showSnackBar(
-                            const SnackBar(content: Text('Username required')),
+                          showAppToast(
+                            ctx,
+                            'Username required',
+                            isError: true,
                           );
                           return;
                         }
                         if (!RegExp(r'^[a-z0-9_]{3,32}$').hasMatch(username)) {
-                          messenger.showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Username must be 3-32 lowercase letters, numbers, or underscores',
-                              ),
-                            ),
+                          showAppToast(
+                            ctx,
+                            'Username must be 3-32 lowercase letters, '
+                            'numbers, or underscores',
+                            isError: true,
                           );
                           return;
                         }
@@ -1386,15 +1387,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ? null
                     : () async {
                         if (confirmCtrl.text.trim() != 'DELETE') {
-                          messenger.showSnackBar(
-                            const SnackBar(content: Text('Type DELETE')),
-                          );
+                          showAppToast(ctx, 'Type DELETE', isError: true);
                           return;
                         }
                         if (passwordCtrl.text.isEmpty) {
-                          messenger.showSnackBar(
-                            const SnackBar(content: Text('Enter password')),
-                          );
+                          showAppToast(ctx, 'Enter password', isError: true);
                           return;
                         }
                         setDlg(() => submitting = true);
@@ -1817,12 +1814,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   value: settings.linkPreviewsEnabled,
                   onChanged: (value) {
                     if (settings.strictPrivacyMode && value) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Turn off Strict Privacy before enabling link previews',
-                          ),
-                        ),
+                      showAppToast(
+                        context,
+                        'Turn off Strict Privacy before enabling link previews',
+                        isError: true,
                       );
                       return;
                     }
@@ -1958,20 +1953,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: settings.autoDownloadMaxMb == 0
                       ? 'No limit'
                       : 'Skip files over ${settings.autoDownloadMaxMb} MB',
-                  trailing: DropdownButton<int>(
-                    value: settings.autoDownloadMaxMb,
-                    underline: const SizedBox.shrink(),
-                    items: const [
-                      DropdownMenuItem(value: 0, child: Text('No limit')),
-                      DropdownMenuItem(value: 1, child: Text('1 MB')),
-                      DropdownMenuItem(value: 5, child: Text('5 MB')),
-                      DropdownMenuItem(value: 10, child: Text('10 MB')),
-                      DropdownMenuItem(value: 25, child: Text('25 MB')),
-                      DropdownMenuItem(value: 50, child: Text('50 MB')),
-                    ],
-                    onChanged: (v) {
-                      if (v != null) settings.setAutoDownloadMaxMb(v);
-                    },
+                  trailing: GlassPicker(
+                    value: settings.autoDownloadMaxMb == 0
+                        ? 'No limit'
+                        : '${settings.autoDownloadMaxMb} MB',
+                    width: 112,
+                    height: 38,
+                    textStyle: TextStyle(
+                      fontSize: 15,
+                      color: Theme.of(context).colorScheme.onSurface,
+                    ),
+                    onTap: () => showGlassActionSheet<void>(
+                      context: context,
+                      title: 'Size limit',
+                      actions: [
+                        for (final mb in const [0, 1, 5, 10, 25, 50])
+                          GlassActionSheetAction(
+                            label: mb == 0 ? 'No limit' : '$mb MB',
+                            onPressed: () => settings.setAutoDownloadMaxMb(mb),
+                          ),
+                      ],
+                    ),
                   ),
                   isLast: true,
                 ),

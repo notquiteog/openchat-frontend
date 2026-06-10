@@ -7,14 +7,14 @@ import 'local_private_state_service.dart';
 import 'secure_storage_service.dart';
 
 class EncryptedBackupService {
+  static const _defaultIterations = 310000;
+  // Floor for imports: a tampered backup file must not be able to downgrade
+  // the KDF cost to something brute-forceable.
+  static const _minImportIterations = 100000;
+
   final SecureStorageService _storage;
   final LocalPrivateStateService _privateState;
   final _cipher = AesGcm.with256bits();
-  final _kdf = Pbkdf2(
-    macAlgorithm: Hmac.sha256(),
-    iterations: 310000,
-    bits: 256,
-  );
 
   EncryptedBackupService({
     SecureStorageService? storage,
@@ -34,7 +34,7 @@ class EncryptedBackupService {
       'local_private_state': await _privateState.readState(),
     };
     final salt = _randomBytes(16);
-    final key = await _deriveKey(normalized, salt);
+    final key = await _deriveKey(normalized, salt, _defaultIterations);
     final box = await _cipher.encrypt(
       utf8.encode(jsonEncode(payload)),
       secretKey: key,
@@ -42,7 +42,7 @@ class EncryptedBackupService {
     return const JsonEncoder.withIndent('  ').convert({
       'openchat_encrypted_recovery': 1,
       'kdf': 'pbkdf2-hmac-sha256',
-      'iterations': 310000,
+      'iterations': _defaultIterations,
       'salt': base64Encode(salt),
       'cipher': 'aes-256-gcm',
       'payload': base64Encode(box.concatenation()),
@@ -61,9 +61,24 @@ class EncryptedBackupService {
     if (version != 1) {
       throw ArgumentError('Unsupported OpenChat backup format');
     }
+    // Honor the KDF parameters stored in the file (with a floor) instead of
+    // assuming the current export constants — otherwise the moment the export
+    // iteration count changes, every older backup silently fails to decrypt.
+    final kdf = decoded['kdf'] as String? ?? 'pbkdf2-hmac-sha256';
+    if (kdf != 'pbkdf2-hmac-sha256') {
+      throw ArgumentError('Unsupported backup KDF: $kdf');
+    }
+    final iterations = switch (decoded['iterations']) {
+      final int value => value,
+      final num value => value.toInt(),
+      _ => _defaultIterations,
+    };
+    if (iterations < _minImportIterations) {
+      throw ArgumentError('Backup KDF iteration count is too low');
+    }
     final salt = base64Decode(decoded['salt'] as String? ?? '');
     final encrypted = base64Decode(decoded['payload'] as String? ?? '');
-    final key = await _deriveKey(passphrase.trim(), salt);
+    final key = await _deriveKey(passphrase.trim(), salt, iterations);
     final box = SecretBox.fromConcatenation(
       encrypted,
       nonceLength: _cipher.nonceLength,
@@ -88,8 +103,17 @@ class EncryptedBackupService {
     }
   }
 
-  Future<SecretKey> _deriveKey(String passphrase, List<int> salt) {
-    return _kdf.deriveKey(
+  Future<SecretKey> _deriveKey(
+    String passphrase,
+    List<int> salt,
+    int iterations,
+  ) {
+    final kdf = Pbkdf2(
+      macAlgorithm: Hmac.sha256(),
+      iterations: iterations,
+      bits: 256,
+    );
+    return kdf.deriveKey(
       secretKey: SecretKey(utf8.encode(passphrase)),
       nonce: salt,
     );

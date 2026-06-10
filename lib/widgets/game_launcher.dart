@@ -15,7 +15,6 @@ Future<void> showGameLauncher(
 }) async {
   const games = ['🎲', '🎯', '🏀', '⚽', '🎳', '🎰', '🪙'];
   final chat = context.read<ChatProvider>();
-  final messenger = ScaffoldMessenger.of(context);
   final anteCtrl = TextEditingController();
   String selected = '🎲';
   bool realMoney = false;
@@ -25,9 +24,7 @@ Future<void> showGameLauncher(
     final useReal = mode == 'betting' && realMoney;
     final ante = useReal ? double.tryParse(anteCtrl.text.trim()) : null;
     if (useReal && (ante == null || ante <= 0)) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Enter a positive ante amount.')),
-      );
+      showAppToast(ctx, 'Enter a positive ante amount.', isError: true);
       return;
     }
     Navigator.pop(ctx);
@@ -41,9 +38,10 @@ Future<void> showGameLauncher(
         isChannel: isChannel,
       );
     } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('Could not start game: $e')),
-      );
+      // The sheet context was popped before the await — fall back to the
+      // launcher's own context.
+      if (!context.mounted) return;
+      showAppToast(context, 'Could not start game: $e', isError: true);
     }
   }
 
@@ -68,35 +66,39 @@ Future<void> showGameLauncher(
               spacing: 6,
               children: [
                 for (final g in games)
-                  ChoiceChip(
-                    label: Text(g, style: const TextStyle(fontSize: 22)),
+                  GlassChip(
+                    label: g,
                     selected: selected == g,
-                    onSelected: (_) => setSheet(() => selected = g),
+                    onTap: () => setSheet(() => selected = g),
                   ),
               ],
             ),
             const SizedBox(height: 8),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
+            GlassListTile(
               title: const Text('Play for real money'),
               subtitle: const Text(
                 'Players ante from their wallet; winners split the pot',
               ),
-              value: realMoney,
-              onChanged: (v) => setSheet(() => realMoney = v),
+              trailing: GlassSwitch(
+                value: realMoney,
+                onChanged: (v) => setSheet(() => realMoney = v),
+                activeColor: Theme.of(sheetCtx).colorScheme.primary,
+                enableHaptics: true,
+              ),
+              onTap: () => setSheet(() => realMoney = !realMoney),
             ),
             if (realMoney) ...[
               Row(
                 children: [
                   const Text('Currency:'),
                   const SizedBox(width: 12),
-                  DropdownButton<String>(
-                    value: provider,
-                    items: const [
-                      DropdownMenuItem(value: 'btc', child: Text('BTC')),
-                      DropdownMenuItem(value: 'xmr', child: Text('XMR')),
-                    ],
-                    onChanged: (v) => setSheet(() => provider = v ?? 'btc'),
+                  Expanded(
+                    child: GlassSegmentedControl(
+                      segments: const ['BTC', 'XMR'],
+                      selectedIndex: provider == 'xmr' ? 1 : 0,
+                      onSegmentSelected: (i) =>
+                          setSheet(() => provider = i == 1 ? 'xmr' : 'btc'),
+                    ),
                   ),
                 ],
               ),

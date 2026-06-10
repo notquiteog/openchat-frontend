@@ -52,14 +52,15 @@ NotificationIntent? notificationIntentFromEvent({
       conversationNotificationPreferences =
       const {},
 }) {
+  final preferences = <String, ConversationNotificationPreference>{
+    ...conversationNotificationPreferences,
+    for (final id in mutedConversationIds)
+      if (!conversationNotificationPreferences.containsKey(id))
+        id: const ConversationNotificationPreference.mutedForever(),
+  };
+
   if (type == 'new_message') {
     final convId = data['conversation_id'] as String? ?? 'msg';
-    final preferences = <String, ConversationNotificationPreference>{
-      ...conversationNotificationPreferences,
-      for (final id in mutedConversationIds)
-        if (!conversationNotificationPreferences.containsKey(id))
-          id: const ConversationNotificationPreference.mutedForever(),
-    };
     if (!shouldNotifyForConversation(
       conversationId: convId,
       preferences: preferences,
@@ -67,7 +68,9 @@ NotificationIntent? notificationIntentFromEvent({
     )) {
       return null;
     }
-    final sender = data['sender_username'] as String?;
+    // WS events nest the sender (sender:{username:…}); push payloads (when
+    // present at all) use the flat sender_username key.
+    final sender = notificationSenderUsernameFromData(data);
     return NotificationIntent(
       kind: NotificationIntentKind.message,
       notificationId: convId.hashCode,
@@ -77,7 +80,18 @@ NotificationIntent? notificationIntentFromEvent({
   }
 
   if (type == 'call_offer' || type == 'incoming_call') {
-    final caller = data['caller_username'] as String?;
+    // Calls respect mute / muted-until / quiet hours — previously every call
+    // rang through regardless. Mentions-only mode deliberately does NOT
+    // suppress calls (it is a message-volume control, not a call block).
+    final convId = data['conversation_id'] as String?;
+    if (convId != null && convId.isNotEmpty) {
+      final pref = preferences[convId];
+      final now = DateTime.now();
+      if (pref != null && (pref.isMutedAt(now) || pref.isQuietAt(now))) {
+        return null;
+      }
+    }
+    final caller = _stringOrNull(data['caller_username']);
     return NotificationIntent(
       kind: NotificationIntentKind.incomingCall,
       notificationId: 1,
@@ -88,5 +102,10 @@ NotificationIntent? notificationIntentFromEvent({
     );
   }
 
+  return null;
+}
+
+String? _stringOrNull(Object? value) {
+  if (value is String && value.trim().isNotEmpty) return value.trim();
   return null;
 }

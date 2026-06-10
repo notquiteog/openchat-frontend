@@ -201,7 +201,22 @@ class NotificationService {
         ),
       );
 
-  static void setActiveConversation(String? id) => _activeConversationId = id;
+  static void setActiveConversation(String? id) {
+    _activeConversationId = id;
+    // Opening a chat clears its tray notification — without this, the entry
+    // for an already-read conversation lingered until the next app restart.
+    if (id != null && id.isNotEmpty) {
+      unawaited(cancelMessageNotification(id));
+    }
+  }
+
+  /// Removes the (single, per-conversation) message notification slot.
+  static Future<void> cancelMessageNotification(String conversationId) async {
+    if (!_supported || !_available) return;
+    try {
+      await _plugin.cancel(id: conversationId.hashCode);
+    } catch (_) {}
+  }
   static void setMutedConversations(Iterable<String> conversationIds) {
     _mutedConversationIds = Set.unmodifiable(conversationIds);
     _conversationNotificationPreferences = Map.unmodifiable({
@@ -657,8 +672,18 @@ class NotificationService {
   static Future<void> showIncomingCall({
     required String body,
     String? payload,
+    String? conversationId,
   }) async {
     if (!_supported) return;
+    // Per-chat mute / muted-until / quiet hours apply to calls too.
+    // (Mentions-only does not — it's a message-volume control.)
+    if (conversationId != null && conversationId.isNotEmpty) {
+      final pref = _conversationNotificationPreferences[conversationId];
+      final now = DateTime.now();
+      if (pref != null && (pref.isMutedAt(now) || pref.isQuietAt(now))) {
+        return;
+      }
+    }
     if (await _shouldSuppressFocusedNotification()) return;
     await init();
     if (!_available) return;

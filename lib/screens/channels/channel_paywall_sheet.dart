@@ -147,9 +147,15 @@ class _ChannelPaywallSheetState extends State<_ChannelPaywallSheet> {
     final provider = (plan['provider'] as String? ?? '').toUpperCase();
     final price = (plan['price'] as num?)?.toString() ?? '0';
     final days = plan['period_days'] as int? ?? 30;
-    return GlassCard(
+    // Opaque card — this tile lives inside an already-glass sheet; nesting
+    // another glass surface stacks a second backdrop pass for no visual gain.
+    return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(20),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -195,8 +201,13 @@ class _ChannelPaywallSheetState extends State<_ChannelPaywallSheet> {
         Text('Send $amount $provider to:',
             style: const TextStyle(fontWeight: FontWeight.w600)),
         const SizedBox(height: 8),
-        GlassCard(
+        Container(
           padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest
+                .withValues(alpha: 0.35),
+            borderRadius: BorderRadius.circular(16),
+          ),
           child: Row(
             children: [
               Expanded(

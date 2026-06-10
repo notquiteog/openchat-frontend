@@ -277,6 +277,20 @@ class ApiService {
     return getUserPublicKeyEntry(userID);
   }
 
+  /// Send-path key lookup with a freshness window: returns the cached entry
+  /// when it was fetched within [maxAge], otherwise force-refreshes from the
+  /// server (which also re-observes key trust). Without this, every send to a
+  /// 100-member PGP group performed ~100 key fetches + transparency reads —
+  /// the documented "subsequent sends skip the network" behaviour.
+  Future<CachedKey?> getRecentUserPublicKeyEntry(
+    String userID, {
+    Duration maxAge = const Duration(minutes: 5),
+  }) async {
+    final cached = await KeyCacheService.get(userID, maxAge: maxAge);
+    if (cached != null) return cached;
+    return getFreshUserPublicKeyEntry(userID);
+  }
+
   Future<List<KeyTransparencyEvent>> getKeyTransparencyEvents(
     String userID,
   ) async {
@@ -877,6 +891,7 @@ class ApiService {
     String? topicId,
     bool silent = false,
     DateTime? scheduledFor,
+    String? clientNonce,
   }) async {
     final resp = await _post('/api/v1/conversations/$convID/messages', {
       'encrypted_payload': encryptedPayload,
@@ -889,6 +904,9 @@ class ApiService {
       if (silent) 'silent': true,
       if (scheduledFor != null)
         'scheduled_for': scheduledFor.toUtc().toIso8601String(),
+      // Idempotency key: a retried send maps onto the original message
+      // server-side instead of duplicating it.
+      'client_nonce': ?clientNonce,
     });
     return Message.fromJson(resp['data'] as Map<String, dynamic>);
   }
@@ -901,6 +919,7 @@ class ApiService {
     String? attachmentId,
     String? topicId,
     bool silent = false,
+    String? clientNonce,
   }) async {
     final resp = await _post('/api/v1/conversations/$convID/sealed-messages', {
       'encrypted_payload': encryptedPayload,
@@ -909,6 +928,7 @@ class ApiService {
       'attachment_id': ?attachmentId,
       'topic_id': ?topicId,
       if (silent) 'silent': true,
+      'client_nonce': ?clientNonce,
     }, authenticated: false);
     final message = Message.fromJson(resp['data'] as Map<String, dynamic>);
     await _saveSealedMessageControlFromMessage(convID, message);
@@ -1728,14 +1748,21 @@ class ApiService {
         .toList();
   }
 
+  /// Creates a story. For private audiences (contacts / selected) pass
+  /// [encryptedPayload] — a PGP envelope holding the media key, nonce,
+  /// caption, filename, and MIME type — and leave the plaintext fields null:
+  /// the server must NOT be able to decrypt story media. Public and channel
+  /// stories have no fixed audience to encrypt to, so they use the plaintext
+  /// fields.
   Future<Story> createStory({
     required String attachmentId,
-    required String fileName,
     required int fileSize,
-    required String mimeType,
-    required String fileKey,
-    required String fileNonce,
     required String mediaType,
+    String? fileName,
+    String? mimeType,
+    String? fileKey,
+    String? fileNonce,
+    String? encryptedPayload,
     String caption = '',
     String privacy = 'contacts',
     List<String> allowUserIds = const [],
@@ -1747,11 +1774,12 @@ class ApiService {
   }) async {
     final resp = await _post('/api/v1/stories', {
       'attachment_id': attachmentId,
-      'file_name': fileName,
+      'file_name': ?fileName,
       'file_size': fileSize,
-      'mime_type': mimeType,
-      'file_key': fileKey,
-      'file_nonce': fileNonce,
+      'mime_type': ?mimeType,
+      'file_key': ?fileKey,
+      'file_nonce': ?fileNonce,
+      'encrypted_payload': ?encryptedPayload,
       'media_type': mediaType,
       'caption': caption,
       'entities': entities,
@@ -2732,6 +2760,13 @@ class ApiService {
   /// {conversation_id, route}. Push payloads carry only the `route`, so the
   /// client uses this to resolve a notification back to its conversation
   /// without the real id ever passing through FCM/APNs.
+  /// Replaces the server-side set of muted push routes (opaque tokens from
+  /// /me/push-routes). The server skips FCM pushes for these — a client-side
+  /// mute alone can't suppress the OS-displayed Notification block.
+  Future<void> setPushRouteMutes(List<String> routes) async {
+    await _put('/api/v1/me/push-route-mutes', {'routes': routes});
+  }
+
   Future<Map<String, String>> getPushRoutes() async {
     final resp = await _get('/api/v1/me/push-routes');
     final data = resp['data'] as Map<String, dynamic>?;

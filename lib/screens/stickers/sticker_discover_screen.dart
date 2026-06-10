@@ -76,6 +76,7 @@ class _StickerDiscoverScreenState extends State<StickerDiscoverScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: GlassAppBar(
         title: const Text('Discover packs'),
         bottom: TabBar(
@@ -86,7 +87,15 @@ class _StickerDiscoverScreenState extends State<StickerDiscoverScreen>
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            padding: EdgeInsets.fromLTRB(
+              16,
+              MediaQuery.paddingOf(context).top +
+                  kToolbarHeight +
+                  kTextTabBarHeight +
+                  12,
+              16,
+              8,
+            ),
             child: TextField(
               controller: _queryCtrl,
               textInputAction: TextInputAction.search,

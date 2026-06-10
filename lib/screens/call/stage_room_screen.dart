@@ -41,6 +41,7 @@ class _StageRoomScreenState extends State<StageRoomScreen> {
     ];
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: GlassAppBar(
         title: Text(widget.conversation.displayName('')),
         actions: [
@@ -57,7 +58,12 @@ class _StageRoomScreenState extends State<StageRoomScreen> {
       body: stage.connecting && !stage.isActive
           ? const Center(child: GlassProgressIndicator.circular())
           : ListView(
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.fromLTRB(
+                16,
+                MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
+                16,
+                16,
+              ),
               children: [
                 if (stage.error != null)
                   Padding(

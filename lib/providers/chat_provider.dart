@@ -9,11 +9,13 @@ import '../crypto/pgp_service.dart';
 import '../crypto/smp_service.dart';
 import '../models/chat_folder.dart';
 import '../models/conversation.dart';
+import '../models/key_transparency_event.dart';
 import '../models/message.dart';
 import '../models/user.dart';
 import '../providers/settings_provider.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
+import '../services/key_cache_service.dart';
 import '../services/message_search_service.dart';
 import '../services/message_cache_service.dart';
 import '../services/mls_service.dart';
@@ -271,6 +273,10 @@ class ChatProvider extends ChangeNotifier {
     _typingUsers.clear();
     _readReceipts.clear();
     _outboxItems = const [];
+    // Reset identity too — the provider outlives a logout/login cycle, and a
+    // stale _selfId misattributes own-message suppression, self-reactions, and
+    // mention detection to the previous account.
+    _selfId = null;
     _selfUsername = null;
     _outboxLoaded = false;
     _wasWsMonitoring = false;
@@ -538,7 +544,27 @@ class ChatProvider extends ChangeNotifier {
         }
       }
 
-      _messages[convID] = _withOutboxOverlays(convID, result);
+      // Preserve scrollback the user already paged in: reconnect catch-up
+      // calls loadMessages for every loaded conversation, and replacing the
+      // list wholesale truncated hundreds of loaded messages to the latest 20
+      // on every WS blip.
+      final existing = _messages[convID] ?? const <Message>[];
+      var merged = result;
+      if (result.isNotEmpty && existing.isNotEmpty) {
+        final fetchedIds = result.map((m) => m.id).toSet();
+        final oldestFetched = result.first.createdAt;
+        final olderScrollback = existing
+            .where(
+              (m) =>
+                  !fetchedIds.contains(m.id) &&
+                  m.createdAt.isBefore(oldestFetched),
+            )
+            .toList();
+        if (olderScrollback.isNotEmpty) {
+          merged = [...olderScrollback, ...result];
+        }
+      }
+      _messages[convID] = _withOutboxOverlays(convID, merged);
       notifyListeners();
     } catch (_) {}
   }
@@ -840,6 +866,11 @@ class ChatProvider extends ChangeNotifier {
         attachmentId: data['attachment_id'] as String?,
         topicId: null,
         silent: data['silent'] as bool? ?? false,
+        // The pending message id doubles as the idempotency key (the same id
+        // used by a direct send before it was queued): a retry after a
+        // timed-out-but-committed POST returns the original message instead
+        // of duplicating it for every recipient.
+        clientNonce: data['pending_message_id'] as String? ?? item.id,
       );
     } else {
       if (isEncrypted) {
@@ -856,6 +887,7 @@ class ChatProvider extends ChangeNotifier {
         attachmentId: data['attachment_id'] as String?,
         topicId: data['topic_id'] as String?,
         silent: data['silent'] as bool? ?? false,
+        clientNonce: data['pending_message_id'] as String? ?? item.id,
       );
     }
     _replacePendingWithConfirmed(
@@ -1710,6 +1742,14 @@ class ChatProvider extends ChangeNotifier {
     if (idx == -1) return;
     final old = list[idx];
 
+    // Drop the durable plaintext cache entry when the ciphertext actually
+    // changed — otherwise a fingerprint false-match could keep rendering the
+    // pre-edit plaintext after a restart. (_tryDecrypt re-caches the new
+    // plaintext for MLS.)
+    if (old.encryptedPayload != msg.encryptedPayload) {
+      await _cache.delete(msg.id);
+    }
+
     final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
     await _tryDecrypt(msg, privateKey);
     // If we can't decrypt the edit (e.g. our own message), keep the text we had.
@@ -1974,6 +2014,9 @@ class ChatProvider extends ChangeNotifier {
     }
 
     try {
+      // pending.id doubles as the idempotency key — the same id rides along
+      // if this send times out and is retried through the outbox, so the
+      // server maps the retry onto the original row instead of duplicating.
       final confirmed = conv.isEncrypted
           ? await _api.sendSealedMessage(
               convID: convID,
@@ -1983,6 +2026,7 @@ class ChatProvider extends ChangeNotifier {
               attachmentId: attachmentId,
               topicId: null,
               silent: silent,
+              clientNonce: pending.id,
             )
           : await _api.sendMessage(
               convID: convID,
@@ -1993,6 +2037,7 @@ class ChatProvider extends ChangeNotifier {
               attachmentId: attachmentId,
               topicId: topicId,
               silent: silent,
+              clientNonce: pending.id,
             );
       _replacePendingWithConfirmed(
         convID: convID,
@@ -2336,15 +2381,57 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
+  // Replay guard: a captured sealed envelope replayed by the server arrives
+  // with the SAME sender-proof signature under a different message id. Keyed
+  // per conversation; in-memory (a replay across restarts re-verifies, but the
+  // durable plaintext cache already short-circuits known message ids).
+  final Map<String, Map<String, String>> _seenProofSignatures = {};
+
   Future<String?> _verifiedPgpSenderId(
     String raw,
     String convID,
-    Conversation? conversation,
-  ) async {
+    Conversation? conversation, {
+    String? messageId,
+    DateTime? serverCreatedAt,
+  }) async {
     final proof = Message.senderProofFromRaw(raw);
     if (proof == null) {
       return null;
     }
+    // Replay detection — the v2 proof binds createdAt precisely so duplicates
+    // are detectable; actually check it instead of only re-signing it.
+    if (messageId != null && proof.signature.isNotEmpty) {
+      final seen = _seenProofSignatures.putIfAbsent(
+        convID,
+        () => <String, String>{},
+      );
+      final priorMessageId = seen[proof.signature];
+      if (priorMessageId != null && priorMessageId != messageId) {
+        debugPrint(
+          'ChatProvider: REPLAYED sender proof — signature already seen on '
+          'message $priorMessageId, rejecting $messageId',
+        );
+        return null;
+      }
+      seen[proof.signature] = messageId;
+    }
+    // A proof "signed" meaningfully after the server accepted the message is
+    // forged metadata (10 min allows client clock skew). The reverse — proof
+    // older than server receipt — is legitimate (offline outbox, scheduled
+    // sends), so it is deliberately not rejected.
+    final proofCreatedAt = DateTime.tryParse(proof.createdAt ?? '');
+    if (proofCreatedAt != null &&
+        serverCreatedAt != null &&
+        proofCreatedAt.isAfter(
+          serverCreatedAt.add(const Duration(minutes: 10)),
+        )) {
+      debugPrint(
+        'ChatProvider: sender proof timestamp ${proof.createdAt} is after '
+        'server receipt $serverCreatedAt — rejecting',
+      );
+      return null;
+    }
+
     var conv = conversation ?? _conversations[convID];
     var members = conv?.members ?? const <ConversationMember>[];
     if (members.isEmpty) {
@@ -2365,12 +2452,18 @@ class ChatProvider extends ChangeNotifier {
       }
     }
     final user = sender?.user;
-    if (user == null) {
-      return null;
-    }
-    if (user.keyFingerprint.toUpperCase() !=
-        proof.keyFingerprint.toUpperCase()) {
-      return null;
+    if (user == null ||
+        user.keyFingerprint.toUpperCase() !=
+            proof.keyFingerprint.toUpperCase()) {
+      // The sender rotated their key or left the conversation. Their key
+      // history (hash-chained transparency log) still proves which key was
+      // theirs when the message was sent — verify against that instead of
+      // permanently failing every pre-rotation message.
+      return _verifyAgainstKeyHistory(
+        proof: proof,
+        convID: convID,
+        currentFingerprint: user?.keyFingerprint,
+      );
     }
     // v2 messages carry a createdAt timestamp in the signed data.  v1 messages
     // (sent before this scheme was introduced) omit it; fall back to v1 so
@@ -2388,6 +2481,60 @@ class ChatProvider extends ChangeNotifier {
     return ok ? proof.senderId : null;
   }
 
+  /// Verifies a sender proof against the signer's key-transparency history:
+  /// the proof's fingerprint must appear in the sender's hash-chained log, the
+  /// signature must verify against that historical public key, and — when the
+  /// sender is still a member with a newer key — the rotation chain from the
+  /// historical key to the current one must be cryptographically continuous.
+  Future<String?> _verifyAgainstKeyHistory({
+    required OpenChatSenderProof proof,
+    required String convID,
+    String? currentFingerprint,
+  }) async {
+    try {
+      final events = await _api.getKeyTransparencyEvents(proof.senderId);
+      final wantedFingerprint = proof.keyFingerprint.toUpperCase();
+      KeyTransparencyEvent? match;
+      for (final event in events) {
+        if (event.newKeyFingerprint.toUpperCase() == wantedFingerprint) {
+          match = event;
+        }
+      }
+      if (match == null || match.newPublicKey.trim().isEmpty) return null;
+      final ok = await PgpService.verify(
+        data: PgpService.senderProofData(
+          conversationId: convID,
+          messageType: proof.type,
+          payload: proof.payload,
+          createdAt: proof.createdAt,
+        ),
+        signatureArmor: proof.signature,
+        signerPublicKeyArmored: match.newPublicKey,
+      );
+      if (!ok) return null;
+      if (currentFingerprint != null &&
+          currentFingerprint.trim().isNotEmpty &&
+          currentFingerprint.toUpperCase() != wantedFingerprint) {
+        final continuous = await verifyRotationContinuity(
+          events: events,
+          userId: proof.senderId,
+          oldFingerprint: proof.keyFingerprint,
+          newFingerprint: currentFingerprint,
+        );
+        if (!continuous) {
+          debugPrint(
+            'ChatProvider: historical key ${proof.keyFingerprint} has no '
+            'continuity proof to current $currentFingerprint',
+          );
+          return null;
+        }
+      }
+      return proof.senderId;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Re-runs sender verification on already-decrypted plaintext after a short,
   /// growing delay (bounded). The openpgp fork's PQC signature verification
   /// intermittently returns false for valid signatures and succeeds on a later
@@ -2402,8 +2549,13 @@ class ChatProvider extends ChangeNotifier {
     _verifyRetryCounts[msg.id] = attempts + 1;
     Future.delayed(Duration(milliseconds: 500 * (attempts + 1)), () async {
       if (_disposed) return;
-      final verifiedSenderId =
-          await _verifiedPgpSenderId(raw, msg.conversationId, conv);
+      final verifiedSenderId = await _verifiedPgpSenderId(
+        raw,
+        msg.conversationId,
+        conv,
+        messageId: msg.id,
+        serverCreatedAt: msg.createdAt,
+      );
       if (verifiedSenderId == null) {
         _scheduleVerifyRetry(msg, raw, conv);
         return;
@@ -2718,7 +2870,11 @@ class ChatProvider extends ChangeNotifier {
 
       PgpRecipient? recipient;
       try {
-        final freshKey = await _api.getFreshUserPublicKeyEntry(member.userId);
+        // Freshness window instead of force-refresh on EVERY send — a
+        // 100-member PGP group otherwise does ~200 network fetches per
+        // message. Keys fetched within the window already passed trust
+        // observation.
+        final freshKey = await _api.getRecentUserPublicKeyEntry(member.userId);
         if (freshKey != null && freshKey.publicKey.trim().isNotEmpty) {
           recipient = PgpRecipient(
             userId: member.userId,
@@ -2727,14 +2883,17 @@ class ChatProvider extends ChangeNotifier {
           );
         }
       } catch (_) {
-        final embeddedKey = member.user?.publicKey ?? '';
-        final embeddedFingerprint = member.user?.keyFingerprint ?? '';
-        if (embeddedKey.trim().isNotEmpty &&
-            embeddedFingerprint.trim().isNotEmpty) {
+        // Fresh fetch failed. Fall back to the most recent VERIFIED fetch
+        // (key cache, 24h TTL) — NOT the key embedded in the conversation
+        // payload, which may predate a rotation and whose trust pin was never
+        // observed on this path. If there is no verified cache entry either,
+        // fail the send rather than encrypt to a possibly-dead key.
+        final cached = await KeyCacheService.get(member.userId);
+        if (cached != null && cached.publicKey.trim().isNotEmpty) {
           recipient = PgpRecipient(
             userId: member.userId,
-            publicKeyArmored: embeddedKey,
-            keyFingerprint: embeddedFingerprint,
+            publicKeyArmored: cached.publicKey,
+            keyFingerprint: cached.fingerprint,
           );
         } else {
           throw const ChatSendException(
@@ -3221,6 +3380,11 @@ class ChatProvider extends ChangeNotifier {
     final userID = data['user_id']?.toString();
     final messageID = data['message_id']?.toString();
     if (convID == null || userID == null || messageID == null) return;
+    // Our own read receipt from ANOTHER device — the chat was read there, so
+    // clear the stale notification on this one.
+    if (userID == _selfId) {
+      unawaited(NotificationService.cancelMessageNotification(convID));
+    }
     _rememberReadReceipt(convID: convID, userID: userID, messageID: messageID);
   }
 
@@ -3701,6 +3865,8 @@ class ChatProvider extends ChangeNotifier {
           raw,
           msg.conversationId,
           conv,
+          messageId: msg.id,
+          serverCreatedAt: msg.createdAt,
         );
         // The MLS ratchet key for this message is consumed by the decrypt above
         // and cannot be replayed after a restart. Persist the plaintext NOW,
@@ -3749,6 +3915,8 @@ class ChatProvider extends ChangeNotifier {
           raw,
           msg.conversationId,
           conv,
+          messageId: msg.id,
+          serverCreatedAt: msg.createdAt,
         );
         if (verifiedSenderId == null) {
           // Fail closed on the in-payload sender proof for EVERY encrypted

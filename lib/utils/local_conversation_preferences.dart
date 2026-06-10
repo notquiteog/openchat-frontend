@@ -306,5 +306,25 @@ String notificationRuleTextFromData(Map<String, dynamic> data) {
     final value = data[key];
     if (value is String && value.trim().isNotEmpty) parts.add(value);
   }
+  // The WS new_message payload nests the sender as sender:{username:…} — it
+  // never carries a top-level sender_username.
+  final nested = notificationSenderUsernameFromData(data);
+  if (nested != null && !parts.contains(nested)) parts.add(nested);
   return parts.join(' ');
+}
+
+/// Extracts the sender's username from an event payload, handling both the
+/// flat `sender_username` shape (push payloads) and the nested `sender:
+/// {username: …}` shape used by WS `new_message` events.
+String? notificationSenderUsernameFromData(Map<String, dynamic> data) {
+  final direct = data['sender_username'];
+  if (direct is String && direct.trim().isNotEmpty) return direct.trim();
+  final sender = data['sender'];
+  if (sender is Map) {
+    final username = sender['username'];
+    if (username is String && username.trim().isNotEmpty) {
+      return username.trim();
+    }
+  }
+  return null;
 }

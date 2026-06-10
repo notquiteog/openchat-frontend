@@ -593,8 +593,15 @@ class _ProviderPickerSheet extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 8),
-            GlassCard(
-              padding: EdgeInsets.zero,
+            // Opaque group — the sheet is already glass; a nested glass card
+            // would stack a second backdrop pass.
+            Container(
+              decoration: BoxDecoration(
+                color:
+                    scheme.surfaceContainerHighest.withValues(alpha: 0.35),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              clipBehavior: Clip.antiAlias,
               child: Column(
                 children: [
                   for (final (i, p) in walletProviders.indexed) ...[
@@ -627,8 +634,12 @@ class _ProviderPickerSheet extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          GlassCard(
-            padding: EdgeInsets.zero,
+          Container(
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainerHighest.withValues(alpha: 0.35),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            clipBehavior: Clip.antiAlias,
             child: Column(
               children: [
                 for (final (i, p) in providers.indexed) ...[

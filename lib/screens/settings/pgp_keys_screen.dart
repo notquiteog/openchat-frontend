@@ -366,20 +366,30 @@ class PgpKeysScreen extends StatelessWidget {
                 'Export and save your current private key before continuing.',
               ),
               const SizedBox(height: 16),
-              DropdownButtonFormField<KeyType>(
-                initialValue: selectedKeyType,
-                decoration: const InputDecoration(
-                  labelText: 'New key algorithm',
-                  border: OutlineInputBorder(),
+              Text(
+                'New key algorithm',
+                style: Theme.of(ctx).textTheme.labelMedium,
+              ),
+              const SizedBox(height: 4),
+              GlassPicker(
+                value: selectedKeyType.dropdownLabel,
+                height: 44,
+                textStyle: TextStyle(
+                  fontSize: 14,
+                  color: Theme.of(ctx).colorScheme.onSurface,
                 ),
-                items: [
-                  for (final keyType in KeyType.accountCreationOptions)
-                    DropdownMenuItem(
-                      value: keyType,
-                      child: Text(keyType.dropdownLabel),
-                    ),
-                ],
-                onChanged: (v) => setDialogState(() => selectedKeyType = v!),
+                onTap: () => showGlassActionSheet<void>(
+                  context: ctx,
+                  title: 'New key algorithm',
+                  actions: [
+                    for (final keyType in KeyType.accountCreationOptions)
+                      GlassActionSheetAction(
+                        label: keyType.dropdownLabel,
+                        onPressed: () =>
+                            setDialogState(() => selectedKeyType = keyType),
+                      ),
+                  ],
+                ),
               ),
               const SizedBox(height: 12),
               TextField(

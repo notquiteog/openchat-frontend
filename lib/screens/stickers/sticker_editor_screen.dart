@@ -109,9 +109,15 @@ class _StickerEditorScreenState extends State<StickerEditorScreen> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: const GlassAppBar(title: Text('Create sticker')),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.fromLTRB(
+          16,
+          MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
+          16,
+          16,
+        ),
         children: [
           AspectRatio(
             aspectRatio: 1,

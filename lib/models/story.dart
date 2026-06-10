@@ -13,6 +13,12 @@ class Story {
   final String? mimeType;
   final String? fileKey;
   final String? fileNonce;
+
+  /// E2E story metadata: a PGP envelope (encrypted to the audience) holding
+  /// {file_key, file_nonce, caption, file_name, mime_type, entities}. When
+  /// set, the plaintext columns above are empty server-side and the viewer
+  /// fills them in locally after decrypting (see [withDecryptedMeta]).
+  final String? encryptedPayload;
   final String mediaType;
   final String privacy;
   final bool pinned;
@@ -40,6 +46,7 @@ class Story {
     this.mimeType,
     this.fileKey,
     this.fileNonce,
+    this.encryptedPayload,
     this.mediaType = 'image',
     this.privacy = 'contacts',
     this.pinned = false,
@@ -68,6 +75,7 @@ class Story {
     mimeType: json['mime_type'] as String?,
     fileKey: json['file_key'] as String?,
     fileNonce: json['file_nonce'] as String?,
+    encryptedPayload: json['encrypted_payload'] as String?,
     mediaType: json['media_type'] as String? ?? 'image',
     privacy: json['privacy'] as String? ?? 'contacts',
     pinned: json['pinned'] as bool? ?? false,
@@ -88,6 +96,42 @@ class Story {
     conversation: json['conversation'] != null
         ? Conversation.fromJson(json['conversation'] as Map<String, dynamic>)
         : null,
+  );
+
+  /// Whether the story's metadata is end-to-end encrypted and not yet
+  /// decrypted locally.
+  bool get needsMetaDecryption =>
+      (encryptedPayload?.isNotEmpty ?? false) &&
+      (fileKey == null || fileKey!.isEmpty);
+
+  /// Returns a copy with the decrypted metadata fields filled in.
+  Story withDecryptedMeta(Map<String, dynamic> meta) => Story(
+    id: id,
+    userId: userId,
+    conversationId: conversationId,
+    caption: meta['caption'] as String? ?? caption,
+    entities: (meta['entities'] as List?) ?? entities,
+    attachmentId: attachmentId,
+    fileName: meta['file_name'] as String? ?? fileName,
+    fileSize: fileSize,
+    mimeType: meta['mime_type'] as String? ?? mimeType,
+    fileKey: meta['file_key'] as String? ?? fileKey,
+    fileNonce: meta['file_nonce'] as String? ?? fileNonce,
+    encryptedPayload: encryptedPayload,
+    mediaType: mediaType,
+    privacy: privacy,
+    pinned: pinned,
+    noForwards: noForwards,
+    viewCount: viewCount,
+    reactionCount: reactionCount,
+    viewerHasViewed: viewerHasViewed,
+    viewerReaction: viewerReaction,
+    expiresAt: expiresAt,
+    createdAt: createdAt,
+    updatedAt: updatedAt,
+    archivedAt: archivedAt,
+    user: user,
+    conversation: conversation,
   );
 
   bool get isVideo =>

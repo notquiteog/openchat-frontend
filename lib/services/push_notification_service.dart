@@ -84,6 +84,25 @@ class PushNotificationService {
     } catch (_) {}
   }
 
+  /// Syncs the user's muted conversations to the server as opaque route
+  /// tokens, so the backend skips their pushes entirely. Quiet hours stay
+  /// client-side (they're a time window, not a set). Best-effort.
+  static Future<void> syncMutedRoutes(
+    ApiService api,
+    Set<String> mutedConversationIds,
+  ) async {
+    try {
+      if (_routeToConversation.isEmpty) {
+        await loadRouteMap();
+      }
+      final routes = <String>[
+        for (final entry in _routeToConversation.entries)
+          if (mutedConversationIds.contains(entry.value)) entry.key,
+      ];
+      await api.setPushRouteMutes(routes);
+    } catch (_) {}
+  }
+
   /// Resolves a push data payload to a conversation id: prefers an explicit
   /// conversation_id (back-compat) and otherwise maps the opaque route token.
   /// Returns null when neither resolves (caller shows a generic notification).
@@ -218,6 +237,10 @@ class PushNotificationService {
     // is open (FCM does not display the system notification in this case).
     _foregroundSub?.cancel();
     _foregroundSub = FirebaseMessaging.onMessage.listen((RemoteMessage msg) {
+      if (msg.data['type'] == 'call_cancel') {
+        unawaited(NotificationService.cancelIncomingCall());
+        return;
+      }
       final intent = foregroundNotificationIntent(
         msg,
         mutedConversationIds: NotificationService.mutedConversationIds,
@@ -237,8 +260,17 @@ class PushNotificationService {
           );
           break;
         case NotificationIntentKind.incomingCall:
-          unawaited(_handleIncomingCallPushData(msg.data));
-          NotificationService.showIncomingCall(body: intent.body);
+          // The push is now only a wake signal (call_id + route token); the
+          // real offer arrives over the connected WebSocket, where CallService
+          // rings and de-dupes by call id. Only feed the payload into the call
+          // path when it actually carries an offer (older servers).
+          if (msg.data['sdp'] != null || msg.data['encrypted_signal'] != null) {
+            unawaited(_handleIncomingCallPushData(msg.data));
+            NotificationService.showIncomingCall(
+              body: intent.body,
+              conversationId: conversationIdForData(msg.data),
+            );
+          }
           break;
       }
     });
@@ -307,10 +339,21 @@ class PushNotificationService {
     if (!_markOpenedMessageHandled(msg)) return;
     final type = msg.data['type'] as String?;
     if (type == 'incoming_call') {
-      unawaited(_handleIncomingCallPushData(msg.data));
+      // Old servers embedded the offer in the push — feed it straight in.
+      if (msg.data['sdp'] != null || msg.data['encrypted_signal'] != null) {
+        unawaited(_handleIncomingCallPushData(msg.data));
+        return;
+      }
+      // New minimal pushes carry no offer: opening the app connects the
+      // WebSocket, which replays the buffered offer and rings. Navigate to
+      // the conversation so the user lands in the right place.
+      final conversationId = conversationIdForData(msg.data) ?? '';
+      if (conversationId.isNotEmpty) {
+        _notificationOpenedHandler?.call(conversationId);
+      }
       return;
     }
-    if (type == 'new_message') {
+    if (type == 'new_message' || type == 'group_call') {
       final conversationId = conversationIdForData(msg.data) ?? '';
       if (conversationId.isEmpty) return;
       _notificationOpenedHandler?.call(conversationId);
@@ -351,7 +394,7 @@ class PushNotificationService {
         body: body,
       );
     }
-    if (type == 'new_message') {
+    if (type == 'new_message' || type == 'group_call') {
       // Resolve the opaque route to a conversation id and backfill it so the
       // mute/rule logic downstream works unchanged.
       final resolvedData = Map<String, dynamic>.from(msg.data);
@@ -368,6 +411,14 @@ class PushNotificationService {
         preferences: preferences,
       )) {
         return null;
+      }
+      if (type == 'group_call') {
+        return NotificationIntent(
+          kind: NotificationIntentKind.message,
+          notificationId: conversationId.hashCode,
+          title: 'OpenChat',
+          body: 'Call started',
+        );
       }
       final notification = msg.notification;
       if (notification != null) {

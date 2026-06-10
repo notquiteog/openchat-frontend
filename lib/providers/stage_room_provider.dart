@@ -20,6 +20,7 @@ class StageRoomProvider extends ChangeNotifier {
 
   Room? _room;
   StreamSubscription<WsEvent>? _wsSub;
+  Timer? _heartbeat;
 
   String? _conversationId;
   String _role = 'listener';
@@ -70,6 +71,16 @@ class StageRoomProvider extends ChangeNotifier {
         _micEnabled = true;
       }
       _wsSub = _ws.events.listen(_onWsEvent);
+      // Heartbeat: re-join periodically so the server can prune crashed
+      // participants (and tear down a stage whose host vanished) instead of
+      // keeping the room "active" for the full key TTL.
+      _heartbeat?.cancel();
+      _heartbeat = Timer.periodic(const Duration(seconds: 60), (_) {
+        final c = _conversationId;
+        if (c != null && _room != null) {
+          unawaited(_api.joinStage(c).catchError((_) => <String, dynamic>{}));
+        }
+      });
     } catch (e) {
       _error = e.toString();
       await _teardown();
@@ -176,12 +187,20 @@ class StageRoomProvider extends ChangeNotifier {
   }
 
   Future<void> _teardown() async {
+    _heartbeat?.cancel();
+    _heartbeat = null;
     await _wsSub?.cancel();
     _wsSub = null;
-    try {
-      await _room?.disconnect();
-    } catch (_) {}
+    final room = _room;
     _room = null;
+    try {
+      await room?.disconnect();
+    } catch (_) {}
+    // Dispose like SfuCallController does — disconnect alone leaks the native
+    // room resources across repeated stage joins.
+    try {
+      await room?.dispose();
+    } catch (_) {}
     _conversationId = null;
     _role = 'listener';
     _hostId = null;

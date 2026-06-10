@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../crypto/pgp_service.dart';
 import '../../models/message.dart';
 import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
@@ -7,7 +10,13 @@ import '../../providers/chat_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/attachment_service.dart';
+import '../../services/secure_storage_service.dart';
 import '../../widgets/glass.dart';
+
+class _StoryEncryptException implements Exception {
+  final String message;
+  const _StoryEncryptException(this.message);
+}
 
 class CreateStoryScreen extends StatefulWidget {
   const CreateStoryScreen({super.key});
@@ -84,25 +93,138 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
         });
         return;
       }
-      await context.read<ApiService>().createStory(
-        attachmentId: pending.attachmentId,
-        fileName: pending.fileName,
-        fileSize: pending.fileSize,
-        mimeType: pending.mimeType,
-        fileKey: pending.fileKey,
-        fileNonce: pending.fileNonce,
-        mediaType: mediaType,
-        caption: _captionCtrl.text.trim(),
-        privacy: _privacy == 'close_friends' ? 'selected' : _privacy,
-        allowUserIds: _privacy == 'close_friends' ? closeFriends : const [],
-        expiresInSeconds: _durationSeconds,
-      );
+      final api = context.read<ApiService>();
+      final privacy = _privacy == 'close_friends' ? 'selected' : _privacy;
+      final allowUserIds = _privacy == 'close_friends'
+          ? closeFriends
+          : const <String>[];
+      final caption = _captionCtrl.text.trim();
+
+      if (privacy == 'public') {
+        // Public stories have no fixed audience to encrypt to — the legacy
+        // plaintext-metadata path is inherent to "anyone can view".
+        await api.createStory(
+          attachmentId: pending.attachmentId,
+          fileName: pending.fileName,
+          fileSize: pending.fileSize,
+          mimeType: pending.mimeType,
+          fileKey: pending.fileKey,
+          fileNonce: pending.fileNonce,
+          mediaType: mediaType,
+          caption: caption,
+          privacy: privacy,
+          expiresInSeconds: _durationSeconds,
+        );
+      } else {
+        // Private audience: the media key, nonce, caption, filename, and MIME
+        // type travel inside a PGP envelope encrypted to the viewers — the
+        // server must not be able to decrypt story media (the attachment
+        // pipeline's documented invariant).
+        final encryptedMeta = await _encryptStoryMeta(
+          fileKey: pending.fileKey,
+          fileNonce: pending.fileNonce,
+          fileName: pending.fileName,
+          mimeType: pending.mimeType,
+          caption: caption,
+          audienceUserIds: privacy == 'selected' ? allowUserIds : null,
+        );
+        await api.createStory(
+          attachmentId: pending.attachmentId,
+          fileSize: pending.fileSize,
+          mediaType: mediaType,
+          encryptedPayload: encryptedMeta,
+          privacy: privacy,
+          allowUserIds: allowUserIds,
+          expiresInSeconds: _durationSeconds,
+        );
+      }
       if (mounted) Navigator.pop(context, true);
+    } on _StoryEncryptException catch (e) {
+      if (mounted) setState(() => _error = e.message);
     } catch (e) {
       if (mounted) setState(() => _error = 'Could not publish story.');
     } finally {
       if (mounted) setState(() => _posting = false);
     }
+  }
+
+  /// Encrypts the story metadata to the audience's PGP keys (plus our own so
+  /// we can re-view it). [audienceUserIds] null = all DM contacts.
+  Future<String> _encryptStoryMeta({
+    required String fileKey,
+    required String fileNonce,
+    required String fileName,
+    required String mimeType,
+    required String caption,
+    List<String>? audienceUserIds,
+  }) async {
+    final api = context.read<ApiService>();
+    final storage = context.read<SecureStorageService>();
+    final me = context.read<AuthProvider>().currentUser?.id ?? '';
+    final chat = context.read<ChatProvider>();
+
+    final privateKey = await storage.getPrivateKeyIfUnlocked() ?? '';
+    final ownPublicKey = await storage.getPublicKey() ?? '';
+    final ownFingerprint = await storage.getFingerprint() ?? '';
+    if (privateKey.isEmpty || ownPublicKey.isEmpty) {
+      throw const _StoryEncryptException(
+        'Unlock your PGP key in Settings to post a private story.',
+      );
+    }
+
+    var audience = audienceUserIds;
+    if (audience == null) {
+      final seen = <String>{};
+      audience = <String>[];
+      for (final c in chat.conversations.where((c) => c.isDM)) {
+        final u = c.otherUser(me);
+        if (u != null && seen.add(u.id)) audience.add(u.id);
+      }
+    }
+
+    final recipients = <PgpRecipient>[
+      if (me.isNotEmpty && ownFingerprint.isNotEmpty)
+        PgpRecipient(
+          userId: me,
+          publicKeyArmored: ownPublicKey,
+          keyFingerprint: ownFingerprint,
+        ),
+    ];
+    for (final userId in audience) {
+      try {
+        final key = await api.getRecentUserPublicKeyEntry(userId);
+        if (key != null && key.publicKey.trim().isNotEmpty) {
+          recipients.add(
+            PgpRecipient(
+              userId: userId,
+              publicKeyArmored: key.publicKey,
+              keyFingerprint: key.fingerprint,
+            ),
+          );
+        }
+      } catch (_) {
+        // A viewer whose key can't be fetched simply can't decrypt this
+        // story — better than blocking the post or downgrading to plaintext.
+      }
+    }
+    if (recipients.isEmpty) {
+      throw const _StoryEncryptException(
+        'No viewers with available keys — story not posted.',
+      );
+    }
+
+    return PgpService.encrypt(
+      plaintext: jsonEncode({
+        'openchat_story_meta': 1,
+        'file_key': fileKey,
+        'file_nonce': fileNonce,
+        'file_name': fileName,
+        'mime_type': mimeType,
+        'caption': caption,
+      }),
+      recipients: recipients,
+      signingPrivateKeyArmored: privateKey,
+    );
   }
 
   Future<void> _pickCloseFriends() async {
@@ -263,23 +385,33 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
                 ),
               ),
             const SizedBox(height: 12),
-            DropdownButtonFormField<int>(
-              initialValue: _durationSeconds,
-              decoration: const InputDecoration(
-                labelText: 'Visible for',
-                border: OutlineInputBorder(),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Visible for',
+                style: Theme.of(context).textTheme.labelMedium,
               ),
-              items: const [
-                DropdownMenuItem(value: 6 * 60 * 60, child: Text('6 hours')),
-                DropdownMenuItem(value: 12 * 60 * 60, child: Text('12 hours')),
-                DropdownMenuItem(value: 24 * 60 * 60, child: Text('24 hours')),
-                DropdownMenuItem(value: 48 * 60 * 60, child: Text('48 hours')),
-              ],
-              onChanged: _posting || pending == null
-                  ? null
-                  : (value) => setState(() {
-                      if (value != null) _durationSeconds = value;
-                    }),
+            ),
+            const SizedBox(height: 6),
+            GlassSegmentedControl(
+              segments: const ['6h', '12h', '24h', '48h'],
+              selectedIndex: switch (_durationSeconds) {
+                const (6 * 60 * 60) => 0,
+                const (12 * 60 * 60) => 1,
+                const (48 * 60 * 60) => 3,
+                _ => 2,
+              },
+              onSegmentSelected: (index) {
+                if (_posting || pending == null) return;
+                setState(() {
+                  _durationSeconds = const [
+                    6 * 60 * 60,
+                    12 * 60 * 60,
+                    24 * 60 * 60,
+                    48 * 60 * 60,
+                  ][index];
+                });
+              },
             ),
             if (_error != null) ...[
               const SizedBox(height: 12),

@@ -164,11 +164,16 @@ class CallService {
   final _sessionController = StreamController<CallSession?>.broadcast();
   final _incomingCallController = StreamController<CallSession>.broadcast();
   final _missedCallController = StreamController<CallSession>.broadcast();
+  final _cancelledCallController = StreamController<CallSession>.broadcast();
   final _callEndedController = StreamController<CallEndedEvent>.broadcast();
 
   Stream<CallSession?> get sessionStream => _sessionController.stream;
   Stream<CallSession> get incomingCalls => _incomingCallController.stream;
   Stream<CallSession> get missedCalls => _missedCallController.stream;
+
+  /// Incoming calls that were answered or declined on another device — the
+  /// ringing UI should dismiss silently (no missed-call entry).
+  Stream<CallSession> get cancelledCalls => _cancelledCallController.stream;
   Stream<CallEndedEvent> get callEnded => _callEndedController.stream;
 
   static const ringTimeout = Duration(seconds: 30);
@@ -394,12 +399,9 @@ class CallService {
       );
       _ws.sendCallAnswer(answerData);
       debugPrint('CallService: answer sent for ${session.callId}, awaiting connection');
-
-      _ws.sendCallRinging(
-        targetUserId: session.remoteUserId,
-        conversationId: conversationId,
-        callId: session.callId,
-      );
+      // (call_ringing is sent when the offer first arrives, not here — by
+      // answer time the caller is already past the ringing state.)
+      _startConnectTimer();
     } catch (e, st) {
       debugPrint('CallService.acceptIncomingCall failed: $e\n$st');
       _cleanup(emitEndedEvent: false);
@@ -432,19 +434,49 @@ class CallService {
   void hangup() {
     final session = _session;
     if (session != null) {
-      final shouldSignalHangup =
-          !session.isGroupCall || session.state != CallState.connected;
-      if (shouldSignalHangup) {
-        for (final userId in _hangupTargetIds(session)) {
-          _ws.sendCallHangup(
-            targetUserId: userId,
-            conversationId: session.conversationId ?? '',
-            callId: session.callId,
-          );
-        }
+      // Always signal — in a connected group call the remaining peers remove
+      // just our tile (see the callHangup handler); without the signal they
+      // stare at a frozen frame until ICE times out.
+      for (final userId in _hangupTargetIds(session)) {
+        _ws.sendCallHangup(
+          targetUserId: userId,
+          conversationId: session.conversationId ?? '',
+          callId: session.callId,
+        );
       }
     }
     _cleanup();
+  }
+
+  /// Removes a single participant from a connected group call: closes their
+  /// peer connection, disposes their renderer, and ends the call when they
+  /// were the last remote participant.
+  void _removePeer(String userId) {
+    final peer = userId.isEmpty ? null : _peers.remove(userId);
+    if (peer == null) {
+      // Unknown sender (or relay without caller_id) — just refresh the UI.
+      _sessionController.add(_session);
+      return;
+    }
+    debugPrint('CallService: peer[$userId] left the group call');
+    peer.pc.onIceCandidate = null;
+    peer.pc.onTrack = null;
+    peer.pc.onConnectionState = null;
+    peer.pc.onIceConnectionState = null;
+    peer.renderer.srcObject = null;
+    unawaited(() async {
+      try {
+        await peer.pc.close();
+      } catch (_) {}
+      try {
+        await peer.renderer.dispose();
+      } catch (_) {}
+    }());
+    if (_peers.isEmpty) {
+      _cleanup();
+    } else {
+      _sessionController.add(_session);
+    }
   }
 
   // ── WebSocket events ────────────────────────────────────────────────────────
@@ -461,15 +493,28 @@ class CallService {
         unawaited(_handleIceCandidate(event.data));
 
       case WsEventType.callHangup:
-        if (_session == null && _pendingIncoming != null) {
-          final missed = _pendingIncoming!;
-          _pendingIncoming = null;
-          _pendingRemoteSdp = null;
-          _pendingRemoteCandidates.clear();
-          _missedCallController.add(missed);
+        final hangupCallId = event.data['call_id']?.toString() ?? '';
+        final hangupFromId = event.data['caller_id']?.toString() ?? '';
+        final pending = _pendingIncoming;
+        if (_session == null && pending != null) {
+          // Only the caller hanging up cancels the ring — another invitee
+          // leaving a group call (or a stale call's hangup) does not.
+          final matchesCall =
+              hangupCallId.isEmpty || hangupCallId == pending.callId;
+          final fromCaller =
+              hangupFromId.isEmpty || hangupFromId == pending.remoteUserId;
+          if (matchesCall && fromCaller) {
+            _pendingIncoming = null;
+            _pendingRemoteSdp = null;
+            _pendingRemoteCandidates.clear();
+            _missedCallController.add(pending);
+          }
         } else if (_session?.isGroupCall == true &&
             _session?.state == CallState.connected) {
-          _sessionController.add(_session);
+          // One participant left a connected group call: tear down just their
+          // peer (otherwise their connection and frozen tile leak until ICE
+          // times out). Everyone else stays in the call.
+          _removePeer(hangupFromId);
         } else {
           debugPrint('CallService: remote hangup signal -> cleanup');
           _cleanup();
@@ -483,7 +528,11 @@ class CallService {
           _pendingRemoteSdp = null;
           _pendingRemoteCandidates.clear();
           _missedCallController.add(missed);
-        } else if (s != null && !s.isGroupCall) {
+        } else if (s != null && s.isGroupCall) {
+          // One invitee declined a group call — drop just their peer; the
+          // call continues for everyone else.
+          _removePeer(event.data['caller_id']?.toString() ?? '');
+        } else if (s != null) {
           debugPrint('CallService: remote reject signal -> cleanup');
           _cleanup();
         }
@@ -494,6 +543,21 @@ class CallService {
             (s.state == CallState.calling || s.state == CallState.ringing)) {
           s.state = CallState.ringing;
           _sessionController.add(s);
+        }
+
+      case WsEventType.callCancel:
+        // This user answered or declined on ANOTHER device — stop ringing
+        // here silently (it was handled, so it is not a missed call).
+        final cancelId = event.data['call_id']?.toString() ?? '';
+        final pendingCancel = _pendingIncoming;
+        if (pendingCancel != null &&
+            _session == null &&
+            (cancelId.isEmpty || cancelId == pendingCancel.callId)) {
+          _cancelRingTimer();
+          _pendingIncoming = null;
+          _pendingRemoteSdp = null;
+          _pendingRemoteCandidates.clear();
+          _cancelledCallController.add(pendingCancel);
         }
 
       default:
@@ -510,16 +574,19 @@ class CallService {
     final s = _session;
     if (s == null) return;
 
-    if (s.state == CallState.calling || s.state == CallState.ringing) {
-      s.state = CallState.connecting;
-      _sessionController.add(s);
-    }
-
     final decoded = await _decodeCallSignal(data);
     if (decoded == null) return;
 
+    // Validate the call id BEFORE touching state — a stale answer from a
+    // previous call must not flip a fresh outgoing call to "connecting".
     final callId = decoded['call_id']?.toString() ?? '';
     if (callId.isNotEmpty && callId != s.callId) return;
+
+    if (s.state == CallState.calling || s.state == CallState.ringing) {
+      s.state = CallState.connecting;
+      _sessionController.add(s);
+      _startConnectTimer();
+    }
 
     final sdp = decoded['sdp']?.toString() ?? '';
     if (sdp.isEmpty) return;
@@ -614,15 +681,63 @@ class CallService {
     };
 
     if (callId.isEmpty) return false;
-    if (_session != null || _pendingIncoming != null) {
-      if (callerId.isNotEmpty) {
-        _ws.sendCallReject(
-          targetUserId: callerId,
-          conversationId: conversationId ?? '',
-          callId: callId,
+
+    // The backend delivers each offer over BOTH the WebSocket and FCM. A
+    // second copy of an offer we already know about must be ignored — busy-
+    // rejecting it would tear down our own pending/active call.
+    if (callId == _pendingIncoming?.callId) return false;
+    final active = _session;
+    if (active != null && callId == active.callId) {
+      // Same call id on the active session: either a duplicate delivery of
+      // the original offer, or (when connected) a renegotiation offer from
+      // the peer — e.g. an ICE restart after a network change.
+      if (active.state == CallState.connected &&
+          sdp != null &&
+          callerId.isNotEmpty) {
+        unawaited(
+          _applyRenegotiationOffer(callerId, sdp, conversationId ?? ''),
         );
       }
       return false;
+    }
+
+    if (active != null || _pendingIncoming != null) {
+      // Glare: both sides called each other in the same conversation at the
+      // same time. Resolve deterministically — both sides compare the same
+      // pair of call ids, the side whose outgoing call id sorts LOWER wins as
+      // caller; the loser silently cancels its outgoing attempt and rings for
+      // the winner's offer instead. (The loser's offer is ignored by the
+      // winner below, so no reject is sent in either direction.)
+      final glare = active != null &&
+          !active.isIncoming &&
+          !active.wasConnected &&
+          (active.state == CallState.calling ||
+              active.state == CallState.ringing) &&
+          conversationId != null &&
+          conversationId == active.conversationId;
+      if (glare) {
+        if (active.callId.compareTo(callId) < 0) {
+          // We win — keep our outgoing call, ignore their offer.
+          return false;
+        }
+        // We lose — drop our outgoing attempt without signaling and fall
+        // through to ring for the incoming offer.
+        debugPrint(
+          'CallService: glare detected, yielding to remote call $callId',
+        );
+        _cleanup(emitEndedEvent: false);
+      } else {
+        // Genuinely busy with a different call.
+        if (callerId.isNotEmpty) {
+          _ws.sendCallReject(
+            targetUserId: callerId,
+            conversationId: conversationId ?? '',
+            callId: callId,
+            reason: 'busy',
+          );
+        }
+        return false;
+      }
     }
 
     final incoming = CallSession(
@@ -640,6 +755,18 @@ class CallService {
     _pendingRemoteCandidates.clear();
     _pendingIncoming = incoming;
     _incomingCallController.add(incoming);
+
+    // Tell the caller we are ringing NOW — not on accept, by which time the
+    // caller has already moved to connecting and ignores the event.
+    if (callerId.isNotEmpty &&
+        conversationId != null &&
+        conversationId.isNotEmpty) {
+      _ws.sendCallRinging(
+        targetUserId: callerId,
+        conversationId: conversationId,
+        callId: callId,
+      );
+    }
 
     _ringTimer?.cancel();
     _ringTimer = Timer(ringTimeout, () {
@@ -736,7 +863,13 @@ class CallService {
           _markConnected();
           _sessionController.add(_session);
         case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
-          if (_session != null && !_session!.wasConnected) _cleanup();
+          if (_session != null && !_session!.wasConnected) {
+            _cleanup();
+          } else if (_session != null) {
+            // Mid-call transport failure (network change) — try to recover
+            // instead of leaving a zombie "connected" call with dead media.
+            _attemptIceRestart(peer);
+          }
         case RTCPeerConnectionState.RTCPeerConnectionStateClosed:
           if (_session != null) _cleanup();
         default:
@@ -757,7 +890,11 @@ class CallService {
           _markConnected();
           _sessionController.add(_session);
         case RTCIceConnectionState.RTCIceConnectionStateFailed:
-          if (_session != null && !_session!.wasConnected) _cleanup();
+          if (_session != null && !_session!.wasConnected) {
+            _cleanup();
+          } else if (_session != null) {
+            _attemptIceRestart(peer);
+          }
         default:
           break;
       }
@@ -1029,6 +1166,8 @@ class CallService {
     _cancelRingTimer();
     _connectTimer?.cancel();
     _connectTimer = null;
+    _iceRestartTimer?.cancel();
+    _iceRestartTimer = null;
     if (!s.wasConnected) {
       s.wasConnected = true;
       s.connectedAt = DateTime.now();
@@ -1055,6 +1194,102 @@ class CallService {
   void _cancelRingTimer() {
     _ringTimer?.cancel();
     _ringTimer = null;
+  }
+
+  /// Fails the call if it never reaches connected after answering — without
+  /// this, a callee whose ICE never completes sits in "connecting" forever.
+  void _startConnectTimer() {
+    _connectTimer?.cancel();
+    _connectTimer = Timer(connectTimeout, () {
+      final s = _session;
+      if (s != null && !s.wasConnected) {
+        debugPrint('CallService: connect timeout -> hangup');
+        hangup();
+      }
+    });
+  }
+
+  // ── ICE restart ─────────────────────────────────────────────────────────────
+
+  static const _iceRestartTimeout = Duration(seconds: 12);
+  Timer? _iceRestartTimer;
+
+  /// A connected call whose transport failed (network change, NAT rebind)
+  /// attempts one ICE restart before giving up. The new offer reuses the
+  /// normal offer relay with the same call id; the remote side recognizes the
+  /// id and treats it as a renegotiation rather than a new call.
+  void _attemptIceRestart(_PeerState peer) {
+    final s = _session;
+    if (s == null || !s.wasConnected) return;
+    if (_iceRestartTimer != null) return; // restart already in flight
+
+    debugPrint('CallService: transport failed while connected -> ICE restart');
+    _iceRestartTimer = Timer(_iceRestartTimeout, () {
+      _iceRestartTimer = null;
+      final current = _session;
+      if (current != null && current.state != CallState.connected) {
+        debugPrint('CallService: ICE restart failed -> cleanup');
+        _cleanup();
+      }
+    });
+    s.state = CallState.connecting;
+    _sessionController.add(s);
+
+    unawaited(() async {
+      try {
+        final offer = await peer.pc.createOffer({'iceRestart': true});
+        await peer.pc.setLocalDescription(offer);
+        final offerData = await _signalCodec.encode(
+          CallSignalPayload(
+            kind: 'offer',
+            targetUserId: peer.userId,
+            callId: s.callId,
+            conversationId: s.conversationId ?? '',
+            isVideo: s.isVideo,
+            sdp: offer.sdp,
+            participantUserIds: s.participantUserIds,
+          ),
+        );
+        _ws.sendCallOfferPayload(offerData);
+      } catch (e) {
+        debugPrint('CallService: ICE restart offer failed: $e');
+      }
+    }());
+  }
+
+  /// Remote side of an ICE restart: an offer arriving with the active call's
+  /// id while connected is a renegotiation — apply it and answer back.
+  Future<void> _applyRenegotiationOffer(
+    String callerId,
+    String sdp,
+    String conversationId,
+  ) async {
+    final s = _session;
+    final peer = _peers[callerId] ?? _peers.values.firstOrNull;
+    if (s == null || peer == null) return;
+    try {
+      await peer.pc.setRemoteDescription(
+        RTCSessionDescription(_ensureSdpTerminator(sdp), 'offer'),
+      );
+      final answer = await peer.pc.createAnswer({});
+      await peer.pc.setLocalDescription(answer);
+      final answerData = await _signalCodec.encode(
+        CallSignalPayload(
+          kind: 'answer',
+          targetUserId: peer.userId,
+          callId: s.callId,
+          conversationId: conversationId.isNotEmpty
+              ? conversationId
+              : (s.conversationId ?? ''),
+          isVideo: s.isVideo,
+          sdp: answer.sdp,
+        ),
+      );
+      _ws.sendCallAnswer(answerData);
+      debugPrint('CallService: renegotiation answer sent for ${s.callId}');
+    } catch (e) {
+      debugPrint('CallService: renegotiation failed: $e');
+    }
   }
 
   // ── Local media ─────────────────────────────────────────────────────────────
@@ -1118,6 +1353,8 @@ class CallService {
     _cancelRingTimer();
     _connectTimer?.cancel();
     _connectTimer = null;
+    _iceRestartTimer?.cancel();
+    _iceRestartTimer = null;
 
     final ending = _session;
     if (emitEndedEvent &&
@@ -1209,6 +1446,7 @@ class CallService {
     _sessionController.close();
     _incomingCallController.close();
     _missedCallController.close();
+    _cancelledCallController.close();
     _callEndedController.close();
     if (_localRendererInitialized) {
       unawaited(_localRenderer.dispose());

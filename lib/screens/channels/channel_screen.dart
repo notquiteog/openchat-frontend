@@ -1178,20 +1178,14 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         channel.id,
       );
       if (result['join_request'] == 'pending') {
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('Join request sent')));
-        }
+        if (mounted) showAppToast(context, 'Join request sent');
         return;
       }
       setState(() => _isSubscribed = true);
       if (mounted) context.read<ChatProvider>().loadConversations();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Subscribe failed: $e')));
+        showAppToast(context, 'Subscribe failed: $e', isError: true);
       }
     }
   }
@@ -1259,9 +1253,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       if (mounted) await _load();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+        showAppToast(context, 'Delete failed: $e', isError: true);
       }
     }
   }
@@ -1349,9 +1341,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       if (mounted) await _load();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+        showAppToast(context, 'Delete failed: $e', isError: true);
       }
     }
   }
@@ -1382,9 +1372,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       if (mounted) await _load();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Ban failed: $e')));
+        showAppToast(context, 'Ban failed: $e', isError: true);
       }
     }
   }
@@ -1688,15 +1676,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       if (mounted) {
         setState(() => _channel = updated);
         context.read<ChatProvider>().loadConversations();
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Channel updated')));
+        showAppToast(context, 'Channel updated');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to update: $e')));
+        showAppToast(context, 'Failed to update: $e', isError: true);
       }
     }
   }
@@ -2198,9 +2182,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final price = double.tryParse(priceCtrl.text.trim()) ?? 0;
     final days = int.tryParse(daysCtrl.text.trim()) ?? 0;
     if (price <= 0 || days < 1) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter a valid price and period')),
-      );
+      showAppToast(context, 'Enter a valid price and period', isError: true);
       return;
     }
     try {
@@ -2211,15 +2193,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         periodDays: days,
       );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Subscription price saved')),
-        );
+        showAppToast(context, 'Subscription price saved');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed: $e')));
+        showAppToast(context, 'Failed: $e', isError: true);
       }
     }
   }
@@ -2522,9 +2500,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         _restoreComposer(rawText, draftEntities);
       }
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(_postErrorMessage(e))));
+        showAppToast(context, _postErrorMessage(e), isError: true);
       }
       return;
     }
@@ -2603,9 +2579,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         _restoreComposer(rawText, draftEntities);
       }
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(_postErrorMessage(e))));
+        showAppToast(context, _postErrorMessage(e), isError: true);
       }
       return;
     }
@@ -2627,11 +2601,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       chat.indexLoadedMessage(confirmed);
     } else if (mounted) {
       setState(() => _scheduledFor = null);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Scheduled for ${_formatSchedule(scheduledFor)}'),
-        ),
-      );
+      showAppToast(context, 'Scheduled for ${_formatSchedule(scheduledFor)}');
     }
   }
 
@@ -3029,11 +2999,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       remindAt: selected,
     );
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Reminder set for ${_formatReminderTime(selected)}'),
-      ),
-    );
+    showAppToast(context, 'Reminder set for ${_formatReminderTime(selected)}');
   }
 
   String _formatReminderTime(DateTime value) {
@@ -3079,23 +3045,17 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         reason: reason,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Report sent')));
+      showAppToast(context, 'Report sent');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to report: $e')));
+      showAppToast(context, 'Failed to report: $e', isError: true);
     }
   }
 
   Future<void> _copyPostText(Message msg) async {
     await Clipboard.setData(ClipboardData(text: msg.decryptedContent ?? ''));
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Post text copied')));
+    showAppToast(context, 'Post text copied');
   }
 
   Future<void> _copyPostLink(Message msg) async {
@@ -3105,9 +3065,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       ),
     );
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Post link copied')));
+    showAppToast(context, 'Post link copied');
   }
 
   Future<void> _downloadPostAttachment(Message msg) async {
@@ -3218,9 +3176,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }) {
     final postContext = _postKeys[messageId]?.currentContext;
     if (postContext == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(missingMessage)));
+      showAppToast(context, missingMessage, isError: true);
       return;
     }
     Scrollable.ensureVisible(
@@ -3747,9 +3703,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     } catch (e) {
       _clearAttachmentUploadProgress();
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+      showAppToast(context, 'Upload failed: $e', isError: true);
       return;
     } finally {
       final file = voiceNote?.file;
@@ -3793,9 +3747,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         return;
       }
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+      showAppToast(context, 'Upload failed: $e', isError: true);
     } finally {
       _clearAttachmentUploadProgress();
     }
@@ -3818,8 +3770,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   .where((t) => t.isNotEmpty)
                   .toList();
               if (question.isEmpty || options.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Question and option required')),
+                showAppToast(
+                  context,
+                  'Question and option required',
+                  isError: true,
                 );
                 return;
               }
@@ -3834,9 +3788,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                 );
               } catch (e) {
                 if (!mounted) return;
-                ScaffoldMessenger.of(
-                  context,
-                ).showSnackBar(SnackBar(content: Text(e.toString())));
+                showAppToast(context, e.toString(), isError: true);
               }
             }
 

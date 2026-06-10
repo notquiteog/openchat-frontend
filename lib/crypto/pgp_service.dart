@@ -233,6 +233,12 @@ class PgpService {
         ),
       });
     }
+    // Shuffle slots with a CSPRNG. Recipients are normalised in sorted order
+    // (for dedup determinism), so without this, slot k always belonged to the
+    // k-th smallest member UUID and the server — which knows the member list —
+    // could attribute every per-recipient ciphertext (and selectively corrupt
+    // a specific member's slot).
+    slots.shuffle(Random.secure());
     return jsonEncode({
       _envelopeKey: _envelopeVersion,
       _cipherKey: _cipherName,
@@ -257,7 +263,12 @@ class PgpService {
       );
       if (target == 0) return plaintext;
       final random = Random.secure();
-      final paddingBytes = max(16, ((target - currentSize) * 3 / 4).floor());
+      // Account for the JSON overhead of the padding field itself
+      // (`,"_padding":""` ≈ 15 chars) so the padded size lands at or below the
+      // bucket boundary instead of bucket+ε.
+      const fieldOverhead = 15;
+      final available = target - currentSize - fieldOverhead;
+      final paddingBytes = max(16, (available * 3 / 4).floor());
       final padding = base64Url.encode(
         List<int>.generate(paddingBytes, (_) => random.nextInt(256)),
       );

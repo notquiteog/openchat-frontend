@@ -157,9 +157,7 @@ class _ChatScreenState extends State<ChatScreen> {
           if (found) {
             await _jumpToMessage(initialMessageId);
           } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Message is not loaded yet')),
-            );
+            showAppToast(context, 'Message is not loaded yet', isError: true);
           }
         }
       }
@@ -864,9 +862,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final messages = context.read<ChatProvider>().messagesFor(conv.id);
     final chronologicalIndex = messages.indexWhere((msg) => msg.id == msgID);
     if (chronologicalIndex < 0) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Message is not loaded')));
+      showAppToast(context, 'Message is not loaded', isError: true);
       return;
     }
 
@@ -915,8 +911,10 @@ class _ChatScreenState extends State<ChatScreen> {
     final found = await chat.ensureMessageLoaded(conv.id, replyTo);
     if (!mounted) return;
     if (!found) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Original message is not loaded yet')),
+      showAppToast(
+        context,
+        'Original message is not loaded yet',
+        isError: true,
       );
       return;
     }
@@ -1308,9 +1306,7 @@ class _ChatScreenState extends State<ChatScreen> {
         .where((m) => m.userId != currentUserID && m.user != null)
         .toList();
     if (members.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('No chat member available')));
+      showAppToast(context, 'No chat member available', isError: true);
       return;
     }
 
@@ -1364,9 +1360,7 @@ class _ChatScreenState extends State<ChatScreen> {
               if (submitting) return;
               final amount = double.tryParse(amountCtrl.text.trim()) ?? 0;
               if (amount <= 0) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Enter an amount')),
-                );
+                showAppToast(context, 'Enter an amount', isError: true);
                 return;
               }
               final isCryptoAmount = amountUnit == 'crypto';
@@ -1382,10 +1376,10 @@ class _ChatScreenState extends State<ChatScreen> {
                       (!isCryptoAmount || amount <= balanceFor(provider));
                   if (useWallet) {
                     if (isCryptoAmount && amount > balanceFor(provider)) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Not enough app wallet balance'),
-                        ),
+                      showAppToast(
+                        context,
+                        'Not enough app wallet balance',
+                        isError: true,
                       );
                       return;
                     }
@@ -1469,9 +1463,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 _scrollToBottom();
               } catch (e) {
                 if (!mounted) return;
-                ScaffoldMessenger.of(
-                  context,
-                ).showSnackBar(SnackBar(content: Text(e.toString())));
+                showAppToast(context, e.toString(), isError: true);
               } finally {
                 if (mounted) setSheet(() => submitting = false);
               }
@@ -1503,33 +1495,30 @@ class _ChatScreenState extends State<ChatScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: 8),
                     child: Row(
                       children: [
-                        SegmentedButton<bool>(
-                          segments: const [
-                            ButtonSegment(
-                              value: true,
-                              label: Text('Pay'),
-                              icon: Icon(Icons.arrow_upward),
-                            ),
-                            ButtonSegment(
-                              value: false,
-                              label: Text('Request'),
-                              icon: Icon(Icons.arrow_downward),
-                            ),
-                          ],
-                          selected: {payMode},
-                          onSelectionChanged: (next) =>
-                              setSheet(() => payMode = next.first),
-                        ),
-                        const Spacer(),
-                        GlassContainer(
-                          shape: const LiquidRoundedSuperellipse(
-                            borderRadius: 999,
+                        Expanded(
+                          child: GlassSegmentedControl(
+                            segments: const ['Pay', 'Request'],
+                            selectedIndex: payMode ? 0 : 1,
+                            onSegmentSelected: (i) =>
+                                setSheet(() => payMode = i == 0),
                           ),
-                          allowElevation: false,
-                          glowIntensity: 0.02,
+                        ),
+                        const SizedBox(width: 10),
+                        // Opaque pill — the sheet itself is already glass;
+                        // nesting another glass surface stacks a second
+                        // backdrop pass ("glass for chrome, opaque for
+                        // content").
+                        Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 10,
                             vertical: 7,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHighest
+                                .withValues(alpha: 0.45),
+                            borderRadius: BorderRadius.circular(999),
                           ),
                           child: Text(
                             '${available.toStringAsFixed(provider == 'btc' ? 8 : 12)} ${provider.toUpperCase()}',
@@ -1561,14 +1550,11 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  SegmentedButton<String>(
-                    segments: [
-                      for (final p in providers)
-                        ButtonSegment(value: p, label: Text(p.toUpperCase())),
-                    ],
-                    selected: {provider},
-                    onSelectionChanged: (next) => setSheet(() {
-                      provider = next.first;
+                  GlassSegmentedControl(
+                    segments: [for (final p in providers) p.toUpperCase()],
+                    selectedIndex: providers.indexOf(provider).clamp(0, providers.length - 1),
+                    onSegmentSelected: (i) => setSheet(() {
+                      provider = providers[i];
                       if (payMode &&
                           amountUnit == 'crypto' &&
                           paymentSource == 'wallet' &&
@@ -1579,38 +1565,32 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   const SizedBox(height: 12),
                   if (payMode) ...[
-                    SegmentedButton<String>(
-                      segments: [
-                        ButtonSegment(
-                          value: 'wallet',
-                          label: const Text('App wallet'),
-                          icon: const Icon(Icons.account_balance_wallet),
-                        ),
-                        const ButtonSegment(
-                          value: 'external',
-                          label: Text('External'),
-                          icon: Icon(Icons.qr_code_2),
-                        ),
-                      ],
-                      selected: {canUseWallet ? paymentSource : 'external'},
-                      onSelectionChanged: (next) =>
-                          setSheet(() => paymentSource = next.first),
+                    GlassSegmentedControl(
+                      segments: const ['App wallet', 'External'],
+                      selectedIndex:
+                          (canUseWallet ? paymentSource : 'external') ==
+                              'wallet'
+                          ? 0
+                          : 1,
+                      onSegmentSelected: (i) => setSheet(
+                        () => paymentSource = i == 0 ? 'wallet' : 'external',
+                      ),
                     ),
                     const SizedBox(height: 12),
                   ],
-                  SegmentedButton<String>(
-                    showSelectedIcon: false,
-                    segments: [
-                      ButtonSegment(
-                        value: 'crypto',
-                        label: Text(provider.toUpperCase()),
-                      ),
-                      const ButtonSegment(value: 'usd', label: Text('USD')),
-                      const ButtonSegment(value: 'eur', label: Text('EUR')),
-                    ],
-                    selected: {amountUnit},
-                    onSelectionChanged: (next) => setSheet(() {
-                      amountUnit = next.first;
+                  GlassSegmentedControl(
+                    segments: [provider.toUpperCase(), 'USD', 'EUR'],
+                    selectedIndex: switch (amountUnit) {
+                      'usd' => 1,
+                      'eur' => 2,
+                      _ => 0,
+                    },
+                    onSegmentSelected: (i) => setSheet(() {
+                      amountUnit = switch (i) {
+                        1 => 'usd',
+                        2 => 'eur',
+                        _ => 'crypto',
+                      };
                       if (payMode &&
                           amountUnit == 'crypto' &&
                           paymentSource == 'wallet' &&
@@ -1825,11 +1805,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                     '${location.latitude}, ${location.longitude}',
                               ),
                             );
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Coordinates copied'),
-                              ),
-                            );
+                            showAppToast(context, 'Coordinates copied');
                           },
                           child: const Text('Copy coordinates'),
                         ),
@@ -1923,10 +1899,10 @@ class _ChatScreenState extends State<ChatScreen> {
             Future<void> submit() async {
               final title = titleCtrl.text.trim();
               if (title.isEmpty || slots.length < 2) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Title and at least 2 time slots required'),
-                  ),
+                showAppToast(
+                  context,
+                  'Title and at least 2 time slots required',
+                  isError: true,
                 );
                 return;
               }
@@ -1946,9 +1922,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 if (sent && mounted) _scrollToBottom();
               } catch (e) {
                 if (!mounted) return;
-                ScaffoldMessenger.of(
-                  context,
-                ).showSnackBar(SnackBar(content: Text(e.toString())));
+                showAppToast(context, e.toString(), isError: true);
               }
             }
 
@@ -2019,8 +1993,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   .where((text) => text.isNotEmpty)
                   .toList();
               if (question.isEmpty || options.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Question and option required')),
+                showAppToast(
+                  context,
+                  'Question and option required',
+                  isError: true,
                 );
                 return;
               }
@@ -2042,9 +2018,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 if (sent && mounted) _scrollToBottom();
               } catch (e) {
                 if (!mounted) return;
-                ScaffoldMessenger.of(
-                  context,
-                ).showSnackBar(SnackBar(content: Text(e.toString())));
+                showAppToast(context, e.toString(), isError: true);
               }
             }
 
@@ -2205,9 +2179,7 @@ class _ChatScreenState extends State<ChatScreen> {
         .toList(growable: false);
 
     if (recipients.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No one else is in this chat')),
-      );
+      showAppToast(context, 'No one else is in this chat', isError: true);
       return;
     }
 
@@ -2225,9 +2197,7 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Could not start call: $e')));
+      showAppToast(context, 'Could not start call: $e', isError: true);
     }
   }
 
@@ -2237,13 +2207,11 @@ class _ChatScreenState extends State<ChatScreen> {
     // Calls use UDP media that can't be tunnelled through a TCP SOCKS proxy;
     // with the strict toggle on, refuse rather than leak the real IP.
     if (ProxyService.instance.callsBlocked) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Calls are disabled while a proxy is active (strict mode). '
-            'Turn off the proxy or disable strict mode to call.',
-          ),
-        ),
+      showAppToast(
+        context,
+        'Calls are disabled while a proxy is active (strict mode). '
+        'Turn off the proxy or disable strict mode to call.',
+        isError: true,
       );
       return;
     }
@@ -2296,11 +2264,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   if (isPremium) {
                     _startSfuCall(isVideo: isVideo);
                   } else {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content:
-                            Text('SFU group calls require OpenChat Premium'),
-                      ),
+                    showAppToast(
+                      context,
+                      'SFU group calls require OpenChat Premium',
+                      isError: true,
                     );
                   }
                 },
@@ -2338,9 +2305,7 @@ class _ChatScreenState extends State<ChatScreen> {
           )
           .catchError((Object e) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not start SFU call: $e')),
-        );
+        showAppToast(context, 'Could not start SFU call: $e', isError: true);
       }),
     );
     Navigator.of(context).push(
@@ -3722,11 +3687,7 @@ class _ChatScreenState extends State<ChatScreen> {
       remindAt: selected,
     );
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Reminder set for ${_formatReminderTime(selected)}'),
-      ),
-    );
+    showAppToast(context, 'Reminder set for ${_formatReminderTime(selected)}');
   }
 
   String _formatReminderTime(DateTime value) {
@@ -3772,23 +3733,17 @@ class _ChatScreenState extends State<ChatScreen> {
         reason: reason,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Report sent')));
+      showAppToast(context, 'Report sent');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to report: $e')));
+      showAppToast(context, 'Failed to report: $e', isError: true);
     }
   }
 
   Future<void> _copyMessageText(Message msg) async {
     await Clipboard.setData(ClipboardData(text: msg.decryptedContent ?? ''));
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Message text copied')));
+    showAppToast(context, 'Message text copied');
   }
 
   Future<void> _copyMessageLink(Message msg) async {
@@ -3798,9 +3753,7 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Message link copied')));
+    showAppToast(context, 'Message link copied');
   }
 
   Future<void> _downloadMessageAttachment(Message msg) async {
@@ -3940,8 +3893,10 @@ class _ChatScreenState extends State<ChatScreen> {
         .where((c) => c.id != conv.id)
         .toList(growable: false);
     if (targets.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No other conversations to forward to')),
+      showAppToast(
+        context,
+        'No other conversations to forward to',
+        isError: true,
       );
       return null;
     }
@@ -4269,8 +4224,10 @@ class _ChatScreenState extends State<ChatScreen> {
         )?.hasPermission(AdminPermission.manageInfo) ??
         false;
     if (!canManageInfo) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Missing permission to edit this group')),
+      showAppToast(
+        context,
+        'Missing permission to edit this group',
+        isError: true,
       );
       return;
     }
@@ -4635,26 +4592,17 @@ class _ChatScreenState extends State<ChatScreen> {
                                                 .loadConversationMembers(
                                                   conv.id,
                                                 );
-                                            ScaffoldMessenger.of(
+                                            showAppToast(
                                               context,
-                                            ).showSnackBar(
-                                              SnackBar(
-                                                content: Text(
-                                                  '@$username added',
-                                                ),
-                                              ),
+                                              '@$username added',
                                             );
                                           }
                                         } catch (e) {
                                           if (context.mounted) {
-                                            ScaffoldMessenger.of(
+                                            showAppToast(
                                               context,
-                                            ).showSnackBar(
-                                              SnackBar(
-                                                content: Text(
-                                                  'Failed to add: $e',
-                                                ),
-                                              ),
+                                              'Failed to add: $e',
+                                              isError: true,
                                             );
                                           }
                                         }
@@ -5345,10 +5293,10 @@ class _GroupCallBanner extends StatelessWidget {
     final isPremium =
         context.read<AuthProvider>().currentUser?.isPremium == true;
     if (!isPremium) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Joining an SFU group call requires OpenChat Premium'),
-        ),
+      showAppToast(
+        context,
+        'Joining an SFU group call requires OpenChat Premium',
+        isError: true,
       );
       return;
     }
@@ -5362,9 +5310,7 @@ class _GroupCallBanner extends StatelessWidget {
           )
           .catchError((Object e) {
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not join call: $e')),
-        );
+        showAppToast(context, 'Could not join call: $e', isError: true);
       }),
     );
     Navigator.of(context).push(

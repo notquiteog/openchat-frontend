@@ -35,6 +35,9 @@ export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
         // Feedback
         GlassProgressIndicator,
         GlassToast,
+        GlassToastType,
+        GlassToastPosition,
+        GlassToastAction,
         // Overlays
         GlassSheet,
         GlassModalSheet,
@@ -69,6 +72,27 @@ export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
 ///  2. The system `MediaQuery.highContrastOf` flag (iOS/Android accessibility).
 bool glassReduceTransparency(BuildContext context) =>
     GlassAccessibilityData.of(context).reduceTransparency;
+
+/// Shows an iOS 26 liquid-glass toast — the app-wide replacement for
+/// `ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(...)))`.
+///
+/// Renders via [GlassToast.show], which inserts an [OverlayEntry] on the
+/// root [Overlay] and manages its own dismiss timer, so it is safe anywhere
+/// a SnackBar was previously shown. Callers that fire after an `await` must
+/// still guard with `context.mounted` (this helper also bails out defensively
+/// if the context has been unmounted).
+void showAppToast(
+  BuildContext context,
+  String message, {
+  bool isError = false,
+}) {
+  if (!context.mounted) return;
+  GlassToast.show(
+    context,
+    message: message,
+    type: isError ? GlassToastType.error : GlassToastType.info,
+  );
+}
 
 Color reducedGlassSurfaceColor(BuildContext context) {
   final theme = Theme.of(context);
@@ -286,8 +310,12 @@ class LiquidGlass extends StatelessWidget {
     return DecoratedBox(
       decoration: BoxDecoration(
         boxShadow: shadow,
-        borderRadius: isCapsule ? null : borderRadius,
-        shape: isCapsule ? BoxShape.rectangle : BoxShape.rectangle,
+        // A capsule needs a stadium radius here — with no radius the shadow is
+        // computed for a sharp rectangle and its square corners peek out from
+        // behind the capsule at low blur.
+        borderRadius: isCapsule
+            ? BorderRadius.circular(999)
+            : borderRadius,
       ),
       child: container,
     );

@@ -112,9 +112,15 @@ class _ProxySettingsScreenState extends State<ProxySettingsScreen> {
     final scheme = Theme.of(context).colorScheme;
     final showFields = _mode != ProxyMode.off;
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: const GlassAppBar(title: Text('Proxy & Tor')),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.fromLTRB(
+          16,
+          MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
+          16,
+          16,
+        ),
         children: [
           GlassCard(
             child: Column(

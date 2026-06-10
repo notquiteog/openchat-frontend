@@ -63,10 +63,12 @@ class KeyCacheService {
   /// TTL, or — when [excludeExpiredKeys] is true — the cached key itself has
   /// passed its PGP expiry. Callers encrypting outbound messages should
   /// always pass excludeExpiredKeys: true so they never address a recipient
-  /// who can't decrypt.
+  /// who can't decrypt. Pass [maxAge] to additionally require the entry to
+  /// have been fetched recently (used by the send path's freshness window).
   static Future<CachedKey?> get(
     String userId, {
     bool excludeExpiredKeys = true,
+    Duration? maxAge,
   }) async {
     final db = await _open();
     final stmt = db.prepare('''
@@ -84,6 +86,10 @@ class KeyCacheService {
     );
     if (DateTime.now().difference(cachedAt) > _ttl) {
       _delete(db, userId);
+      return null;
+    }
+    if (maxAge != null && DateTime.now().difference(cachedAt) > maxAge) {
+      // Still valid by TTL but not fresh enough for this caller — keep it.
       return null;
     }
     DateTime? expiresAt;
