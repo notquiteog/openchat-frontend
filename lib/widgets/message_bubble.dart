@@ -31,6 +31,8 @@ import '../services/network_service.dart';
 import '../services/security_service.dart';
 import '../utils/link_preview_utils.dart';
 import '../utils/mention_utils.dart';
+import '../utils/skill_game.dart';
+import 'game_play_sheet.dart';
 import 'glass.dart';
 import 'location_map_preview.dart';
 import 'message_image_layout.dart';
@@ -785,6 +787,14 @@ class _GameBubbleState extends State<_GameBubble> {
       }
     }
 
+    // Skill rounds (lobby flow, scored by timing) vs legacy chance rounds
+    // (picked-face betting, random outcome). Old rounds in the history keep
+    // rendering with the legacy branches below.
+    final isSkill =
+        status == 'lobby' ||
+        status == 'playing' ||
+        (status == 'revealed' && round['outcome'] == null);
+
     final children = <Widget>[
       Row(
         children: [
@@ -794,13 +804,17 @@ class _GameBubbleState extends State<_GameBubble> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Provably-fair game',
-                  style: TextStyle(fontWeight: FontWeight.w800),
+                Text(
+                  isSkill
+                      ? '${skillGameName(emoji)} — skill game'
+                      : 'Provably-fair game',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
                 Text(
                   isReal
-                      ? 'Ante $stake ${provider.toUpperCase()} · winners split the pot'
+                      ? 'Ante $stake ${provider.toUpperCase()} · best total takes the pot'
+                      : isSkill
+                      ? 'No stakes · best total score wins'
                       : 'No stakes · verify the result yourself',
                   style: TextStyle(
                     fontSize: 11,
@@ -818,9 +832,21 @@ class _GameBubbleState extends State<_GameBubble> {
     if (status == 'refunded') {
       children.add(
         Text(
-          'Round expired — all antes were refunded.',
+          isReal
+              ? 'Game cancelled or expired — all antes were refunded.'
+              : 'Game cancelled or expired.',
           style: TextStyle(color: scheme.error),
         ),
+      );
+    } else if (status == 'lobby') {
+      children.addAll(_lobbyChildren(round, selfId, myBet, bets, scheme));
+    } else if (status == 'playing') {
+      children.addAll(
+        _playingChildren(round, selfId, myBet, bets, scheme, emoji),
+      );
+    } else if (isSkill) {
+      children.addAll(
+        _scoreboardChildren(round, selfId, bets, scheme, provider, faces),
       );
     } else if (status == 'revealed') {
       final outcome = (round['outcome'] as num?)?.toInt() ?? 0;
@@ -964,6 +990,331 @@ class _GameBubbleState extends State<_GameBubble> {
       default:
         return provider == 'fun' ? 'No win this time' : 'You lost your ante';
     }
+  }
+
+  // ── Skill-game lobby flow ─────────────────────────────────────────────────
+
+  String _playerName(String? selfId, String userId) {
+    if (userId == selfId) return 'You';
+    final conv = context
+        .read<ChatProvider>()
+        .conversations
+        .where((c) => c.id == widget.conversationId)
+        .firstOrNull;
+    final member = conv?.members.where((m) => m.userId == userId).firstOrNull;
+    final name = member?.user?.username;
+    if (name == null || name.trim().isEmpty) {
+      return 'Player ${userId.length >= 4 ? userId.substring(0, 4) : userId}';
+    }
+    return '@$name';
+  }
+
+  Widget _playerRow(
+    String? selfId,
+    Map<String, dynamic> seat,
+    ColorScheme scheme, {
+    Widget? trailing,
+  }) {
+    final userId = seat['user_id']?.toString() ?? '';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              _playerName(selfId, userId),
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontWeight: userId == selfId
+                    ? FontWeight.w700
+                    : FontWeight.w500,
+                fontSize: 13,
+              ),
+            ),
+          ),
+          ?trailing,
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _lobbyChildren(
+    Map<String, dynamic> round,
+    String? selfId,
+    Map<String, dynamic>? mySeat,
+    List<dynamic> seats,
+    ColorScheme scheme,
+  ) {
+    final maxPlayers = (round['max_players'] as num?)?.toInt() ?? 8;
+    final createdBy = round['created_by']?.toString();
+    final iAmCreator = selfId != null && selfId == createdBy;
+    final full = seats.length >= maxPlayers;
+    final myReady = mySeat?['ready'] == true;
+
+    return [
+      Text(
+        'Waiting for players — ${seats.length}/$maxPlayers joined',
+        style: TextStyle(
+          fontSize: 12,
+          color: scheme.onSurface.withValues(alpha: 0.7),
+        ),
+      ),
+      const SizedBox(height: 6),
+      for (final seat in seats.whereType<Map>())
+        _playerRow(
+          selfId,
+          Map<String, dynamic>.from(seat),
+          scheme,
+          trailing: seat['ready'] == true
+              ? Icon(Icons.check_circle_rounded, size: 16, color: scheme.primary)
+              : Icon(
+                  Icons.hourglass_empty_rounded,
+                  size: 14,
+                  color: scheme.onSurface.withValues(alpha: 0.4),
+                ),
+        ),
+      const SizedBox(height: 10),
+      if (mySeat == null)
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton(
+            onPressed: _busy || full
+                ? null
+                : () => _run(
+                    () => context.read<ChatProvider>().joinGame(
+                      widget.conversationId,
+                      widget.roundId,
+                      isChannel: widget.isChannel,
+                    ),
+                  ),
+            child: Text(full ? 'Lobby full' : 'Join game'),
+          ),
+        )
+      else
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton(
+                onPressed: _busy
+                    ? null
+                    : () => _run(
+                        () => context.read<ChatProvider>().readyGame(
+                          widget.conversationId,
+                          widget.roundId,
+                          ready: !myReady,
+                          isChannel: widget.isChannel,
+                        ),
+                      ),
+                child: Text(myReady ? 'Unready' : 'Ready up'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton(
+                onPressed: _busy
+                    ? null
+                    : () => _run(
+                        () => context.read<ChatProvider>().leaveGame(
+                          widget.conversationId,
+                          widget.roundId,
+                          isChannel: widget.isChannel,
+                        ),
+                      ),
+                child: Text(iAmCreator ? 'Cancel game' : 'Leave'),
+              ),
+            ),
+          ],
+        ),
+      if (mySeat != null && seats.length < 2) ...[
+        const SizedBox(height: 6),
+        Text(
+          'It takes at least two players to start.',
+          style: TextStyle(
+            fontSize: 11,
+            color: scheme.onSurface.withValues(alpha: 0.55),
+          ),
+        ),
+      ],
+    ];
+  }
+
+  Future<void> _playMyTurn() async {
+    final chat = context.read<ChatProvider>();
+    setState(() => _busy = true);
+    try {
+      // The shared broadcast never carries my_patterns — fetch the round
+      // directly so the play sheet animates the exact patterns the server
+      // scores against.
+      final round = await chat.fetchGameRound(
+        widget.conversationId,
+        widget.roundId,
+        isChannel: widget.isChannel,
+      );
+      final patterns = GamePattern.parseList(round['my_patterns']);
+      final gameType = round['game_type'] as String? ?? '🎲';
+      if (patterns.isEmpty || round['status'] != 'playing') {
+        throw Exception('the game is not in play');
+      }
+      if (!mounted) return;
+      setState(() => _busy = false);
+      final taps = await showGamePlaySheet(
+        context,
+        gameType: gameType,
+        patterns: patterns,
+      );
+      if (taps == null || !mounted) return; // forfeited — nothing submitted
+      setState(() => _busy = true);
+      await chat.playGame(
+        widget.conversationId,
+        widget.roundId,
+        taps,
+        isChannel: widget.isChannel,
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  List<Widget> _playingChildren(
+    Map<String, dynamic> round,
+    String? selfId,
+    Map<String, dynamic>? mySeat,
+    List<dynamic> seats,
+    ColorScheme scheme,
+    String emoji,
+  ) {
+    final iPlayed = mySeat?['played_at'] != null;
+    final pending = seats
+        .whereType<Map>()
+        .where((s) => s['played_at'] == null)
+        .length;
+
+    return [
+      Text(
+        'Game on — $pending player(s) still to play',
+        style: TextStyle(
+          fontSize: 12,
+          color: scheme.onSurface.withValues(alpha: 0.7),
+        ),
+      ),
+      const SizedBox(height: 6),
+      for (final seat in seats.whereType<Map>())
+        _playerRow(
+          selfId,
+          Map<String, dynamic>.from(seat),
+          scheme,
+          trailing: seat['played_at'] != null
+              ? Text(
+                  '${(seat['score'] as num?)?.toInt() ?? 0}',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: scheme.primary,
+                  ),
+                )
+              : Icon(
+                  Icons.sports_esports_outlined,
+                  size: 14,
+                  color: scheme.onSurface.withValues(alpha: 0.4),
+                ),
+        ),
+      const SizedBox(height: 10),
+      if (mySeat != null && !iPlayed)
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            icon: Text(emoji),
+            label: Text('Play your ${emoji == '🎯' ? 'throws' : 'stops'}'),
+            onPressed: _busy ? null : () => unawaited(_playMyTurn()),
+          ),
+        )
+      else if (mySeat != null)
+        Text(
+          'Waiting for the others to finish…',
+          style: TextStyle(
+            fontSize: 12,
+            color: scheme.onSurface.withValues(alpha: 0.6),
+          ),
+        )
+      else
+        Text(
+          'Game in progress — you can join the next one.',
+          style: TextStyle(
+            fontSize: 12,
+            color: scheme.onSurface.withValues(alpha: 0.6),
+          ),
+        ),
+    ];
+  }
+
+  List<Widget> _scoreboardChildren(
+    Map<String, dynamic> round,
+    String? selfId,
+    List<dynamic> seats,
+    ColorScheme scheme,
+    String provider,
+    int attempts,
+  ) {
+    final sorted = seats.whereType<Map>().toList()
+      ..sort(
+        (a, b) => ((b['score'] as num?) ?? 0).compareTo(
+          (a['score'] as num?) ?? 0,
+        ),
+      );
+    return [
+      for (var i = 0; i < sorted.length; i++)
+        _playerRow(
+          selfId,
+          Map<String, dynamic>.from(sorted[i]),
+          scheme,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (sorted[i]['status'] == 'won') ...[
+                const Text('🏆', style: TextStyle(fontSize: 13)),
+                const SizedBox(width: 4),
+              ],
+              Text(
+                '${(sorted[i]['score'] as num?)?.toInt() ?? 0}',
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: sorted[i]['status'] == 'won'
+                      ? scheme.primary
+                      : scheme.onSurface.withValues(alpha: 0.7),
+                ),
+              ),
+              if (provider != 'fun' && sorted[i]['status'] == 'won') ...[
+                const SizedBox(width: 6),
+                Text(
+                  '+${_amount(sorted[i]['payout'])}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: scheme.primary,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      const SizedBox(height: 8),
+      _commit('Server seed (revealed)', round['server_seed'] as String? ?? ''),
+      const SizedBox(height: 4),
+      Text(
+        'Verify: SHA-256(server seed) must equal the commitment; each player\'s '
+        '$attempts marker patterns derive from it and their published taps '
+        'recompute their score.',
+        style: TextStyle(
+          fontSize: 10,
+          color: scheme.onSurface.withValues(alpha: 0.55),
+        ),
+      ),
+    ];
   }
 
   Widget _commit(String label, String value) {
@@ -2994,9 +3345,20 @@ class _PollBubble extends StatefulWidget {
 class _PollBubbleState extends State<_PollBubble> {
   bool _voting = false;
 
+  /// The poll with the viewer's own votes restored. Refetched poll payloads
+  /// don't echo the viewer's selections (anonymous polls can't, by design),
+  /// so re-entering a chat would un-mark the voted bubble without merging
+  /// the device-local vote memory back in.
+  Poll _mergedPoll(List<String> localVotes) {
+    final base = widget.message.poll!;
+    if (base.voterOptionIds.isNotEmpty || localVotes.isEmpty) return base;
+    return base.copyWith(voterOptionIds: localVotes);
+  }
+
   Future<void> _vote(PollOption option) async {
-    final poll = widget.message.poll;
-    if (poll == null || poll.isClosed || _voting) return;
+    final base = widget.message.poll;
+    if (base == null || base.isClosed || _voting) return;
+    final poll = _mergedPoll(context.read<ChatProvider>().myPollVotes(base.id));
     final selected = poll.voterOptionIds.toSet();
     final next = poll.allowsMultipleAnswers
         ? (selected.contains(option.id)
@@ -3052,9 +3414,25 @@ class _PollBubbleState extends State<_PollBubble> {
     } catch (_) {}
   }
 
+  /// The device-local vote memory, watched so the bubble re-marks itself
+  /// when the lazy storage load lands (myPollVotes returns a stable list
+  /// instance per poll, so select's identity comparison works). Degrades to
+  /// "no local votes" in provider-less trees (widget tests).
+  List<String> _watchLocalVotes(BuildContext context, String pollId) {
+    try {
+      return context.select<ChatProvider, List<String>>(
+        (chat) => chat.myPollVotes(pollId),
+      );
+    } on ProviderNotFoundException {
+      return const [];
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final poll = widget.message.poll!;
+    final poll = _mergedPoll(
+      _watchLocalVotes(context, widget.message.poll!.id),
+    );
     final cs = Theme.of(context).colorScheme;
     final total = math.max(1, poll.totalVoterCount);
     // Quiz: reveal the correct answer + explanation once the user has voted

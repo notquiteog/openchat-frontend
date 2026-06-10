@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openchat/providers/settings_provider.dart';
 import 'package:openchat/services/background_ws_service.dart';
@@ -444,6 +445,28 @@ void main() {
       expect(intent.body, '@bob is calling');
     });
 
+    test('maps join_request into a reviewable notification intent', () {
+      final intent = BackgroundWsService.notificationIntentFromRawLine(
+        '{"type":"join_request","data":{"conversation_id":"conv-1","user_id":"u-9"}}',
+        showSensitive: true,
+      );
+
+      expect(intent, isNotNull);
+      expect(intent!.kind, NotificationIntentKind.message);
+      expect(intent.notificationId, 'conv-1'.hashCode);
+      expect(intent.body, 'New join request');
+    });
+
+    test('muted conversations suppress join_request intents too', () {
+      final intent = BackgroundWsService.notificationIntentFromRawLine(
+        '{"type":"join_request","data":{"conversation_id":"conv-1","user_id":"u-9"}}',
+        showSensitive: true,
+        mutedConversationIds: {'conv-1'},
+      );
+
+      expect(intent, isNull);
+    });
+
     test('ignores malformed payloads and unsupported events', () {
       expect(
         BackgroundWsService.notificationIntentFromRawLine(
@@ -498,6 +521,21 @@ void main() {
       expect(intent, isNull);
     });
 
+    test('routes desktop join_request events into notification intents', () {
+      final intent = ForegroundWsNotificationRouter.intentForEvent(
+        WsEvent(
+          type: WsEventType.joinRequest,
+          data: {'conversation_id': 'conv-1', 'user_id': 'u-9'},
+        ),
+        showSensitive: true,
+        isDesktop: true,
+      );
+
+      expect(intent, isNotNull);
+      expect(intent!.kind, NotificationIntentKind.message);
+      expect(intent.body, 'New join request');
+    });
+
     test('ignores mobile foreground websocket events', () {
       final intent = ForegroundWsNotificationRouter.intentForEvent(
         WsEvent(type: WsEventType.callOffer, data: const {}),
@@ -522,6 +560,31 @@ void main() {
 
       ws.debugSetConnectionStatus(WsConnectionStatus.connected);
       expect(ws.isMonitoring, isTrue);
+    });
+  });
+
+  group('Incoming call notification contract', () {
+    // The notification IS the native ring experience on a locked/idle Android
+    // device — these properties are what make the OS treat it like a call
+    // (full-screen launch, call ranking, un-swipeable mid-ring, self-expiring
+    // just past the ring window + offer buffer).
+    test('is a full-screen, non-dismissable call-category notification', () {
+      final android =
+          NotificationService.incomingCallNotificationDetails.android;
+      expect(android, isNotNull);
+      expect(android!.category, AndroidNotificationCategory.call);
+      expect(android.fullScreenIntent, isTrue);
+      expect(android.ongoing, isTrue);
+      expect(android.autoCancel, isFalse);
+      expect(android.timeoutAfter, 35000);
+      expect(android.actions, hasLength(3));
+    });
+
+    test('breaks through Focus modes on iOS and macOS', () {
+      final ios = NotificationService.incomingCallNotificationDetails.iOS;
+      final macos = NotificationService.incomingCallNotificationDetails.macOS;
+      expect(ios?.interruptionLevel, InterruptionLevel.timeSensitive);
+      expect(macos?.interruptionLevel, InterruptionLevel.timeSensitive);
     });
   });
 }

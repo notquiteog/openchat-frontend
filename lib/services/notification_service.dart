@@ -130,6 +130,21 @@ class NotificationService {
           largeIcon: DrawableResourceAndroidBitmap('@mipmap/launcher_icon'),
           importance: Importance.max,
           priority: Priority.max,
+          // Native incoming-call behavior: ranked and rendered as a call,
+          // lights the screen / launches the app full-screen on an idle
+          // device (USE_FULL_SCREEN_INTENT in the manifest), and can't be
+          // swiped away mid-ring — only Answer/Dismiss/End end it. The
+          // notification times itself out just past the 30s ring window +
+          // offer buffer, so a dead-app ring never lingers as a stale card.
+          //
+          // MainActivity deliberately does NOT set showWhenLocked: the
+          // full-screen intent launches the whole app, and showing chats
+          // over the keyguard would trade lock-screen privacy for ring UX.
+          category: AndroidNotificationCategory.call,
+          fullScreenIntent: true,
+          ongoing: true,
+          autoCancel: false,
+          timeoutAfter: 35000,
           actions: [
             AndroidNotificationAction(
               incomingCallAnswerActionId,
@@ -157,12 +172,17 @@ class NotificationService {
           presentBanner: true,
           presentList: true,
           presentSound: true,
+          // Break through Focus modes the way a phone call would. (True
+          // CallKit lock-screen UI additionally needs PushKit VoIP pushes —
+          // native Runner + server APNs work tracked separately.)
+          interruptionLevel: InterruptionLevel.timeSensitive,
         ),
         macOS: DarwinNotificationDetails(
           categoryIdentifier: _incomingCallCategory,
           presentBanner: true,
           presentList: true,
           presentSound: true,
+          interruptionLevel: InterruptionLevel.timeSensitive,
         ),
         linux: LinuxNotificationDetails(
           actions: [
@@ -598,13 +618,33 @@ class NotificationService {
           >();
       if (android == null) return true;
       final alreadyEnabled = await android.areNotificationsEnabled();
-      if (alreadyEnabled ?? false) return true;
+      if (alreadyEnabled ?? false) {
+        await _ensureFullScreenIntentPermission(android);
+        return true;
+      }
       final granted = await android.requestNotificationsPermission();
-      if (granted ?? false) return true;
+      if (granted ?? false) {
+        await _ensureFullScreenIntentPermission(android);
+        return true;
+      }
       final enabledAfterRequest = await android.areNotificationsEnabled();
       return enabledAfterRequest ?? false;
     }
     return true;
+  }
+
+  /// Incoming-call notifications use a full-screen intent so an idle device
+  /// rings like a phone. Granted on install; Android 14+ lets the OS or Play
+  /// revoke it, in which case the plugin opens the matching Settings screen.
+  /// Below 14 (and when already granted) this completes silently.
+  static Future<void> _ensureFullScreenIntentPermission(
+    AndroidFlutterLocalNotificationsPlugin android,
+  ) async {
+    try {
+      await android.requestFullScreenIntentPermission();
+    } catch (_) {
+      // Older plugin/OS combinations — the manifest permission still applies.
+    }
   }
 
   static Future<void> showMessage({

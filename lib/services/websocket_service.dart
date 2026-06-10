@@ -37,11 +37,16 @@ enum WsEventType {
   callCancel,
   // A mesh-call participant asked everyone to move to the SFU.
   callEscalate,
+  // SFU media frame-key exchange (key rides inside encrypted_signal only).
+  callE2EEKey,
+  callE2EEKeyRequest,
   groupCallJoin,
   groupCallLeave,
   groupCallState,
   stageState,
   gameUpdated,
+  // A pending join request, delivered only to members who can approve it.
+  joinRequest,
   // Server: the replay buffer can't bridge our last_seq — do a full refetch.
   resyncRequired,
   error,
@@ -442,6 +447,18 @@ class WebSocketService extends ChangeNotifier {
     _send({'type': 'call_escalate', 'data': data});
   }
 
+  /// Relays an SFU media frame key to one conversation member. The key is
+  /// inside the encoded payload's encrypted_signal — opaque to the server.
+  void sendCallE2EEKey(Map<String, dynamic> data) {
+    _send({'type': 'call_e2ee_key', 'data': data});
+  }
+
+  /// Asks one current call participant for the SFU media frame key (used by a
+  /// joiner who wasn't online when the key was distributed).
+  void sendCallE2EEKeyRequest(Map<String, dynamic> data) {
+    _send({'type': 'call_e2ee_key_request', 'data': data});
+  }
+
   void sendCallRinging({
     required String targetUserId,
     required String conversationId,
@@ -520,11 +537,14 @@ class WebSocketService extends ChangeNotifier {
     'call_ringing' => WsEventType.callRinging,
     'call_cancel' => WsEventType.callCancel,
     'call_escalate' => WsEventType.callEscalate,
+    'call_e2ee_key' => WsEventType.callE2EEKey,
+    'call_e2ee_key_request' => WsEventType.callE2EEKeyRequest,
     'group_call_join' => WsEventType.groupCallJoin,
     'group_call_leave' => WsEventType.groupCallLeave,
     'group_call_state' => WsEventType.groupCallState,
     'stage_state' => WsEventType.stageState,
     'game_updated' => WsEventType.gameUpdated,
+    'join_request' => WsEventType.joinRequest,
     'resync_required' => WsEventType.resyncRequired,
     'error' => WsEventType.error,
     _ => WsEventType.unknown,

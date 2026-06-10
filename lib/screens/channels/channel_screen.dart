@@ -2456,6 +2456,39 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     String messageType = 'text',
     String? attachmentId,
   }) async {
+    // A bare 🎲 (plain unicode, no custom-emoji entities, nothing scheduled)
+    // rolls a server-random animated dice instead of posting text — same
+    // Telegram behavior as the chat composer, on the /channels surface.
+    if (plaintextOverride == null &&
+        messageType == 'text' &&
+        attachmentId == null &&
+        _customEmojiEntities.isEmpty &&
+        _scheduledFor == null &&
+        isPlainDiceMessage(_inputCtrl.text)) {
+      final diceText = _inputCtrl.text;
+      _draftSaveTimer?.cancel();
+      _hasPendingDraftSave = false;
+      _setComposerValue(
+        const TextEditingValue(
+          text: '',
+          selection: TextSelection.collapsed(offset: 0),
+        ),
+      );
+      try {
+        await context.read<ChatProvider>().rollDice(
+          channel.id,
+          isChannel: true,
+        );
+        if (!mounted) return;
+        unawaited(_settings.clearMessageDraft(channel.id));
+      } catch (e) {
+        if (!mounted) return;
+        _restoreComposer(diceText, const []);
+        showAppToast(context, _postErrorMessage(e), isError: true);
+      }
+      return;
+    }
+
     final rawText = _inputCtrl.text;
     final draftEntities = [..._customEmojiEntities];
     final draft = plaintextOverride == null && messageType == 'text'

@@ -7,6 +7,100 @@ import '../../services/api_service.dart';
 import '../../widgets/deposit_progress_view.dart';
 import '../../widgets/glass.dart';
 
+/// Deposits still in flight: anything not yet confirmed and not expired.
+/// These get a live-progress card instead of a static history row; once the
+/// poller flips them to confirmed/expired they move into the history list.
+List<Map<String, dynamic>> pendingDeposits(List<Map<String, dynamic>> all) {
+  final out = all.where((dep) {
+    final status = (dep['status'] ?? '').toString();
+    return status != 'confirmed' && status != 'expired';
+  }).toList();
+  out.sort(
+    (a, b) =>
+        (b['created_at'] ?? '').toString().compareTo(
+          (a['created_at'] ?? '').toString(),
+        ),
+  );
+  return out;
+}
+
+/// One pending deposit: provider header + live confirmation ring. Tapping
+/// re-opens the address sheet so the user can copy the address again.
+class PendingDepositCard extends StatelessWidget {
+  final Map<String, dynamic> deposit;
+  final VoidCallback? onTap;
+  final VoidCallback? onConfirmed;
+
+  /// Test seam forwarded to [DepositProgressView].
+  @visibleForTesting
+  final Stream<Map<String, dynamic>>? progressStream;
+
+  const PendingDepositCard({
+    super.key,
+    required this.deposit,
+    this.onTap,
+    this.onConfirmed,
+    this.progressStream,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final provider = (deposit['provider'] ?? '').toString();
+    final isSub = (deposit['purpose'] ?? 'topup') == 'channel_sub';
+    return GestureDetector(
+      onTap: onTap,
+      child: GlassCard(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  isSub
+                      ? Icons.workspace_premium_outlined
+                      : Icons.arrow_downward,
+                  size: 16,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    isSub
+                        ? 'Channel subscription ${provider.toUpperCase()}'
+                        : 'Deposit ${provider.toUpperCase()}',
+                    style: const TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                Icon(
+                  Icons.qr_code_2,
+                  size: 18,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            DepositProgressView(
+              depositId: (deposit['id'] ?? '').toString(),
+              initialConfirmations:
+                  (deposit['confirmations'] as num?)?.toInt() ?? 0,
+              requiredConfirmations:
+                  (deposit['required_confirmations'] as num?)?.toInt() ?? 0,
+              initialStatus: deposit['status']?.toString() ?? 'nothing_sent',
+              onConfirmed: onConfirmed,
+              progressStream: progressStream,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class WalletScreen extends StatefulWidget {
   const WalletScreen({super.key});
 
@@ -247,10 +341,13 @@ class _WalletScreenState extends State<WalletScreen> {
     for (final dep in _deposits) {
       final provider = dep['provider'] as String? ?? '';
       final purpose = dep['purpose'] as String? ?? 'topup';
+      final status = (dep['status'] ?? '').toString();
+      // Actively pending deposits live in the "Pending deposits" section with
+      // a live progress ring — history keeps the settled ones.
+      if (status != 'confirmed' && status != 'expired') continue;
       // A peer / subscription deposit also produces a peer transfer once
       // confirmed; skip it there to avoid double-counting (it shows as the
-      // transfer). A still-pending one (no transfer yet) is kept so the user
-      // can see the incoming payment.
+      // transfer).
       if (purpose != 'topup' && dep['peer_transfer_id'] != null) continue;
       final isSub = purpose == 'channel_sub';
       final amount = _asDouble(
@@ -427,6 +524,30 @@ class _WalletScreenState extends State<WalletScreen> {
                       ),
                     ),
                     const SizedBox(height: 8),
+                  ],
+                  if (pendingDeposits(_deposits) case final pending
+                      when pending.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4, bottom: 10),
+                      child: Text(
+                        'PENDING DEPOSITS',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.primary,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                    ),
+                    for (final dep in pending) ...[
+                      PendingDepositCard(
+                        deposit: dep,
+                        onTap: () => _showDepositAddress(dep),
+                        onConfirmed: _load,
+                      ),
+                      const SizedBox(height: 8),
+                    ],
                   ],
                   const SizedBox(height: 8),
                   Padding(

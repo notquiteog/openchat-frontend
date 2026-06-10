@@ -64,4 +64,21 @@ void main() {
       expect(msg.gameRoundId, 'cccccccc-0000-0000-0000-000000000000');
     });
   });
+
+  group('bare dice emoji send (Telegram behavior)', () {
+    test('exactly one plain 🎲 triggers a server roll', () {
+      expect(isPlainDiceMessage('🎲'), isTrue);
+      expect(isPlainDiceMessage('  🎲  '), isTrue);
+      expect(isPlainDiceMessage('\n🎲\n'), isTrue);
+    });
+
+    test('anything else stays an ordinary text message', () {
+      expect(isPlainDiceMessage(''), isFalse);
+      expect(isPlainDiceMessage('🎲🎲'), isFalse);
+      expect(isPlainDiceMessage('roll 🎲'), isFalse);
+      expect(isPlainDiceMessage('🎲!'), isFalse);
+      expect(isPlainDiceMessage('🎯'), isFalse);
+      expect(isPlainDiceMessage('dice'), isFalse);
+    });
+  });
 }

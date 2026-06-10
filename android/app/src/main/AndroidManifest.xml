@@ -8,6 +8,10 @@
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
     <!-- Android 13+ runtime notification permission -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Incoming-call notifications light the screen / launch full-screen on
+         an idle device. Granted on install for self-distributed builds; Play
+         keeps it for calling apps (we set category=call on the notification). -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <!-- Background WebSocket notifications run as a foreground service. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>

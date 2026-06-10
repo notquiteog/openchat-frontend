@@ -353,7 +353,7 @@ class PushNotificationService {
       }
       return;
     }
-    if (type == 'new_message' || type == 'group_call') {
+    if (type == 'new_message' || type == 'group_call' || type == 'join_request') {
       final conversationId = conversationIdForData(msg.data) ?? '';
       if (conversationId.isEmpty) return;
       _notificationOpenedHandler?.call(conversationId);
@@ -394,7 +394,7 @@ class PushNotificationService {
         body: body,
       );
     }
-    if (type == 'new_message' || type == 'group_call') {
+    if (type == 'new_message' || type == 'group_call' || type == 'join_request') {
       // Resolve the opaque route to a conversation id and backfill it so the
       // mute/rule logic downstream works unchanged.
       final resolvedData = Map<String, dynamic>.from(msg.data);
@@ -418,6 +418,14 @@ class PushNotificationService {
           notificationId: conversationId.hashCode,
           title: 'OpenChat',
           body: 'Call started',
+        );
+      }
+      if (type == 'join_request') {
+        return NotificationIntent(
+          kind: NotificationIntentKind.message,
+          notificationId: conversationId.hashCode,
+          title: 'OpenChat',
+          body: 'New join request',
         );
       }
       final notification = msg.notification;

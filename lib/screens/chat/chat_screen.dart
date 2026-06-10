@@ -310,6 +310,36 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _sendMessage() async {
+    // A bare 🎲 (plain unicode, no custom-emoji entities, no reply, nothing
+    // scheduled) rolls a server-random animated dice instead of sending
+    // text — Telegram behavior. Anything else falls through unchanged.
+    if (_customEmojiEntities.isEmpty &&
+        _replyingTo == null &&
+        _scheduledFor == null &&
+        isPlainDiceMessage(_inputCtrl.text)) {
+      final diceText = _inputCtrl.text;
+      _draftSaveTimer?.cancel();
+      _hasPendingDraftSave = false;
+      _setComposerValue(
+        const TextEditingValue(
+          text: '',
+          selection: TextSelection.collapsed(offset: 0),
+        ),
+      );
+      final messenger = ScaffoldMessenger.of(context);
+      try {
+        await context.read<ChatProvider>().rollDice(conv.id);
+        if (!mounted) return;
+        unawaited(_settings.clearMessageDraft(widget.conversation.id));
+        _scrollToBottom();
+      } catch (e) {
+        if (!mounted) return;
+        _restoreComposedMessage(diceText, null, const []);
+        messenger.showSnackBar(SnackBar(content: Text(_sendErrorMessage(e))));
+      }
+      return;
+    }
+
     final draft = buildCustomEmojiTextPayload(
       _inputCtrl.text,
       _customEmojiEntities,
@@ -2346,12 +2376,33 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _startSfuCall({required bool isVideo}) {
     final sfu = context.read<SfuCallController>();
+    final call = context.read<CallProvider>();
+    final api = context.read<ApiService>();
+
+    // Sealed conversations get media frame encryption: generate the call key
+    // and hand it to every member over sealed signals so their banner "Join"
+    // has it ready. Joiners who miss the signal request it on demand.
+    String? e2eeKey;
+    if (conv.isEncrypted) {
+      e2eeKey = call.createSfuKey(conv.id);
+      unawaited(() async {
+        try {
+          var ids = conv.members.map((m) => m.userId).toList();
+          if (ids.isEmpty) {
+            final members = await api.getConversationMembers(conv.id);
+            ids = members.map((m) => m.userId).toList();
+          }
+          await call.distributeSfuKey(conv.id, ids);
+        } catch (_) {}
+      }());
+    }
     unawaited(
       sfu
           .join(
             conversationId: conv.id,
             title: conv.name ?? 'Group call',
             isVideo: isVideo,
+            e2eeKeyB64: e2eeKey,
           )
           .catchError((Object e) {
             if (!mounted) return;
@@ -5416,23 +5467,56 @@ class _GroupCallBanner extends StatelessWidget {
       return;
     }
     final sfu = context.read<SfuCallController>();
-    unawaited(
-      sfu
-          .join(
-            conversationId: conversation.id,
-            title: conversation.name ?? 'Group call',
-            isVideo: false,
-          )
-          .catchError((Object e) {
-            if (!context.mounted) return;
-            showAppToast(context, 'Could not join call: $e', isError: true);
-          }),
-    );
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        fullscreenDialog: true,
-        builder: (_) => const SfuCallScreen(),
-      ),
-    );
+    final call = context.read<CallProvider>();
+    final participantIds =
+        context
+            .read<GroupCallPresenceProvider>()
+            .infoFor(conversation.id)
+            ?.participantIds ??
+        const <String>[];
+    final navigator = Navigator.of(context);
+    unawaited(() async {
+      String? e2eeKey;
+      if (conversation.isEncrypted) {
+        // The frame key arrived in a sealed signal when the call started; if
+        // this device missed it (offline, fresh login), ask a participant.
+        e2eeKey =
+            call.sfuKeyFor(conversation.id) ??
+            await call.requestSfuKey(
+              conversation.id,
+              fromUserIds: participantIds,
+            );
+        if (e2eeKey == null) {
+          if (context.mounted) {
+            showAppToast(
+              context,
+              'Could not fetch the call\'s encryption key — try again in a moment',
+              isError: true,
+            );
+          }
+          return;
+        }
+      }
+      try {
+        // join() flips isActive synchronously, so push only after it starts —
+        // SfuCallScreen pops itself when the controller is inactive.
+        final joining = sfu.join(
+          conversationId: conversation.id,
+          title: conversation.name ?? 'Group call',
+          isVideo: false,
+          e2eeKeyB64: e2eeKey,
+        );
+        navigator.push(
+          MaterialPageRoute<void>(
+            fullscreenDialog: true,
+            builder: (_) => const SfuCallScreen(),
+          ),
+        );
+        await joining;
+      } catch (e) {
+        if (!context.mounted) return;
+        showAppToast(context, 'Could not join call: $e', isError: true);
+      }
+    }());
   }
 }

@@ -7,6 +7,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/call_provider.dart';
+import '../../services/app_lock_state.dart';
 import '../../services/call_service.dart';
 import '../../widgets/glass.dart';
 import 'call_glass.dart';
@@ -347,7 +348,9 @@ class _CallScreenState extends State<CallScreen> {
                               size: 44,
                             ),
                             const Spacer(),
-                            // Status chip (shows duration once connected)
+                            // Status chip (shows duration once connected),
+                            // with the E2EE lock when this call's signaling
+                            // is sealed — same treatment as the SFU header.
                             GlassContainer(
                               shape: const LiquidRoundedSuperellipse(
                                 borderRadius: 999,
@@ -358,13 +361,30 @@ class _CallScreenState extends State<CallScreen> {
                                 horizontal: 14,
                                 vertical: 7,
                               ),
-                              child: Text(
-                                statusText,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    statusText,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  if (session.sealed) ...[
+                                    const SizedBox(width: 8),
+                                    Tooltip(
+                                      message: 'End-to-end encrypted',
+                                      child: Icon(
+                                        Icons.lock_rounded,
+                                        key: const Key('call-e2ee-lock'),
+                                        color: Colors.greenAccent.shade100,
+                                        size: 13,
+                                      ),
+                                    ),
+                                  ],
+                                ],
                               ),
                             ),
                             const Spacer(),
@@ -1080,18 +1100,30 @@ class CallOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cp = context.watch<CallProvider>();
-    if (cp.incomingCall != null) {
-      return const SizedBox.expand(child: IncomingCallModal());
-    }
-    final session = cp.session;
-    if (session != null && session.state != CallState.ended) {
-      if (cp.isCallMinimized) {
-        return const _MinimizedCallOverlay();
-      }
-      return const SizedBox.expand(child: CallScreen());
-    }
-    return const SizedBox.shrink();
+    return ValueListenableBuilder<bool>(
+      valueListenable: appLockedListenable,
+      builder: (context, locked, _) {
+        // Living above the navigator, this overlay would otherwise paint
+        // caller identity and call video straight over the app-lock screen.
+        // While locked, render nothing — the ringtone and OS notification
+        // still announce the call, an in-progress call keeps its audio, and
+        // the UI reappears (still state-driven) the moment the user unlocks.
+        if (locked) return const SizedBox.shrink();
+
+        final cp = context.watch<CallProvider>();
+        if (cp.incomingCall != null) {
+          return const SizedBox.expand(child: IncomingCallModal());
+        }
+        final session = cp.session;
+        if (session != null && session.state != CallState.ended) {
+          if (cp.isCallMinimized) {
+            return const _MinimizedCallOverlay();
+          }
+          return const SizedBox.expand(child: CallScreen());
+        }
+        return const SizedBox.shrink();
+      },
+    );
   }
 }
 
@@ -1342,6 +1374,7 @@ class _IncomingCallModalState extends State<IncomingCallModal>
                                       _KindBadge(
                                         isVideo: incoming.isVideo,
                                         label: kind,
+                                        sealed: incoming.sealed,
                                       ),
                                     ],
                                   ),
@@ -1402,8 +1435,13 @@ class _IncomingCallModalState extends State<IncomingCallModal>
 class _KindBadge extends StatelessWidget {
   final bool isVideo;
   final String label;
+  final bool sealed;
 
-  const _KindBadge({required this.isVideo, required this.label});
+  const _KindBadge({
+    required this.isVideo,
+    required this.label,
+    this.sealed = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1429,6 +1467,18 @@ class _KindBadge extends StatelessWidget {
               fontWeight: FontWeight.w500,
             ),
           ),
+          if (sealed) ...[
+            const SizedBox(width: 8),
+            Tooltip(
+              message: 'End-to-end encrypted',
+              child: Icon(
+                Icons.lock_rounded,
+                key: const Key('incoming-call-e2ee-lock'),
+                color: Colors.greenAccent.shade100,
+                size: 13,
+              ),
+            ),
+          ],
         ],
       ),
     );

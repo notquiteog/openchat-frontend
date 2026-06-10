@@ -198,6 +198,7 @@ class _SfuCallScreenState extends State<SfuCallScreen> {
                     title: sfu.title ?? 'Group call',
                     connecting: sfu.isConnecting,
                     count: participants.length,
+                    mediaE2EE: sfu.isMediaE2EE,
                   ),
                 ),
               ),
@@ -255,11 +256,13 @@ class _SfuHeader extends StatelessWidget {
     required this.title,
     required this.connecting,
     required this.count,
+    this.mediaE2EE = false,
   });
 
   final String title;
   final bool connecting;
   final int count;
+  final bool mediaE2EE;
 
   @override
   Widget build(BuildContext context) {
@@ -284,7 +287,9 @@ class _SfuHeader extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          // Glass status capsule (people count / connecting).
+          // Glass status capsule (people count / connecting), plus the media
+          // E2EE lock — frames are encrypted with the conversation's call key
+          // and the SFU only ever routes ciphertext.
           GlassContainer(
             shape: const LiquidRoundedSuperellipse(borderRadius: 999),
             useOwnLayer: true,
@@ -307,6 +312,17 @@ class _SfuHeader extends StatelessWidget {
                     fontWeight: FontWeight.w600,
                   ),
                 ),
+                if (mediaE2EE) ...[
+                  const SizedBox(width: 8),
+                  Tooltip(
+                    message: 'Media is end-to-end encrypted',
+                    child: Icon(
+                      Icons.lock_rounded,
+                      color: Colors.greenAccent.shade100,
+                      size: 13,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

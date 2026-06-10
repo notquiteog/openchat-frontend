@@ -604,6 +604,11 @@ class ChatArtifact {
   }
 }
 
+/// True when composed text is exactly one plain dice emoji — sent as a
+/// server-rolled animated dice message (Telegram behavior) instead of text.
+/// Callers must additionally check there are no custom-emoji entities.
+bool isPlainDiceMessage(String text) => text.trim() == '🎲';
+
 /// A server-authoritative dice / randomiser roll.
 class DiceContent {
   final String emoji;

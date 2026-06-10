@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/foundation.dart'
     show
         debugPrint,
@@ -24,6 +26,13 @@ enum CallState {
   ended,
 }
 
+/// Whether a decoded incoming call signal came out of a sealed envelope.
+/// `encryption_mode` is authoritative: the privacy codec emits it only after
+/// successfully decrypting an `encrypted_signal`, and both codecs strip it
+/// from plain passthrough payloads so a sender can't spoof the E2EE chip.
+bool sealedCallPayload(Map<String, dynamic> decoded) =>
+    (decoded['encryption_mode']?.toString().trim() ?? '').isNotEmpty;
+
 class CallSession {
   final String callId;
   final String remoteUserId;
@@ -38,6 +47,13 @@ class CallSession {
   final bool isIncoming;
   CallState state;
 
+  /// Whether this call's signaling is sealed (PGP/MLS conversation): media is
+  /// always peer-encrypted by DTLS-SRTP, but only sealed signaling makes the
+  /// handshake fingerprints tamper-proof against the server — the bar for
+  /// showing the "End-to-end encrypted" chip. Mutable because the outgoing
+  /// path learns it from an async conversation lookup just after dialing.
+  bool sealed;
+
   bool wasConnected = false;
   DateTime? connectedAt;
 
@@ -50,6 +66,7 @@ class CallSession {
     List<String> participantUserIds = const [],
     required this.isVideo,
     required this.isIncoming,
+    this.sealed = false,
     this.state = CallState.ringing,
   }) : participantUserIds = List.unmodifiable(participantUserIds);
 
@@ -76,7 +93,16 @@ class EscalatedCall {
   final String conversationId;
   final bool isVideo;
 
-  const EscalatedCall({required this.conversationId, required this.isVideo});
+  /// Media frame-encryption key for the LiveKit room (base64), distributed
+  /// inside the sealed escalate signal. Null in plaintext conversations —
+  /// the SFU then sees media the same way it did before escalation existed.
+  final String? e2eeKeyB64;
+
+  const EscalatedCall({
+    required this.conversationId,
+    required this.isVideo,
+    this.e2eeKeyB64,
+  });
 }
 
 class CallAudioOutput {
@@ -200,6 +226,16 @@ class CallService {
   /// responsible for joining the LiveKit room.
   Stream<EscalatedCall> get escalatedCalls => _escalatedCallController.stream;
 
+  /// SFU media frame keys by conversation id (base64, 32 random bytes each).
+  /// One key per active group call; a new call start overwrites the old key.
+  /// Holding a key implies nothing beyond conversation membership — exactly
+  /// the authorization the server's relay and LiveKit token endpoint enforce.
+  final Map<String, String> _sfuKeys = {};
+  static const _sfuKeyCacheCap = 32;
+
+  /// Joiners waiting for a peer to answer a key request, by conversation id.
+  final Map<String, Completer<String>> _sfuKeyWaiters = {};
+
   static const ringTimeout = Duration(seconds: 30);
   static const connectTimeout = Duration(seconds: 30);
   Timer? _ringTimer;
@@ -278,6 +314,19 @@ class CallService {
       state: CallState.calling,
     );
     _sessionController.add(_session);
+
+    // Learn whether this conversation seals its signaling AFTER the session
+    // exists (the `_session != null` re-entry guard must not race the async
+    // lookup); the UI's E2EE chip appears as soon as the answer lands.
+    unawaited(
+      _signalCodec.isConversationEncrypted(conversationId).then((sealed) {
+        final s = _session;
+        if (sealed && s != null && s.callId == callId) {
+          s.sealed = true;
+          _sessionController.add(s);
+        }
+      }),
+    );
 
     try {
       await _initLocalRenderer();
@@ -610,6 +659,12 @@ class CallService {
       case WsEventType.callEscalate:
         unawaited(_handleCallEscalate(event.data));
 
+      case WsEventType.callE2EEKey:
+        unawaited(_handleCallE2EEKey(event.data));
+
+      case WsEventType.callE2EEKeyRequest:
+        unawaited(_handleCallE2EEKeyRequest(event.data));
+
       case WsEventType.callCancel:
         // This user answered or declined on ANOTHER device — stop ringing
         // here silently (it was handled, so it is not a missed call).
@@ -742,6 +797,9 @@ class CallService {
   /// local mesh down and reports the escalation for the SFU join. The server
   /// gate (LiveKit token endpoint) still enforces premium per participant —
   /// a peer who can't join simply errors out of the new room.
+  ///
+  /// In sealed conversations a fresh media frame key rides inside each
+  /// escalate signal, so the LiveKit room starts end-to-end encrypted.
   Future<void> escalateToSfu() async {
     final s = _session;
     final convId = s?.conversationId ?? '';
@@ -749,6 +807,10 @@ class CallService {
       return;
     }
     debugPrint('CallService: escalating ${s.callId} to SFU');
+    String? e2eeKey;
+    if (await _signalCodec.isConversationEncrypted(convId)) {
+      e2eeKey = createSfuKey(convId);
+    }
     for (final peer in _peers.values) {
       try {
         final data = await _signalCodec.encode(
@@ -757,6 +819,7 @@ class CallService {
             targetUserId: peer.userId,
             callId: s.callId,
             conversationId: convId,
+            e2eeKey: e2eeKey,
           ),
         );
         _ws.sendCallEscalate(data);
@@ -764,7 +827,11 @@ class CallService {
         debugPrint('CallService: escalate signal to ${peer.userId} failed: $e');
       }
     }
-    final escalated = EscalatedCall(conversationId: convId, isVideo: s.isVideo);
+    final escalated = EscalatedCall(
+      conversationId: convId,
+      isVideo: s.isVideo,
+      e2eeKeyB64: e2eeKey,
+    );
     _cleanup(emitEndedEvent: false);
     _escalatedCallController.add(escalated);
   }
@@ -780,9 +847,125 @@ class CallService {
     final convId = s.conversationId ?? decoded['conversation_id']?.toString() ?? '';
     if (convId.isEmpty) return;
     debugPrint('CallService: peer escalated ${s.callId} to SFU');
-    final escalated = EscalatedCall(conversationId: convId, isVideo: s.isVideo);
+    final e2eeKey = decoded['e2ee_key']?.toString();
+    if (e2eeKey != null && e2eeKey.isNotEmpty) {
+      _storeSfuKey(convId, e2eeKey);
+    }
+    final escalated = EscalatedCall(
+      conversationId: convId,
+      isVideo: s.isVideo,
+      e2eeKeyB64: (e2eeKey?.isNotEmpty ?? false) ? e2eeKey : null,
+    );
     _cleanup(emitEndedEvent: false);
     _escalatedCallController.add(escalated);
+  }
+
+  // ── SFU media E2EE keys ───────────────────────────────────────────────────
+
+  /// The cached media frame key for a conversation's active SFU call, if this
+  /// client generated or received one.
+  String? sfuKeyFor(String conversationId) => _sfuKeys[conversationId];
+
+  /// Generates (and caches) a fresh 32-byte media frame key for a new SFU
+  /// call in [conversationId].
+  String createSfuKey(String conversationId) {
+    final rng = Random.secure();
+    final key = base64Encode(List<int>.generate(32, (_) => rng.nextInt(256)));
+    _storeSfuKey(conversationId, key);
+    return key;
+  }
+
+  void _storeSfuKey(String conversationId, String key) {
+    _sfuKeys.remove(conversationId); // re-insert → most-recently-used
+    _sfuKeys[conversationId] = key;
+    while (_sfuKeys.length > _sfuKeyCacheCap) {
+      _sfuKeys.remove(_sfuKeys.keys.first);
+    }
+    final waiter = _sfuKeyWaiters.remove(conversationId);
+    if (waiter != null && !waiter.isCompleted) waiter.complete(key);
+  }
+
+  /// Sends the current frame key for [conversationId] to each of [targetIds]
+  /// inside sealed signals. No-op in plaintext conversations — the codec's
+  /// plain fallback structurally drops the key, so don't even try.
+  Future<void> distributeSfuKey(
+    String conversationId,
+    Iterable<String> targetIds,
+  ) async {
+    final key = _sfuKeys[conversationId];
+    if (key == null) return;
+    if (!await _signalCodec.isConversationEncrypted(conversationId)) return;
+    for (final target in targetIds.toSet()) {
+      if (target.trim().isEmpty) continue;
+      try {
+        final data = await _signalCodec.encode(
+          CallSignalPayload(
+            kind: 'e2ee_key',
+            targetUserId: target,
+            callId: conversationId,
+            conversationId: conversationId,
+            e2eeKey: key,
+          ),
+        );
+        _ws.sendCallE2EEKey(data);
+      } catch (e) {
+        debugPrint('CallService: e2ee key to $target failed: $e');
+      }
+    }
+  }
+
+  /// Asks up to three current participants for the active call's frame key
+  /// and waits for one to answer. Returns null on timeout (no participant
+  /// reachable, or none holds a key — e.g. a plaintext conversation).
+  Future<String?> requestSfuKey(
+    String conversationId, {
+    required List<String> fromUserIds,
+    Duration timeout = const Duration(seconds: 4),
+  }) async {
+    final cached = _sfuKeys[conversationId];
+    if (cached != null) return cached;
+    if (fromUserIds.isEmpty) return null;
+    final waiter = _sfuKeyWaiters.putIfAbsent(conversationId, Completer.new);
+    for (final target in fromUserIds.take(3)) {
+      try {
+        final data = await _signalCodec.encode(
+          CallSignalPayload(
+            kind: 'e2ee_key_request',
+            targetUserId: target,
+            callId: conversationId,
+            conversationId: conversationId,
+          ),
+        );
+        _ws.sendCallE2EEKeyRequest(data);
+      } catch (e) {
+        debugPrint('CallService: e2ee key request to $target failed: $e');
+      }
+    }
+    try {
+      return await waiter.future.timeout(timeout);
+    } on TimeoutException {
+      _sfuKeyWaiters.remove(conversationId);
+      return null;
+    }
+  }
+
+  Future<void> _handleCallE2EEKey(Map<String, dynamic> data) async {
+    final decoded = await _decodeCallSignal(data);
+    if (decoded == null) return;
+    final convId = decoded['conversation_id']?.toString() ?? '';
+    final key = decoded['e2ee_key']?.toString() ?? '';
+    if (convId.isEmpty || key.isEmpty) return;
+    _storeSfuKey(convId, key);
+  }
+
+  Future<void> _handleCallE2EEKeyRequest(Map<String, dynamic> data) async {
+    final decoded = await _decodeCallSignal(data);
+    if (decoded == null) return;
+    final convId = decoded['conversation_id']?.toString() ?? '';
+    final requester = decoded['caller_id']?.toString() ?? '';
+    if (convId.isEmpty || requester.isEmpty) return;
+    if (_sfuKeys[convId] == null) return;
+    await distributeSfuKey(convId, [requester]);
   }
 
   bool _handleIncomingCallPayload(Map<String, dynamic> data) {
@@ -880,6 +1063,7 @@ class CallService {
       participantUserIds: participantUserIds,
       isVideo: isVideo,
       isIncoming: true,
+      sealed: sealedCallPayload(data),
       state: CallState.ringing,
     );
     _pendingRemoteSdp = sdp;
@@ -1052,6 +1236,12 @@ class CallService {
       if (videoTrack != null) videoTrack.enabled = enabled;
     }
   }
+
+  /// Whether this device has acquired a camera track for the current call.
+  /// False on the receiving side of a remote video upgrade until the user
+  /// turns their own camera on ([setCameraEnabled] can only toggle an
+  /// existing track; acquiring one goes through [upgradeToVideo]).
+  bool get hasLocalVideo => _localStream?.getVideoTracks().isNotEmpty == true;
 
   /// Whether the connected 1:1 call can gain video right now — drives the
   /// "turn on camera" button on voice calls.

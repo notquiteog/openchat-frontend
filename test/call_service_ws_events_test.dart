@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openchat/services/api_service.dart';
 import 'package:openchat/services/call_service.dart';
+import 'package:openchat/services/call_signal_codec.dart';
 import 'package:openchat/services/secure_storage_service.dart';
 import 'package:openchat/services/websocket_service.dart';
 
@@ -259,6 +261,166 @@ void main() {
       expect(escalations, isEmpty);
       expect(service.currentSession?.callId, 'mesh-call');
       await sub.cancel();
+    });
+
+    test('an escalate carrying a frame key caches it and hands it on',
+        () async {
+      service.debugSession = _session(
+        callId: 'mesh-call',
+        state: CallState.connected,
+      )..wasConnected = true;
+
+      final escalations = <EscalatedCall>[];
+      final sub = service.escalatedCalls.listen(escalations.add);
+
+      service.debugHandleWsEvent(
+        WsEvent(
+          type: WsEventType.callEscalate,
+          data: {
+            'call_id': 'mesh-call',
+            'conversation_id': 'conv-1',
+            'e2ee_key': 'a-shared-frame-key',
+          },
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(escalations.single.e2eeKeyB64, 'a-shared-frame-key');
+      // Cached so a later banner join (or key request from a peer) has it.
+      expect(service.sfuKeyFor('conv-1'), 'a-shared-frame-key');
+      await sub.cancel();
+    });
+  });
+
+  group('SFU media E2EE keys', () {
+    test('createSfuKey yields a cached 32-byte key, fresh per call', () {
+      final first = service.createSfuKey('conv-1');
+      expect(base64Decode(first), hasLength(32));
+      expect(service.sfuKeyFor('conv-1'), first);
+
+      final second = service.createSfuKey('conv-1');
+      expect(second, isNot(first));
+      expect(service.sfuKeyFor('conv-1'), second);
+    });
+
+    test('an incoming call_e2ee_key is stored for its conversation', () async {
+      service.debugHandleWsEvent(
+        WsEvent(
+          type: WsEventType.callE2EEKey,
+          data: {
+            'conversation_id': 'conv-9',
+            'e2ee_key': 'key-from-a-participant',
+            'caller_id': 'participant-1',
+          },
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(service.sfuKeyFor('conv-9'), 'key-from-a-participant');
+      expect(service.sfuKeyFor('conv-other'), isNull);
+    });
+
+    test('requestSfuKey resolves when a participant answers', () async {
+      final pending = service.requestSfuKey(
+        'conv-2',
+        fromUserIds: const ['participant-1'],
+      );
+
+      service.debugHandleWsEvent(
+        WsEvent(
+          type: WsEventType.callE2EEKey,
+          data: {
+            'conversation_id': 'conv-2',
+            'e2ee_key': 'answered-key',
+            'caller_id': 'participant-1',
+          },
+        ),
+      );
+
+      expect(await pending, 'answered-key');
+    });
+
+    test('requestSfuKey returns the cached key without waiting', () async {
+      final key = service.createSfuKey('conv-3');
+      expect(
+        await service.requestSfuKey('conv-3', fromUserIds: const ['p1']),
+        key,
+      );
+    });
+
+    test('requestSfuKey times out to null when nobody answers', () async {
+      final result = await service.requestSfuKey(
+        'conv-4',
+        fromUserIds: const ['participant-1'],
+        timeout: const Duration(milliseconds: 50),
+      );
+      expect(result, isNull);
+    });
+
+    test('requestSfuKey with no participants gives up immediately', () async {
+      expect(
+        await service.requestSfuKey('conv-5', fromUserIds: const []),
+        isNull,
+      );
+    });
+  });
+
+  group('sealed call signaling (E2EE chip)', () {
+    test('sealedCallPayload keys off a codec-asserted encryption_mode', () {
+      expect(sealedCallPayload({'encryption_mode': 'pgp'}), isTrue);
+      expect(sealedCallPayload({'encryption_mode': 'mls'}), isTrue);
+      expect(sealedCallPayload(const {}), isFalse);
+      expect(sealedCallPayload({'encryption_mode': '  '}), isFalse);
+    });
+
+    test('the plain codec strips a spoofed encryption_mode', () async {
+      const codec = PlainCallSignalCodec();
+      final decoded = await codec.decode({
+        'call_id': 'c1',
+        // Attacker-supplied on a plaintext signal — must never survive to
+        // light up the E2EE chip.
+        'encryption_mode': 'pgp',
+      });
+      expect(decoded, isNot(contains('encryption_mode')));
+    });
+
+    test('a sealed incoming offer marks the pending session sealed', () {
+      expect(
+        service.handleIncomingCallPayload({
+          'call_id': 'sealed-call',
+          'caller_id': 'alice-id',
+          'conversation_id': 'conv-1',
+          'encryption_mode': 'pgp',
+        }),
+        isTrue,
+      );
+      expect(service.debugPendingIncoming?.sealed, isTrue);
+
+      // Clear the pending ring so its timer doesn't outlive the test.
+      service.debugHandleWsEvent(
+        WsEvent(
+          type: WsEventType.callCancel,
+          data: {'call_id': 'sealed-call'},
+        ),
+      );
+      expect(service.debugPendingIncoming, isNull);
+    });
+
+    test('a plaintext incoming offer stays unsealed', () {
+      expect(
+        service.handleIncomingCallPayload({
+          'call_id': 'plain-call',
+          'caller_id': 'bob-id',
+          'conversation_id': 'conv-2',
+        }),
+        isTrue,
+      );
+      expect(service.debugPendingIncoming?.sealed, isFalse);
+
+      service.debugHandleWsEvent(
+        WsEvent(type: WsEventType.callCancel, data: {'call_id': 'plain-call'}),
+      );
+      expect(service.debugPendingIncoming, isNull);
     });
   });
 

@@ -30,6 +30,7 @@ class SfuCallController extends ChangeNotifier {
   bool _isVideo = false;
   bool _connecting = false;
   bool _sawRemote = false;
+  bool _mediaE2EE = false;
   String? _error;
 
   Room? get room => _room;
@@ -39,6 +40,10 @@ class SfuCallController extends ChangeNotifier {
   String? get conversationId => _conversationId;
   String? get title => _title;
   bool get isVideo => _isVideo;
+
+  /// True when this room's media frames are end-to-end encrypted (every
+  /// participant joined with the shared frame key; the SFU routes ciphertext).
+  bool get isMediaE2EE => _mediaE2EE;
   String? get error => _error;
 
   bool get isMicEnabled =>
@@ -61,10 +66,17 @@ class SfuCallController extends ChangeNotifier {
 
   /// Fetch a join token from the backend (premium/group/member-gated) and
   /// connect to the LiveKit room named after the conversation.
+  ///
+  /// With [e2eeKeyB64] set, every media frame is additionally encrypted with
+  /// that shared key (AES-GCM frame cryptor) before it reaches the SFU — the
+  /// server routes ciphertext it cannot decrypt. All participants must join
+  /// with the same key (distributed via sealed call signals); a client
+  /// joining without it renders the others' tracks as noise, never plaintext.
   Future<void> join({
     required String conversationId,
     required String title,
     required bool isVideo,
+    String? e2eeKeyB64,
   }) async {
     if (isActive) return;
     _conversationId = conversationId;
@@ -72,6 +84,7 @@ class SfuCallController extends ChangeNotifier {
     _isVideo = isVideo;
     _connecting = true;
     _sawRemote = false;
+    _mediaE2EE = false;
     _error = null;
     notifyListeners();
 
@@ -83,8 +96,17 @@ class SfuCallController extends ChangeNotifier {
         throw Exception('SFU is not available');
       }
 
+      E2EEOptions? e2ee;
+      if (e2eeKeyB64 != null && e2eeKeyB64.isNotEmpty) {
+        e2ee = await E2EEOptions.sharedKey(e2eeKeyB64);
+        _mediaE2EE = true;
+      }
       final room = Room(
-        roomOptions: const RoomOptions(adaptiveStream: true, dynacast: true),
+        roomOptions: RoomOptions(
+          adaptiveStream: true,
+          dynacast: true,
+          e2eeOptions: e2ee,
+        ),
       );
       final listener = room.createListener();
       _room = room;
@@ -224,6 +246,7 @@ class SfuCallController extends ChangeNotifier {
     _conversationId = null;
     _title = null;
     _sawRemote = false;
+    _mediaE2EE = false;
     _heartbeat?.cancel();
     _heartbeat = null;
     unawaited(_platformControls.stopMediaProjection());

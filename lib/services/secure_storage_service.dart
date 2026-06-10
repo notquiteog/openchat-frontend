@@ -83,6 +83,7 @@ class SecureStorageService {
   static const _keyMlsCredentialIdentityPrefix = 'mls_credential_identity_v1';
   static const _keyPgpPostTokenPrefix = 'pgp_post_token_v1';
   static const _keyPollVoteTokenPrefix = 'poll_vote_token_v1';
+  static const _keyPollMyVotesPrefix = 'poll_my_votes_v1';
   static const _keySealedScheduleControlsPrefix = 'sealed_schedule_controls_v1';
   static const _keySealedMessageControlsPrefix = 'sealed_message_controls_v1';
   static const _keyScheduledPlaintextPrefix = 'scheduled_plaintext_v1';
@@ -307,6 +308,26 @@ class SecureStorageService {
     return _storage.write(
       key: _scopedKey(_keyPollVoteTokenPrefix, pollID),
       value: token,
+    );
+  }
+
+  /// The option ids this device voted for in a poll. Refetched poll payloads
+  /// don't carry the viewer's own votes (and for anonymous polls they can't,
+  /// by design), so the marked-bubble state survives chat re-entry via here.
+  Future<List<String>> getPollVoteSelections(String pollID) async {
+    final raw = await _readOrNull(_scopedKey(_keyPollMyVotesPrefix, pollID));
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      return (jsonDecode(raw) as List).whereType<String>().toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> savePollVoteSelections(String pollID, List<String> optionIDs) {
+    return _storage.write(
+      key: _scopedKey(_keyPollMyVotesPrefix, pollID),
+      value: jsonEncode(optionIDs),
     );
   }
 

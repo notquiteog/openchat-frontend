@@ -30,6 +30,10 @@ class CallProvider extends ChangeNotifier {
   List<CallAudioOutput> _audioOutputs = const [];
   String? _selectedAudioOutputId;
   CallState? _lastSessionState;
+  // Voice→video flip detection (remote upgrades must not claim our camera
+  // is on — see the session listener).
+  String? _lastSessionCallId;
+  bool _lastSessionIsVideo = false;
   String? _activeCallNotificationSessionId;
   CallState? _activeCallNotificationState;
   bool? _activeCallNotificationMuted;
@@ -190,6 +194,20 @@ class CallProvider extends ChangeNotifier {
       if (s != null && s.state != CallState.ended) {
         _historySession = s;
       }
+      // Mid-call voice→video flip on the SAME call. If we initiated it,
+      // upgradeToVideo() acquired a camera track before this emission and
+      // the control stays on; a REMOTE upgrade must never present our
+      // camera as on — the peer's video shows, ours stays off until the
+      // user presses the camera button themselves.
+      if (s != null &&
+          s.isVideo &&
+          s.callId == _lastSessionCallId &&
+          !_lastSessionIsVideo &&
+          !_callService.hasLocalVideo) {
+        _cameraEnabled = false;
+      }
+      _lastSessionCallId = s?.callId;
+      _lastSessionIsVideo = s?.isVideo ?? false;
       if (s == null || s.state == CallState.ended) {
         _incomingCall = null;
         unawaited(NotificationService.cancelIncomingCall());
@@ -477,6 +495,14 @@ class CallProvider extends ChangeNotifier {
 
   void setCameraEnabled(bool enabled) {
     if (_cameraEnabled == enabled) return;
+    if (enabled && session?.isVideo == true && !_callService.hasLocalVideo) {
+      // First camera-on after a REMOTE video upgrade: there is no local
+      // camera track to un-mute — acquiring one is the same flow as
+      // upgrading (permission gate, getUserMedia, renegotiation offer).
+      // _cameraEnabled flips on in upgradeToVideo() once that succeeds.
+      unawaited(upgradeToVideo());
+      return;
+    }
     _cameraEnabled = enabled;
     try {
       _callService.setCameraEnabled(enabled);
@@ -498,6 +524,20 @@ class CallProvider extends ChangeNotifier {
   Stream<EscalatedCall> get escalatedCalls => _callService.escalatedCalls;
 
   Future<void> escalateToSfu() => _callService.escalateToSfu();
+
+  // SFU media E2EE keys (see CallService for the distribution model).
+  String? sfuKeyFor(String conversationId) =>
+      _callService.sfuKeyFor(conversationId);
+  String createSfuKey(String conversationId) =>
+      _callService.createSfuKey(conversationId);
+  Future<void> distributeSfuKey(
+    String conversationId,
+    Iterable<String> targetIds,
+  ) => _callService.distributeSfuKey(conversationId, targetIds);
+  Future<String?> requestSfuKey(
+    String conversationId, {
+    required List<String> fromUserIds,
+  }) => _callService.requestSfuKey(conversationId, fromUserIds: fromUserIds);
 
   /// Turns the camera on mid-call (upgrading a voice call to video). Asks for
   /// camera permission first — the voice call never requested it.

@@ -19,6 +19,7 @@ class ForegroundWsNotificationRouter {
     final type = switch (event.type) {
       WsEventType.newMessage => 'new_message',
       WsEventType.callOffer => 'call_offer',
+      WsEventType.joinRequest => 'join_request',
       _ => null,
     };
     if (type == null) return null;

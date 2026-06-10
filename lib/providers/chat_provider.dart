@@ -192,6 +192,14 @@ class ChatProvider extends ChangeNotifier {
   Stream<Map<String, dynamic>> get depositProgress =>
       _depositProgressController.stream;
 
+  /// Pending join requests, delivered only to members who can approve them.
+  /// Payload keys: conversation_id, user_id (the requester). The join-request
+  /// review UI listens to live-refresh its list while open.
+  final StreamController<Map<String, dynamic>> _joinRequestController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get joinRequests =>
+      _joinRequestController.stream;
+
   /// Send one SMP step to [convID] as a hidden `system` control message.
   Future<void> sendSmpStep(String convID, Map<String, dynamic> payload) async {
     final body = jsonEncode({'openchat_smp': 1, ...payload});
@@ -280,6 +288,11 @@ class ChatProvider extends ChangeNotifier {
     _chatFolders.clear();
     _typingUsers.clear();
     _readReceipts.clear();
+    // Drop the in-memory vote marks on logout. The persisted entries are
+    // device-local and keyed by poll id (the same model as the anonymous
+    // vote tokens above them in secure storage).
+    _myPollVotes.clear();
+    _myPollVotesLoading.clear();
     _outboxItems = const [];
     // Reset identity too — the provider outlives a logout/login cycle, and a
     // stale _selfId misattributes own-message suppression, self-reactions, and
@@ -388,24 +401,7 @@ class ChatProvider extends ChangeNotifier {
       final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
       final next = <String, Conversation>{};
       for (final c in convs) {
-        var hydrated = c;
-        final last = c.lastMessage;
-        if (last != null) {
-          await _promoteDeliveredSealedScheduledMessage(last);
-          _hydrateMessageSender(last);
-          final cached = _cachedDecryptedMessage(last);
-          if (cached != null) {
-            _hydrateMessageSender(cached, fresh: last);
-            hydrated = c.copyWith(lastMessage: cached);
-            await _syncLocalUnreadMentionFromConversation(hydrated);
-            next[c.id] = hydrated;
-            continue;
-          }
-          await _tryDecrypt(last, privateKey, conversation: c);
-          hydrated = c.copyWith(lastMessage: last);
-        }
-        await _syncLocalUnreadMentionFromConversation(hydrated);
-        next[c.id] = hydrated;
+        next[c.id] = await _hydrateConversationPreview(c, privateKey);
       }
       changed = hasConversationListChanges(
         current: _conversations,
@@ -429,6 +425,73 @@ class ChatProvider extends ChangeNotifier {
         notifyListeners();
       }
     }
+  }
+
+  /// Decrypts/backfills a conversation's last-message preview — shared by the
+  /// full list load and the incremental single-conversation refresh so both
+  /// produce identical entries.
+  Future<Conversation> _hydrateConversationPreview(
+    Conversation c,
+    String privateKey,
+  ) async {
+    var hydrated = c;
+    final last = c.lastMessage;
+    if (last != null) {
+      await _promoteDeliveredSealedScheduledMessage(last);
+      _hydrateMessageSender(last);
+      final cached = _cachedDecryptedMessage(last);
+      if (cached != null) {
+        _hydrateMessageSender(cached, fresh: last);
+        hydrated = c.copyWith(lastMessage: cached);
+      } else {
+        await _tryDecrypt(last, privateKey, conversation: c);
+        hydrated = c.copyWith(lastMessage: last);
+      }
+    }
+    await _syncLocalUnreadMentionFromConversation(hydrated);
+    return hydrated;
+  }
+
+  /// Incrementally refreshes ONE conversation — the live-update path for WS
+  /// metadata/membership events. A full list refetch per event does not scale
+  /// (a busy account would re-pull thousands of conversations on every
+  /// rename); this fetches, hydrates and upserts just the affected one.
+  ///
+  /// 403/404 means our access is gone (removed, expired, deleted) — the
+  /// conversation is dropped locally. Transient errors keep current state;
+  /// the next event or full load reconciles.
+  Future<void> refreshConversation(String convID) async {
+    if (convID.isEmpty) return;
+    try {
+      final conv = await _api.getConversation(convID);
+      final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
+      final hydrated = await _hydrateConversationPreview(conv, privateKey);
+      final isNew = !_conversations.containsKey(convID);
+      _conversations[convID] = hydrated;
+      if (isNew && PushNotificationService.isRegistered) {
+        // Newly visible conversation: keep the opaque push-routing map
+        // current so its notifications resolve to the right chat.
+        unawaited(PushNotificationService.refreshPushRoutes(_api));
+      }
+      notifyListeners();
+    } on ApiException catch (e) {
+      if (e.statusCode == 403 || e.statusCode == 404) {
+        removeConversationLocally(convID);
+      }
+    } catch (_) {
+      // Transient (offline, timeout) — leave the current entry alone.
+    }
+  }
+
+  /// Drops a conversation from local state (lost access / revoked / deleted
+  /// elsewhere). No server call — the server already considers us out.
+  void removeConversationLocally(String convID) {
+    if (_conversations.remove(convID) == null) return;
+    _messages.remove(convID);
+    _typingUsers.remove(convID);
+    unawaited(_settings.clearUnreadMention(convID));
+    _deleteSearchConversation(convID);
+    notifyListeners();
   }
 
   Future<void> loadChatFolders() async {
@@ -1584,6 +1647,43 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
+  // The viewer's own poll selections, by poll id. Refetched poll payloads
+  // don't echo the viewer's votes (anonymous ones can't, by design), so the
+  // marked bubble would vanish on chat re-entry without this device-local
+  // memory. Hydrated lazily per poll from secure storage.
+  final Map<String, List<String>> _myPollVotes = {};
+  final Set<String> _myPollVotesLoading = {};
+
+  /// The option ids this device voted for in [pollID] (empty until known).
+  /// Triggers a lazy storage read on first ask and notifies when it lands.
+  List<String> myPollVotes(String pollID) {
+    final cached = _myPollVotes[pollID];
+    if (cached != null) return cached;
+    if (_myPollVotesLoading.add(pollID)) {
+      unawaited(
+        _storage
+            .getPollVoteSelections(pollID)
+            .then((ids) {
+              _myPollVotes[pollID] = ids;
+              if (ids.isNotEmpty) notifyListeners();
+            })
+            .catchError((Object _) {
+              _myPollVotes[pollID] = const <String>[];
+            }),
+      );
+    }
+    return const [];
+  }
+
+  void _rememberPollVote(String pollID, List<String> optionIDs) {
+    _myPollVotes[pollID] = List.of(optionIDs);
+    unawaited(
+      _storage
+          .savePollVoteSelections(pollID, optionIDs)
+          .catchError((Object _) {}),
+    );
+  }
+
   Future<void> votePoll({
     required String convID,
     required String pollID,
@@ -1615,6 +1715,9 @@ class ChatProvider extends ChangeNotifier {
     } else {
       updatedPoll = await _api.votePoll(pollID, optionIDs);
     }
+    // Persist the selection so the marked bubble survives chat re-entry
+    // (refetched polls don't echo the viewer's own votes).
+    _rememberPollVote(pollID, optionIDs);
 
     if (list == null) return;
     final idx = list.indexWhere((m) => m.poll?.id == pollID);
@@ -3219,12 +3322,7 @@ class ChatProvider extends ChangeNotifier {
       case WsEventType.conversationDeleted:
         final convID = event.data['conversation_id'] as String?;
         if (convID != null) {
-          _conversations.remove(convID);
-          _messages.remove(convID);
-          _typingUsers.remove(convID);
-          unawaited(_settings.clearUnreadMention(convID));
-          _deleteSearchConversation(convID);
-          notifyListeners();
+          removeConversationLocally(convID);
         }
 
       case WsEventType.messageEdited:
@@ -3256,7 +3354,9 @@ class ChatProvider extends ChangeNotifier {
 
       case WsEventType.conversationUpdated:
         // Name / description / avatar (and for channels, handle) changed. Pull
-        // the fresh conversation + members so it updates without a manual refresh.
+        // the fresh conversation + members so it updates without a manual
+        // refresh — ONE conversation, not the whole list (at scale a busy
+        // account would otherwise re-pull everything on every rename).
         final convID = event.data['conversation_id'] as String?;
         if (convID != null) {
           // A "burner" group/channel just expired: the server has locked it and
@@ -3266,7 +3366,7 @@ class ChatProvider extends ChangeNotifier {
             unawaited(_cache.deleteConversation(convID));
             _messages.remove(convID);
           }
-          unawaited(refreshConversationsSilently());
+          unawaited(refreshConversation(convID));
           if (_conversations.containsKey(convID)) {
             loadConversationMembers(convID);
             // For MLS groups, process any pending commits (e.g. a new member's
@@ -3290,15 +3390,28 @@ class ChatProvider extends ChangeNotifier {
       case WsEventType.readReceipt:
         _handleReadReceipt(event.data);
 
+      case WsEventType.joinRequest:
+        if (!_joinRequestController.isClosed) {
+          _joinRequestController.add(event.data);
+        }
+
       case WsEventType.memberJoined:
       case WsEventType.memberLeft:
         final convID = event.data['conversation_id'] as String?;
+        final userID = event.data['user_id'] as String?;
         if (convID != null) {
-          if (_conversations.containsKey(convID)) {
+          if (userID != null &&
+              userID == _selfId &&
+              event.type == WsEventType.memberLeft) {
+            // WE lost access (removed, left elsewhere, subscription
+            // expired) — drop it locally, no fetch needed.
+            removeConversationLocally(convID);
+          } else if (_conversations.containsKey(convID)) {
             loadConversationMembers(convID);
           } else {
-            // We were added to a new group — fetch the full list to surface it.
-            unawaited(refreshConversationsSilently());
+            // We were added/subscribed (or learned of a conversation we have
+            // not loaded) — fetch just that one to surface it.
+            unawaited(refreshConversation(convID));
           }
         }
 
@@ -3555,8 +3668,9 @@ class ChatProvider extends ChangeNotifier {
         lastMessage: displayMsg,
       );
     } else if (!_isLoading) {
-      // Message from a conversation we haven't seen yet (new DM or group).
-      unawaited(refreshConversationsSilently());
+      // Message from a conversation we haven't seen yet (new DM or group) —
+      // fetch just that one rather than re-pulling the whole list.
+      unawaited(refreshConversation(msg.conversationId));
     }
 
     _indexMessage(displayMsg);
@@ -4016,25 +4130,108 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Starts a game. mode: 'quick' (instant fun roll) | 'betting'.
-  /// provider: 'fun' | 'btc' | 'xmr'; stake is the per-bettor ante for real money.
-  /// isChannel routes to the /channels surface when the round lives in a channel.
+  /// Rolls a server-authoritative animated dice (Telegram behavior for a
+  /// bare 🎲 message). The server picks the value, posts the public dice
+  /// message and broadcasts it; the response is ingested directly so the
+  /// roller sees it instantly (the WS copy dedupes by id).
+  Future<void> rollDice(
+    String convID, {
+    String emoji = '🎲',
+    bool isChannel = false,
+  }) async {
+    final msg = Message.fromJson(
+      await _api.rollDice(convID, emoji: emoji, isChannel: isChannel),
+    );
+    await _handleIncomingMessage(msg);
+    notifyListeners();
+  }
+
+  /// Opens a skill-game lobby ('🎲' dice or '🎯' darts). provider: 'fun' |
+  /// 'btc' | 'xmr'; stake is the per-player ante for real money. isChannel
+  /// routes to the /channels surface when the round lives in a channel.
   Future<Map<String, dynamic>> createGame(
     String convID, {
     required String gameType,
-    required String mode,
     required String provider,
     double? stake,
+    int maxPlayers = 8,
     bool isChannel = false,
   }) async {
     final round = await _api.createGameRound(
       convID,
       gameType: gameType,
-      mode: mode,
       provider: provider,
       stake: stake,
+      maxPlayers: maxPlayers,
       isChannel: isChannel,
     );
+    _ingestGameRound(round);
+    return round;
+  }
+
+  Future<void> joinGame(
+    String convID,
+    String roundID, {
+    bool isChannel = false,
+  }) async {
+    _ingestGameRound(
+      await _api.joinGameRound(convID, roundID, isChannel: isChannel),
+    );
+  }
+
+  Future<void> leaveGame(
+    String convID,
+    String roundID, {
+    bool isChannel = false,
+  }) async {
+    _ingestGameRound(
+      await _api.leaveGameRound(convID, roundID, isChannel: isChannel),
+    );
+  }
+
+  Future<void> readyGame(
+    String convID,
+    String roundID, {
+    bool ready = true,
+    bool isChannel = false,
+  }) async {
+    _ingestGameRound(
+      await _api.readyGameRound(
+        convID,
+        roundID,
+        ready: ready,
+        isChannel: isChannel,
+      ),
+    );
+  }
+
+  /// Submits the player's marker stops; the returned round carries the final
+  /// state (and, mid-game, my_patterns for the caller only — not cached, the
+  /// play sheet refetches per play session anyway).
+  Future<Map<String, dynamic>> playGame(
+    String convID,
+    String roundID,
+    List<int> taps, {
+    bool isChannel = false,
+  }) async {
+    final round = await _api.playGameRound(
+      convID,
+      roundID,
+      taps,
+      isChannel: isChannel,
+    );
+    _ingestGameRound(round);
+    return round;
+  }
+
+  /// Fetches the freshest round state INCLUDING the caller's my_patterns
+  /// (needed to open the play sheet — the WS broadcast never carries them).
+  Future<Map<String, dynamic>> fetchGameRound(
+    String convID,
+    String roundID, {
+    bool isChannel = false,
+  }) async {
+    final round = await _api.getGameRound(convID, roundID, isChannel: isChannel);
     _ingestGameRound(round);
     return round;
   }
@@ -4109,6 +4306,7 @@ class ChatProvider extends ChangeNotifier {
     _disposed = true;
     _wsSub?.cancel();
     _depositProgressController.close();
+    _joinRequestController.close();
     NotificationService.setLiveLocationHandlers(onCancel: null);
     unawaited(_stopAllLiveLocationShares());
     _ws.removeListener(_onWsConnectionChanged);

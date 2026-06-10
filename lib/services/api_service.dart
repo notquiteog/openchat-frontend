@@ -542,30 +542,94 @@ class ApiService {
     });
   }
 
-  /// Roll a server-authoritative dice/randomiser. The server picks the value.
-  Future<void> rollDice(String convID, String emoji) async {
-    await _post('/api/v1/conversations/$convID/dice', {'emoji': emoji});
+  /// Server-authoritative dice roll, posted by the server as a public `dice`
+  /// message (the client only animates to the returned value).
+  Future<Map<String, dynamic>> rollDice(
+    String convID, {
+    String emoji = '🎲',
+    bool isChannel = false,
+  }) async {
+    final base = isChannel ? 'channels' : 'conversations';
+    final resp = await _post('/api/v1/$base/$convID/dice', {'emoji': emoji});
+    return resp['data'] as Map<String, dynamic>;
   }
 
-  // ── Provably-fair games (fun + real-money pari-mutuel) ─────────────────────
-  // mode: 'quick' (instant fun roll) | 'betting'. provider: 'fun' | 'btc' | 'xmr'.
+  // ── Skill games (dice/darts lobbies) ────────────────────────────────────────
   // Channels expose the same surface under /channels instead of /conversations.
   String _gameBase(String convID, bool isChannel) =>
       '/api/v1/${isChannel ? 'channels' : 'conversations'}/$convID/games';
 
+  /// Opens a skill-game lobby (dice = 5 marker stops, darts = 3 throws). The
+  /// creator takes the first seat; their client seed feeds their own marker
+  /// patterns the same way joiners' seeds do.
   Future<Map<String, dynamic>> createGameRound(
     String convID, {
     String gameType = '🎲',
-    String mode = 'quick',
     String provider = 'fun',
     double? stake,
+    int maxPlayers = 8,
     bool isChannel = false,
   }) async {
     final resp = await _post(_gameBase(convID, isChannel), {
       'game_type': gameType,
-      'mode': mode,
       'provider': provider,
       'stake': ?stake,
+      'max_players': maxPlayers,
+      'client_seed': _randomClientSeed(),
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  /// Accepts a game invite — takes a lobby seat (escrowing the ante on a
+  /// real-money game). The client seed feeds this player's marker patterns.
+  Future<Map<String, dynamic>> joinGameRound(
+    String convID,
+    String roundID, {
+    bool isChannel = false,
+  }) async {
+    final resp = await _post('${_gameBase(convID, isChannel)}/$roundID/join', {
+      'client_seed': _randomClientSeed(),
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  /// Gives the seat back (creator leaving cancels the game for everyone).
+  Future<Map<String, dynamic>> leaveGameRound(
+    String convID,
+    String roundID, {
+    bool isChannel = false,
+  }) async {
+    final resp = await _post(
+      '${_gameBase(convID, isChannel)}/$roundID/leave',
+      {},
+    );
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  /// Toggles ready; when every seated player is ready the game starts.
+  Future<Map<String, dynamic>> readyGameRound(
+    String convID,
+    String roundID, {
+    bool ready = true,
+    bool isChannel = false,
+  }) async {
+    final resp = await _post('${_gameBase(convID, isChannel)}/$roundID/ready', {
+      'ready': ready,
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  /// Submits the marker-stop offsets (ms, one per attempt). The server scores
+  /// them against the caller's seed-derived patterns — the local score shown
+  /// during play is preview only.
+  Future<Map<String, dynamic>> playGameRound(
+    String convID,
+    String roundID,
+    List<int> taps, {
+    bool isChannel = false,
+  }) async {
+    final resp = await _post('${_gameBase(convID, isChannel)}/$roundID/play', {
+      'taps': taps,
     });
     return resp['data'] as Map<String, dynamic>;
   }

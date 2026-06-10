@@ -79,6 +79,22 @@ NotificationIntent? notificationIntentFromEvent({
     );
   }
 
+  if (type == 'join_request') {
+    final convId = data['conversation_id'] as String? ?? 'join';
+    if (!shouldNotifyForConversation(
+      conversationId: convId,
+      preferences: preferences,
+    )) {
+      return null;
+    }
+    return NotificationIntent(
+      kind: NotificationIntentKind.message,
+      notificationId: convId.hashCode,
+      title: 'OpenChat',
+      body: 'New join request',
+    );
+  }
+
   if (type == 'call_offer' || type == 'incoming_call') {
     // Calls respect mute / muted-until / quiet hours — previously every call
     // rang through regardless. Mentions-only mode deliberately does NOT

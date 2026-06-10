@@ -222,7 +222,15 @@ class PgpService {
     // Hidden recipients: every slot's PKESK carries a wildcard (zeroed) key
     // id, so a slot does not even name which key can open it. Combined with
     // the slot shuffle below, the server sees only "N opaque ciphertexts".
-    final slotOptions = KeyOptions()..hiddenRecipients = true;
+    //
+    // Cipher/hash must be requested explicitly: go-crypto seeds the candidate
+    // set from the encrypt-time config (absent options → AES-128/SHA-256)
+    // before intersecting with key preferences, so generating keys with
+    // AES-256/SHA-512 preferences alone is not enough.
+    final slotOptions = KeyOptions()
+      ..hiddenRecipients = true
+      ..cipher = Cipher.AES256
+      ..hash = Hash.SHA512;
     for (final recipient in recipients) {
       final signer = Entity()
         ..privateKey = signingPrivateKeyArmored

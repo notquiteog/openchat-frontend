@@ -33,6 +33,12 @@ class CallSignalPayload {
   final String? sdp;
   final List<String> participantUserIds;
 
+  /// SFU media frame-encryption key (base64). SECRET: deliberately absent
+  /// from [toPlainOuter] — it may only travel inside the encrypted inner
+  /// JSON, so in a plaintext conversation (where encode falls back to the
+  /// plain outer shape) it is structurally dropped rather than leaked.
+  final String? e2eeKey;
+
   const CallSignalPayload({
     required this.kind,
     required this.targetUserId,
@@ -45,6 +51,7 @@ class CallSignalPayload {
     this.videoUpgrade = false,
     this.sdp,
     this.participantUserIds = const [],
+    this.e2eeKey,
   });
 
   Map<String, dynamic> toPlainOuter() => {
@@ -65,6 +72,11 @@ abstract class CallSignalCodec {
   Future<Map<String, dynamic>> encode(CallSignalPayload payload);
 
   Future<Map<String, dynamic>?> decode(Map<String, dynamic> data);
+
+  /// Whether signals for this conversation are sealed (PGP/MLS). SFU media
+  /// E2EE keys may only be distributed when this is true — otherwise the key
+  /// would transit the server readable.
+  Future<bool> isConversationEncrypted(String conversationId);
 }
 
 class PlainCallSignalCodec implements CallSignalCodec {
@@ -76,7 +88,13 @@ class PlainCallSignalCodec implements CallSignalCodec {
 
   @override
   Future<Map<String, dynamic>?> decode(Map<String, dynamic> data) async =>
-      Map<String, dynamic>.from(data);
+      // `encryption_mode` is the receivers' proof that a signal came out of a
+      // sealed envelope (it drives the call UI's E2EE chip) — strip it from
+      // plain payloads so a sender can't spoof it.
+      Map<String, dynamic>.from(data)..remove('encryption_mode');
+
+  @override
+  Future<bool> isConversationEncrypted(String conversationId) async => false;
 }
 
 class PrivacyCallSignalCodec implements CallSignalCodec {
@@ -121,6 +139,8 @@ class PrivacyCallSignalCodec implements CallSignalCodec {
       'sdp': ?payload.sdp,
       if (payload.participantUserIds.isNotEmpty)
         'participant_user_ids': payload.participantUserIds,
+      // Sealed-only: the SFU frame key never appears in the plain outer shape.
+      'e2ee_key': ?payload.e2eeKey,
       'created_at': DateTime.now().toUtc().toIso8601String(),
     });
 
@@ -149,7 +169,9 @@ class PrivacyCallSignalCodec implements CallSignalCodec {
   Future<Map<String, dynamic>?> decode(Map<String, dynamic> data) async {
     final encryptedSignal = data['encrypted_signal'] as String?;
     if (encryptedSignal == null || encryptedSignal.trim().isEmpty) {
-      return Map<String, dynamic>.from(data);
+      // Same anti-spoof rule as the plain codec: only a successful sealed
+      // decryption below may assert `encryption_mode` to the caller.
+      return Map<String, dynamic>.from(data)..remove('encryption_mode');
     }
 
     final conversationId = data['conversation_id']?.toString() ?? '';
@@ -211,6 +233,8 @@ class PrivacyCallSignalCodec implements CallSignalCodec {
       if (payload['video_upgrade'] == true) 'video_upgrade': true,
       'encryption_mode': mode.apiValue,
     };
+    final e2eeKey = payload['e2ee_key'];
+    if (e2eeKey is String && e2eeKey.isNotEmpty) out['e2ee_key'] = e2eeKey;
     final sdp = payload['sdp'];
     if (sdp is String && sdp.isNotEmpty) out['sdp'] = sdp;
     final participantUserIds = payload['participant_user_ids'];
@@ -221,6 +245,13 @@ class PrivacyCallSignalCodec implements CallSignalCodec {
           .toList(growable: false);
     }
     return out;
+  }
+
+  @override
+  Future<bool> isConversationEncrypted(String conversationId) async {
+    if (conversationId.trim().isEmpty) return false;
+    final conversation = await _conversationFor(conversationId);
+    return conversation?.isEncrypted ?? false;
   }
 
   Future<_CallCallerProfile> _currentCallerProfile(

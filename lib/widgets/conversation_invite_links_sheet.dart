@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../models/conversation.dart';
 import '../models/conversation_invite.dart';
+import '../providers/chat_provider.dart';
 import '../services/api_service.dart';
 import 'glass.dart';
 
@@ -54,12 +57,48 @@ class _ConversationInviteLinksSheetState
 
   ConversationInviteLink? get _activeLink =>
       _links.isEmpty ? null : _links.first;
+  StreamSubscription<Map<String, dynamic>>? _joinRequestSub;
 
   @override
   void initState() {
     super.initState();
     _approvalRequired = widget.conversation.joinApprovalRequired;
     _load();
+    // Live-refresh the pending list when a request arrives while the sheet is
+    // open. Guarded: tests (and exotic embeddings) may pump this sheet without
+    // a ChatProvider above it.
+    try {
+      _joinRequestSub = context.read<ChatProvider>().joinRequests.listen((
+        data,
+      ) {
+        if (data['conversation_id'] == widget.conversation.id) {
+          _reloadRequests();
+        }
+      });
+    } on ProviderNotFoundException {
+      // No live updates without a provider — manual refresh still works.
+    }
+  }
+
+  @override
+  void dispose() {
+    _joinRequestSub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _reloadRequests() async {
+    try {
+      final api = context.read<ApiService>();
+      final requests = await api.listJoinRequests(
+        widget.conversation.id,
+        channel: widget.channel,
+      );
+      if (!mounted) return;
+      setState(() => _requests = requests);
+    } catch (_) {
+      // Transient failure: keep the current list; the next event or manual
+      // reload reconciles.
+    }
   }
 
   Future<void> _load() async {

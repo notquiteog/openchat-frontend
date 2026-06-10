@@ -6,6 +6,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openchat/providers/call_provider.dart';
 import 'package:openchat/screens/call/call_screen.dart';
+import 'package:openchat/services/app_lock_state.dart';
 import 'package:openchat/services/call_audio.dart';
 import 'package:openchat/services/call_foreground_service.dart';
 import 'package:openchat/services/call_media_permissions.dart';
@@ -919,6 +920,281 @@ void main() {
       service.dispose();
     });
   });
+
+  group('Remote video upgrade camera policy', () {
+    test('a remote upgrade leaves this side\'s camera OFF', () async {
+      final service = _FakeCallService();
+      final provider = CallProvider(
+        service,
+        audio: _FakeCallAudio(),
+        mediaPermissionGate: ({required bool isVideo}) async {},
+      );
+      final session = CallSession(
+        callId: 'c-upgrade',
+        remoteUserId: 'u-peer',
+        remoteUsername: 'peer',
+        isVideo: false,
+        isIncoming: true,
+        state: CallState.connected,
+      )..connectedAt = DateTime.now();
+
+      service.emitSession(session);
+      await Future<void>.delayed(Duration.zero);
+      expect(provider.isCameraEnabled, isTrue);
+
+      // Peer turns their camera on: same call flips to video, but no local
+      // camera track exists — our camera control must read OFF.
+      session.isVideo = true;
+      service.emitSession(session);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(provider.isCameraEnabled, isFalse);
+      expect(service.upgradeToVideoCalls, 0);
+
+      provider.dispose();
+      service.dispose();
+    });
+
+    test('our own upgrade keeps the camera ON', () async {
+      final service = _FakeCallService();
+      final provider = CallProvider(
+        service,
+        audio: _FakeCallAudio(),
+        mediaPermissionGate: ({required bool isVideo}) async {},
+      );
+      final session = CallSession(
+        callId: 'c-self-upgrade',
+        remoteUserId: 'u-peer',
+        isVideo: false,
+        isIncoming: false,
+        state: CallState.connected,
+      )..connectedAt = DateTime.now();
+
+      service.emitSession(session);
+      await Future<void>.delayed(Duration.zero);
+
+      // We upgrade: the service acquires the camera before re-emitting.
+      await provider.upgradeToVideo();
+      session.isVideo = true;
+      service.emitSession(session);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(service.upgradeToVideoCalls, 1);
+      expect(provider.isCameraEnabled, isTrue);
+
+      provider.dispose();
+      service.dispose();
+    });
+
+    test('turning the camera on after a remote upgrade acquires it', () async {
+      final service = _FakeCallService();
+      final provider = CallProvider(
+        service,
+        audio: _FakeCallAudio(),
+        mediaPermissionGate: ({required bool isVideo}) async {},
+      );
+      final session = CallSession(
+        callId: 'c-acquire',
+        remoteUserId: 'u-peer',
+        isVideo: false,
+        isIncoming: true,
+        state: CallState.connected,
+      )..connectedAt = DateTime.now();
+
+      service.emitSession(session);
+      await Future<void>.delayed(Duration.zero);
+      session.isVideo = true;
+      service.emitSession(session);
+      await Future<void>.delayed(Duration.zero);
+      expect(provider.isCameraEnabled, isFalse);
+
+      // The camera button can't just un-mute a track that was never
+      // acquired — it must route through the upgrade (getUserMedia +
+      // renegotiation), after which the control reads ON.
+      provider.setCameraEnabled(true);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(service.upgradeToVideoCalls, 1);
+      expect(provider.isCameraEnabled, isTrue);
+
+      provider.dispose();
+      service.dispose();
+    });
+  });
+
+  group('App lock gating', () {
+    testWidgets('call UI never paints over the app lock screen', (
+      tester,
+    ) async {
+      appLockedListenable.value = true;
+      addTearDown(() => appLockedListenable.value = false);
+
+      final service = _FakeCallService();
+      final provider = CallProvider(service, audio: _FakeCallAudio());
+      try {
+        service.emitSession(
+          CallSession(
+            callId: 'c-locked',
+            remoteUserId: 'u-locked',
+            remoteUsername: 'secret-contact',
+            isVideo: false,
+            isIncoming: false,
+            state: CallState.connected,
+          )..connectedAt = DateTime.now(),
+        );
+
+        await tester.pumpWidget(
+          ChangeNotifierProvider<CallProvider>.value(
+            value: provider,
+            child: const MaterialApp(home: Scaffold(body: CallOverlay())),
+          ),
+        );
+        await tester.pump();
+
+        // Locked: no call screen, no caller identity — the call's audio is
+        // untouched, only its UI waits for the unlock.
+        expect(find.byType(CallScreen), findsNothing);
+        expect(find.text('secret-contact'), findsNothing);
+
+        appLockedListenable.value = false;
+        await tester.pump();
+
+        expect(find.byType(CallScreen), findsOneWidget);
+      } finally {
+        provider.dispose();
+        service.dispose();
+      }
+    });
+
+    testWidgets('incoming ring UI stays behind the lock too', (tester) async {
+      appLockedListenable.value = true;
+      addTearDown(() => appLockedListenable.value = false);
+
+      final service = _FakeCallService();
+      final provider = CallProvider(service, audio: _FakeCallAudio());
+      try {
+        await tester.pumpWidget(
+          ChangeNotifierProvider<CallProvider>.value(
+            value: provider,
+            child: const MaterialApp(home: Scaffold(body: CallOverlay())),
+          ),
+        );
+        service.emitIncoming(
+          CallSession(
+            callId: 'c-locked-ring',
+            remoteUserId: 'u-locked-ring',
+            remoteUsername: 'caller',
+            isVideo: false,
+            isIncoming: true,
+            state: CallState.ringing,
+          ),
+        );
+        await tester.pump();
+
+        expect(find.byType(IncomingCallModal), findsNothing);
+        expect(find.text('@caller'), findsNothing);
+      } finally {
+        provider.dispose();
+        service.dispose();
+      }
+    });
+  });
+
+  group('E2EE chip on call UIs', () {
+    testWidgets('sealed calls show the lock, plaintext calls do not', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+
+      final service = _FakeCallService();
+      final provider = CallProvider(service, audio: _FakeCallAudio());
+      try {
+        service.emitSession(
+          CallSession(
+            callId: 'c-sealed',
+            remoteUserId: 'u-sealed',
+            remoteUsername: 'sealed-peer',
+            isVideo: false,
+            isIncoming: false,
+            sealed: true,
+            state: CallState.connected,
+          )..connectedAt = DateTime.now(),
+        );
+
+        await tester.pumpWidget(
+          ChangeNotifierProvider<CallProvider>.value(
+            value: provider,
+            child: const MaterialApp(home: Scaffold(body: CallOverlay())),
+          ),
+        );
+        await tester.pump();
+        expect(find.byKey(const Key('call-e2ee-lock')), findsOneWidget);
+
+        service.emitSession(
+          CallSession(
+            callId: 'c-plain',
+            remoteUserId: 'u-plain',
+            remoteUsername: 'plain-peer',
+            isVideo: false,
+            isIncoming: false,
+            state: CallState.connected,
+          )..connectedAt = DateTime.now(),
+        );
+        // One pump to deliver the stream event, one to rebuild on notify.
+        await tester.pump();
+        await tester.pump();
+        expect(find.byKey(const Key('call-e2ee-lock')), findsNothing);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+        provider.dispose();
+        service.dispose();
+      }
+    });
+
+    testWidgets('sealed incoming ring shows the lock in the kind badge', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1200, 800);
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      final service = _FakeCallService();
+      final provider = CallProvider(service, audio: _FakeCallAudio());
+      try {
+        await tester.pumpWidget(
+          ChangeNotifierProvider<CallProvider>.value(
+            value: provider,
+            child: const MaterialApp(home: Scaffold(body: CallOverlay())),
+          ),
+        );
+        service.emitIncoming(
+          CallSession(
+            callId: 'c-sealed-ring',
+            remoteUserId: 'u-sealed-ring',
+            remoteUsername: 'sealed-caller',
+            isVideo: true,
+            isIncoming: true,
+            sealed: true,
+            state: CallState.ringing,
+          ),
+        );
+        await tester.pump();
+
+        expect(
+          find.byKey(const Key('incoming-call-e2ee-lock')),
+          findsOneWidget,
+        );
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+        provider.dispose();
+        service.dispose();
+      }
+    });
+  });
 }
 
 class _FakeCallAudio implements CallAudioController {
@@ -1027,7 +1303,9 @@ class _FakeCallService extends CallService {
   int hangupCalls = 0;
   int startCallCalls = 0;
   int switchCameraCalls = 0;
+  int upgradeToVideoCalls = 0;
   bool localMediaReady;
+  bool localVideoReady = false;
   final List<bool> startCallIsVideo = [];
   final List<List<String>> startCallAdditionalUserIds = [];
   final List<bool> micMuteValues = [];
@@ -1059,6 +1337,15 @@ class _FakeCallService extends CallService {
 
   @override
   bool get hasLocalMedia => localMediaReady;
+
+  @override
+  bool get hasLocalVideo => localVideoReady;
+
+  @override
+  Future<void> upgradeToVideo() async {
+    upgradeToVideoCalls += 1;
+    localVideoReady = true;
+  }
 
   @override
   Future<void> startCall({

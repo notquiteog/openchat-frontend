@@ -25,6 +25,7 @@ import 'screens/onboarding/privacy_onboarding_screen.dart';
 import 'screens/settings/pgp_keys_screen.dart';
 import 'services/api_service.dart';
 import 'services/app_access_gate.dart';
+import 'services/app_lock_state.dart';
 import 'services/background_ws_service.dart';
 import 'services/badge_service.dart';
 import 'services/desktop_startup_service.dart';
@@ -174,6 +175,26 @@ class OpenChatApp extends StatelessWidget {
               child: const _LiveConnectionBanner(),
             ),
           ],
+        );
+
+        // App lock. The home-route gate in _AppRoot cannot cover PUSHED
+        // routes (they sit above home in the navigator) nor the root
+        // overlays in this Stack (call UI, location bar) — so while locked
+        // the entire chrome is visually replaced here. Offstage keeps the
+        // navigator and any in-progress call alive (audio continues, no
+        // state is lost) but paints nothing and accepts no input.
+        appChrome = ValueListenableBuilder<bool>(
+          valueListenable: appLockedListenable,
+          builder: (context, locked, chrome) {
+            if (!locked) return chrome!;
+            return Stack(
+              children: [
+                Offstage(child: chrome),
+                _AppLockScreen(onUnlock: () => appUnlockRequester?.call()),
+              ],
+            );
+          },
+          child: appChrome,
         );
 
         if (reduceTransparency) {
@@ -509,6 +530,7 @@ class _AppRootState extends State<_AppRoot> {
   @override
   void initState() {
     super.initState();
+    appUnlockRequester = _promptAppUnlock;
     _initInviteLinks();
     _initShareIntake();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -560,7 +582,7 @@ class _AppRootState extends State<_AppRoot> {
       _appLockEnabled = await storage.getAppLockEnabled();
       final shouldLockOnLaunch = _appLockEnabled && await storage.isLoggedIn();
       if (mounted && shouldLockOnLaunch) {
-        setState(() => _appLocked = true);
+        _setAppLocked(true);
       }
       _lifecycleListener = AppLifecycleListener(
         onHide: _onBackground,
@@ -859,6 +881,16 @@ class _AppRootState extends State<_AppRoot> {
     });
   }
 
+  /// Single writer for the lock state: the local field gates the home shell's
+  /// build; the shared listenable gates root-level overlays (CallOverlay)
+  /// that live outside this subtree and would otherwise paint over the lock.
+  void _setAppLocked(bool locked) {
+    if (_appLocked != locked) {
+      setState(() => _appLocked = locked);
+    }
+    appLockedListenable.value = locked;
+  }
+
   void _onBackground() {
     NotificationService.setAppFocused(false);
     unawaited(BackgroundWsService.updateForegroundState(false));
@@ -868,14 +900,10 @@ class _AppRootState extends State<_AppRoot> {
     storage.getAppLockEnabled().then((enabled) {
       if (!mounted) return;
       _appLockEnabled = enabled;
-      if (_appLockEnabled) {
-        setState(() => _appLocked = true);
-      } else if (_appLocked) {
-        setState(() => _appLocked = false);
-      }
+      _setAppLocked(_appLockEnabled);
     });
     if (_appLockEnabled) {
-      setState(() => _appLocked = true);
+      _setAppLocked(true);
     }
   }
 
@@ -893,7 +921,7 @@ class _AppRootState extends State<_AppRoot> {
       if (!mounted) return;
       _appLockEnabled = enabled;
       if (!_appLockEnabled && _appLocked) {
-        setState(() => _appLocked = false);
+        _setAppLocked(false);
         _drainPendingInviteLink();
         _drainPendingContactLink();
         _drainPendingPushConversation();
@@ -916,7 +944,7 @@ class _AppRootState extends State<_AppRoot> {
     try {
       final ok = await auth.authenticate(localizedReason: 'Unlock OpenChat');
       if (ok && mounted) {
-        setState(() => _appLocked = false);
+        _setAppLocked(false);
         _drainPendingInviteLink();
         _drainPendingContactLink();
         _drainPendingPushConversation();
@@ -932,6 +960,7 @@ class _AppRootState extends State<_AppRoot> {
 
   @override
   void dispose() {
+    appUnlockRequester = null;
     _badgeService.dispose();
     _lifecycleListener?.dispose();
     _inviteLinkSub?.cancel();
@@ -960,6 +989,7 @@ class _AppRootState extends State<_AppRoot> {
             conversationId: escalated.conversationId,
             title: conv?.name ?? 'Group call',
             isVideo: escalated.isVideo,
+            e2eeKeyB64: escalated.e2eeKeyB64,
           )
           .catchError((Object e) {
             // Typically the server's premium gate on the LiveKit token.
