@@ -245,16 +245,6 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Select latest installed Xcode
-        run: |
-          XCODE_PATH="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -n 1)"
-          if [ -z "$XCODE_PATH" ]; then
-            echo "No Xcode.app found under /Applications"
-            exit 1
-          fi
-          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
-          xcodebuild -version
-
       - name: Show Apple SDK versions
         run: |
           xcodebuild -version
@@ -301,16 +291,6 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
-
-      - name: Select latest installed Xcode
-        run: |
-          XCODE_PATH="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -n 1)"
-          if [ -z "$XCODE_PATH" ]; then
-            echo "No Xcode.app found under /Applications"
-            exit 1
-          fi
-          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
-          xcodebuild -version
 
       - name: Show Apple SDK versions
         run: |
