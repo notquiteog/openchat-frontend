@@ -735,6 +735,21 @@ class ChatProvider extends ChangeNotifier {
     return true;
   }
 
+  /// Client nonces a verified nearby peer has confirmed ingesting over BLE.
+  /// Deliberately NOT persisted: the outbox item stays queued for the server
+  /// drain (the durable record) — this is a UX signal for the pending bubble.
+  final Set<String> _meshDeliveredNonces = {};
+
+  /// True when the pending message with [pendingId] (== its client nonce)
+  /// was confirmed delivered to the recipient over the nearby mesh.
+  bool meshDelivered(String pendingId) =>
+      _meshDeliveredNonces.contains(pendingId);
+
+  /// Records a nearby-mesh delivery receipt for a queued message.
+  void markMeshDelivered(String nonce) {
+    if (_meshDeliveredNonces.add(nonce)) notifyListeners();
+  }
+
   /// Ephemeral per-session translations (message id → translated text).
   /// Deliberately NOT persisted: a translation is a view, not message state.
   final Map<String, String> _messageTranslations = {};

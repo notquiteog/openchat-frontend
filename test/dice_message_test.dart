@@ -1,7 +1,32 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openchat/models/message.dart';
+import 'package:openchat/widgets/die_3d.dart';
 import 'package:openchat/widgets/message_bubble.dart';
+import 'package:vector_math/vector_math_64.dart' as vm;
+
+/// Which die value currently faces the viewer under [die]'s rotation —
+/// the face whose rotated outward normal points most toward the camera.
+int frontFaceValue(Die3D die) {
+  final normals = <int, vm.Vector3>{
+    1: vm.Vector3(0, 0, -1),
+    2: vm.Vector3(1, 0, 0),
+    3: vm.Vector3(0, -1, 0),
+    4: vm.Vector3(0, 1, 0),
+    5: vm.Vector3(-1, 0, 0),
+    6: vm.Vector3(0, 0, 1),
+  };
+  var best = 0;
+  var bestZ = double.infinity;
+  normals.forEach((value, normal) {
+    final z = die.rotation.transform3(normal.clone()).z;
+    if (z < bestZ) {
+      bestZ = z;
+      best = value;
+    }
+  });
+  return best;
+}
 
 // Regression test for the empty dice/game bubble: a server-rolled dice is a
 // plaintext message (is_encrypted=false) whose payload is {"dice":{...}}. After
@@ -117,8 +142,9 @@ void main() {
 
       expect(find.text('Rolling…'), findsNothing);
       expect(find.text('4 / 6'), findsOneWidget);
-      expect(find.text('⚃'), findsOneWidget,
-          reason: 'the die face must show the server-decided result');
+      final die = tester.widget<Die3D>(find.byType(Die3D));
+      expect(frontFaceValue(die), 4,
+          reason: 'the 3D die must land on the server-decided result');
     });
 
     testWidgets('scrollback rolls render settled, no replay', (tester) async {
@@ -139,7 +165,11 @@ void main() {
 
       expect(find.text('Rolling…'), findsNothing);
       expect(find.text('4 / 6'), findsOneWidget);
-      expect(find.text('⚃'), findsOneWidget);
+      expect(
+        frontFaceValue(tester.widget<Die3D>(find.byType(Die3D))),
+        4,
+        reason: 'scrollback renders the settled 3D die, no replay',
+      );
     });
   });
 }

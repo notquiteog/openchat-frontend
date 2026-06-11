@@ -1,23 +1,26 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../../providers/chat_provider.dart';
+import '../../models/contact_bundle.dart';
+import '../../providers/settings_provider.dart';
 import '../../services/mesh/mesh_platform.dart';
 import '../../services/mesh/mesh_session.dart';
 import '../../services/mesh/nearby_mesh_service.dart';
-import '../../services/secure_storage_service.dart';
+import '../../utils/identity_qr.dart';
 import '../../widgets/glass.dart';
 
 /// Nearby (offline mesh DMs over BLE).
 ///
-/// The radio runs ONLY while this screen is open: no background beaconing,
-/// no tracking beacon. Advertising carries a random session tag; identity is
-/// proven inside the signed handshake after connecting. Messages written in
-/// a DM while offline queue as usual — this screen delivers that queue to
-/// the verified peer over BLE (live, as you type new ones) and receives
-/// theirs into the same DM.
+/// The radio runs ONLY while this screen is open (or, with the explicit
+/// keep-alive opt-in, while the app stays foregrounded): no background
+/// beaconing, no tracking beacon. Advertising carries a random session tag;
+/// identity is proven inside the signed handshake after connecting.
+/// Messages written in a DM while offline queue as usual — the mesh
+/// delivers that queue to the verified peer over BLE (live, as you type new
+/// ones) and receives theirs into the same DM.
 class NearbyScreen extends StatefulWidget {
   const NearbyScreen({super.key});
 
@@ -27,46 +30,41 @@ class NearbyScreen extends StatefulWidget {
 
 class _NearbyScreenState extends State<NearbyScreen> {
   NearbyMeshService? _mesh;
-  ChatProvider? _chat;
+  Set<String> _knownLinkIds = {};
+  int _pulseToken = 0;
 
   @override
   void initState() {
     super.initState();
     if (!NearbyMeshService.isSupported) return;
-    final chat = context.read<ChatProvider>();
-    _chat = chat;
-    final mesh = NearbyMeshService(
-      storage: context.read<SecureStorageService>(),
-      onEnvelope: (envelope, fingerprint) =>
-          chat.ingestMeshMessage(envelope, fingerprint),
-      envelopesForPeer: chat.meshEnvelopesForFingerprint,
-      contactNameForFingerprint: (fingerprint) {
-        final convID = chat.dmConversationIdForFingerprint(fingerprint);
-        if (convID == null) return null;
-        final conv = chat.conversations.where((c) => c.id == convID).firstOrNull;
-        return conv?.displayName('');
-      },
-    );
+    final mesh = context.read<NearbyMeshService>();
     _mesh = mesh;
+    _knownLinkIds = mesh.peers.map((p) => p.linkId).toSet();
     mesh.addListener(_onMeshChanged);
-    // Live delivery: a message queued in any DM while this screen is open
-    // re-drains to whoever is connected and verified.
-    chat.addListener(_onChatChanged);
-    mesh.start();
+    mesh.attachScreen();
   }
 
   void _onMeshChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    final mesh = _mesh;
+    if (mesh != null) {
+      final ids = mesh.peers.map((p) => p.linkId).toSet();
+      if (ids.difference(_knownLinkIds).isNotEmpty) {
+        // Someone surfaced on the radar: a soft tick + a sonar pulse.
+        HapticFeedback.lightImpact();
+        _pulseToken++;
+      }
+      _knownLinkIds = ids;
+    }
+    setState(() {});
   }
-
-  void _onChatChanged() => _mesh?.notifyOutboxMaybeChanged();
 
   @override
   void dispose() {
-    // Foreground-only guarantee: leaving the screen silences the radio.
-    _chat?.removeListener(_onChatChanged);
     _mesh?.removeListener(_onMeshChanged);
-    _mesh?.dispose();
+    // Foreground-only guarantee: without the keep-alive opt-in, leaving the
+    // screen silences the radio.
+    _mesh?.detachScreen();
     super.dispose();
   }
 
@@ -75,12 +73,12 @@ class _NearbyScreenState extends State<NearbyScreen> {
       context: context,
       title: 'How Nearby protects you',
       message:
-          'The radio is on only while this screen is open — never in the '
-          'background. The Bluetooth beacon carries a random session tag, '
-          'not your identity. After two devices connect, each proves its '
-          'PGP key with a signed challenge before a single message moves, '
-          'and messages stay end-to-end encrypted exactly as they are '
-          'online.',
+          'The radio is on only while this screen is open — or, if you '
+          'choose, while the app itself is — never in the background. The '
+          'Bluetooth beacon carries a random session tag, not your '
+          'identity. After two devices connect, each proves its PGP key '
+          'with a signed challenge before a single message moves, and '
+          'messages stay end-to-end encrypted exactly as they are online.',
       actions: [
         GlassDialogAction(
           label: 'OK',
@@ -89,6 +87,21 @@ class _NearbyScreenState extends State<NearbyScreen> {
         ),
       ],
     );
+  }
+
+  void _scrollToPeer(int index) {
+    final mesh = _mesh;
+    if (mesh == null || index < 0 || index >= mesh.peers.length) return;
+    final key = GlobalObjectKey('nearby-peer-${mesh.peers[index].linkId}');
+    final ctx = key.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+        alignment: 0.2,
+      );
+    }
   }
 
   @override
@@ -120,15 +133,32 @@ class _NearbyScreenState extends State<NearbyScreen> {
           _RadarHero(
             active: searching,
             peerCount: peers.length,
+            pulseToken: _pulseToken,
+            onBlipTap: _scrollToPeer,
           ),
           const SizedBox(height: 14),
-          if (mesh != null && mesh.isRunning) _statusChips(mesh),
+          if (mesh != null && mesh.isRunning) ...[
+            _statusChips(mesh),
+            const SizedBox(height: 12),
+            GlassListTile(
+              leading: const Icon(Icons.all_inclusive_rounded),
+              title: const Text('Keep exchanging while the app is open'),
+              subtitle: const Text(
+                'Chat elsewhere in the app without dropping nearby links. '
+                'Always stops when the app leaves the foreground.',
+              ),
+              trailing: GlassSwitch(
+                value: mesh.keepAliveWhileAppOpen,
+                onChanged: (value) => mesh.keepAliveWhileAppOpen = value,
+              ),
+            ),
+          ],
           const SizedBox(height: 14),
           Text(
-            'Exchange queued messages with contacts over Bluetooth — no '
-            'internet needed. Active only while this screen is open. Write '
-            'messages in the chat as usual; they deliver here the moment '
-            'the contact is in range.',
+            'Exchange queued messages with contacts over Bluetooth or your '
+            'local network — no internet needed. Write messages in the chat '
+            'as usual; they deliver here the moment the contact is in '
+            'range.',
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurface.withValues(alpha: 0.65),
             ),
@@ -183,9 +213,11 @@ class _NearbyScreenState extends State<NearbyScreen> {
           else
             for (final peer in peers)
               _PeerCard(
-                key: ValueKey(peer.linkId),
+                key: GlobalObjectKey('nearby-peer-${peer.linkId}'),
                 peer: peer,
                 onDeliver: () => mesh!.deliverQueuedTo(peer),
+                onCompareFingerprints: () =>
+                    _showFingerprintSheet(context, mesh!, peer),
               ),
         ],
       ),
@@ -210,11 +242,171 @@ class _NearbyScreenState extends State<NearbyScreen> {
                 : Icons.wifi_tethering_off_rounded,
           ),
         ),
+        if (mesh.lanActive)
+          GlassChip(
+            label: 'Local network',
+            icon: const Icon(Icons.lan_rounded),
+          ),
         if (mesh.peers.isNotEmpty)
           GlassChip(
             label:
                 '${mesh.peers.length} ${mesh.peers.length == 1 ? 'device' : 'devices'}',
             icon: const Icon(Icons.devices_rounded),
+          ),
+      ],
+    );
+  }
+
+  /// The in-person verification sheet for a key-verified stranger: both
+  /// fingerprints large, a QR of our key for them to scan, and — when their
+  /// build shared a user id in the handshake — a save-as-contact action so a
+  /// DM can start the moment both come online.
+  void _showFingerprintSheet(
+    BuildContext context,
+    NearbyMeshService mesh,
+    NearbyPeer peer,
+  ) {
+    final peerInfo = peer.session.peer;
+    final myFp = mesh.selfFingerprint;
+    if (peerInfo == null || myFp == null) return;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (sheetCtx) => GlassBottomSheetFrame(
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+        child: _FingerprintCompareSheet(peer: peerInfo, selfFingerprint: myFp),
+      ),
+    );
+  }
+}
+
+class _FingerprintCompareSheet extends StatefulWidget {
+  const _FingerprintCompareSheet({
+    required this.peer,
+    required this.selfFingerprint,
+  });
+
+  final MeshPeer peer;
+  final String selfFingerprint;
+
+  @override
+  State<_FingerprintCompareSheet> createState() =>
+      _FingerprintCompareSheetState();
+}
+
+class _FingerprintCompareSheetState extends State<_FingerprintCompareSheet> {
+  bool _saved = false;
+
+  Future<void> _saveContact() async {
+    final peer = widget.peer;
+    await context.read<SettingsProvider>().upsertPrivateContact(
+          ContactBundle(
+            userId: peer.userId,
+            displayName: peer.displayName.isNotEmpty
+                ? peer.displayName
+                : 'Nearby contact',
+            publicKey: peer.publicKeyArmored,
+            keyFingerprint: peer.fingerprint,
+            safetyNumber: peer.fingerprint,
+            mailboxBootstrap: {
+              'type': 'openchat_user',
+              'user_id': peer.userId,
+              'public_key_endpoint':
+                  '/api/v1/users/${peer.userId}/public-key',
+            },
+            addedAt: DateTime.now(),
+          ),
+        );
+    if (mounted) setState(() => _saved = true);
+  }
+
+  Widget _fingerprintBlock(
+    ThemeData theme,
+    String label,
+    String fingerprint,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+          ),
+        ),
+        const SizedBox(height: 4),
+        SelectableText(
+          formatIdentityFingerprint(fingerprint),
+          style: const TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 13,
+            letterSpacing: 0.5,
+            height: 1.5,
+          ),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final peer = widget.peer;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const GlassSheetGrabber(),
+        const SizedBox(height: 12),
+        Text(
+          peer.displayName.isNotEmpty ? peer.displayName : 'Nearby device',
+          style: theme.textTheme.titleMedium,
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'This key proved itself cryptographically, but it isn\'t one of '
+          'your contacts yet. Read the fingerprints aloud to each other — '
+          'every group must match.',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.65),
+          ),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 18),
+        _fingerprintBlock(theme, 'Their key', peer.fingerprint),
+        const SizedBox(height: 14),
+        _fingerprintBlock(theme, 'Your key', widget.selfFingerprint),
+        const SizedBox(height: 18),
+        Center(
+          child: IdentityQrView(
+            data: identityFingerprintQrPayload(widget.selfFingerprint),
+            size: 180,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'They can scan this to double-check your key.',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+          ),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 18),
+        if (peer.userId.isNotEmpty)
+          GlassButtonWidget(
+            onPressed: _saved ? null : _saveContact,
+            child: Text(_saved ? 'Saved to contacts' : 'Save as contact'),
+          )
+        else
+          Text(
+            'Their app version doesn\'t share a contact id over the mesh — '
+            'add them online or by QR instead.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+            ),
+            textAlign: TextAlign.center,
           ),
       ],
     );
@@ -225,20 +417,30 @@ class _NearbyScreenState extends State<NearbyScreen> {
 
 /// iOS-26-style sonar: breathing concentric rings and a rotating sweep
 /// around a glass Bluetooth core. Pure Flutter painting — safe to layer with
-/// glass (no platform textures underneath).
+/// glass (no platform textures underneath). Blips are tappable and jump to
+/// the matching peer card; a discovery fires a one-shot pulse ring.
 class _RadarHero extends StatefulWidget {
-  const _RadarHero({required this.active, required this.peerCount});
+  const _RadarHero({
+    required this.active,
+    required this.peerCount,
+    required this.pulseToken,
+    required this.onBlipTap,
+  });
 
   final bool active;
   final int peerCount;
+
+  /// Increment to fire a one-shot discovery pulse.
+  final int pulseToken;
+  final ValueChanged<int> onBlipTap;
 
   @override
   State<_RadarHero> createState() => _RadarHeroState();
 }
 
-class _RadarHeroState extends State<_RadarHero>
-    with SingleTickerProviderStateMixin {
+class _RadarHeroState extends State<_RadarHero> with TickerProviderStateMixin {
   late final AnimationController _controller;
+  late final AnimationController _pulse;
 
   @override
   void initState() {
@@ -246,6 +448,10 @@ class _RadarHeroState extends State<_RadarHero>
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 4),
+    );
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
     );
     if (widget.active) _controller.repeat();
   }
@@ -258,12 +464,26 @@ class _RadarHeroState extends State<_RadarHero>
     } else if (!widget.active && _controller.isAnimating) {
       _controller.stop();
     }
+    if (widget.pulseToken != oldWidget.pulseToken) {
+      _pulse.forward(from: 0);
+    }
   }
 
   @override
   void dispose() {
     _controller.dispose();
+    _pulse.dispose();
     super.dispose();
+  }
+
+  void _handleTap(TapDownDetails details, Size size) {
+    for (var i = 0; i < widget.peerCount; i++) {
+      final blip = _RadarPainter.blipOffset(i, widget.peerCount, size);
+      if ((details.localPosition - blip).distance <= 18) {
+        widget.onBlipTap(i);
+        return;
+      }
+    }
   }
 
   @override
@@ -272,28 +492,36 @@ class _RadarHeroState extends State<_RadarHero>
     return RepaintBoundary(
       child: SizedBox(
         height: 190,
-        child: AnimatedBuilder(
-          animation: _controller,
-          builder: (context, child) => CustomPaint(
-            painter: _RadarPainter(
-              progress: _controller.value,
-              color: scheme.primary,
-              active: widget.active,
-              blips: widget.peerCount,
-            ),
-            child: child,
-          ),
-          child: Center(
-            child: GlassCircleIconButton(
-              onPressed: null,
-              tooltip: widget.active ? 'Searching' : 'Idle',
-              size: 58,
-              icon: Icon(
-                widget.active
-                    ? Icons.bluetooth_searching_rounded
-                    : Icons.bluetooth_disabled_rounded,
-                color: scheme.primary,
-                size: 26,
+        child: LayoutBuilder(
+          builder: (context, constraints) => GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: (details) =>
+                _handleTap(details, constraints.biggest),
+            child: AnimatedBuilder(
+              animation: Listenable.merge([_controller, _pulse]),
+              builder: (context, child) => CustomPaint(
+                painter: _RadarPainter(
+                  progress: _controller.value,
+                  color: scheme.primary,
+                  active: widget.active,
+                  blips: widget.peerCount,
+                  pulse: _pulse.isAnimating ? _pulse.value : null,
+                ),
+                child: child,
+              ),
+              child: Center(
+                child: GlassCircleIconButton(
+                  onPressed: null,
+                  tooltip: widget.active ? 'Searching' : 'Idle',
+                  size: 58,
+                  icon: Icon(
+                    widget.active
+                        ? Icons.bluetooth_searching_rounded
+                        : Icons.bluetooth_disabled_rounded,
+                    color: scheme.primary,
+                    size: 26,
+                  ),
+                ),
               ),
             ),
           ),
@@ -309,12 +537,25 @@ class _RadarPainter extends CustomPainter {
     required this.color,
     required this.active,
     required this.blips,
+    this.pulse,
   });
 
   final double progress;
   final Color color;
   final bool active;
   final int blips;
+
+  /// One-shot discovery pulse progress (null = idle).
+  final double? pulse;
+
+  /// Where blip [i] of [blips] sits — shared with the tap hit test.
+  static Offset blipOffset(int i, int blips, Size size) {
+    final center = size.center(Offset.zero);
+    final maxRadius = size.height / 2 - 4;
+    final a = -math.pi / 2 + i * 2 * math.pi / math.max(blips, 3);
+    final r = maxRadius * (i.isEven ? 2 : 2.6) / 3;
+    return center + Offset(math.cos(a) * r, math.sin(a) * r);
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -334,11 +575,11 @@ class _RadarPainter extends CustomPainter {
 
     // Two breathing pulses, half a cycle apart, fading as they expand.
     for (final phase in [progress, (progress + 0.5) % 1.0]) {
-      final pulse = Paint()
+      final breath = Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.5
         ..color = color.withValues(alpha: 0.30 * (1 - phase));
-      canvas.drawCircle(center, 30 + (maxRadius - 30) * phase, pulse);
+      canvas.drawCircle(center, 30 + (maxRadius - 30) * phase, breath);
     }
 
     // Rotating sweep: a soft gradient wedge, like a sonar trace.
@@ -359,12 +600,20 @@ class _RadarPainter extends CustomPainter {
     // One blip per connected peer, parked on the rings at stable angles.
     final blip = Paint()..color = color.withValues(alpha: 0.85);
     for (var i = 0; i < blips; i++) {
-      final a = -math.pi / 2 + i * 2 * math.pi / math.max(blips, 3);
-      final r = maxRadius * (i.isEven ? 2 : 2.6) / 3;
+      canvas.drawCircle(blipOffset(i, blips, size), 3.5, blip);
+    }
+
+    // Discovery pulse: an expanding ring around the newest blip.
+    final p = pulse;
+    if (p != null && blips > 0) {
+      final origin = blipOffset(blips - 1, blips, size);
       canvas.drawCircle(
-        center + Offset(math.cos(a) * r, math.sin(a) * r),
-        3.5,
-        blip,
+        origin,
+        4 + 22 * p,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2
+          ..color = color.withValues(alpha: 0.55 * (1 - p)),
       );
     }
   }
@@ -374,16 +623,23 @@ class _RadarPainter extends CustomPainter {
       old.progress != progress ||
       old.active != active ||
       old.blips != blips ||
+      old.pulse != pulse ||
       old.color != color;
 }
 
 // ── Peer card ────────────────────────────────────────────────────────────────
 
 class _PeerCard extends StatelessWidget {
-  const _PeerCard({super.key, required this.peer, required this.onDeliver});
+  const _PeerCard({
+    super.key,
+    required this.peer,
+    required this.onDeliver,
+    required this.onCompareFingerprints,
+  });
 
   final NearbyPeer peer;
   final VoidCallback onDeliver;
+  final VoidCallback onCompareFingerprints;
 
   String _shortFingerprint(String? fp) {
     if (fp == null || fp.length < 16) return fp ?? '';
@@ -392,6 +648,9 @@ class _PeerCard extends StatelessWidget {
         .replaceAllMapped(RegExp('....'), (m) => '${m.group(0)} ')
         .trim();
   }
+
+  bool get _isUnknownVerified =>
+      peer.session.authenticated && peer.matchedContactName == null;
 
   (IconData, Color?, String) _status(ThemeData theme) {
     return switch (peer.state) {
@@ -403,7 +662,7 @@ class _PeerCard extends StatelessWidget {
       MeshSessionState.authenticated => (
           Icons.help_outline_rounded,
           Colors.amber,
-          'Key verified, but not a contact — compare fingerprints in person',
+          'Key verified, but not a contact — tap to compare fingerprints',
         ),
       MeshSessionState.failed => (
           Icons.gpp_bad_rounded,
@@ -419,6 +678,7 @@ class _PeerCard extends StatelessWidget {
   }
 
   IconData? _signalIcon() {
+    if (peer.isLan) return Icons.lan_rounded;
     final rssi = peer.rssi;
     if (rssi == null) return null;
     if (rssi >= -60) return Icons.signal_cellular_alt_rounded;
@@ -437,6 +697,81 @@ class _PeerCard extends StatelessWidget {
     final signalIcon = _signalIcon();
     final muted = theme.colorScheme.onSurface.withValues(alpha: 0.6);
 
+    final card = GlassCard(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _PeerAvatar(
+            title: title,
+            accent: iconColor ?? theme.colorScheme.primary,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: theme.textTheme.titleSmall,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (signalIcon != null) ...[
+                      Icon(signalIcon, size: 15, color: muted),
+                      const SizedBox(width: 4),
+                    ],
+                    Icon(icon, size: 17, color: iconColor),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  status,
+                  style: theme.textTheme.bodySmall?.copyWith(color: muted),
+                ),
+                if (peer.fingerprint != null) ...[
+                  const SizedBox(height: 5),
+                  Text(
+                    _shortFingerprint(peer.fingerprint),
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      letterSpacing: 0.5,
+                      color: muted,
+                    ),
+                  ),
+                ],
+                if (peer.sentCount > 0 ||
+                    peer.receivedCount > 0 ||
+                    peer.rejectedCount > 0) ...[
+                  const SizedBox(height: 8),
+                  _statsRow(theme, muted),
+                ],
+              ],
+            ),
+          ),
+          if (peer.session.authenticated &&
+              peer.matchedContactName != null) ...[
+            const SizedBox(width: 10),
+            GlassCircleIconButton(
+              onPressed: onDeliver,
+              tooltip: 'Deliver queued messages',
+              size: 40,
+              icon: Icon(
+                Icons.send_rounded,
+                size: 18,
+                color: theme.colorScheme.primary,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
       duration: const Duration(milliseconds: 350),
@@ -448,77 +783,9 @@ class _PeerCard extends StatelessWidget {
           child: child,
         ),
       ),
-      child: GlassCard(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _PeerAvatar(title: title, accent: iconColor ?? theme.colorScheme.primary),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          title,
-                          style: theme.textTheme.titleSmall,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      if (signalIcon != null) ...[
-                        Icon(signalIcon, size: 15, color: muted),
-                        const SizedBox(width: 4),
-                      ],
-                      Icon(icon, size: 17, color: iconColor),
-                    ],
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    status,
-                    style: theme.textTheme.bodySmall?.copyWith(color: muted),
-                  ),
-                  if (peer.fingerprint != null) ...[
-                    const SizedBox(height: 5),
-                    Text(
-                      _shortFingerprint(peer.fingerprint),
-                      style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 11,
-                        letterSpacing: 0.5,
-                        color: muted,
-                      ),
-                    ),
-                  ],
-                  if (peer.sentCount > 0 ||
-                      peer.receivedCount > 0 ||
-                      peer.rejectedCount > 0) ...[
-                    const SizedBox(height: 8),
-                    _statsRow(theme, muted),
-                  ],
-                ],
-              ),
-            ),
-            if (peer.session.authenticated &&
-                peer.matchedContactName != null) ...[
-              const SizedBox(width: 10),
-              GlassCircleIconButton(
-                onPressed: onDeliver,
-                tooltip: 'Deliver queued messages',
-                size: 40,
-                icon: Icon(
-                  Icons.send_rounded,
-                  size: 18,
-                  color: theme.colorScheme.primary,
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
+      child: _isUnknownVerified
+          ? GestureDetector(onTap: onCompareFingerprints, child: card)
+          : card,
     );
   }
 

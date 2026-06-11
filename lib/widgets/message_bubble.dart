@@ -33,6 +33,7 @@ import '../services/transcription_service.dart';
 import '../utils/link_preview_utils.dart';
 import '../utils/mention_utils.dart';
 import '../utils/skill_game.dart';
+import 'die_3d.dart';
 import 'game_play_sheet.dart';
 import 'glass.dart';
 import 'location_map_preview.dart';
@@ -60,6 +61,11 @@ class MessageBubble extends StatelessWidget {
   // game card) route their API calls to the /channels surface.
   final bool isChannel;
 
+  /// When [message] anchors a media album (consecutive same-sender images
+  /// sharing a media_group_id), the full chronological run — rendered as one
+  /// grouped grid instead of a lone image. See utils/message_albums.dart.
+  final List<Message>? albumMessages;
+
   const MessageBubble({
     super.key,
     required this.message,
@@ -78,6 +84,7 @@ class MessageBubble extends StatelessWidget {
     this.meBubbleColor,
     this.bubbleRadius = 18,
     this.isChannel = false,
+    this.albumMessages,
   });
 
   /// Resolved background color for this bubble.
@@ -308,7 +315,16 @@ class MessageBubble extends StatelessWidget {
     }
 
     if (content.hasAttachment) {
+      final album = albumMessages;
       final attachment = switch (message.type) {
+        MessageType.image when album != null && album.length >= 2 =>
+          _AlbumGridBubble(
+            messages: album,
+            anchor: message,
+            bubbleColor: bubbleColor,
+            textColor: textColor,
+            radii: radii,
+          ),
         MessageType.image => _ImageBubble(
           message: message,
           content: content,
@@ -636,9 +652,6 @@ class _DiceBubble extends StatefulWidget {
 
 class _DiceBubbleState extends State<_DiceBubble>
     with SingleTickerProviderStateMixin {
-  /// Die-face glyphs for a visual tumble that LANDS on the server value.
-  static const _dieFaces = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
-
   /// Rolls animate once per message per app run: a fresh roll tumbles, a
   /// scrollback remount (or any list rebuild) renders the settled result.
   static final Set<String> _rolledOnce = <String>{};
@@ -672,14 +685,75 @@ class _DiceBubbleState extends State<_DiceBubble>
     super.dispose();
   }
 
-  /// The face shown at progress [t]: a deterministic pseudo-random tumble
-  /// (seeded by the message id, swap cadence slowing as t grows) that ends on
-  /// the server-decided value. Pure function of t — no setState per frame.
-  int _faceForProgress(double t) {
-    if (t >= 1.0) return widget.dice.value;
-    final step = (math.pow(t, 0.7) * 14).floor();
-    final hash = (widget.messageId.hashCode ^ (step * 2654435761)) & 0x7fffffff;
-    return 1 + hash % 6;
+  /// The 🎲 path: a perspective cube tumbling through seeded spins, hopping
+  /// twice off the ground, and easing onto the server-decided face. Pure
+  /// function of t, like the glyph path.
+  Widget _die3d(double t) {
+    const dieSize = 54.0;
+    final seed = widget.messageId.hashCode & 0x7fffffff;
+    final ease = Curves.easeOutQuart.transform(t);
+    final spinsX =
+        (2 + seed % 2) * (((seed >> 5) & 1) == 0 ? 1.0 : -1.0);
+    final spinsY =
+        (3 + (seed >> 3) % 2) * (((seed >> 7) & 1) == 0 ? 1.0 : -1.0);
+    final (targetX, targetY) = Die3D.targetRotationFor(widget.dice.value);
+    // A fixed presentation tilt keeps two extra edges visible once settled —
+    // composed OUTSIDE the spin so the landed face still points at the
+    // viewer.
+    final rotation = Matrix4.identity()
+      ..rotateX(-0.30)
+      ..rotateY(0.36)
+      ..rotateX(targetX + spinsX * 2 * math.pi * (1 - ease))
+      ..rotateY(targetY + spinsY * 2 * math.pi * (1 - ease));
+    final hop =
+        t < 1.0 ? 24.0 * (1 - t) * math.sin(t * math.pi * 3).abs() : 0.0;
+    final lift = hop / 24.0;
+    return SizedBox(
+      width: 96,
+      height: 88,
+      child: Stack(
+        alignment: Alignment.bottomCenter,
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            bottom: 2,
+            child: Container(
+              width: dieSize * (1.0 - 0.3 * lift),
+              height: 9,
+              decoration: BoxDecoration(
+                borderRadius: const BorderRadius.all(
+                  Radius.elliptical(27, 4.5),
+                ),
+                color: Colors.black.withValues(alpha: 0.28 - 0.16 * lift),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: 12 + hop,
+            child: Die3D(rotation: rotation, size: dieSize),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Non-die randomisers (🎯 …) keep the 2D glyph tumble.
+  Widget _emojiTumble(double t, ColorScheme scheme) {
+    final rolling = t < 1.0;
+    // Wobble + spin fade out as the emoji settles; a slight overshoot pop
+    // lands the result.
+    final wobble = rolling ? math.sin(t * math.pi * 10) * 0.35 * (1 - t) : 0.0;
+    final settlePop = rolling ? 1.0 + 0.18 * (1 - t) : 1.0;
+    return Transform.rotate(
+      angle: wobble,
+      child: Transform.scale(
+        scale: settlePop,
+        child: Text(
+          widget.dice.emoji,
+          style: const TextStyle(fontSize: 44, height: 1.1),
+        ),
+      ),
+    );
   }
 
   @override
@@ -699,32 +773,10 @@ class _DiceBubbleState extends State<_DiceBubble>
           builder: (context, _) {
             final t = _ctrl.value;
             final rolling = t < 1.0;
-            // Wobble + spin fade out as the die settles; a slight overshoot
-            // pop lands the result.
-            final wobble = rolling ? math.sin(t * math.pi * 10) * 0.35 * (1 - t) : 0.0;
-            final settlePop = rolling
-                ? 1.0 + 0.18 * (1 - t)
-                : 1.0;
-            final glyph = _isDie
-                ? _dieFaces[(_faceForProgress(t) - 1).clamp(0, 5)]
-                : widget.dice.emoji;
             return Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Transform.rotate(
-                  angle: wobble,
-                  child: Transform.scale(
-                    scale: settlePop,
-                    child: Text(
-                      glyph,
-                      style: TextStyle(
-                        fontSize: _isDie ? 56 : 44,
-                        color: _isDie ? scheme.onSurface : null,
-                        height: 1.1,
-                      ),
-                    ),
-                  ),
-                ),
+                if (_isDie) _die3d(t) else _emojiTumble(t, scheme),
                 const SizedBox(height: 4),
                 Text(
                   rolling ? 'Rolling…' : widget.dice.label,
@@ -4349,6 +4401,216 @@ class _ImageBubbleState extends State<_ImageBubble> {
   }
 }
 
+// ── Album grid bubble ─────────────────────────────────────────────────────────
+
+/// Telegram-style grouped media: 2 → side-by-side, 3 → one tall + two
+/// stacked, 4+ → a 2×2 grid with a "+N" veil on the last tile. The anchor
+/// (newest member) carries the caption, timestamp, and reactions for the
+/// whole group.
+class _AlbumGridBubble extends StatelessWidget {
+  final List<Message> messages;
+  final Message anchor;
+  final Color bubbleColor;
+  final Color textColor;
+  final BorderRadius radii;
+
+  const _AlbumGridBubble({
+    required this.messages,
+    required this.anchor,
+    required this.bubbleColor,
+    required this.textColor,
+    required this.radii,
+  });
+
+  static const double _gap = 2;
+
+  @override
+  Widget build(BuildContext context) {
+    final layout = MessageImageLayout.forViewport(MediaQuery.of(context).size);
+    final w = layout.maxBubbleWidth;
+    final caption = anchor.content?.text ?? '';
+
+    return ClipRRect(
+      borderRadius: radii,
+      child: Container(
+        constraints: BoxConstraints(maxWidth: w),
+        color: bubbleColor,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _grid(w),
+            if (caption.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                child: Text(
+                  caption,
+                  style: TextStyle(color: textColor, fontSize: 14),
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 2, 12, 8),
+              child: _Timestamp(message: anchor, textColor: textColor),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tile(Message m, double width, double height) => SizedBox(
+        width: width,
+        height: height,
+        child: _AlbumTile(message: m),
+      );
+
+  Widget _grid(double w) {
+    final half = (w - _gap) / 2;
+    switch (messages.length) {
+      case 2:
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _tile(messages[0], half, w * 0.66),
+            const SizedBox(width: _gap),
+            _tile(messages[1], half, w * 0.66),
+          ],
+        );
+      case 3:
+        final h = w * 0.66;
+        final cell = (h - _gap) / 2;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _tile(messages[0], half, h),
+            const SizedBox(width: _gap),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _tile(messages[1], half, cell),
+                const SizedBox(height: _gap),
+                _tile(messages[2], half, cell),
+              ],
+            ),
+          ],
+        );
+      default:
+        // 4+: rows of pairs; an odd straggler gets a full-width row. Every
+        // member stays visible — its own list row is collapsed to zero
+        // height, so this grid is the only place it can appear.
+        final rows = <Widget>[];
+        for (var i = 0; i + 1 < messages.length; i += 2) {
+          if (rows.isNotEmpty) rows.add(const SizedBox(height: _gap));
+          rows.add(Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _tile(messages[i], half, half),
+              const SizedBox(width: _gap),
+              _tile(messages[i + 1], half, half),
+            ],
+          ));
+        }
+        if (messages.length.isOdd) {
+          rows.add(const SizedBox(height: _gap));
+          rows.add(_tile(messages.last, w, w * 0.55));
+        }
+        return Column(mainAxisSize: MainAxisSize.min, children: rows);
+    }
+  }
+}
+
+/// One image cell of an album: loads (and decrypts) its own attachment,
+/// opens fullscreen on tap.
+class _AlbumTile extends StatefulWidget {
+  final Message message;
+
+  const _AlbumTile({required this.message});
+
+  @override
+  State<_AlbumTile> createState() => _AlbumTileState();
+}
+
+class _AlbumTileState extends State<_AlbumTile> {
+  _LoadState _state = _LoadState.idle;
+  Uint8List? _bytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final c = widget.message.content;
+    if (c?.attachmentId == null) {
+      setState(() => _state = _LoadState.error);
+      return;
+    }
+    setState(() => _state = _LoadState.loading);
+    try {
+      final svc = AttachmentService(context.read<ApiService>());
+      final bytes = c!.fileKey != null && c.fileNonce != null
+          ? await svc.downloadAndDecrypt(
+              attachmentId: c.attachmentId!,
+              fileKeyB64: c.fileKey!,
+              fileNonceB64: c.fileNonce!,
+            )
+          : !widget.message.isEncrypted
+          ? await svc.downloadRaw(attachmentId: c.attachmentId!)
+          : throw StateError('missing attachment key');
+      if (mounted) {
+        setState(() {
+          _bytes = bytes;
+          _state = _LoadState.done;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _state = _LoadState.error);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return switch (_state) {
+      _LoadState.done => GestureDetector(
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              fullscreenDialog: true,
+              builder: (_) => Scaffold(
+                backgroundColor: Colors.black,
+                appBar: AppBar(
+                  backgroundColor: Colors.black,
+                  foregroundColor: Colors.white,
+                ),
+                body: Center(
+                  child: InteractiveViewer(child: Image.memory(_bytes!)),
+                ),
+              ),
+            ),
+          ),
+          child: Image.memory(
+            _bytes!,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+          ),
+        ),
+      _LoadState.error => Container(
+          color: Colors.black12,
+          child: const Center(
+            child: Icon(Icons.broken_image, color: Colors.grey, size: 20),
+          ),
+        ),
+      _ => Container(
+          color: Colors.black12,
+          child: const Center(
+            child: GlassProgressIndicator.circular(size: 18, strokeWidth: 2),
+          ),
+        ),
+    };
+  }
+}
+
 // ── Video bubble ──────────────────────────────────────────────────────────────
 
 class _VideoBubble extends StatefulWidget {
@@ -5339,6 +5601,14 @@ class _Timestamp extends StatelessWidget {
     final pending = message is PendingMessage
         ? message as PendingMessage
         : null;
+    // A still-queued message that a verified peer already confirmed over the
+    // nearby mesh: the server copy is pending, but the human has it.
+    final meshDelivered = pending != null &&
+        pending.status != PendingMessageStatus.failed &&
+        context.select<ChatProvider, bool>(
+          (chat) => chat.meshDelivered(pending.id),
+        );
+    final receivedViaMesh = message.id.startsWith('mesh-');
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -5346,13 +5616,26 @@ class _Timestamp extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(right: 3),
             child: Icon(
-              switch (pending.status) {
-                PendingMessageStatus.sending => Icons.sync_rounded,
-                PendingMessageStatus.queued => Icons.cloud_upload_outlined,
-                PendingMessageStatus.failed => Icons.error_outline_rounded,
-              },
+              meshDelivered
+                  ? Icons.bluetooth_connected_rounded
+                  : switch (pending.status) {
+                      PendingMessageStatus.sending => Icons.sync_rounded,
+                      PendingMessageStatus.queued =>
+                        Icons.cloud_upload_outlined,
+                      PendingMessageStatus.failed =>
+                        Icons.error_outline_rounded,
+                    },
               size: 11,
               color: textColor.withValues(alpha: 0.62),
+            ),
+          ),
+        if (receivedViaMesh)
+          Padding(
+            padding: const EdgeInsets.only(right: 3),
+            child: Icon(
+              Icons.bluetooth_rounded,
+              size: 11,
+              color: textColor.withValues(alpha: 0.55),
             ),
           ),
         if (message.decryptionFailed)
@@ -5369,11 +5652,13 @@ class _Timestamp extends StatelessWidget {
         Text(
           pending == null
               ? timeago.format(message.createdAt, locale: 'en_short')
-              : switch (pending.status) {
-                  PendingMessageStatus.sending => 'sending',
-                  PendingMessageStatus.queued => 'queued',
-                  PendingMessageStatus.failed => 'retrying',
-                },
+              : meshDelivered
+                  ? 'delivered nearby'
+                  : switch (pending.status) {
+                      PendingMessageStatus.sending => 'sending',
+                      PendingMessageStatus.queued => 'queued',
+                      PendingMessageStatus.failed => 'retrying',
+                    },
           style: TextStyle(
             fontSize: 10,
             color: textColor.withValues(alpha: 0.6),

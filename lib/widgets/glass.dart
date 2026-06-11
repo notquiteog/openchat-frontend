@@ -328,6 +328,10 @@ class GlassAppBar extends StatelessWidget implements PreferredSizeWidget {
   final PreferredSizeWidget? bottom;
   final double? titleSpacing;
 
+  /// False suppresses the auto back button — for screens embedded in a
+  /// split-view pane rather than pushed as routes.
+  final bool automaticallyImplyLeading;
+
   const GlassAppBar({
     super.key,
     required this.title,
@@ -336,6 +340,7 @@ class GlassAppBar extends StatelessWidget implements PreferredSizeWidget {
     this.centerTitle = false,
     this.bottom,
     this.titleSpacing,
+    this.automaticallyImplyLeading = true,
   });
 
   @override
@@ -357,6 +362,7 @@ class GlassAppBar extends StatelessWidget implements PreferredSizeWidget {
         centerTitle: centerTitle,
         bottom: bottom,
         titleSpacing: titleSpacing,
+        automaticallyImplyLeading: automaticallyImplyLeading,
       ),
     );
   }

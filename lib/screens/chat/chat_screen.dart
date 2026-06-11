@@ -22,6 +22,7 @@ import '../../providers/chat_provider.dart';
 import '../../providers/group_call_presence_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
+import '../../services/mesh/nearby_mesh_service.dart';
 import '../../services/sfu_call_controller.dart';
 import '../call/sfu_call_screen.dart';
 import '../../services/mls_service.dart';
@@ -36,6 +37,7 @@ import '../../utils/custom_emoji_payload.dart';
 import '../../utils/disappearing_message_duration.dart';
 import '../../utils/local_conversation_preferences.dart';
 import '../../utils/message_actions.dart';
+import '../../utils/message_albums.dart';
 import '../../utils/mention_utils.dart';
 import '../../widgets/attachment_upload_progress.dart';
 import '../../widgets/admin_permissions_sheet.dart';
@@ -85,10 +87,15 @@ class ChatScreen extends StatefulWidget {
   final Conversation conversation;
   final String? initialMessageId;
 
+  /// True when this screen lives in the right pane of the desktop split
+  /// view instead of being pushed as a route — suppresses the back button.
+  final bool embedded;
+
   const ChatScreen({
     super.key,
     required this.conversation,
     this.initialMessageId,
+    this.embedded = false,
   });
 
   @override
@@ -2544,6 +2551,24 @@ class _ChatScreenState extends State<ChatScreen> {
                                     final messageIndex =
                                         messages.length - 1 - i;
                                     final msg = messages[messageIndex];
+                                    // Media albums: the run renders once, on
+                                    // its newest member; the other members
+                                    // keep their rows (so index math, keys,
+                                    // and reply jumps survive) at zero
+                                    // height.
+                                    final albumRun = albumRunAt(
+                                      messages,
+                                      messageIndex,
+                                    );
+                                    if (albumRun != null &&
+                                        albumRun.last.id != msg.id) {
+                                      return SizedBox.shrink(
+                                        key: _messageKeys.putIfAbsent(
+                                          msg.id,
+                                          () => GlobalKey(),
+                                        ),
+                                      );
+                                    }
                                     final isMe = msg.senderId == currentUserID;
                                     final isLocationMessage =
                                         msg.type == MessageType.location &&
@@ -2586,6 +2611,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                           message: msg,
                                           isMe: isMe,
                                           isChannel: conv.isChannel,
+                                          albumMessages: albumRun,
                                           showAvatar: showAvatar,
                                           readByOthers:
                                               isMe &&
@@ -2988,6 +3014,21 @@ class _ChatScreenState extends State<ChatScreen> {
   ) {
     final name = conv.displayName(currentUserID);
 
+    // Live mesh presence: this DM's partner currently holds a verified
+    // Bluetooth link (Nearby screen open or keep-alive on), so messages
+    // written here deliver offline, instantly.
+    final mesh = context.watch<NearbyMeshService>();
+    final meshLinked = conv.isDM &&
+        mesh.peers.any((peer) {
+          final fp = peer.fingerprint;
+          return peer.session.authenticated &&
+              fp != null &&
+              context.read<ChatProvider>().dmConversationIdForFingerprint(
+                    fp,
+                  ) ==
+                  conv.id;
+        });
+
     final dmPartner = !conv.isGroup
         ? conv.members.where((m) => m.userId != currentUserID).firstOrNull?.user
         : null;
@@ -3010,6 +3051,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     return GlassAppBar(
       titleSpacing: 0,
+      automaticallyImplyLeading: !widget.embedded,
       title: InkWell(
         onTap: openInfo,
         child: Row(
@@ -3044,10 +3086,32 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                     overflow: TextOverflow.ellipsis,
                   ),
-                  if (conv.isBurner && !conv.locked)
-                    _BurnerCountdownLabel(expiresAt: conv.expiresAt!)
-                  else
-                    ConversationEncryptionStatus(conversation: conv),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: conv.isBurner && !conv.locked
+                            ? _BurnerCountdownLabel(expiresAt: conv.expiresAt!)
+                            : ConversationEncryptionStatus(conversation: conv),
+                      ),
+                      if (meshLinked) ...[
+                        const SizedBox(width: 6),
+                        Icon(
+                          Icons.bluetooth_connected_rounded,
+                          size: 12,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        const SizedBox(width: 2),
+                        Text(
+                          'nearby',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ],
               ),
             ),

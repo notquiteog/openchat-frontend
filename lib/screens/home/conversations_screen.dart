@@ -44,6 +44,14 @@ double? storiesSnapTarget(double offset, double extent) {
 class _ConversationsScreenState extends State<ConversationsScreen> {
   String? _selectedFolderId;
 
+  /// Desktop split view: the conversation open in the right pane. Channels
+  /// keep their full-screen feed; everything else embeds.
+  String? _splitSelectedId;
+  String? _splitInitialMessageId;
+
+  static bool _useSplitView(BuildContext context) =>
+      MediaQuery.sizeOf(context).width >= 900;
+
   /// StoriesStrip height (96) + its hairline divider (0.5 + 2 margin). The
   /// list starts scrolled past this, so the strip hides above the fold until
   /// the user pulls down on the inbox (Telegram-archive style reveal).
@@ -204,7 +212,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
             settings.conversationNotificationPreferences,
           );
 
-    return Scaffold(
+    final inbox = Scaffold(
       extendBodyBehindAppBar: true,
       appBar: GlassAppBar(
         title: const Text('Chats'),
@@ -360,6 +368,42 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
           stretch: 0.6,
         ),
       ),
+    );
+
+    if (!_useSplitView(context)) return inbox;
+
+    // Desktop split view: inbox stays at a fixed sidebar width, the selected
+    // chat fills the rest. The selected conversation is re-resolved from the
+    // provider every build so renames/membership changes stay live, and a
+    // deleted conversation simply empties the pane.
+    final selected = _splitSelectedId == null
+        ? null
+        : chat.conversations
+              .where((c) => c.id == _splitSelectedId)
+              .firstOrNull;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(width: 380, child: inbox),
+        Container(
+          width: 0.5,
+          color: Theme.of(context).colorScheme.onSurface.withValues(
+            alpha: 0.08,
+          ),
+        ),
+        Expanded(
+          child: selected == null
+              ? _SplitViewPlaceholder()
+              : ChatScreen(
+                  // Keyed by conversation so switching chats rebuilds state
+                  // (controllers, drafts, read receipts) from scratch.
+                  key: ValueKey('split-${selected.id}'),
+                  conversation: selected,
+                  initialMessageId: _splitInitialMessageId,
+                  embedded: true,
+                ),
+        ),
+      ],
     );
   }
 
@@ -624,6 +668,15 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     Conversation conv, {
     String? initialMessageId,
   }) {
+    // Wide desktop windows open chats beside the inbox instead of pushing a
+    // full-screen route. Channels keep their feed screen for now.
+    if (!conv.isChannel && _useSplitView(context)) {
+      setState(() {
+        _splitSelectedId = conv.id;
+        _splitInitialMessageId = initialMessageId;
+      });
+      return;
+    }
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -2268,4 +2321,48 @@ class _SheetTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) =>
       GlassActionTile(icon: icon, label: label, onTap: onTap);
+}
+
+/// Right pane of the desktop split view before a chat is chosen.
+class _SplitViewPlaceholder extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 88,
+              height: 88,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: scheme.primary.withValues(alpha: 0.08),
+              ),
+              child: Icon(
+                Icons.forum_outlined,
+                size: 40,
+                color: scheme.primary.withValues(alpha: 0.55),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Select a conversation',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: scheme.onSurface.withValues(alpha: 0.7),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Your messages stay end-to-end encrypted.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: scheme.onSurface.withValues(alpha: 0.45),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

@@ -3,11 +3,13 @@ library;
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../crypto/pgp_service.dart';
 import '../secure_storage_service.dart';
 import 'ble_mesh_transport.dart';
+import 'lan_mesh_transport.dart';
 import 'mesh_frames.dart';
 import 'mesh_platform.dart';
 import 'mesh_session.dart';
@@ -16,6 +18,9 @@ import 'mesh_session.dart';
 class NearbyPeer {
   final String linkId;
   final MeshSession session;
+
+  /// The transport carrying this peer (null only in unit tests).
+  final MeshLink? link;
 
   /// Signal strength at discovery (dBm); null on peripheral-side links.
   final int? rssi;
@@ -41,25 +46,36 @@ class NearbyPeer {
   bool _draining = false;
   bool _redrainRequested = false;
 
-  NearbyPeer({required this.linkId, required this.session, this.rssi});
+  NearbyPeer({
+    required this.linkId,
+    required this.session,
+    this.link,
+    this.rssi,
+  });
 
   MeshSessionState get state => session.state;
   String? get fingerprint => session.peer?.fingerprint;
   String? get advertisedName => session.peer?.displayName;
+  bool get isLan => link is LanMeshLink;
 }
 
-/// Orchestrates the whole Nearby feature while its screen is open: both BLE
-/// roles (or central-only, per [MeshRole]), one authenticated [MeshSession]
-/// per link, queued-message delivery to verified peers with per-envelope
-/// acks, and ingest of envelopes they push to us. Stopping the service tears
-/// down advertising, scanning, and every session — the radio is silent the
-/// moment the screen closes.
-class NearbyMeshService extends ChangeNotifier {
+/// Orchestrates the whole Nearby feature: both BLE roles (or central-only,
+/// per [MeshRole]), one authenticated [MeshSession] per link, queued-message
+/// delivery to verified peers with per-envelope acks, and ingest of
+/// envelopes they push to us.
+///
+/// Foreground-only guarantee: the radio runs while the Nearby screen is
+/// attached — or, when [keepAliveWhileAppOpen] is on, while the app itself
+/// is in the foreground — and stops the moment the app backgrounds or the
+/// last reason to run goes away. There is never a background beacon.
+class NearbyMeshService extends ChangeNotifier with WidgetsBindingObserver {
   NearbyMeshService({
     required this._storage,
     required this.onEnvelope,
     required this.envelopesForPeer,
     required this.contactNameForFingerprint,
+    this.onEnvelopeAcked,
+    this._outboxSignal,
   });
 
   final SecureStorageService _storage;
@@ -78,13 +94,27 @@ class NearbyMeshService extends ChangeNotifier {
   /// Contact display name for a verified fingerprint (null = unknown).
   final String? Function(String fingerprint) contactNameForFingerprint;
 
+  /// The peer answered one of our envelopes (nonce == pending message id).
+  /// Lets ChatProvider flip the pending bubble to "delivered nearby".
+  final void Function(String nonce, bool accepted)? onEnvelopeAcked;
+
+  /// Fires when the outbox may have grown (ChatProvider itself); listened to
+  /// only while running, so a queued message re-drains live.
+  final Listenable? _outboxSignal;
+
   final MeshPeripheral _peripheral = MeshPeripheral();
   final MeshCentral _central = MeshCentral();
+  final LanMeshTransport _lan = LanMeshTransport();
   final Map<String, NearbyPeer> _peers = {};
   final List<StreamSubscription<dynamic>> _subs = [];
   Timer? _redrainDebounce;
   bool _running = false;
   bool _discoverable = false;
+  bool _observing = false;
+  bool _resumeOnForeground = false;
+  int _attachedScreens = 0;
+  bool _keepAliveWhileAppOpen = false;
+  String? _selfFingerprint;
   String? _error;
 
   bool get isRunning => _running;
@@ -93,25 +123,78 @@ class NearbyMeshService extends ChangeNotifier {
   /// central-only platforms (Linux) this stays false: we can find dual-role
   /// peers, but they cannot initiate toward us.
   bool get isDiscoverable => _discoverable;
+
+  /// Our own key fingerprint, available once the radio has started — the
+  /// comparison sheet shows it next to an unknown peer's.
+  String? get selfFingerprint => _selfFingerprint;
+
+  /// True while the local-network transport (UDP discovery + TCP frames) is
+  /// up — the fast path, and the only one two Linux machines share.
+  bool get lanActive => _lan.isRunning;
   String? get error => _error;
   List<NearbyPeer> get peers => List.unmodifiable(_peers.values);
 
   static MeshRole get role => currentMeshRole;
   static bool get isSupported => role.canRun;
 
+  /// Radio outlives the Nearby screen (but never the foregrounded app) so
+  /// the user can chat while queued messages keep exchanging.
+  bool get keepAliveWhileAppOpen => _keepAliveWhileAppOpen;
+  set keepAliveWhileAppOpen(bool value) {
+    if (_keepAliveWhileAppOpen == value) return;
+    _keepAliveWhileAppOpen = value;
+    if (!value && _attachedScreens <= 0) {
+      unawaited(stop());
+    } else {
+      notifyListeners();
+    }
+  }
+
+  /// The Nearby screen came on stage: make sure the radio is up.
+  void attachScreen() {
+    _attachedScreens++;
+    unawaited(start());
+  }
+
+  /// The Nearby screen left. Without the keep-alive opt-in this silences the
+  /// radio immediately — the original foreground-only behavior.
+  void detachScreen() {
+    _attachedScreens = (_attachedScreens - 1).clamp(0, 1 << 30);
+    if (_attachedScreens <= 0 && !_keepAliveWhileAppOpen) {
+      unawaited(stop());
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.detached:
+        // No background beaconing, ever — regardless of keep-alive.
+        if (_running) {
+          _resumeOnForeground = true;
+          unawaited(stop());
+        }
+      case AppLifecycleState.resumed:
+        if (_resumeOnForeground) {
+          _resumeOnForeground = false;
+          unawaited(start());
+        }
+      case AppLifecycleState.inactive:
+        break; // transient (app switcher, permission dialogs) — keep running
+    }
+  }
+
   Future<void> start() async {
     if (_running || !isSupported) return;
+    if (!_observing) {
+      // Lazy registration keeps the constructor binding-free (testable) and
+      // the observer survives stop() so a backgrounded radio can resume.
+      WidgetsBinding.instance.addObserver(this);
+      _observing = true;
+    }
     _error = null;
-    if (!await _ensurePermissions()) {
-      _error = 'Bluetooth permissions are required for Nearby';
-      notifyListeners();
-      return;
-    }
-    if (!await meshAdapterIsOn()) {
-      _error = 'Bluetooth is turned off or unavailable';
-      notifyListeners();
-      return;
-    }
     final privateKey = await _storage.getPrivateKey();
     final publicKey = await _storage.getPublicKey();
     if (privateKey == null || publicKey == null) {
@@ -120,32 +203,54 @@ class NearbyMeshService extends ChangeNotifier {
       return;
     }
     final fingerprint = await PgpService.fingerprintFromPublicKey(publicKey);
+    _selfFingerprint = fingerprint;
     final username = await _storage.getUsername() ?? '';
+    final userId = await _storage.getUserID() ?? '';
+    final self = (
+      privateKey: privateKey,
+      publicKey: publicKey,
+      fingerprint: fingerprint,
+      username: username,
+      userId: userId,
+    );
     _running = true;
-    _subs.add(_peripheral.newLinks.listen(
-      (link) => _attachLink(link, privateKey, publicKey, fingerprint, username),
-    ));
-    _subs.add(_central.newLinks.listen(
-      (link) => _attachLink(link, privateKey, publicKey, fingerprint, username),
-    ));
-    if (role.advertises) {
-      try {
-        // The advertised name is a random tag — identity never beacons.
-        final tag = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
-        await _peripheral.start(localName: 'oc-$tag');
-        _discoverable = true;
-      } catch (_) {
-        // Some adapters can't advertise (no LE peripheral mode). Degrade to
-        // central-only instead of failing the whole feature.
-        _discoverable = false;
+    _subs.add(_peripheral.newLinks.listen((link) => _attachLink(link, self)));
+    _subs.add(_central.newLinks.listen((link) => _attachLink(link, self)));
+    _subs.add(_lan.newLinks.listen((link) => _attachLink(link, self)));
+
+    // The advertised name / LAN beacon is a RANDOM session tag — identity
+    // never beacons on either transport.
+    final tag = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+
+    // BLE and LAN start independently: Bluetooth being off (or denied)
+    // must not take the local-network path down with it, and vice versa.
+    var bleUp = false;
+    if (await _ensurePermissions() && await meshAdapterIsOn()) {
+      if (role.advertises) {
+        try {
+          await _peripheral.start(localName: 'oc-$tag');
+          _discoverable = true;
+        } catch (_) {
+          // Some adapters can't advertise (no LE peripheral mode). Degrade
+          // to central-only instead of failing the whole feature.
+          _discoverable = false;
+        }
       }
+      try {
+        await _central.start();
+        bleUp = true;
+      } catch (_) {}
     }
     try {
-      await _central.start();
-    } catch (e) {
-      _error = 'Bluetooth unavailable: $e';
+      await _lan.start(sessionTag: tag);
+    } catch (_) {}
+
+    if (!bleUp && !_lan.isRunning) {
+      _error = 'Neither Bluetooth nor a local network is available';
       await stop();
+      return;
     }
+    _outboxSignal?.addListener(notifyOutboxMaybeChanged);
     notifyListeners();
   }
 
@@ -169,18 +274,22 @@ class NearbyMeshService extends ChangeNotifier {
 
   void _attachLink(
     MeshLink link,
-    String privateKey,
-    String publicKey,
-    String fingerprint,
-    String username,
+    ({
+      String privateKey,
+      String publicKey,
+      String fingerprint,
+      String username,
+      String userId,
+    }) self,
   ) {
     if (!_running || _peers.containsKey(link.linkId)) return;
     final session = MeshSession(
-      selfFingerprint: fingerprint,
-      selfPublicKeyArmored: publicKey,
-      selfDisplayName: username,
+      selfFingerprint: self.fingerprint,
+      selfPublicKeyArmored: self.publicKey,
+      selfDisplayName: self.username,
+      selfUserId: self.userId,
       sign: (data) =>
-          PgpService.sign(data: data, privateKeyArmored: privateKey),
+          PgpService.sign(data: data, privateKeyArmored: self.privateKey),
       verify: (data, signature, peerKey) => PgpService.verify(
         data: data,
         signatureArmor: signature,
@@ -193,6 +302,7 @@ class NearbyMeshService extends ChangeNotifier {
     final peer = NearbyPeer(
       linkId: link.linkId,
       session: session,
+      link: link,
       rssi: link.rssi,
     );
     _peers[link.linkId] = peer;
@@ -211,6 +321,19 @@ class NearbyMeshService extends ChangeNotifier {
     _subs.add(session.stateChanges.listen((state) {
       if (state == MeshSessionState.authenticated) {
         final fp = session.peer!.fingerprint;
+        // The same person can surface on BLE and LAN at once. Keep one
+        // link, preferring LAN (~1000× the throughput).
+        final twin = _peers.values
+            .where((p) =>
+                p.linkId != peer.linkId &&
+                p.session.authenticated &&
+                p.fingerprint == fp)
+            .firstOrNull;
+        if (twin != null) {
+          final loser = peer.isLan && !twin.isLan ? twin : peer;
+          unawaited(loser.link?.close()); // onDone drops the peer entry
+          if (loser == peer) return;
+        }
         peer.matchedContactName = contactNameForFingerprint(fp);
         unawaited(deliverQueuedTo(peer));
       }
@@ -224,6 +347,7 @@ class NearbyMeshService extends ChangeNotifier {
       } else {
         peer.rejectedCount++;
       }
+      onEnvelopeAcked?.call(ack.nonce, ack.accepted);
       notifyListeners();
     }));
 
@@ -301,13 +425,16 @@ class NearbyMeshService extends ChangeNotifier {
 
   void _dropPeer(String linkId) {
     final peer = _peers.remove(linkId);
-    peer?.session.dispose();
-    if (peer != null) notifyListeners();
+    if (peer == null) return;
+    unawaited(peer.link?.close()); // idempotent — usually already closed
+    peer.session.dispose();
+    notifyListeners();
   }
 
   Future<void> stop() async {
     _running = false;
     _discoverable = false;
+    _outboxSignal?.removeListener(notifyOutboxMaybeChanged);
     _redrainDebounce?.cancel();
     _redrainDebounce = null;
     for (final sub in _subs) {
@@ -316,7 +443,11 @@ class NearbyMeshService extends ChangeNotifier {
     _subs.clear();
     await _central.stop();
     await _peripheral.stop();
+    await _lan.stop();
     for (final peer in _peers.values) {
+      // Central-dialed GATT links and LAN sockets outlive their transports'
+      // stop() — close them explicitly or the connections linger.
+      unawaited(peer.link?.close());
       peer.session.dispose();
     }
     _peers.clear();
@@ -325,6 +456,10 @@ class NearbyMeshService extends ChangeNotifier {
 
   @override
   void dispose() {
+    if (_observing) {
+      WidgetsBinding.instance.removeObserver(this);
+      _observing = false;
+    }
     unawaited(stop());
     super.dispose();
   }

@@ -44,11 +44,17 @@ class MeshPeer {
   final String publicKeyArmored;
   final String displayName;
 
+  /// The peer's server user id, when its build shares one (newer builds
+  /// only). Lets a verified stranger be saved as a contact for later — it is
+  /// exactly as public as the name/key already exchanged in hello.
+  final String userId;
+
   const MeshPeer({
     required this.sessionId,
     required this.fingerprint,
     required this.publicKeyArmored,
     required this.displayName,
+    this.userId = '',
   });
 }
 
@@ -61,6 +67,7 @@ class MeshSession {
     required this._verify,
     required this._fingerprintOf,
     required this._sendFrame,
+    this.selfUserId = '',
     String? sessionId,
     Random? random,
   }) : _random = random ?? Random.secure() {
@@ -71,6 +78,7 @@ class MeshSession {
   final String selfFingerprint;
   final String selfPublicKeyArmored;
   final String selfDisplayName;
+  final String selfUserId;
   final MeshSign _sign;
   final MeshVerify _verify;
   final MeshFingerprintOf _fingerprintOf;
@@ -132,6 +140,7 @@ class MeshSession {
         'public_key': selfPublicKeyArmored,
         'name': selfDisplayName,
         'challenge': _challenge,
+        if (selfUserId.isNotEmpty) 'user_id': selfUserId,
       });
 
   Future<void> _sendJson(int type, Map<String, dynamic> json) =>
@@ -229,6 +238,7 @@ class MeshSession {
       fingerprint: actualFp,
       publicKeyArmored: publicKey,
       displayName: json['name']?.toString() ?? '',
+      userId: json['user_id']?.toString() ?? '',
     );
     // Responder path: we learned of the peer before start() ran.
     if (_state == MeshSessionState.idle) {

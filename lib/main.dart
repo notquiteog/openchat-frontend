@@ -23,6 +23,7 @@ import 'services/call_signal_codec.dart';
 import 'services/sfu_call_controller.dart';
 import 'services/desktop_startup_service.dart';
 import 'services/local_private_state_service.dart';
+import 'services/mesh/nearby_mesh_service.dart';
 import 'services/mls_service.dart';
 import 'services/notification_service.dart';
 import 'services/push_notification_service.dart';
@@ -203,6 +204,36 @@ class _Providers extends StatelessWidget {
             storage: storage,
           ),
           update: (_, _, previous) => previous!,
+        ),
+        // App-level so the radio can outlive the Nearby screen (keep-alive
+        // opt-in) and the DM header can show live mesh presence. Lazy: the
+        // constructor is inert; nothing touches Bluetooth until start().
+        ChangeNotifierProvider<NearbyMeshService>(
+          create: (ctx) => NearbyMeshService(
+            storage: storage,
+            onEnvelope: (envelope, fingerprint) => ctx
+                .read<ChatProvider>()
+                .ingestMeshMessage(envelope, fingerprint),
+            envelopesForPeer: (fingerprint) => ctx
+                .read<ChatProvider>()
+                .meshEnvelopesForFingerprint(fingerprint),
+            contactNameForFingerprint: (fingerprint) {
+              final chat = ctx.read<ChatProvider>();
+              final convID =
+                  chat.dmConversationIdForFingerprint(fingerprint);
+              if (convID == null) return null;
+              return chat.conversations
+                  .where((c) => c.id == convID)
+                  .firstOrNull
+                  ?.displayName('');
+            },
+            onEnvelopeAcked: (nonce, accepted) {
+              if (accepted) {
+                ctx.read<ChatProvider>().markMeshDelivered(nonce);
+              }
+            },
+            outboxSignal: ctx.read<ChatProvider>(),
+          ),
         ),
         ChangeNotifierProvider(
           create: (_) => CallProvider(callService, callHistory: callHistory),
