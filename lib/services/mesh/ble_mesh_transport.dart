@@ -1,11 +1,13 @@
 /// Mesh wire protocol, layer 0: BLE links. One GATT service with two
 /// characteristics — central writes frames into `inbox`, peripheral pushes
-/// frames out through `outbox` notifications. Both roles run at once
-/// (advertise + scan), so two phones connect whichever direction wins first.
+/// frames out through `outbox` notifications. On dual-role platforms
+/// (Android, iOS, macOS, Windows — see mesh_platform.dart) both roles run at
+/// once (advertise + scan), so two devices connect whichever direction wins
+/// first; central-only platforms (Linux) just scan and dial.
 ///
-/// Android-only MVP, and ONLY while the Nearby screen is open: advertising
-/// carries the service UUID and a random per-session id — never identity —
-/// and everything stops when the screen closes (no background beacon).
+/// Active ONLY while the Nearby screen is open: advertising carries the
+/// service UUID and a random per-session id — never identity — and
+/// everything stops when the screen closes (no background beacon).
 library;
 
 import 'dart:async';
@@ -24,6 +26,27 @@ const String meshOutboxUuid = '6f70656e-6368-6174-0003-6d6573683031';
 /// minus the 3-byte ATT header.
 const int _fallbackChunkBytes = 20;
 
+/// Resolves once the adapter reports a usable state. Returns true when
+/// Bluetooth is on — anything else (off, unauthorized, unavailable, or no
+/// report within [timeout]) means the radio cannot start.
+Future<bool> meshAdapterIsOn({
+  Duration timeout = const Duration(seconds: 4),
+}) async {
+  try {
+    final state = await fbp.FlutterBluePlus.adapterState
+        .firstWhere(
+          (s) =>
+              s != fbp.BluetoothAdapterState.unknown &&
+              s != fbp.BluetoothAdapterState.turningOn &&
+              s != fbp.BluetoothAdapterState.turningOff,
+        )
+        .timeout(timeout);
+    return state == fbp.BluetoothAdapterState.on;
+  } catch (_) {
+    return false;
+  }
+}
+
 /// A bidirectional chunk pipe to one peer, regardless of which side dialed.
 abstract class MeshLink {
   /// Stable transport-level id (BLE address) for bookkeeping.
@@ -32,6 +55,10 @@ abstract class MeshLink {
   int get maxChunkBytes;
   Future<void> sendChunk(Uint8List chunk);
   Future<void> close();
+
+  /// Signal strength at discovery time (dBm); null when we are the
+  /// peripheral — the OS GATT server doesn't report the central's RSSI.
+  int? get rssi => null;
 
   /// Sends a whole frame as ordered chunks.
   Future<void> sendFrame(Uint8List frame) async {
@@ -44,22 +71,29 @@ abstract class MeshLink {
 /// Central role: we scanned, we connected, we write into the peer's inbox
 /// and subscribe to its outbox.
 class CentralMeshLink extends MeshLink {
-  CentralMeshLink._(this._device, this._inbox, this._outbox, this._mtu);
+  CentralMeshLink._(this._device, this._inbox, this._outbox, this._mtu, this.rssi);
 
   final fbp.BluetoothDevice _device;
   final fbp.BluetoothCharacteristic _inbox;
   final fbp.BluetoothCharacteristic _outbox;
   final int _mtu;
+
+  @override
+  final int? rssi;
+
   StreamSubscription<List<int>>? _notifySub;
   final StreamController<Uint8List> _inbound = StreamController.broadcast();
 
-  static Future<CentralMeshLink> connect(fbp.BluetoothDevice device) async {
+  static Future<CentralMeshLink> connect(
+    fbp.BluetoothDevice device, {
+    int? rssi,
+  }) async {
+    // connect() itself negotiates MTU 512 on Android; iOS/macOS/Windows
+    // negotiate automatically and report through mtuNow. requestMtu() throws
+    // everywhere but Android, so never call it here.
     await device.connect(timeout: const Duration(seconds: 15));
-    var mtu = _fallbackChunkBytes + 3;
-    try {
-      mtu = await device.requestMtu(512);
-    } catch (_) {}
     final services = await device.discoverServices();
+    final mtu = device.mtuNow < 23 ? _fallbackChunkBytes + 3 : device.mtuNow;
     final service = services.firstWhere(
       (s) => s.uuid.str128.toLowerCase() == meshServiceUuid,
       orElse: () => throw StateError('peer does not expose the mesh service'),
@@ -74,6 +108,7 @@ class CentralMeshLink extends MeshLink {
       byUuid(meshInboxUuid),
       byUuid(meshOutboxUuid),
       mtu,
+      rssi,
     );
     link._notifySub = link._outbox.onValueReceived.listen(
       (value) => link._inbound.add(Uint8List.fromList(value)),
@@ -252,7 +287,7 @@ class MeshCentral {
     _scanning = true;
     _scanSub = fbp.FlutterBluePlus.scanResults.listen((results) {
       for (final result in results) {
-        unawaited(_maybeDial(result.device));
+        unawaited(_maybeDial(result.device, result.rssi));
       }
     });
     await fbp.FlutterBluePlus.startScan(
@@ -261,11 +296,11 @@ class MeshCentral {
     );
   }
 
-  Future<void> _maybeDial(fbp.BluetoothDevice device) async {
+  Future<void> _maybeDial(fbp.BluetoothDevice device, int rssi) async {
     final id = device.remoteId.str;
     if (!_scanning || !_dialing.add(id)) return;
     try {
-      final link = await CentralMeshLink.connect(device);
+      final link = await CentralMeshLink.connect(device, rssi: rssi);
       if (!_scanning) {
         await link.close();
         return;

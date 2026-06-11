@@ -193,6 +193,40 @@ void main() {
       expect(victim.failure, contains('fingerprint'));
     });
 
+    test('acks round-trip after authentication', () async {
+      final (a, b) = wiredPair();
+      await a.start();
+      final received = <MeshAck>[];
+      a.acks.listen(received.add);
+
+      // sendAck is illegal pre-auth on a fresh session…
+      final lonely = buildSession(fp: 'CCCC', sendFrame: (t, p) async {});
+      expect(
+        () => lonely.sendAck('n-1', accepted: true),
+        throwsStateError,
+      );
+
+      // …and round-trips on an authenticated one.
+      await b.sendAck('nonce-1', accepted: true);
+      await b.sendAck('nonce-2', accepted: false);
+      await Future<void>.delayed(Duration.zero);
+      expect(received, hasLength(2));
+      expect(received[0].nonce, 'nonce-1');
+      expect(received[0].accepted, isTrue);
+      expect(received[1].nonce, 'nonce-2');
+      expect(received[1].accepted, isFalse);
+    });
+
+    test('an ack before authentication fails the session', () async {
+      final victim = buildSession(fp: 'AAAA', sendFrame: (t, p) async {});
+      await victim.handleFrame(MeshFrame(
+        type: meshFrameAck,
+        payload: Uint8List.fromList('{"nonce":"x","accepted":true}'.codeUnits),
+      ));
+      expect(victim.state, MeshSessionState.failed);
+      expect(victim.failure, contains('ack before authentication'));
+    });
+
     test('a replayed proof from another session fails (challenge binding)',
         () async {
       // First, a legitimate exchange to capture A's proof signature.

@@ -16,7 +16,7 @@ import 'mesh_frames.dart';
 /// A signature binds the signer's PGP key to THIS pair of ephemeral session
 /// ids and the verifier's fresh challenge — replaying a recorded proof at a
 /// new session fails because both ids and the challenge differ. Only after
-/// BOTH proofs verify does the session accept message frames.
+/// BOTH proofs verify does the session accept message and ack frames.
 ///
 /// The advertisement itself carries only the random session id: identity is
 /// revealed exclusively to a connected peer, never beaconed.
@@ -28,6 +28,15 @@ typedef MeshFingerprintOf = Future<String> Function(String publicKeyArmored);
 typedef MeshFrameSender = Future<void> Function(int type, Uint8List payload);
 
 enum MeshSessionState { idle, helloSent, awaitingProof, authenticated, failed }
+
+/// Receiver's verdict for one message envelope, keyed by its client nonce.
+/// accepted=false means the peer could not ingest it (e.g. no matching DM on
+/// that device) — re-sending the same payload will not change the outcome.
+class MeshAck {
+  final String nonce;
+  final bool accepted;
+  const MeshAck({required this.nonce, required this.accepted});
+}
 
 class MeshPeer {
   final String sessionId;
@@ -81,6 +90,7 @@ class MeshSession {
       StreamController.broadcast();
   final StreamController<Map<String, dynamic>> _messages =
       StreamController.broadcast();
+  final StreamController<MeshAck> _acks = StreamController.broadcast();
 
   MeshSessionState get state => _state;
   MeshPeer? get peer => _peer;
@@ -91,6 +101,10 @@ class MeshSession {
   /// Decoded `message` frame payloads, emitted only on authenticated
   /// sessions.
   Stream<Map<String, dynamic>> get messages => _messages.stream;
+
+  /// Delivery receipts from the peer for envelopes we sent. Older builds
+  /// never send acks, so absence of an ack only means "unconfirmed".
+  Stream<MeshAck> get acks => _acks.stream;
 
   String _randomHex(int bytes) {
     final b = List<int>.generate(bytes, (_) => _random.nextInt(256));
@@ -131,6 +145,15 @@ class MeshSession {
     await _sendJson(meshFrameMessage, envelope);
   }
 
+  /// Acknowledges a received envelope by client nonce. Only legal once
+  /// authenticated.
+  Future<void> sendAck(String nonce, {required bool accepted}) async {
+    if (!authenticated) {
+      throw StateError('mesh session is not authenticated');
+    }
+    await _sendJson(meshFrameAck, {'nonce': nonce, 'accepted': accepted});
+  }
+
   /// Feed every decoded frame from the transport here.
   Future<void> handleFrame(MeshFrame frame) async {
     if (_state == MeshSessionState.failed) return;
@@ -155,7 +178,17 @@ class MeshSession {
         }
         _messages.add(json);
       case meshFrameAck:
-        break; // reserved
+        if (!authenticated) {
+          _fail('ack before authentication');
+          return;
+        }
+        final nonce = json['nonce']?.toString() ?? '';
+        if (nonce.isNotEmpty) {
+          _acks.add(MeshAck(
+            nonce: nonce,
+            accepted: json['accepted'] == true,
+          ));
+        }
       default:
         _fail('unknown frame type ${frame.type}');
     }
@@ -267,5 +300,6 @@ class MeshSession {
   void dispose() {
     _stateController.close();
     _messages.close();
+    _acks.close();
   }
 }

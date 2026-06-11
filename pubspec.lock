@@ -681,7 +681,7 @@ packages:
     description:
       path: "."
       ref: main
-      resolved-ref: "0da27d8868d550674bada0ca3282527bdcaa0610"
+      resolved-ref: "06f3b52f569764130b640921f5227c42b0d2727e"
       url: "https://github.com/notquiteog/flutter_blue_ce_winrt.git"
     source: git
     version: "2.3.8+ce.1"

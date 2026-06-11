@@ -99,5 +99,7 @@
 	<string>OpenChat needs always access to keep live location sharing running.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Face ID protects private key export.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Bluetooth exchanges queued messages with nearby verified contacts while the Nearby screen is open.</string>
 </dict>
 </plist>

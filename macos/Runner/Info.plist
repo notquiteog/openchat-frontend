@@ -43,5 +43,7 @@
 	<string>Camera access is required for video calls.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Microphone access is required for voice notes and calls.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Bluetooth exchanges queued messages with nearby verified contacts while the Nearby screen is open.</string>
 </dict>
 </plist>
