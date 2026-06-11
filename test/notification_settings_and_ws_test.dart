@@ -563,6 +563,94 @@ void main() {
     });
   });
 
+  group('Message notification tap routing', () {
+    tearDown(() => NotificationService.setMessageOpenedHandler(null));
+
+    test('routes message notification taps to the conversation', () {
+      final opened = <String>[];
+      NotificationService.setMessageOpenedHandler(opened.add);
+
+      NotificationService.debugHandleNotificationResponse(
+        NotificationResponse(
+          id: 'conv-1'.hashCode,
+          payload: '{"type":"message","conversation_id":"conv-1"}',
+          notificationResponseType:
+              NotificationResponseType.selectedNotification,
+        ),
+      );
+
+      expect(opened, ['conv-1']);
+    });
+
+    test('routes reminder notification taps to the conversation', () {
+      final opened = <String>[];
+      NotificationService.setMessageOpenedHandler(opened.add);
+
+      NotificationService.debugHandleNotificationResponse(
+        const NotificationResponse(
+          id: 99,
+          payload:
+              '{"type":"message_reminder","reminder_id":"r-1","conversation_id":"conv-2","message_id":"m-1"}',
+          notificationResponseType:
+              NotificationResponseType.selectedNotification,
+        ),
+      );
+
+      expect(opened, ['conv-2']);
+    });
+
+    test('queues cold-start taps until the app shell wires the handler',
+        () async {
+      // Launch-details tap arrives before initState wiring — must not be lost.
+      NotificationService.debugHandleNotificationResponse(
+        const NotificationResponse(
+          id: 98,
+          payload: '{"type":"message","conversation_id":"conv-3"}',
+          notificationResponseType:
+              NotificationResponseType.selectedNotification,
+        ),
+      );
+
+      final opened = <String>[];
+      NotificationService.setMessageOpenedHandler(opened.add);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(opened, ['conv-3']);
+    });
+
+    test('ignores taps without a routable payload', () {
+      final opened = <String>[];
+      NotificationService.setMessageOpenedHandler(opened.add);
+
+      NotificationService.debugHandleNotificationResponse(
+        const NotificationResponse(
+          id: 97,
+          notificationResponseType:
+              NotificationResponseType.selectedNotification,
+        ),
+      );
+      NotificationService.debugHandleNotificationResponse(
+        const NotificationResponse(
+          id: 96,
+          // Live-location payloads carry ids but no routable type.
+          payload: '{"conversation_id":"conv-4","message_id":"m-2"}',
+          notificationResponseType:
+              NotificationResponseType.selectedNotification,
+        ),
+      );
+      NotificationService.debugHandleNotificationResponse(
+        const NotificationResponse(
+          id: 95,
+          payload: 'not json',
+          notificationResponseType:
+              NotificationResponseType.selectedNotification,
+        ),
+      );
+
+      expect(opened, isEmpty);
+    });
+  });
+
   group('Incoming call notification contract', () {
     // The notification IS the native ring experience on a locked/idle Android
     // device — these properties are what make the OS treat it like a call

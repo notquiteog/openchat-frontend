@@ -135,6 +135,8 @@ class ChatProvider extends ChangeNotifier {
   final Map<String, Conversation> _conversations = {};
   final List<ChatFolder> _chatFolders = [];
   final Map<String, Set<String>> _typingUsers = {};
+  // Pending typing-indicator expirations, keyed '<convID>|<userID>'.
+  final Map<String, Timer> _typingExpiry = {};
   final Map<String, Map<String, String>> _readReceipts = {};
   // Live provably-fair game rounds, keyed by round id (populated from the API
   // and game_updated WS events) so the in-chat game cards render reactively.
@@ -368,7 +370,20 @@ class ChatProvider extends ChangeNotifier {
     _myPollVotes.clear();
     _myPollVotesLoading.clear();
     _pollSnapshots.clear();
+    _pollVoterStateAuthoritative.clear();
     _outboxItems = const [];
+    for (final timer in _typingExpiry.values) {
+      timer.cancel();
+    }
+    _typingExpiry.clear();
+    // Cross-account residue: pooled sealed-post tokens were issued under the
+    // previous account's auth, and the remaining caches are keyed by ids the
+    // next account can re-encounter.
+    _postTokenPool.clear();
+    _seenProofSignatures.clear();
+    _gameRounds.clear();
+    _messageTranslations.clear();
+    _meshDeliveredNonces.clear();
     // Reset identity too — the provider outlives a logout/login cycle, and a
     // stale _selfId misattributes own-message suppression, self-reactions, and
     // mention detection to the previous account.
@@ -453,6 +468,7 @@ class ChatProvider extends ChangeNotifier {
     // refetch below carries fresher tallies — don't let an old snapshot
     // overlay them in the bubbles.
     _pollSnapshots.clear();
+    _pollVoterStateAuthoritative.clear();
     await refreshConversationsSilently();
     await drainOutbox();
     final loadedConversationIds = _messages.keys.toList(growable: false);
@@ -845,6 +861,7 @@ class ChatProvider extends ChangeNotifier {
       final result = <Message>[];
       for (final msg in msgs.reversed) {
         await _promoteDeliveredSealedScheduledMessage(msg);
+        _ingestPollVoterEcho(msg);
         final cached = cachedById[msg.id];
         if (cached != null &&
             cached.isDecrypted &&
@@ -895,6 +912,7 @@ class ChatProvider extends ChangeNotifier {
       if (result.isNotEmpty && existing.isNotEmpty) {
         final fetchedIds = result.map((m) => m.id).toSet();
         final oldestFetched = result.first.createdAt;
+        final newestFetched = result.last.createdAt;
         final olderScrollback = existing
             .where(
               (m) =>
@@ -902,8 +920,19 @@ class ChatProvider extends ChangeNotifier {
                   m.createdAt.isBefore(oldestFetched),
             )
             .toList();
-        if (olderScrollback.isNotEmpty) {
-          merged = [...olderScrollback, ...result];
+        // Keep messages newer than the fetched page too: a WS arrival that
+        // landed while the fetch/decrypt loop above was running is in
+        // `existing` but not in `result`, and dropping it here made bubbles
+        // vanish until the chat was reopened.
+        final newerArrivals = existing
+            .where(
+              (m) =>
+                  !fetchedIds.contains(m.id) &&
+                  !m.createdAt.isBefore(newestFetched),
+            )
+            .toList();
+        if (olderScrollback.isNotEmpty || newerArrivals.isNotEmpty) {
+          merged = [...olderScrollback, ...result, ...newerArrivals];
         }
       }
       _messages[convID] = _withOutboxOverlays(convID, merged);
@@ -924,6 +953,7 @@ class ChatProvider extends ChangeNotifier {
       if (older.isEmpty) return 0;
       for (final msg in older) {
         await _promoteDeliveredSealedScheduledMessage(msg);
+        _ingestPollVoterEcho(msg);
         _hydrateMessageSender(msg);
       }
       final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
@@ -948,10 +978,17 @@ class ChatProvider extends ChangeNotifier {
       for (final msg in older) {
         await _syncLiveLocationShareFromMessage(msg);
       }
+      // Splice onto the live list, not the pre-fetch snapshot: messages that
+      // arrived over WS during the fetch/decrypt awaits live only in the
+      // current list and would be dropped by writing the snapshot back.
+      final current = _messages[convID] ?? existing;
+      final olderIds = older.map((m) => m.id).toSet();
       _messages[convID] = _withOutboxOverlays(convID, [
         ...older.reversed,
-        ...existing.where(
-          (message) => message is! PendingMessage || message.outboxId == null,
+        ...current.where(
+          (message) =>
+              !olderIds.contains(message.id) &&
+              (message is! PendingMessage || message.outboxId == null),
         ),
       ]);
       notifyListeners();
@@ -1246,27 +1283,50 @@ class ChatProvider extends ChangeNotifier {
     if (ciphertextPath == null || ciphertextPath.isEmpty) {
       throw const ChatSendException('Queued attachment file is missing.');
     }
-    final ciphertext = await _outbox.readAttachmentCiphertext(ciphertextPath);
-    final encryptedAttachment = EncryptedAttachmentUpload.fromMetadataJson(
-      Map<String, dynamic>.from(data['attachment'] as Map? ?? const {}),
-      ciphertext: ciphertext,
-    );
-    final attachment = await AttachmentService(
-      _api,
-    ).uploadEncryptedAttachment(encryptedAttachment);
-    final plaintext = jsonEncode(
-      attachment.toPayloadJson(
-        caption: data['caption'] as String? ?? '',
-        viewOnce: data['view_once'] as bool? ?? false,
-        hasSpoiler: data['has_spoiler'] as bool? ?? false,
-      ),
-    );
+    // A prior drain attempt may have uploaded the ciphertext and then failed
+    // on the message send — reuse that upload instead of minting a second
+    // server-side attachment on every retry.
+    String? attachmentId = data['uploaded_attachment_id'] as String?;
+    String? plaintext = data['uploaded_payload'] as String?;
+    String? messageType = data['uploaded_message_type'] as String?;
+    if (attachmentId == null || plaintext == null || messageType == null) {
+      final ciphertext = await _outbox.readAttachmentCiphertext(ciphertextPath);
+      final encryptedAttachment = EncryptedAttachmentUpload.fromMetadataJson(
+        Map<String, dynamic>.from(data['attachment'] as Map? ?? const {}),
+        ciphertext: ciphertext,
+      );
+      final attachment = await AttachmentService(
+        _api,
+      ).uploadEncryptedAttachment(encryptedAttachment);
+      attachmentId = attachment.attachmentId;
+      messageType = attachment.messageType.name;
+      plaintext = jsonEncode(
+        attachment.toPayloadJson(
+          caption: data['caption'] as String? ?? '',
+          viewOnce: data['view_once'] as bool? ?? false,
+          hasSpoiler: data['has_spoiler'] as bool? ?? false,
+        ),
+      );
+      await _upsertOutboxItem(
+        item.copyWith(
+          data: {
+            ...data,
+            'uploaded_attachment_id': attachmentId,
+            'uploaded_payload': plaintext,
+            'uploaded_message_type': messageType,
+          },
+        ),
+      );
+    }
     final sent = await _prepareAndSendOutboxPayload(
       convID: item.conversationId,
       plaintextPayload: plaintext,
-      messageType: attachment.messageType.name,
+      messageType: messageType,
       pendingID: data['pending_message_id'] as String?,
-      attachmentId: attachment.attachmentId,
+      // Same idempotency key as the plain queued-send path: a send that timed
+      // out after the server committed must not duplicate on the next drain.
+      clientNonce: data['pending_message_id'] as String? ?? item.id,
+      attachmentId: attachmentId,
       replyTo: data['reply_to'] as String?,
       topicId: data['topic_id'] as String?,
       silent: data['silent'] as bool? ?? false,
@@ -1320,6 +1380,7 @@ class ChatProvider extends ChangeNotifier {
     required String plaintextPayload,
     required String messageType,
     required String? pendingID,
+    String? clientNonce,
     String? replyTo,
     String? attachmentId,
     String? topicId,
@@ -1341,6 +1402,7 @@ class ChatProvider extends ChangeNotifier {
       attachmentId: attachmentId,
       topicId: topicId,
       silent: silent,
+      clientNonce: clientNonce,
     );
     _replacePendingWithConfirmed(
       convID: convID,
@@ -1935,9 +1997,22 @@ class ChatProvider extends ChangeNotifier {
   // message object its host gave it.
   final Map<String, Poll> _pollSnapshots = {};
 
+  // Polls whose snapshot voterOptionIds are device-truth (set by a vote or
+  // retraction THIS session). Needed because "voter ids empty" is ambiguous:
+  // broadcasts and anonymous refetches can't echo the viewer's votes, but a
+  // retraction genuinely means "no votes" — only an authoritative empty may
+  // override a non-empty echo on the rendered message.
+  final Set<String> _pollVoterStateAuthoritative = {};
+
   /// The freshest known server state for [pollID], if any update arrived this
   /// session (vote response or poll_updated broadcast).
   Poll? pollSnapshot(String pollID) => _pollSnapshots[pollID];
+
+  /// Whether [pollSnapshot]'s voterOptionIds reflect this device's actual
+  /// vote state (a vote/retract response) rather than a voter-stripped
+  /// broadcast — an authoritative EMPTY list means "retracted", not "unknown".
+  bool isPollVoterStateAuthoritative(String pollID) =>
+      _pollVoterStateAuthoritative.contains(pollID);
 
   /// The option ids this device voted for in [pollID] (empty until known).
   /// Triggers a lazy storage read on first ask and notifies when it lands.
@@ -1970,6 +2045,25 @@ class ChatProvider extends ChangeNotifier {
           .savePollVoteSelections(pollID, optionIDs)
           .catchError((Object _) {}),
     );
+  }
+
+  /// A freshly fetched message's voter echo is per-viewer server truth for
+  /// non-anonymous polls — it supersedes a snapshot this device certified
+  /// earlier (e.g. an authoritative empty left by a retraction here, after
+  /// which the account revoted from another device). Without this, the stale
+  /// "authoritative" snapshot would blank the echo forever.
+  void _ingestPollVoterEcho(Message msg) {
+    final poll = msg.poll;
+    if (poll == null || poll.isAnonymous) return;
+    if (!_pollVoterStateAuthoritative.contains(poll.id)) return;
+    final snap = _pollSnapshots[poll.id];
+    if (snap == null) return;
+    if (!listEquals(snap.voterOptionIds, poll.voterOptionIds)) {
+      _pollSnapshots[poll.id] = snap.copyWith(
+        voterOptionIds: List.of(poll.voterOptionIds),
+      );
+      _rememberPollVote(poll.id, poll.voterOptionIds);
+    }
   }
 
   Future<void> votePoll({
@@ -2012,18 +2106,29 @@ class ChatProvider extends ChangeNotifier {
     // Persist the selection so the marked bubble survives chat re-entry
     // (refetched anonymous polls can't echo the viewer's own votes).
     _rememberPollVote(pollID, optionIDs);
-    _pollSnapshots[pollID] = updatedPoll;
+    // The response is device-truth for the viewer's votes — set them
+    // explicitly (the response echo is empty for anonymous polls and for
+    // retractions, where empty must NOT fall back to the old selection).
+    _pollSnapshots[pollID] = updatedPoll.copyWith(
+      voterOptionIds: List.of(optionIDs),
+    );
+    _pollVoterStateAuthoritative.add(pollID);
 
-    final idx = list?.indexWhere((m) => m.poll?.id == pollID) ?? -1;
-    if (list != null && idx != -1) {
-      final updated = List<Message>.from(list);
+    // Re-read the live list: the awaits above (token issuance, decorrelation
+    // delay, vote POST) are long enough for WS arrivals to install a new list
+    // into _messages — writing back a copy of the pre-await snapshot would
+    // silently drop them.
+    final live = _messages[convID];
+    final idx = live?.indexWhere((m) => m.poll?.id == pollID) ?? -1;
+    if (live != null && idx != -1) {
+      final updated = List<Message>.from(live);
       final current = updated[idx];
       updated[idx] = current.copyWith(
         poll: _pollWithArtifactLabels(
           updatedPoll,
           current.artifact,
           fallback: current.poll,
-        ),
+        ).copyWith(voterOptionIds: List.of(optionIDs)),
       );
       _messages[convID] = updated;
     }
@@ -2107,15 +2212,21 @@ class ChatProvider extends ChangeNotifier {
       cleartextPayload = newPlaintext;
     }
 
-    if (idx != -1) {
-      final optimistic = list[idx].copyWith(
+    // Re-resolve against the live list: _prepareEncryptedPayload awaits long
+    // enough (member/key fetches, PGP encrypt) for WS arrivals to install a
+    // new list — writing back the pre-await snapshot would drop them.
+    final live = _messages[convID] ?? [];
+    final liveIdx = live.indexWhere((m) => m.id == msgID);
+    if (liveIdx != -1) {
+      final optimistic = live[liveIdx].copyWith(
         encryptedPayload: encrypted,
         signature: signature,
         editedAt: DateTime.now(),
       );
       optimistic.setDecryptedContent(cleartextPayload);
-      list[idx] = optimistic;
-      _messages[convID] = List.from(list);
+      final next = List<Message>.from(live);
+      next[liveIdx] = optimistic;
+      _messages[convID] = next;
       notifyListeners();
     }
 
@@ -2239,9 +2350,17 @@ class ChatProvider extends ChangeNotifier {
     }
     if (msg.senderId.isEmpty) msg.senderId = old.senderId;
     msg.sender ??= old.sender;
-    list[idx] = msg;
     await _syncLiveLocationShareFromMessage(msg);
-    _messages[msg.conversationId] = List.from(list);
+    // Re-resolve against the live list: the cache/decrypt awaits above run
+    // concurrently with other WS handlers, so a new_message may have installed
+    // a new list since `list` was captured — writing that snapshot back would
+    // drop the arrival.
+    final current = _messages[msg.conversationId];
+    final curIdx = current?.indexWhere((m) => m.id == msg.id) ?? -1;
+    if (current == null || curIdx == -1) return;
+    final next = List<Message>.from(current);
+    next[curIdx] = msg;
+    _messages[msg.conversationId] = next;
     notifyListeners();
   }
 
@@ -3653,10 +3772,19 @@ class ChatProvider extends ChangeNotifier {
         if (convID != null && userID != null) {
           _typingUsers[convID] = {...?_typingUsers[convID], userID};
           notifyListeners();
-          Future.delayed(const Duration(seconds: 3), () {
-            _typingUsers[convID]?.remove(userID);
-            notifyListeners();
-          });
+          // Resettable per-(conv,user) timer: a continuously typing user keeps
+          // sending events, and an older timer firing must not flicker them
+          // off 3s after their FIRST keystroke.
+          _typingExpiry['$convID|$userID']?.cancel();
+          _typingExpiry['$convID|$userID'] = Timer(
+            const Duration(seconds: 3),
+            () {
+              _typingExpiry.remove('$convID|$userID');
+              if (_disposed) return;
+              _typingUsers[convID]?.remove(userID);
+              notifyListeners();
+            },
+          );
         }
 
       case WsEventType.messageDeleted:
@@ -4182,14 +4310,25 @@ class ChatProvider extends ChangeNotifier {
             ? (displayMsg.decryptedContent ?? 'New message')
             : 'New message';
       }
-      NotificationService.showMessage(
-        conversationId: msg.conversationId,
-        title: title,
-        body: body,
-        showSensitive: _settings.notificationSensitiveContent,
-        mentionedForCurrentUser: mentionedForCurrentUser,
-        notificationText: body,
-      );
+      // On mobile with FCM registered the server mirrors every message as an
+      // OS-displayed alert, so this local mirror only ever duplicates it:
+      // focused → showMessage suppresses itself anyway; paused-but-alive →
+      // both the FCM alert and this one appeared. Desktop/web have no FCM
+      // alert and keep the local path.
+      final fcmWillDisplay =
+          !kIsWeb &&
+          (Platform.isAndroid || Platform.isIOS) &&
+          PushNotificationService.isRegistered;
+      if (!fcmWillDisplay) {
+        NotificationService.showMessage(
+          conversationId: msg.conversationId,
+          title: title,
+          body: body,
+          showSensitive: _settings.notificationSensitiveContent,
+          mentionedForCurrentUser: mentionedForCurrentUser,
+          notificationText: body,
+        );
+      }
     }
 
     notifyListeners();
@@ -4814,10 +4953,15 @@ class ChatProvider extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _wsSub?.cancel();
+    for (final timer in _typingExpiry.values) {
+      timer.cancel();
+    }
+    _typingExpiry.clear();
     vaultModeListenable.removeListener(_onVaultModeChanged);
     _depositProgressController.close();
     _joinRequestController.close();
     _recoveryEventsController.close();
+    _smpController.close();
     NotificationService.setLiveLocationHandlers(onCancel: null);
     unawaited(_stopAllLiveLocationShares());
     _ws.removeListener(_onWsConnectionChanged);

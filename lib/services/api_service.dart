@@ -153,6 +153,12 @@ class ApiService {
   /// to AuthProvider.logout so the user is returned to the login screen.
   void Function()? onAuthFailed;
 
+  /// Called after a refreshed access token has been persisted. Wired in main()
+  /// to BackgroundWsService.updateToken so the background isolate never keeps
+  /// reconnecting with an expired token. Static so the hook is independent of
+  /// any particular ApiService instance.
+  static Future<void> Function(String accessToken)? onAccessTokenRefreshed;
+
   ApiService(this._storage) : _httpClient = http.Client();
 
   // ---- Auth ----
@@ -202,10 +208,15 @@ class ApiService {
         'device_name': openChatDeviceName(),
       }, authenticated: false);
       final data = resp['data'] as Map<String, dynamic>;
+      final accessToken = data['access_token'] as String;
       await _storage.updateTokens(
-        accessToken: data['access_token'] as String,
+        accessToken: accessToken,
         refreshToken: data['refresh_token'] as String,
       );
+      // Persist first, notify second: listeners (the background WS isolate)
+      // re-read storage, so it must already hold the new token.
+      final hook = onAccessTokenRefreshed;
+      if (hook != null) unawaited(hook(accessToken));
     } on ApiException catch (error) {
       // A device that slept past the WS replay window learns about its remote
       // wipe here: the refresh rejection carries the signed command. Hand it

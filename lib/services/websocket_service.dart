@@ -345,9 +345,12 @@ class WebSocketService extends ChangeNotifier {
   /// in unit tests.
   @visibleForTesting
   void handleRawFrame(String raw) {
-    try {
-      for (final line in raw.split('\n')) {
-        if (line.trim().isEmpty) continue;
+    for (final line in raw.split('\n')) {
+      if (line.trim().isEmpty) continue;
+      // Per-line guard: one malformed line must not discard the rest of the
+      // batch — earlier lines already advanced _lastSeq, so the resume
+      // protocol would never replay the dropped tail.
+      try {
         final json = jsonDecode(line) as Map<String, dynamic>;
         final type = _parseType(json['type'] as String?);
         final data = (json['data'] as Map<String, dynamic>?) ?? {};
@@ -369,8 +372,8 @@ class WebSocketService extends ChangeNotifier {
         if (!_eventStream.isClosed) {
           _eventStream.add(WsEvent(type: type, data: data, seq: seq));
         }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
   }
 
   void _onError(Object _, WebSocketChannel channel) {

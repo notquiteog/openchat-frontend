@@ -40,6 +40,10 @@ import 'utils/local_conversation_preferences.dart';
 /// calls so older servers still surface a local call notification.
 @pragma('vm:entry-point')
 Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
+  // This isolate is by definition not the focused UI, but NotificationService
+  // defaults to focused — without this, every notification below is suppressed
+  // by the focus check while the app is terminated/backgrounded.
+  NotificationService.setAppFocused(false);
   final type = message.data['type'];
   if (type == 'call_cancel') {
     // The call was answered/declined elsewhere or the caller hung up —
@@ -69,14 +73,16 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
       return;
     }
     await NotificationService.init();
-    await NotificationService.showMessage(
+    final shown = await NotificationService.showMessage(
       conversationId: conversationId,
       title: 'OpenChat',
       body: type == 'group_call' ? 'Call started' : 'New message',
     );
-    if (type == 'new_message') {
+    if (shown && type == 'new_message') {
       // Best-effort launcher badge bump while the app isn't running; the
       // next foreground recompute replaces it with the authoritative count.
+      // Gated on the notification actually posting so the badge never counts
+      // messages the user was never alerted to.
       await BadgeService.incrementFromBackground();
     }
   }
@@ -126,6 +132,18 @@ Future<bool> _shouldShowMessageNotification(String conversationId) async {
   );
 }
 
+/// Runs one pre-runApp init step, downgrading any failure to a log line.
+Future<void> _guardStartupStep(
+  String name,
+  Future<void> Function() step,
+) async {
+  try {
+    await step();
+  } catch (e) {
+    debugPrint('Startup step "$name" failed (continuing degraded): $e');
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // Linux/Windows need a just_audio platform backend for voice notes and tones.
@@ -135,22 +153,41 @@ void main() async {
   // aberration; on Skia it primes the lightweight fragment shader.
   await LiquidGlassWidgets.initialize();
   await DesktopStartupService.startTray();
-  // Register Firebase background message handler before runApp so the
-  // messaging plugin can dispatch messages when the app is terminated.
-  // No-op when Firebase credentials are placeholders or platform unsupported.
-  await PushNotificationService.registerBackgroundHandler(
-    _firebaseBackgroundHandler,
-  );
-  // Configure the background WS service isolate; must run before any UI.
-  await BackgroundWsService.configure();
-  // Apply the persisted screenshot-prevention setting as early as possible so
-  // FLAG_SECURE / the iOS secure layer is in place before the first frame.
-  await SecureStorageService().getScreenSecurity().then(
-    SecurityService.instance.setGlobalSecure,
-  );
-  // Install the proxy (HttpOverrides) BEFORE any HTTP/WS client is built so all
-  // traffic is routed from the first request.
-  await ProxyService.instance.load(SecureStorageService());
+  // Every pre-runApp step below talks to platform plugins. None of them is
+  // worth a black screen: if plugin registration broke (a release build once
+  // shipped where one plugin's NoClassDefFoundError aborted the whole
+  // GeneratedPluginRegistrant), an unhandled MissingPluginException here used
+  // to kill main() before runApp and the app sat on a black window forever.
+  // Run the app degraded instead — the failures are logged and every feature
+  // retries through its own init path.
+  await _guardStartupStep('push background handler', () async {
+    // Register Firebase background message handler before runApp so the
+    // messaging plugin can dispatch messages when the app is terminated.
+    // No-op when Firebase credentials are placeholders or platform unsupported.
+    await PushNotificationService.registerBackgroundHandler(
+      _firebaseBackgroundHandler,
+    );
+  });
+  await _guardStartupStep('background WS configure', () async {
+    // Configure the background WS service isolate; must run before any UI.
+    await BackgroundWsService.configure();
+  });
+  // Keep the background WS isolate's credentials fresh: every persisted token
+  // refresh is pushed into the running service (it never refreshes tokens
+  // itself — a double refresh would race and invalidate the session).
+  ApiService.onAccessTokenRefreshed = BackgroundWsService.updateToken;
+  await _guardStartupStep('screen security', () async {
+    // Apply the persisted screenshot-prevention setting as early as possible so
+    // FLAG_SECURE / the iOS secure layer is in place before the first frame.
+    await SecureStorageService().getScreenSecurity().then(
+      SecurityService.instance.setGlobalSecure,
+    );
+  });
+  await _guardStartupStep('proxy load', () async {
+    // Install the proxy (HttpOverrides) BEFORE any HTTP/WS client is built so
+    // all traffic is routed from the first request.
+    await ProxyService.instance.load(SecureStorageService());
+  });
   runApp(
     LiquidGlassWidgets.wrap(
       // Adaptive quality: benchmarks the device on first launch and adjusts

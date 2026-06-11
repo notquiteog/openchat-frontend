@@ -30,7 +30,8 @@ void main() {
   late _FakeWs ws;
   late ChatProvider provider;
 
-  Message pollMessage({required bool anonymous}) => Message(
+  Message pollMessage({required bool anonymous, bool multi = false}) =>
+      Message(
     id: 'msg-1',
     conversationId: 'conv-1',
     senderId: 'creator-1',
@@ -45,7 +46,7 @@ void main() {
       question: 'Where to?',
       type: 'regular',
       isAnonymous: anonymous,
-      allowsMultipleAnswers: false,
+      allowsMultipleAnswers: multi,
       allowsRevoting: true,
       isClosed: false,
       totalVoterCount: 0,
@@ -107,6 +108,22 @@ void main() {
     matching: find.byIcon(Icons.check_circle),
   );
 
+  // A channel-shaped host: the message object is a snapshot that never
+  // refreshes (like ChannelScreen._posts).
+  Future<void> pumpStaleHost(WidgetTester tester, Message msg) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChangeNotifierProvider<ChatProvider>.value(
+          value: provider,
+          child: Scaffold(
+            body: MessageBubble(message: msg, isMe: false, isChannel: true),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+  }
+
   testWidgets('revote after restart moves the refetch-echoed mark',
       (tester) async {
     // Post-restart state for a non-anonymous poll: the refetched payload
@@ -166,25 +183,89 @@ void main() {
     );
   }
 
+  testWidgets('tapping the selected option retracts the vote', (tester) async {
+    provider.debugSeedMessages('conv-1', [pollMessage(anonymous: false)]);
+    await pumpPoll(tester);
+
+    await tester.tap(find.text('Beach'));
+    await tester.pumpAndSettle();
+    expect(selectedIconIn('Beach'), findsOneWidget);
+
+    await tester.tap(find.text('Beach'));
+    await tester.pumpAndSettle();
+    expect(selectedIconIn('Beach'), findsNothing,
+        reason: 'tapping the selected option again must retract the vote');
+    expect(selectedIconIn('Hills'), findsNothing);
+    expect(api.serverVotes, isEmpty);
+    expect(await storage.getPollVoteSelections('poll-1'), isEmpty);
+  });
+
+  testWidgets('retraction wins over a stale refetch-echoed mark',
+      (tester) async {
+    // Channel-shaped: the host message still echoes the vote being retracted.
+    await storage.savePollVoteSelections('poll-1', ['opt-a']);
+    api.serverVotes = ['opt-a'];
+    final msg = pollMessage(anonymous: false);
+    await pumpStaleHost(
+      tester,
+      msg.copyWith(
+        poll: msg.poll!.copyWith(
+          voterOptionIds: ['opt-a'],
+          options: const [
+            PollOption(id: 'opt-a', index: 0, text: 'Beach', voterCount: 1),
+            PollOption(id: 'opt-b', index: 1, text: 'Hills', voterCount: 0),
+          ],
+        ),
+      ),
+    );
+    expect(selectedIconIn('Beach'), findsOneWidget);
+
+    await tester.tap(find.text('Beach'));
+    await tester.pumpAndSettle();
+    expect(selectedIconIn('Beach'), findsNothing,
+        reason: 'an authoritative empty vote state must beat the stale echo');
+    expect(api.serverVotes, isEmpty);
+  });
+
+  testWidgets('multi-answer poll: hint shown, taps toggle options',
+      (tester) async {
+    api.multiAnswerPoll = true;
+    provider.debugSeedMessages('conv-1', [
+      pollMessage(anonymous: false, multi: true),
+    ]);
+    await pumpPoll(tester);
+    expect(find.text('Select all that apply'), findsOneWidget);
+
+    await tester.tap(find.text('Beach'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Hills'));
+    await tester.pumpAndSettle();
+    expect(selectedIconIn('Beach'), findsOneWidget);
+    expect(selectedIconIn('Hills'), findsOneWidget);
+
+    await tester.tap(find.text('Beach'));
+    await tester.pumpAndSettle();
+    expect(selectedIconIn('Beach'), findsNothing);
+    expect(selectedIconIn('Hills'), findsOneWidget);
+
+    await tester.tap(find.text('Hills'));
+    await tester.pumpAndSettle();
+    expect(selectedIconIn('Hills'), findsNothing,
+        reason: 'removing the last option retracts the whole vote');
+    expect(api.serverVotes, isEmpty);
+    expect(await storage.getPollVoteSelections('poll-1'), isEmpty);
+  });
+
+  testWidgets('single-answer poll shows no multi hint', (tester) async {
+    provider.debugSeedMessages('conv-1', [pollMessage(anonymous: false)]);
+    await pumpPoll(tester);
+    expect(find.text('Select all that apply'), findsNothing);
+  });
+
   // ── Channel-shaped hosts ────────────────────────────────────────────────
   // The channel screen renders posts from a screen-local list that is loaded
   // once and never refreshed from ChatProvider — the bubble must still show
   // votes correctly via the provider's poll state.
-
-  Future<void> pumpStaleHost(WidgetTester tester, Message msg) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        home: ChangeNotifierProvider<ChatProvider>.value(
-          value: provider,
-          child: Scaffold(
-            // Like channel _posts: the message object never changes.
-            body: MessageBubble(message: msg, isMe: false, isChannel: true),
-          ),
-        ),
-      ),
-    );
-    await tester.pump();
-  }
 
   testWidgets('channel: revote moves the stale refetch-echoed mark',
       (tester) async {
@@ -265,6 +346,7 @@ class _FakeApi extends ApiService {
   late _FakeWs ws;
   List<String> serverVotes = [];
   bool anonymousPoll = false;
+  bool multiAnswerPoll = false;
   int attributedVoteCalls = 0;
 
   @override
@@ -276,9 +358,9 @@ class _FakeApi extends ApiService {
     'question': 'Where to?',
     'type': 'regular',
     'is_anonymous': anonymousPoll,
-    'allows_multiple_answers': false,
+    'allows_multiple_answers': multiAnswerPoll,
     'allows_revoting': true,
-    'total_voter_count': 1,
+    'total_voter_count': serverVotes.isEmpty ? 0 : 1,
     'options': [
       {
         'id': 'opt-a',

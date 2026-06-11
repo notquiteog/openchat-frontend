@@ -109,6 +109,7 @@ class NotificationService {
   static bool _drainingPendingResponses = false;
   static Future<void> Function(String conversationId, String messageId)?
   _liveLocationCancelHandler;
+  static void Function(String conversationId)? _messageOpenedHandler;
   static bool _appFocused = true;
   static bool _timeZonesInitialized = false;
 
@@ -237,14 +238,6 @@ class NotificationService {
       await _plugin.cancel(id: conversationId.hashCode);
     } catch (_) {}
   }
-  static void setMutedConversations(Iterable<String> conversationIds) {
-    _mutedConversationIds = Set.unmodifiable(conversationIds);
-    _conversationNotificationPreferences = Map.unmodifiable({
-      for (final id in _mutedConversationIds)
-        id: const ConversationNotificationPreference.mutedForever(),
-    });
-  }
-
   static void setConversationNotificationPreferences(
     Map<String, ConversationNotificationPreference> preferences,
   ) {
@@ -311,6 +304,16 @@ class NotificationService {
     _drainPendingResponses();
   }
 
+  /// Routes message and reminder notification taps to a conversation. The app
+  /// shell wires this to the same pending-conversation queue that FCM
+  /// onMessageOpenedApp taps feed, so both tap sources land in the chat.
+  static void setMessageOpenedHandler(
+    void Function(String conversationId)? handler,
+  ) {
+    _messageOpenedHandler = handler;
+    _drainPendingResponses();
+  }
+
   static void setLiveLocationHandlers({
     Future<void> Function(String conversationId, String messageId)? onCancel,
   }) {
@@ -353,13 +356,56 @@ class NotificationService {
         } catch (_) {}
         return;
       default:
-        if (response.notificationResponseType ==
-                NotificationResponseType.selectedNotification &&
-            response.id == incomingCallNotificationId) {
+        if (response.notificationResponseType !=
+            NotificationResponseType.selectedNotification) {
+          return;
+        }
+        if (response.id == incomingCallNotificationId) {
           _handleOrQueueIncomingCallResponse(response);
+          return;
+        }
+        // Message and reminder taps carry a typed JSON payload with the
+        // target conversation; route them to the chat.
+        if (_conversationIdFromTapPayload(response.payload) != null) {
+          _handleOrQueueMessageOpenedResponse(response);
         }
         return;
     }
+  }
+
+  /// Extracts the conversation id from a message / reminder tap payload, or
+  /// null when the payload is absent, malformed, or of another type.
+  static String? _conversationIdFromTapPayload(String? payload) {
+    if (payload == null || payload.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(payload);
+      if (decoded is! Map) return null;
+      final type = decoded['type'] as String?;
+      if (type != 'message' && type != 'message_reminder') return null;
+      final conversationId = decoded['conversation_id'] as String?;
+      if (conversationId == null || conversationId.isEmpty) return null;
+      return conversationId;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static bool _isMessageOpenedResponse(NotificationResponse response) =>
+      response.id != incomingCallNotificationId &&
+      _conversationIdFromTapPayload(response.payload) != null;
+
+  static void _handleOrQueueMessageOpenedResponse(
+    NotificationResponse response,
+  ) {
+    // Cold-start taps arrive before the app shell wires the handler — queue
+    // them alongside pending call responses and drain once it is set.
+    final handler = _messageOpenedHandler;
+    if (handler == null) {
+      _pendingResponses.add(response);
+      return;
+    }
+    final conversationId = _conversationIdFromTapPayload(response.payload);
+    if (conversationId != null) handler(conversationId);
   }
 
   static void _handleOrQueueIncomingCallResponse(
@@ -382,17 +428,26 @@ class NotificationService {
         (!hasPayload || _incomingCallPayloadHandler != null);
   }
 
+  static bool _canHandlePendingResponse(NotificationResponse response) =>
+      _isMessageOpenedResponse(response)
+      ? _messageOpenedHandler != null
+      : _canHandleIncomingCallResponse(response);
+
   static void _drainPendingResponses() {
     if (_drainingPendingResponses || _pendingResponses.isEmpty) return;
     _drainingPendingResponses = true;
     scheduleMicrotask(() {
       try {
         final ready = _pendingResponses
-            .where(_canHandleIncomingCallResponse)
+            .where(_canHandlePendingResponse)
             .toList(growable: false);
         _pendingResponses.removeWhere(ready.contains);
         for (final response in ready) {
-          unawaited(_handleIncomingCallResponse(response));
+          if (_isMessageOpenedResponse(response)) {
+            _handleOrQueueMessageOpenedResponse(response);
+          } else {
+            unawaited(_handleIncomingCallResponse(response));
+          }
         }
       } finally {
         _drainingPendingResponses = false;
@@ -647,7 +702,10 @@ class NotificationService {
     }
   }
 
-  static Future<void> showMessage({
+  /// Returns true only when a notification was actually posted, so callers
+  /// (the FCM background isolate) can keep side effects like badge bumps in
+  /// step with what the user can see.
+  static Future<bool> showMessage({
     required String conversationId,
     required String title,
     required String body,
@@ -655,19 +713,19 @@ class NotificationService {
     bool mentionedForCurrentUser = false,
     String? notificationText,
   }) async {
-    if (!_supported) return;
+    if (!_supported) return false;
     if (!shouldNotifyForConversation(
       conversationId: conversationId,
       preferences: _conversationNotificationPreferences,
       mentionedForCurrentUser: mentionedForCurrentUser,
       notificationText: notificationText ?? '$title $body',
     )) {
-      return;
+      return false;
     }
-    if (await _shouldSuppressFocusedNotification()) return;
-    if (_activeConversationId == conversationId) return;
+    if (await _shouldSuppressFocusedNotification()) return false;
+    if (_activeConversationId == conversationId) return false;
     await init();
-    if (!_available) return;
+    if (!_available) return false;
     // Per-chat custom notification sound (Batch 5.2): Android routes to a
     // per-sound channel; iOS/macOS name the bundled sound file directly.
     final soundId =
@@ -706,7 +764,13 @@ class NotificationService {
       title: displayTitle,
       body: displayBody,
       notificationDetails: details,
+      // Tap target for handleNotificationResponse — routes to the chat.
+      payload: jsonEncode({
+        'type': 'message',
+        'conversation_id': conversationId,
+      }),
     );
+    return true;
   }
 
   static Future<void> showIncomingCall({

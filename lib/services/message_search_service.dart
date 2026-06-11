@@ -153,7 +153,9 @@ class MessageSearchService {
     Set<MessageSearchCategory>? categories,
     int limit = 40,
   }) async {
-    final queryTokens = _tokensForQuery(query);
+    // Dedupe: a repeated word ("had had") would demand COUNT(DISTINCT) equal
+    // to the duplicated length, which no message can satisfy.
+    final queryTokens = _tokensForQuery(query).toSet();
     if (queryTokens.isEmpty) return const [];
     final hashes = <String>[];
     for (final token in queryTokens) {

@@ -3603,7 +3603,11 @@ class _PollBubbleState extends State<_PollBubble> {
   /// poll_updated broadcast), then with the viewer's own votes restored.
   /// Refetched anonymous polls can't echo the viewer's selections by design,
   /// so without the device-local vote memory the voted bubble would un-mark.
-  Poll _mergedPoll(List<String> localVotes, Poll? snapshot) {
+  Poll _mergedPoll(
+    List<String> localVotes,
+    Poll? snapshot, {
+    required bool voterAuthoritative,
+  }) {
     var base = widget.message.poll!;
     if (snapshot != null && snapshot.id == base.id) {
       // Tallies and lifecycle come from the snapshot; labels stay with base —
@@ -3625,11 +3629,15 @@ class _PollBubbleState extends State<_PollBubble> {
         ],
         totalVoterCount: snapshot.totalVoterCount,
         isClosed: base.isClosed || snapshot.isClosed,
-        // Broadcasts are voter-stripped — only a snapshot that knows the
-        // viewer's selection (vote response) may override the base echo.
-        voterOptionIds: snapshot.voterOptionIds.isNotEmpty
+        // Broadcasts are voter-stripped, so their empty voter list means
+        // "unknown" and must not blank the base echo. A vote/retract
+        // response is device-truth though — there, empty means "retracted"
+        // and must win over a stale echo.
+        voterOptionIds: voterAuthoritative
             ? snapshot.voterOptionIds
-            : base.voterOptionIds,
+            : (snapshot.voterOptionIds.isNotEmpty
+                  ? snapshot.voterOptionIds
+                  : base.voterOptionIds),
         correctOptionIds: snapshot.correctOptionIds.isNotEmpty
             ? snapshot.correctOptionIds
             : base.correctOptionIds,
@@ -3647,15 +3655,20 @@ class _PollBubbleState extends State<_PollBubble> {
     final poll = _mergedPoll(
       chat.myPollVotes(base.id),
       chat.pollSnapshot(base.id),
+      voterAuthoritative: chat.isPollVoterStateAuthoritative(base.id),
     );
     if (poll.isClosed) return;
     final selected = poll.voterOptionIds.toSet();
-    final next = poll.allowsMultipleAnswers
-        ? (selected.contains(option.id)
-              ? (selected..remove(option.id)).toList()
-              : (selected..add(option.id)).toList())
-        : [option.id];
-    if (next.isEmpty) return;
+    // Tapping a selected option retracts it; an empty result retracts the
+    // whole vote (the server deletes this voter's rows).
+    final List<String> next;
+    if (selected.contains(option.id)) {
+      next = (selected..remove(option.id)).toList();
+    } else if (poll.allowsMultipleAnswers) {
+      next = (selected..add(option.id)).toList();
+    } else {
+      next = [option.id];
+    }
     setState(() => _voting = true);
     try {
       await chat.votePoll(
@@ -3732,12 +3745,25 @@ class _PollBubbleState extends State<_PollBubble> {
     }
   }
 
+  bool _readVoterAuthoritative(BuildContext context, String pollId) {
+    try {
+      // No select needed: authority only flips together with a new snapshot
+      // instance, which the snapshot watcher already rebuilds on.
+      return context.read<ChatProvider>().isPollVoterStateAuthoritative(
+        pollId,
+      );
+    } on ProviderNotFoundException {
+      return false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final pollId = widget.message.poll!.id;
     final poll = _mergedPoll(
       _watchLocalVotes(context, pollId),
       _watchSnapshot(context, pollId),
+      voterAuthoritative: _readVoterAuthoritative(context, pollId),
     );
     final cs = Theme.of(context).colorScheme;
     final total = math.max(1, poll.totalVoterCount);
@@ -3793,6 +3819,19 @@ class _PollBubbleState extends State<_PollBubble> {
               ),
             ),
           ],
+          if (poll.allowsMultipleAnswers && !poll.isClosed) ...[
+            const SizedBox(height: 4),
+            Text(
+              poll.isMeeting
+                  ? 'Select all times that work'
+                  : 'Select all that apply',
+              style: TextStyle(
+                color: widget.textColor.withValues(alpha: 0.62),
+                fontSize: 12,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
           for (final option in poll.options) ...[
             _PollOptionRow(
@@ -3801,7 +3840,9 @@ class _PollBubbleState extends State<_PollBubble> {
               selected: poll.isSelected(option.id),
               enabled: !poll.isClosed &&
                   !_voting &&
-                  !(poll.isQuiz && poll.voterOptionIds.isNotEmpty),
+                  !(poll.isQuiz && poll.voterOptionIds.isNotEmpty) &&
+                  // No revoting = the vote is final: no moving, no retracting.
+                  (poll.allowsRevoting || poll.voterOptionIds.isEmpty),
               textColor: widget.textColor,
               quizReveal: quizRevealed,
               isCorrect: poll.isCorrectOption(option.index),

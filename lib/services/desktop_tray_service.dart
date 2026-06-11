@@ -108,7 +108,7 @@ class DesktopTrayService with WindowListener, TrayListener {
       return;
     }
     // Windows / Linux: left-click = restore the window immediately.
-    unawaited(_showWindow());
+    unawaited(showWindow());
   }
 
   @override
@@ -119,7 +119,7 @@ class DesktopTrayService with WindowListener, TrayListener {
   void onTrayMenuItemClick(MenuItem menuItem) {
     switch (menuItem.key) {
       case 'show':
-        unawaited(_showWindow());
+        unawaited(showWindow());
       case 'exit':
         unawaited(_exitApp());
     }
@@ -158,14 +158,16 @@ class DesktopTrayService with WindowListener, TrayListener {
     NotificationService.setAppFocused(true);
   }
 
-  // ── Private helpers ───────────────────────────────────────────────────────
-
-  Future<void> _showWindow() async {
+  /// Restore and focus the window (from the tray, or when a notification tap
+  /// must surface a hidden app). Public for the app shell's tap routing.
+  Future<void> showWindow() async {
     await windowManager.setSkipTaskbar(false);
     await windowManager.show();
     await windowManager.focus();
     NotificationService.setAppFocused(true);
   }
+
+  // ── Private helpers ───────────────────────────────────────────────────────
 
   Future<void> _hideToTray() async {
     if (_quitting || _hidingToTray) return;

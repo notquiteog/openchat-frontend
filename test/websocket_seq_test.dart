@@ -167,4 +167,16 @@ void main() {
     await Future<void>.delayed(Duration.zero);
     expect(received, hasLength(2), reason: 'same cseq deliverable post-reset');
   });
+
+  test('a malformed line does not discard the rest of a batched frame',
+      () async {
+    // Earlier lines advance lastSeq, so a dropped tail would never be
+    // replayed by the resume protocol — each line must be parsed under its
+    // own guard.
+    ws.handleRawFrame('${frame(1)}\nnot json{\n${frame(2)}\n${frame(3)}');
+    await Future<void>.delayed(Duration.zero);
+
+    expect(received, hasLength(3));
+    expect(ws.lastSeq, 3);
+  });
 }

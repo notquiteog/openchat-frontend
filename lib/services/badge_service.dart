@@ -112,6 +112,9 @@ class BadgeService {
     );
   }
 
+  @visibleForTesting
+  Future<void> debugPublish() => _publish();
+
   void _scheduleRecompute() {
     if (_disposed) return;
     _debounce?.cancel();
@@ -124,7 +127,13 @@ class BadgeService {
   Future<void> _publish() async {
     if (_disposed) return;
     final total = computeTotalUnread();
-    if (total == _lastPublished) return;
+    // An unchanged in-memory total is not enough to skip: the FCM background
+    // isolate may have bumped the platform badge (and its prefs bookkeeping)
+    // since the last publish, in which case the authoritative count must be
+    // reapplied and the bookkeeping reset — or the drift compounds.
+    if (total == _lastPublished && !await _backgroundBadgeStateDiverged(total)) {
+      return;
+    }
     _lastPublished = total;
     await _applyPlatformBadge(total);
     final tray = _applyTrayBadge;
@@ -139,6 +148,21 @@ class BadgeService {
       await prefs.setInt(badgeLastTotalPrefsKey, total);
       await prefs.setInt(badgeBackgroundIncrementPrefsKey, 0);
     } catch (_) {}
+  }
+
+  /// True when the persisted bookkeeping no longer matches [total]: a nonzero
+  /// background increment, or a stale persisted base.
+  static Future<bool> _backgroundBadgeStateDiverged(int total) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      // The main isolate may hold a stale cache of values written by the
+      // FCM background isolate.
+      await prefs.reload();
+      return (prefs.getInt(badgeBackgroundIncrementPrefsKey) ?? 0) != 0 ||
+          (prefs.getInt(badgeLastTotalPrefsKey) ?? 0) != total;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Best-effort bump from the FCM background isolate (app terminated or

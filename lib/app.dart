@@ -574,6 +574,15 @@ class _AppRootState extends State<_AppRoot> {
       PushNotificationService.setNotificationOpenedHandler(
         _queuePushConversation,
       );
+      // Local message/reminder notification taps route through the same
+      // pending-conversation queue as FCM taps (cold-start taps are queued by
+      // NotificationService until this handler lands).
+      NotificationService.setMessageOpenedHandler((conversationId) {
+        // On desktop the app may be hidden in the tray — restore it first.
+        final tray = DesktopStartupService.tray;
+        if (tray != null) unawaited(tray.showWindow());
+        _queuePushConversation(conversationId);
+      });
       // NOTE: no separate desktop WS→notification subscription here.
       // ChatProvider (rich decrypted message previews) and CallProvider
       // (incoming-call alerts) already post notifications for these events —
@@ -1088,6 +1097,7 @@ class _AppRootState extends State<_AppRoot> {
     PushNotificationService.setForegroundIncomingCallHandler(null);
     PushNotificationService.setNotificationOpenedHandler(null);
     NotificationService.setIncomingCallPayloadHandler();
+    NotificationService.setMessageOpenedHandler(null);
     _settings?.removeListener(_onSettingsChanged);
     context.read<AuthProvider>().removeListener(_onAuthChanged);
     context.read<CallProvider>().removeListener(_onCallChanged);
@@ -1169,6 +1179,10 @@ class _AppRootState extends State<_AppRoot> {
       // always has a current token. Silently skipped when Firebase credentials
       // are placeholders or push notifications have not been enabled.
       unawaited(_initPushFromSettingsIfEnabled());
+      // Likewise restart the background WS channel if the user enabled it —
+      // before this, the persisted setting only took effect again the next
+      // time the settings toggle was flipped.
+      unawaited(_startBackgroundWsIfEnabled());
     } else if (auth.state == AuthState.unauthenticated &&
         _lastAuthState == AuthState.authenticated) {
       context.read<ChatProvider>().clearState();
@@ -1219,6 +1233,24 @@ class _AppRootState extends State<_AppRoot> {
     await settings.load();
     if (!mounted || !settings.pushNotificationsEnabled) return;
     await PushNotificationService.initFromSettings(api: api);
+  }
+
+  /// Restart the background WS service when the persisted setting is on.
+  /// start() is idempotent: if the service is already running it just pushes
+  /// the current token and notification rules into the isolate.
+  Future<void> _startBackgroundWsIfEnabled() async {
+    final settings = context.read<SettingsProvider>();
+    final storage = context.read<SecureStorageService>();
+    await settings.load();
+    if (!mounted || !settings.wsBackgroundEnabled) return;
+    final token = await storage.getAccessToken() ?? '';
+    if (token.isEmpty) return;
+    await BackgroundWsService.start(
+      accessToken: token,
+      showSensitive: settings.notificationSensitiveContent,
+      conversationNotificationPreferences:
+          settings.conversationNotificationPreferences,
+    );
   }
 
   Future<void> _prepareMlsIdentity() async {

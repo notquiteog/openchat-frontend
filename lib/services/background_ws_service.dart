@@ -55,16 +55,43 @@ class BackgroundWsService {
 
   static final _service = FlutterBackgroundService();
 
+  /// Last lifecycle state pushed by the app shell; replayed into the isolate
+  /// right after start so it doesn't boot believing the app is backgrounded
+  /// while the user is actively reading a chat. Defaults to true because the
+  /// main isolate (the only writer) necessarily starts foregrounded.
+  static bool _appForeground = true;
+
   /// Configure the background service. Call once at app startup.
   static Future<void> configure() async {
     if (!_mobileOnly) return;
 
+    // Mirror the persisted user setting into the boot receiver so an enabled
+    // background channel comes back after a reboot without opening the app.
+    bool autoStartOnBoot = false;
+    try {
+      final state = await _loadLocalPrivateState();
+      autoStartOnBoot = decodePrivateNotificationSettings(
+        state[privateStateNotificationSettingsKey],
+      ).wsBackgroundEnabled;
+    } catch (_) {}
+    await _configure(autoStartOnBoot: autoStartOnBoot);
+  }
+
+  /// Keep the boot receiver in sync when the setting is toggled: the plugin
+  /// persists autoStartOnBoot at configure time, so re-run configure with the
+  /// new flag (autoStart stays false — this never starts/stops the service).
+  static Future<void> setAutoStartOnBoot(bool enabled) async {
+    if (!_mobileOnly) return;
+    await _configure(autoStartOnBoot: enabled);
+  }
+
+  static Future<void> _configure({required bool autoStartOnBoot}) async {
     try {
       await _service.configure(
         androidConfiguration: AndroidConfiguration(
           onStart: _onStart,
           autoStart: false,
-          autoStartOnBoot: false,
+          autoStartOnBoot: autoStartOnBoot,
           isForegroundMode: true,
           notificationChannelId: 'openchat_background',
           initialNotificationTitle: 'OpenChat',
@@ -107,6 +134,8 @@ class BackgroundWsService {
         await updateConversationNotificationPreferences(
           conversationNotificationPreferences,
         );
+        await updateForegroundState(_appForeground);
+        await setAutoStartOnBoot(true);
         return true;
       }
       final started = await _service.startService();
@@ -115,6 +144,11 @@ class BackgroundWsService {
         await updateConversationNotificationPreferences(
           conversationNotificationPreferences,
         );
+        // The isolate boots assuming background (correct for boot auto-start,
+        // where no main isolate exists); replay the real lifecycle state so a
+        // foregrounded enable doesn't notify for the chat being read.
+        await updateForegroundState(_appForeground);
+        await setAutoStartOnBoot(true);
       }
       return started;
     } catch (e) {
@@ -131,12 +165,16 @@ class BackgroundWsService {
     } catch (e) {
       debugPrint('Background WebSocket stop failed: $e');
     }
+    // Disabled channels must not resurrect themselves after a reboot.
+    await setAutoStartOnBoot(false);
   }
 
   /// Push a refreshed access token into the running service.
   static Future<void> updateToken(String accessToken) async {
     if (!_mobileOnly) return;
-    _service.invoke('setToken', {'token': accessToken});
+    try {
+      _service.invoke('setToken', {'token': accessToken});
+    } catch (_) {}
   }
 
   /// Sync the sensitive-content preference without restarting the service.
@@ -150,6 +188,7 @@ class BackgroundWsService {
   /// the background isolate posting too produced system notifications for the
   /// chat the user was actively reading.
   static Future<void> updateForegroundState(bool foreground) async {
+    _appForeground = foreground;
     if (!_mobileOnly) return;
     try {
       _service.invoke('setForeground', {'foreground': foreground});
@@ -180,37 +219,31 @@ class BackgroundWsService {
     WidgetsFlutterBinding.ensureInitialized();
     DartPluginRegistrant.ensureInitialized();
 
-    // Initialise local notifications inside the background isolate.
-    final notif = FlutterLocalNotificationsPlugin();
-    await notif.initialize(
-      settings: const InitializationSettings(
-        // Transparent logo foreground for the (alpha-masked) status-bar icon;
-        // the full-color app icon is shown via largeIcon per notification.
-        android: AndroidInitializationSettings('@drawable/ic_launcher_foreground'),
-        iOS: DarwinInitializationSettings(),
-      ),
-    );
-
-    final localState = await _loadLocalPrivateState();
-    String? token = await SecureStorageService().getAccessToken();
-    bool showSensitive = decodePrivateNotificationSettings(
-      localState[privateStateNotificationSettingsKey],
-    ).sensitiveContent;
+    // Isolate state. Declared (and the service.on listeners below registered)
+    // BEFORE the async storage loads: the main isolate fires set* events right
+    // after startService(), and events on the plugin's broadcast stream are
+    // dropped if no listener is attached yet.
+    String? token;
+    bool showSensitive = false;
     Map<String, ConversationNotificationPreference>
-    conversationNotificationPreferences =
-        decodePrivateConversationNotificationPreferences(
-          localState[privateStateConversationNotificationPreferencesKey],
-        );
-    Set<String> mutedConversationIds = activeMutedConversationIds(
-      conversationNotificationPreferences,
-    );
+    conversationNotificationPreferences = const {};
+    Set<String> mutedConversationIds = const {};
 
     WebSocketChannel? channel;
     Timer? reconnectTimer;
     bool stopped = false;
+    // connect() awaits a storage read, so guard against overlapping attempts
+    // (setToken and the reconnect timer can both fire it).
+    bool connecting = false;
     // While the app is foregrounded the MAIN isolate posts notifications (with
     // focus + active-conversation suppression); this isolate stays silent.
+    // start() replays the real lifecycle state right after boot; false is the
+    // correct default for the one spawn path with no main isolate (boot).
     bool appForeground = false;
+
+    // Local notifications inside the background isolate (initialised below,
+    // before the first connect).
+    final notif = FlutterLocalNotificationsPlugin();
 
     // Declare as late so the two closures can reference each other.
     late void Function() connect;
@@ -221,9 +254,22 @@ class BackgroundWsService {
       reconnectTimer = Timer(const Duration(seconds: 8), connect);
     };
 
-    connect = () {
-      if (stopped || token == null) return;
+    connect = () async {
+      if (stopped || connecting || channel != null) return;
+      connecting = true;
       try {
+        // Re-read the access token on every attempt: access tokens are
+        // short-lived, so any token captured at start is stale by the first
+        // reconnect after a longer disconnect. The main isolate persists
+        // refreshed tokens to secure storage before pushing them here, so
+        // storage is always at least as fresh as the last setToken event.
+        try {
+          final stored = await SecureStorageService().getAccessToken();
+          if (stored != null && stored.isNotEmpty) token = stored;
+        } catch (_) {
+          // Keep the last known token when storage is briefly unreadable.
+        }
+        if (stopped || token == null) return;
         channel = WebSocketChannel.connect(
           Uri.parse(ApiConfig.wsUrl),
           protocols: ['openchat.v1', 'openchat.jwt.$token'],
@@ -249,7 +295,10 @@ class BackgroundWsService {
           },
         );
       } catch (_) {
+        channel = null;
         reconnect();
+      } finally {
+        connecting = false;
       }
     };
 
@@ -286,7 +335,33 @@ class BackgroundWsService {
       );
     });
 
-    connect();
+    // Initialise local notifications inside the background isolate.
+    await notif.initialize(
+      settings: const InitializationSettings(
+        // Transparent logo foreground for the (alpha-masked) status-bar icon;
+        // the full-color app icon is shown via largeIcon per notification.
+        android: AndroidInitializationSettings('@drawable/ic_launcher_foreground'),
+        iOS: DarwinInitializationSettings(),
+      ),
+    );
+
+    // Self-load persisted state: the start() invokes above are best-effort
+    // (same values, already persisted), so a boot-receiver spawn with no main
+    // isolate still gets token + notification rules.
+    final localState = await _loadLocalPrivateState();
+    token ??= await SecureStorageService().getAccessToken();
+    showSensitive = decodePrivateNotificationSettings(
+      localState[privateStateNotificationSettingsKey],
+    ).sensitiveContent;
+    conversationNotificationPreferences =
+        decodePrivateConversationNotificationPreferences(
+          localState[privateStateConversationNotificationPreferencesKey],
+        );
+    mutedConversationIds = activeMutedConversationIds(
+      conversationNotificationPreferences,
+    );
+
+    if (!stopped) connect();
   }
 
   static void _handleRaw(
