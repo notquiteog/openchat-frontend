@@ -12,7 +12,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:ble_peripheral/ble_peripheral.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart' as fbp;
+import 'package:flutter_blue_ce/flutter_blue_ce.dart' as fbp;
 
 import 'mesh_frames.dart';
 
@@ -130,10 +130,10 @@ class PeripheralMeshLink extends MeshLink {
 
   @override
   Future<void> sendChunk(Uint8List chunk) => BlePeripheral.updateCharacteristic(
-        characteristicId: meshOutboxUuid,
-        value: chunk,
-        deviceId: deviceId,
-      );
+    characteristicId: meshOutboxUuid,
+    value: chunk,
+    deviceId: deviceId,
+  );
 
   @override
   Future<void> close() async {

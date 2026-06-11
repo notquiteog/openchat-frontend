@@ -15,7 +15,7 @@ import ffmpeg_kit_flutter_new_min
 import file_selector_macos
 import firebase_core
 import firebase_messaging
-import flutter_blue_plus_darwin
+import flutter_blue_ce_darwin
 import flutter_image_compress_macos
 import flutter_local_notifications
 import flutter_secure_storage_darwin

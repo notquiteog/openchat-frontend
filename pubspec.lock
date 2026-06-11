@@ -622,55 +622,69 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "5.1.2"
-  flutter_blue_plus:
+  flutter_blue_ce:
     dependency: "direct main"
     description:
-      path: "../../flutter_blue_plus"
-      relative: true
-    source: path
-    version: "1.36.8"
-  flutter_blue_plus_android:
-    dependency: "direct overridden"
+      path: "."
+      ref: main
+      resolved-ref: "767bf5669570f1bd0348c35b783da7f8706dfbaa"
+      url: "https://github.com/notquiteog/flutter_blue_ce.git"
+    source: git
+    version: "2.3.8+ce.1"
+  flutter_blue_ce_android:
+    dependency: transitive
     description:
-      path: "../../flutter_blue_plus_android"
-      relative: true
-    source: path
-    version: "7.0.4"
-  flutter_blue_plus_darwin:
-    dependency: "direct overridden"
+      path: "."
+      ref: main
+      resolved-ref: "589e190deecf929d744bd24164e6bbf5ff43de55"
+      url: "https://github.com/notquiteog/flutter_blue_ce_android.git"
+    source: git
+    version: "2.3.8+ce.1"
+  flutter_blue_ce_darwin:
+    dependency: transitive
     description:
-      path: "../../flutter_blue_plus_darwin"
-      relative: true
-    source: path
-    version: "7.0.3"
-  flutter_blue_plus_linux:
-    dependency: "direct overridden"
+      path: "."
+      ref: main
+      resolved-ref: d3950025a87555c3d654ea57597e346995410c47
+      url: "https://github.com/notquiteog/flutter_blue_ce_darwin.git"
+    source: git
+    version: "2.3.8+ce.1"
+  flutter_blue_ce_linux:
+    dependency: transitive
     description:
-      path: "../../flutter_blue_plus_linux"
-      relative: true
-    source: path
-    version: "7.0.3"
-  flutter_blue_plus_platform_interface:
-    dependency: "direct overridden"
+      path: "."
+      ref: main
+      resolved-ref: "676cd708cba408d1cb7c6fefd2a0ef5eda2d5080"
+      url: "https://github.com/notquiteog/flutter_blue_ce_linux.git"
+    source: git
+    version: "2.3.8+ce.1"
+  flutter_blue_ce_platform_interface:
+    dependency: transitive
     description:
-      path: "../../flutter_blue_plus_platform_interface"
-      relative: true
-    source: path
-    version: "7.0.0"
-  flutter_blue_plus_web:
-    dependency: "direct overridden"
+      path: "."
+      ref: main
+      resolved-ref: "5f93dd21e36d742246f5955a1e4423bdc81c8003"
+      url: "https://github.com/notquiteog/flutter_blue_ce_platform_interface.git"
+    source: git
+    version: "2.3.8+ce.1"
+  flutter_blue_ce_web:
+    dependency: transitive
     description:
-      path: "../../flutter_blue_plus_web"
-      relative: true
-    source: path
-    version: "7.0.2"
-  flutter_blue_plus_winrt:
-    dependency: "direct overridden"
+      path: "."
+      ref: main
+      resolved-ref: b20ad8fc0b1743fb22efd96fdc6086f5ff1177c2
+      url: "https://github.com/notquiteog/flutter_blue_ce_web.git"
+    source: git
+    version: "2.3.8+ce.1"
+  flutter_blue_ce_winrt:
+    dependency: transitive
     description:
-      path: "../../flutter_blue_plus_winrt"
-      relative: true
-    source: path
-    version: "0.0.20"
+      path: "."
+      ref: main
+      resolved-ref: "0da27d8868d550674bada0ca3282527bdcaa0610"
+      url: "https://github.com/notquiteog/flutter_blue_ce_winrt.git"
+    source: git
+    version: "2.3.8+ce.1"
   flutter_cache_manager:
     dependency: transitive
     description:

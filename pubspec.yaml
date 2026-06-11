@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.5.48+124
+version: 0.5.49+125
 publish_to: 'none'
 
 environment:
@@ -130,7 +130,10 @@ dependencies:
   ffmpeg_kit_flutter_new_min: ^3.1.0
   google_mlkit_translation: ^0.13.1
   google_mlkit_language_id: ^0.13.1
-  flutter_blue_plus: ^1.35.0
+  flutter_blue_ce:
+    git:
+      url: https://github.com/notquiteog/flutter_blue_ce.git
+      ref: main
   ble_peripheral: ^2.4.0
 
 flutter:
@@ -159,20 +162,6 @@ dependency_overrides:
       url: https://github.com/notquiteog/flutter_image_compress.git
       ref: flutter_image_compress_common-v1.0.6-ios26.1
       path: packages/flutter_image_compress_common
-  flutter_blue_plus:
-    path: ../../flutter_blue_plus
-  flutter_blue_plus_android:
-    path: ../../flutter_blue_plus_android
-  flutter_blue_plus_darwin:
-    path: ../../flutter_blue_plus_darwin
-  flutter_blue_plus_linux:
-    path: ../../flutter_blue_plus_linux
-  flutter_blue_plus_platform_interface:
-    path: ../../flutter_blue_plus_platform_interface
-  flutter_blue_plus_web:
-    path: ../../flutter_blue_plus_web
-  flutter_blue_plus_winrt:
-    path: ../../flutter_blue_plus_winrt
   # livekit_client 2.8.0 hard-pins flutter_webrtc 1.4.0, but we keep 1.4.1
   # (a patch over 1.4.0 — Dart-API compatible). Force 1.4.1 app-wide so the P2P
   # mesh and the LiveKit SFU share a single flutter_webrtc native plugin.
