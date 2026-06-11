@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.5.47+123
+version: 0.5.48+124
 publish_to: 'none'
 
 environment:
@@ -39,7 +39,7 @@ dependencies:
   dio: ^5.9.2
 
   # Local database (message cache)
-  drift: ^2.33.0
+  drift: ^2.34.0
   sqlite3: ^3.3.2
 
   # Storage
@@ -77,7 +77,7 @@ dependencies:
   mobile_scanner: ^7.2.0
 
   # iOS 26 Liquid Glass UI kit — shader-based refraction, physics animations
-  liquid_glass_widgets: ^0.15.2
+  liquid_glass_widgets: ^0.15.6
 
   # UI utilities
   intl: ^0.20.2
@@ -104,11 +104,11 @@ dependencies:
   flutter_image_compress: ^2.4.0
   package_info_plus: 10.1.0
   window_manager: ^0.5.1
-  tray_manager: ^0.5.2
+  tray_manager: ^0.5.3
   app_badge_plus: ^1.3.1
-  record: ^7.0.0
+  record: ^7.1.0
   permission_handler: ^12.0.3
-  app_links: ^7.1.1
+  app_links: ^7.1.2
 
   # Outgoing share — share a message / media out to other apps via the OS sheet.
   # 13.x targets win32 ^6.x, matching our pinned win32 6.3.0 (11/12.x target
@@ -147,17 +147,39 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
   build_runner: ^2.15.0
-  drift_dev: ^2.33.0
+  drift_dev: ^2.34.0
   flutter_launcher_icons: ^0.14.1
 
 dependency_overrides:
+  # flutter_image_compress_common 1.0.6 still compiles obsolete AssetsLibrary
+  # helpers, which Xcode rejects when the app targets iOS 26+. Keep this fork
+  # until upstream publishes a Photos/ImageIO-only iOS implementation.
+  flutter_image_compress_common:
+    git:
+      url: https://github.com/notquiteog/flutter_image_compress.git
+      ref: flutter_image_compress_common-v1.0.6-ios26.1
+      path: packages/flutter_image_compress_common
+  flutter_blue_plus:
+    path: ../../flutter_blue_plus
+  flutter_blue_plus_android:
+    path: ../../flutter_blue_plus_android
+  flutter_blue_plus_darwin:
+    path: ../../flutter_blue_plus_darwin
+  flutter_blue_plus_linux:
+    path: ../../flutter_blue_plus_linux
+  flutter_blue_plus_platform_interface:
+    path: ../../flutter_blue_plus_platform_interface
+  flutter_blue_plus_web:
+    path: ../../flutter_blue_plus_web
+  flutter_blue_plus_winrt:
+    path: ../../flutter_blue_plus_winrt
   # livekit_client 2.8.0 hard-pins flutter_webrtc 1.4.0, but we keep 1.4.1
   # (a patch over 1.4.0 — Dart-API compatible). Force 1.4.1 app-wide so the P2P
   # mesh and the LiveKit SFU share a single flutter_webrtc native plugin.
   flutter_webrtc: 1.4.1
   # Pinned to exact versions — keep in sync with the version table in the PR.
-  _fe_analyzer_shared: 101.0.0
-  analyzer: 13.1.0
+  _fe_analyzer_shared: 102.0.0
+  analyzer: 13.2.0
   cli_util: 0.5.1
   dart_style: 3.1.9
   dbus: 0.7.14
