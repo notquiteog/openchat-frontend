@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -25,9 +26,13 @@ class _StickerEditorScreenState extends State<StickerEditorScreen> {
   Uint8List? _bytes;
   bool _busy = false;
   bool _bgRemoved = false;
+  // First-run u2netp download progress (0..1); null when not downloading.
+  double? _modelDownloadProgress;
+  StreamSubscription<double>? _modelDownloadSub;
 
   @override
   void dispose() {
+    _modelDownloadSub?.cancel();
     _nameCtrl.dispose();
     super.dispose();
   }
@@ -62,21 +67,44 @@ class _StickerEditorScreenState extends State<StickerEditorScreen> {
     if (bytes == null) return;
     setState(() => _busy = true);
     final messenger = ScaffoldMessenger.of(context);
-    final result = await SegmentationService.removeBackground(bytes);
+    // The segmentation model is fetched on demand — warn about the one-time
+    // download and surface its progress on the button label.
+    final modelCached = await SegmentationService.isModelCached();
     if (!mounted) return;
-    setState(() {
-      _busy = false;
-      if (result != null) {
-        _bytes = result;
-        _bgRemoved = true;
-      }
-    });
-    if (result == null) {
+    if (SegmentationService.isSupported && !modelCached) {
       messenger.showSnackBar(
         const SnackBar(
-          content: Text('Background removal is unavailable on this device'),
+          content: Text('Downloading AI model (one-time, ~5MB)…'),
         ),
       );
+      _modelDownloadSub = SegmentationService.downloadProgress.listen((p) {
+        if (mounted) setState(() => _modelDownloadProgress = p);
+      });
+    }
+    try {
+      final result = await SegmentationService.removeBackgroundOrThrow(bytes);
+      if (!mounted) return;
+      setState(() {
+        _bytes = result;
+        _bgRemoved = true;
+      });
+    } on SegmentationException catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Background removal failed: ${e.message}')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Background removal failed: $e')),
+      );
+    } finally {
+      await _modelDownloadSub?.cancel();
+      _modelDownloadSub = null;
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _modelDownloadProgress = null;
+        });
+      }
     }
   }
 
@@ -166,7 +194,13 @@ class _StickerEditorScreenState extends State<StickerEditorScreen> {
                           strokeWidth: 2,
                         )
                       : const Icon(Icons.auto_fix_high_rounded),
-                  label: Text(_bgRemoved ? 'Background removed' : 'Remove background'),
+                  label: Text(
+                    _bgRemoved
+                        ? 'Background removed'
+                        : _modelDownloadProgress != null
+                            ? 'Downloading model… ${(_modelDownloadProgress! * 100).round()}%'
+                            : 'Remove background',
+                  ),
                   onPressed: _busy || _bgRemoved ? null : _removeBackground,
                 ),
             ],

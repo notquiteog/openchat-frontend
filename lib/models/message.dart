@@ -882,8 +882,22 @@ class Message {
     return null;
   }
 
+  /// Parsed social-recovery share payload if this is an in-band guardian
+  /// share delivery, else null. Carried as `system` messages, never rendered —
+  /// the receiving client stores the share and suppresses the bubble.
+  Map<String, dynamic>? get recoveryShareControl {
+    if (type != MessageType.system || _content == null) return null;
+    final text = _content!.text;
+    if (!text.contains('openchat_recovery_share')) return null;
+    try {
+      final json = jsonDecode(text) as Map<String, dynamic>;
+      if (json['openchat_recovery_share'] == 1) return json;
+    } catch (_) {}
+    return null;
+  }
+
   /// True for any system control message that must not render in the chat list.
-  bool get isHiddenControl => smpControl != null;
+  bool get isHiddenControl => smpControl != null || recoveryShareControl != null;
 
   /// Parsed server-rolled dice/randomiser, or null. The value is set by the
   /// server (the client only animates to it), so it's read from the plaintext

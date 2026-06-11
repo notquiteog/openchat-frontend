@@ -49,6 +49,10 @@ class MlsSignerStorage {
 /// - Android: EncryptedSharedPreferences + Android Keystore
 /// - Windows: Windows Credential Manager
 /// - Linux: libsecret (GNOME Keyring / KWallet)
+/// How an entered app-lock PIN classified: the real unlock code, the duress
+/// code (decoy session or silent wipe per configuration), or wrong.
+enum AppLockPinKind { real, duress, invalid }
+
 class SecureStorageService {
   static const _storage = FlutterSecureStorage(
     aOptions: AndroidOptions(),
@@ -67,6 +71,13 @@ class SecureStorageService {
   static const _keyRefreshToken = 'refresh_token';
   static const _keyBiometricEnabled = 'biometric_enabled';
   static const _keyAppLockEnabled = 'app_lock_enabled';
+  static const _keySendJitter = 'send_jitter_enabled';
+  static const _keyAppLockPin = 'app_lock_pin_v1';
+  static const _keyDuressPin = 'app_lock_duress_pin_v1';
+  static const _keyDuressAction = 'app_lock_duress_action_v1';
+  static const _keyDeadmanDays = 'deadman_days_v1';
+  static const _keyLastRealUnlockAt = 'last_real_unlock_at_v1';
+  static const _keyRecoveryShareHeldPrefix = 'recovery_share_held_v1';
   static const _keyForceTurn = 'force_turn_calls';
   static const _keyScreenSecurity = 'screen_security_enabled';
   static const _keyProxyConfig = 'proxy_config_v1';
@@ -634,6 +645,20 @@ class SecureStorageService {
     value: enabled ? 'true' : 'false',
   );
 
+  // Send jitter: random 200–1500ms delay before each message send, so a
+  // traffic observer can't correlate keystroke/submit timing with ciphertext
+  // departure. The bubble shows immediately (optimistic UI); only the wire
+  // send is delayed.
+  Future<bool> getSendJitterEnabled() async {
+    final v = await _readOrNull(_keySendJitter);
+    return v == 'true';
+  }
+
+  Future<void> setSendJitterEnabled(bool enabled) => _storage.write(
+    key: _keySendJitter,
+    value: enabled ? 'true' : 'false',
+  );
+
   // Force-TURN: route all call media through the relay so peers never see each
   // other's IP (defeats IP discovery; requires TURN to be configured).
   Future<bool> getForceTurn() async {
@@ -711,6 +736,132 @@ class SecureStorageService {
     }
   }
 
+  // ── App-lock PIN + duress PIN ─────────────────────────────────────────────
+  // Same salted-SHA-256-at-rest scheme as conversation PINs. The duress PIN is
+  // a second, indistinguishable unlock code: classification tells the shell
+  // whether to open the real session, the decoy session, or wipe.
+
+  static String _saltedPinRecord(String pin) {
+    final rand = Random.secure();
+    final salt = base64Encode(List<int>.generate(16, (_) => rand.nextInt(256)));
+    final hash = sha256.convert(utf8.encode('$salt:$pin')).toString();
+    return '$salt:$hash';
+  }
+
+  static bool _pinMatchesRecord(String pin, String? record) {
+    if (record == null || record.isEmpty) return false;
+    final idx = record.indexOf(':');
+    if (idx < 0) return false;
+    final salt = record.substring(0, idx);
+    final hash = record.substring(idx + 1);
+    return sha256.convert(utf8.encode('$salt:$pin')).toString() == hash;
+  }
+
+  Future<void> setAppLockPin(String pin) =>
+      _storage.write(key: _keyAppLockPin, value: _saltedPinRecord(pin));
+
+  Future<void> clearAppLockPin() => _storage.delete(key: _keyAppLockPin);
+
+  Future<bool> hasAppLockPin() async =>
+      ((await _readOrNull(_keyAppLockPin)) ?? '').isNotEmpty;
+
+  Future<void> setDuressPin(String pin) =>
+      _storage.write(key: _keyDuressPin, value: _saltedPinRecord(pin));
+
+  Future<void> clearDuressPin() => _storage.delete(key: _keyDuressPin);
+
+  Future<bool> hasDuressPin() async =>
+      ((await _readOrNull(_keyDuressPin)) ?? '').isNotEmpty;
+
+  /// 'decoy' (default) or 'wipe'.
+  Future<String> getDuressAction() async =>
+      (await _readOrNull(_keyDuressAction)) ?? 'decoy';
+
+  Future<void> setDuressAction(String action) =>
+      _storage.write(key: _keyDuressAction, value: action);
+
+  /// Classifies an entered PIN: [AppLockPinKind.real], [AppLockPinKind.duress],
+  /// or [AppLockPinKind.invalid]. Both hashes are always checked so timing
+  /// does not reveal whether a duress PIN exists.
+  Future<AppLockPinKind> classifyAppLockPin(String pin) async {
+    final realMatch = _pinMatchesRecord(pin, await _readOrNull(_keyAppLockPin));
+    final duressMatch = _pinMatchesRecord(pin, await _readOrNull(_keyDuressPin));
+    if (realMatch) return AppLockPinKind.real;
+    if (duressMatch) return AppLockPinKind.duress;
+    return AppLockPinKind.invalid;
+  }
+
+  // ── Dead-man switch ───────────────────────────────────────────────────────
+
+  /// 0 = disabled; otherwise wipe local data when the app hasn't seen a real
+  /// unlock for this many days.
+  Future<int> getDeadmanDays() async =>
+      int.tryParse((await _readOrNull(_keyDeadmanDays)) ?? '') ?? 0;
+
+  Future<void> setDeadmanDays(int days) =>
+      _storage.write(key: _keyDeadmanDays, value: days.toString());
+
+  Future<DateTime?> getLastRealUnlockAt() async {
+    final raw = await _readOrNull(_keyLastRealUnlockAt);
+    final ms = int.tryParse(raw ?? '');
+    if (ms == null) return null;
+    return DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true);
+  }
+
+  Future<void> recordRealUnlock() => _storage.write(
+    key: _keyLastRealUnlockAt,
+    value: DateTime.now().toUtc().millisecondsSinceEpoch.toString(),
+  );
+
+  /// This device's session id, decoded from the access token's `sid` claim —
+  /// the remote-wipe target check needs to know which session we are.
+  Future<String?> getSessionId() async {
+    final token = await getAccessToken();
+    if (token == null || token.isEmpty) return null;
+    final parts = token.split('.');
+    if (parts.length != 3) return null;
+    try {
+      final payload = utf8.decode(
+        base64Url.decode(base64Url.normalize(parts[1])),
+      );
+      final claims = jsonDecode(payload);
+      if (claims is Map) {
+        final sid = claims['sid']?.toString();
+        return (sid == null || sid.isEmpty) ? null : sid;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  // ── Held recovery shares (guardian side) ──────────────────────────────────
+  // One Shamir share per account this device guards. Stored verbatim (the
+  // share-delivery JSON), keyed by the protected account's user id. These DO
+  // ride in encrypted backups — losing your own device must not destroy the
+  // shares you hold for friends.
+
+  Future<void> saveHeldRecoveryShare(String ownerUserId, String shareJson) =>
+      _storage.write(
+        key: _scopedKey(_keyRecoveryShareHeldPrefix, ownerUserId),
+        value: shareJson,
+      );
+
+  Future<String?> getHeldRecoveryShare(String ownerUserId) =>
+      _readOrNull(_scopedKey(_keyRecoveryShareHeldPrefix, ownerUserId));
+
+  Future<void> deleteHeldRecoveryShare(String ownerUserId) =>
+      _storage.delete(key: _scopedKey(_keyRecoveryShareHeldPrefix, ownerUserId));
+
+  /// owner user id → stored share JSON, for the Trust Center guardian list.
+  Future<Map<String, String>> listHeldRecoveryShares() async {
+    final all = await _storage.readAll();
+    const prefix = '$_keyRecoveryShareHeldPrefix:';
+    return {
+      for (final entry in all.entries)
+        if (entry.key.startsWith(prefix) && entry.value.isNotEmpty)
+          entry.key.substring(prefix.length): entry.value,
+    };
+  }
+
   /// Message encryption/decryption needs the private key during normal app use.
   /// Biometric key unlock only protects explicit private-key export.
   Future<String?> getPrivateKeyIfUnlocked() async {
@@ -728,6 +879,14 @@ class SecureStorageService {
       _keyBiometricEnabled,
       _keyAppLockEnabled,
       _keyStorageProbe,
+      // Device-local security policy never travels in a backup: restoring a
+      // bundle on a new device must not silently carry over (or reveal the
+      // existence of) lock PINs, the duress configuration, or wipe timers.
+      _keyAppLockPin,
+      _keyDuressPin,
+      _keyDuressAction,
+      _keyDeadmanDays,
+      _keyLastRealUnlockAt,
     };
     return {
       for (final entry in all.entries)
@@ -743,6 +902,11 @@ class SecureStorageService {
       _keyBiometricEnabled,
       _keyAppLockEnabled,
       _keyStorageProbe,
+      _keyAppLockPin,
+      _keyDuressPin,
+      _keyDuressAction,
+      _keyDeadmanDays,
+      _keyLastRealUnlockAt,
     };
     for (final entry in values.entries) {
       if (blocked.contains(entry.key) || entry.value.isEmpty) continue;

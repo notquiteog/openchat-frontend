@@ -47,8 +47,17 @@ enum WsEventType {
   gameUpdated,
   // A pending join request, delivered only to members who can approve it.
   joinRequest,
+  // A PGP-signed remote-wipe command for one of this account's sessions.
+  deviceWipe,
+  // Social recovery: a contact you guard opened a ceremony / a guardian
+  // submitted a share to your ceremony.
+  recoveryRequest,
+  recoveryShare,
   // Server: the replay buffer can't bridge our last_seq — do a full refetch.
   resyncRequired,
+  // Server: one broadcast conversation's replay window couldn't bridge our
+  // conv_seq — refetch just that conversation (data carries conversation_id).
+  convResyncRequired,
   error,
   unknown,
 }
@@ -62,7 +71,21 @@ class WsEvent {
   /// may be out of order across server instances.
   final int seq;
 
-  WsEvent({required this.type, required this.data, this.seq = 0});
+  /// Broadcast-conversation stream id + per-conversation sequence number.
+  /// Set only on events from conversations the server promoted to broadcast
+  /// fanout; such events never carry (or consume) a per-user [seq]. Unlike
+  /// [seq], cseq IS a real per-conversation ordering signal — a gap in it
+  /// means a missed event worth a targeted refetch.
+  final String? cid;
+  final int cseq;
+
+  WsEvent({
+    required this.type,
+    required this.data,
+    this.seq = 0,
+    this.cid,
+    this.cseq = 0,
+  });
 }
 
 enum WsConnectionStatus { disconnected, connecting, connected }
@@ -95,6 +118,16 @@ class WebSocketService extends ChangeNotifier {
   final Queue<int> _recentSeqOrder = Queue<int>();
   final Set<int> _recentSeqs = <int>{};
 
+  // Broadcast-conversation resume state: highest cseq per conversation plus a
+  // small per-conversation dedup window, mirroring the per-user machinery.
+  // These never touch _lastSeq — broadcast events don't consume user seqs.
+  static const String _convSeqsPrefsKey = 'ws_conv_seqs';
+  static const int _convDedupeWindow = 128;
+  final Map<String, int> _convSeqs = {};
+  final Map<String, Set<int>> _recentConvSeqs = {};
+  final Map<String, Queue<int>> _recentConvSeqOrder = {};
+  final math.Random _reconnectJitter = math.Random();
+
   final _eventStream = StreamController<WsEvent>.broadcast();
   Stream<WsEvent> get events => _eventStream.stream;
   WsConnectionStatus get connectionStatus => _status;
@@ -113,6 +146,17 @@ class WebSocketService extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       _lastSeq = math.max(_lastSeq, prefs.getInt(_lastSeqPrefsKey) ?? 0);
+      final rawConvSeqs = prefs.getString(_convSeqsPrefsKey);
+      if (rawConvSeqs != null && rawConvSeqs.isNotEmpty) {
+        final decoded = jsonDecode(rawConvSeqs);
+        if (decoded is Map) {
+          decoded.forEach((key, value) {
+            final seq = (value as num?)?.toInt() ?? 0;
+            final existing = _convSeqs[key.toString()] ?? 0;
+            if (seq > existing) _convSeqs[key.toString()] = seq;
+          });
+        }
+      }
     } catch (_) {}
   }
 
@@ -122,9 +166,13 @@ class WebSocketService extends ChangeNotifier {
     _lastSeq = 0;
     _recentSeqs.clear();
     _recentSeqOrder.clear();
+    _convSeqs.clear();
+    _recentConvSeqs.clear();
+    _recentConvSeqOrder.clear();
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_lastSeqPrefsKey);
+      await prefs.remove(_convSeqsPrefsKey);
     } catch (_) {}
   }
 
@@ -161,6 +209,41 @@ class WebSocketService extends ChangeNotifier {
       await prefs.setInt(_lastSeqPrefsKey, _lastSeq);
     } catch (_) {}
   }
+
+  /// True when this (conversation, cseq) pair was already delivered. Mirrors
+  /// [_isDuplicateSeq] but per conversation, and never touches [_lastSeq].
+  bool _isDuplicateConvSeq(String cid, int cseq) {
+    if (cseq <= 0) return false;
+    final seen = _recentConvSeqs.putIfAbsent(cid, () => <int>{});
+    if (seen.contains(cseq)) return true;
+    final order = _recentConvSeqOrder.putIfAbsent(cid, Queue<int>.new);
+    seen.add(cseq);
+    order.addLast(cseq);
+    while (order.length > _convDedupeWindow) {
+      seen.remove(order.removeFirst());
+    }
+    if (cseq > (_convSeqs[cid] ?? 0)) {
+      _convSeqs[cid] = cseq;
+      unawaited(_persistConvSeqs());
+    }
+    return false;
+  }
+
+  DateTime _convSeqsPersistedAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Future<void> _persistConvSeqs() async {
+    final now = DateTime.now();
+    if (now.difference(_convSeqsPersistedAt) < const Duration(seconds: 2)) {
+      return;
+    }
+    _convSeqsPersistedAt = now;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_convSeqsPrefsKey, jsonEncode(_convSeqs));
+    } catch (_) {}
+  }
+
+  /// Highest broadcast-conversation sequence seen, keyed by conversation id.
+  Map<String, int> get convSeqs => Map.unmodifiable(_convSeqs);
 
   Future<void> connect() async {
     if (_disposed) return;
@@ -222,10 +305,13 @@ class WebSocketService extends ChangeNotifier {
       // client (lastSeq 0) skips this — its initial REST load covers it.
       await _ensureLastSeqLoaded();
       if (_lastSeq > 0) {
-        _trySendNow({
-          'type': 'resume',
-          'data': {'last_seq': _lastSeq},
-        });
+        final resume = <String, dynamic>{'last_seq': _lastSeq};
+        // Broadcast-conversation resume positions ride along; servers that
+        // don't know the field ignore it.
+        if (_convSeqs.isNotEmpty) {
+          resume['conv_seqs'] = Map<String, int>.from(_convSeqs);
+        }
+        _trySendNow({'type': 'resume', 'data': resume});
       }
       _flushPendingSends();
     } catch (_) {
@@ -263,6 +349,18 @@ class WebSocketService extends ChangeNotifier {
         final json = jsonDecode(line) as Map<String, dynamic>;
         final type = _parseType(json['type'] as String?);
         final data = (json['data'] as Map<String, dynamic>?) ?? {};
+        // Broadcast-conversation events carry cid/cseq instead of a per-user
+        // seq; they get their own per-conversation dedup window and never
+        // advance _lastSeq.
+        final cid = json['cid'] as String?;
+        final cseq = (json['cseq'] as num?)?.toInt() ?? 0;
+        if (cid != null && cid.isNotEmpty && cseq > 0) {
+          if (_isDuplicateConvSeq(cid, cseq)) continue;
+          if (!_eventStream.isClosed) {
+            _eventStream.add(WsEvent(type: type, data: data, cid: cid, cseq: cseq));
+          }
+          continue;
+        }
         final seq = (json['seq'] as num?)?.toInt() ?? 0;
         // Replay racing live delivery can duplicate an event; drop repeats.
         if (_isDuplicateSeq(seq)) continue;
@@ -304,7 +402,13 @@ class WebSocketService extends ChangeNotifier {
     _reconnectTimer?.cancel();
     final seconds = math.min(15, 1 << math.min(_reconnectAttempt, 3));
     _reconnectAttempt += 1;
-    _reconnectTimer = Timer(Duration(seconds: seconds), () {
+    // Jitter spreads a fleet of clients reconnecting after a server restart
+    // across ~a second per step instead of a synchronized thundering herd.
+    final delay = Duration(
+      seconds: seconds,
+      milliseconds: _reconnectJitter.nextInt(1000),
+    );
+    _reconnectTimer = Timer(delay, () {
       _reconnectTimer = null;
       unawaited(connect());
     });
@@ -545,7 +649,11 @@ class WebSocketService extends ChangeNotifier {
     'stage_state' => WsEventType.stageState,
     'game_updated' => WsEventType.gameUpdated,
     'join_request' => WsEventType.joinRequest,
+    'device_wipe' => WsEventType.deviceWipe,
+    'recovery_request' => WsEventType.recoveryRequest,
+    'recovery_share' => WsEventType.recoveryShare,
     'resync_required' => WsEventType.resyncRequired,
+    'conv_resync_required' => WsEventType.convResyncRequired,
     'error' => WsEventType.error,
     _ => WsEventType.unknown,
   };

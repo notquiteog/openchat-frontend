@@ -11,6 +11,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
+import '../../services/app_lock_state.dart';
 import '../../config/api_config.dart';
 import '../../utils/local_conversation_preferences.dart';
 import '../../utils/smart_inbox_filter.dart';
@@ -421,6 +422,10 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final settings = context.read<SettingsProvider>();
     final isPinned = settings.isConversationPinned(conv.id);
     final isArchived = settings.isConversationArchived(conv.id);
+    final isHidden = settings.isConversationHidden(conv.id);
+    // Vault-hiding is offered only in a real session: a decoy (duress-PIN)
+    // session must show no trace of the vault — not even the action.
+    final inRealVault = vaultModeListenable.value == VaultMode.real;
     final notificationPreference = settings
         .notificationPreferenceForConversation(conv.id);
     final notificationLabel = settings.notificationLabelForConversation(
@@ -429,7 +434,7 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final selected = await GlassModalSheet.show<String>(
       context: context,
       initialState: SheetState.half,
-      halfSize: 0.42,
+      halfSize: inRealVault ? 0.48 : 0.42,
       enableInteractionGlow: true,
       builder: (ctx) => SafeArea(
         top: false,
@@ -454,6 +459,14 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
               label: isArchived ? 'Unarchive Chat' : 'Archive Chat',
               onTap: () => Navigator.pop(ctx, 'archive'),
             ),
+            if (inRealVault)
+              _SheetTile(
+                icon: isHidden
+                    ? Icons.visibility_outlined
+                    : Icons.visibility_off_outlined,
+                label: isHidden ? 'Unhide Chat' : 'Hide Chat',
+                onTap: () => Navigator.pop(ctx, 'hide'),
+              ),
             _SheetTile(
               icon: Icons.delete_outline_rounded,
               label: _deleteActionLabel(context, conv),
@@ -473,6 +486,13 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
       );
     } else if (selected == 'archive') {
       await settings.toggleConversationArchived(conv.id);
+    } else if (selected == 'hide') {
+      final hide = !isHidden;
+      await settings.setConversationHidden(conv.id, hide);
+      // Mute forever on hide so a notification can't reveal the chat in a
+      // decoy session. Unhiding leaves the mute alone — undoing it could
+      // discard a mute the user had set independently.
+      if (hide) await settings.setConversationMuted(conv.id, true);
     } else if (selected == 'delete' && context.mounted) {
       await _confirmDelete(context, conv);
     }

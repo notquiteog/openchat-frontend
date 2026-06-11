@@ -22,7 +22,9 @@ import '../services/mls_service.dart';
 import '../services/notification_service.dart';
 import '../services/offline_outbox_service.dart';
 import '../services/push_notification_service.dart';
+import '../services/app_lock_state.dart';
 import '../services/secure_storage_service.dart';
+import '../services/social_recovery_service.dart';
 import '../services/websocket_service.dart';
 import '../utils/mention_utils.dart';
 
@@ -145,11 +147,50 @@ class ChatProvider extends ChangeNotifier {
   bool _outboxLoaded = false;
 
   List<Conversation> get conversations =>
-      _conversations.values.toList()..sort((a, b) {
-        final aTime = a.lastMessage?.createdAt ?? a.createdAt;
-        final bTime = b.lastMessage?.createdAt ?? b.createdAt;
-        return bTime.compareTo(aTime);
-      });
+      _conversations.values.where(_visibleInCurrentVault).toList()
+        ..sort((a, b) {
+          final aTime = a.lastMessage?.createdAt ?? a.createdAt;
+          final bTime = b.lastMessage?.createdAt ?? b.createdAt;
+          return bTime.compareTo(aTime);
+        });
+
+  void _onVaultModeChanged() {
+    if (!_disposed) notifyListeners();
+  }
+
+  /// Send jitter: random 200–1500ms before the wire send so an observer can't
+  /// correlate typing/submit timing with ciphertext departure. The optimistic
+  /// bubble is already on screen; only the network call waits.
+  bool _sendJitterEnabled = false;
+  final Random _sendJitterRandom = Random.secure();
+
+  bool get sendJitterEnabled => _sendJitterEnabled;
+
+  Future<void> setSendJitterEnabled(bool enabled) async {
+    _sendJitterEnabled = enabled;
+    await _storage.setSendJitterEnabled(enabled);
+    notifyListeners();
+  }
+
+  Future<void> _applySendJitter() async {
+    if (!_sendJitterEnabled) return;
+    await Future<void>.delayed(
+      Duration(milliseconds: 200 + _sendJitterRandom.nextInt(1300)),
+    );
+  }
+
+  /// Vault filter: decoy (duress-PIN) sessions must not surface hidden
+  /// conversations anywhere — list, search, badges, notifications. Real
+  /// sessions see everything.
+  bool _visibleInCurrentVault(Conversation conv) =>
+      vaultModeListenable.value == VaultMode.real ||
+      !_settings.isConversationHidden(conv.id);
+
+  /// Public form of the vault filter for UI surfaces (badges, search results)
+  /// that resolve conversations outside [conversations].
+  bool isConversationVisibleInVault(String convID) =>
+      vaultModeListenable.value == VaultMode.real ||
+      !_settings.isConversationHidden(convID);
 
   Conversation? conversationById(String conversationId) =>
       _conversations[conversationId];
@@ -200,12 +241,36 @@ class ChatProvider extends ChangeNotifier {
   Stream<Map<String, dynamic>> get joinRequests =>
       _joinRequestController.stream;
 
+  /// Social-recovery ceremony events, tagged with `kind`:
+  /// 'request' (a contact you guard opened a ceremony — Trust Center refreshes
+  /// + banners) or 'share' (a guardian's share landed on YOUR ceremony — the
+  /// recovery screen progresses live).
+  final StreamController<Map<String, dynamic>> _recoveryEventsController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get recoveryEvents =>
+      _recoveryEventsController.stream;
+
   /// Send one SMP step to [convID] as a hidden `system` control message.
   Future<void> sendSmpStep(String convID, Map<String, dynamic> payload) async {
     final body = jsonEncode({'openchat_smp': 1, ...payload});
     await _sendEncryptedPayload(
       convID: convID,
       plaintextPayload: body,
+      messageType: 'system',
+    );
+  }
+
+  /// Delivers one Shamir recovery share to a guardian as a hidden E2EE
+  /// control message (same transport as SMP). [shareJson] is the full
+  /// openchat_recovery_share payload from SocialRecoveryService.configure.
+  Future<void> sendRecoveryShare(
+    String guardianUserId,
+    String shareJson,
+  ) async {
+    final conv = await openDM(guardianUserId);
+    await _sendEncryptedPayload(
+      convID: conv.id,
+      plaintextPayload: shareJson,
       messageType: 'system',
     );
   }
@@ -255,6 +320,10 @@ class ChatProvider extends ChangeNotifier {
        _outbox = outboxService ?? OfflineOutboxService(_storage) {
     _wsSub = _ws.events.listen(_handleWsEvent);
     _ws.addListener(_onWsConnectionChanged);
+    // Vault mode changes what `conversations` returns (decoy sessions filter
+    // hidden chats) — rebuild listeners when it flips.
+    vaultModeListenable.addListener(_onVaultModeChanged);
+    _storage.getSendJitterEnabled().then((v) => _sendJitterEnabled = v);
     NotificationService.setLiveLocationHandlers(
       onCancel: (_, messageId) async => stopLiveLocation(messageId),
     );
@@ -280,7 +349,10 @@ class ChatProvider extends ChangeNotifier {
 
   void indexLoadedMessage(Message message) => _indexMessage(message);
 
-  Future<void> connectWebSocket() => _ws.connect();
+  Future<void> connectWebSocket() {
+    unawaited(_hydrateSelfIdentity());
+    return _ws.connect();
+  }
 
   void clearState() {
     _messages.clear();
@@ -380,6 +452,15 @@ class ChatProvider extends ChangeNotifier {
     await Future.wait(loadedConversationIds.map(loadMessages));
   }
 
+  Future<void> _hydrateSelfIdentity() async {
+    if (_selfId == null || _selfId!.isEmpty) {
+      _selfId = await _storage.getUserID();
+    }
+    if (_selfUsername == null || _selfUsername!.isEmpty) {
+      _selfUsername = await _storage.getUsername();
+    }
+  }
+
   Future<void> loadConversations() => _loadConversations(silent: false);
 
   Future<void> refreshConversationsSilently() {
@@ -391,6 +472,13 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<void> _loadConversations({required bool silent}) async {
+    // Self-identity is hydrated once in the constructor — which on a fresh
+    // install runs BEFORE login, and clearState() nulls it on logout. Without
+    // re-hydration here (the first call after every login), everything keyed
+    // on "is this me" silently broke until an app restart: own game seats
+    // never matched (the join button never became "Ready up"), own messages
+    // triggered notifications, mentions misattributed.
+    await _hydrateSelfIdentity();
     if (!silent) {
       _isLoading = true;
       notifyListeners();
@@ -531,6 +619,35 @@ class ChatProvider extends ChangeNotifier {
     _chatFolders.removeWhere((folder) => folder.id == folderId);
     notifyListeners();
   }
+
+  /// Test seams for the MLS plaintext-cache regression suite: sent/edited MLS
+  /// messages can never be re-decrypted by their author (one-time sender
+  /// ratchet keys), so these private paths MUST persist plaintext into the
+  /// durable cache — a regression silently destroys message history on the
+  /// next restart.
+  @visibleForTesting
+  void debugSeedConversation(Conversation conversation) {
+    _conversations[conversation.id] = conversation;
+  }
+
+  @visibleForTesting
+  void debugReplacePendingWithConfirmed({
+    required String convID,
+    required String? pendingID,
+    required Message confirmed,
+    required String plaintextPayload,
+  }) {
+    _replacePendingWithConfirmed(
+      convID: convID,
+      pendingID: pendingID,
+      confirmed: confirmed,
+      plaintextPayload: plaintextPayload,
+    );
+  }
+
+  @visibleForTesting
+  Future<void> debugHandleEditedMessage(Message message) =>
+      _handleEditedMessage(message);
 
   @visibleForTesting
   static bool hasConversationListChanges({
@@ -1026,6 +1143,19 @@ class ChatProvider extends ChangeNotifier {
       signature: data['signature'] as String? ?? '',
     );
     updated.setDecryptedContent(plaintext);
+    // Same as the live edit path: the author can't re-decrypt an MLS edit, so
+    // the durable cache must carry the new ciphertext's plaintext.
+    if (_conversations[item.conversationId]?.usesMls == true) {
+      unawaited(
+        _cache.put(
+          updated.id,
+          item.conversationId,
+          updated.encryptedPayload,
+          plaintext,
+          updated.senderId.isNotEmpty ? updated.senderId : _selfId,
+        ),
+      );
+    }
     _replaceMessage(item.conversationId, msgID, updated);
   }
 
@@ -1849,6 +1979,20 @@ class ChatProvider extends ChangeNotifier {
       // We can't always re-decrypt our own message from the server, so set the
       // plaintext we already know directly.
       updated.setDecryptedContent(cleartextPayload);
+      // An MLS edit mints a new ciphertext the author can never re-decrypt;
+      // refresh the durable cache under the new fingerprint or the edit is
+      // lost on the next restart.
+      if (conv.usesMls) {
+        unawaited(
+          _cache.put(
+            updated.id,
+            convID,
+            updated.encryptedPayload,
+            cleartextPayload,
+            updated.senderId.isNotEmpty ? updated.senderId : _selfId,
+          ),
+        );
+      }
       _replaceMessage(convID, msgID, updated);
     } catch (e) {
       if (_shouldRetryOutboxError(e)) {
@@ -1901,11 +2045,29 @@ class ChatProvider extends ChangeNotifier {
     // If we can't decrypt the edit (e.g. our own message), keep the text we had.
     if (!msg.isDecrypted && old.isDecrypted) {
       final oldLocation = old.location;
-      msg.setDecryptedContent(
-        oldLocation != null
-            ? jsonEncode(oldLocation.toJson())
-            : (old.decryptedContent ?? ''),
-      );
+      final keptPlaintext = oldLocation != null
+          ? jsonEncode(oldLocation.toJson())
+          : (old.decryptedContent ?? '');
+      msg.setDecryptedContent(keptPlaintext);
+      // Our own MLS edit echoed from another device: we can never decrypt our
+      // own ciphertext, and the stale cache entry was just dropped above —
+      // re-persist the kept plaintext under the new fingerprint so a restart
+      // doesn't render the message undecryptable. Only for own messages: a
+      // recipient's transient decrypt failure must stay uncached so nothing
+      // masks the real content.
+      if (old.senderId.isNotEmpty &&
+          old.senderId == _selfId &&
+          _conversations[msg.conversationId]?.usesMls == true) {
+        unawaited(
+          _cache.put(
+            msg.id,
+            msg.conversationId,
+            msg.encryptedPayload,
+            keptPlaintext,
+            old.senderId,
+          ),
+        );
+      }
     }
     if (msg.senderId.isEmpty) msg.senderId = old.senderId;
     msg.sender ??= old.sender;
@@ -2160,6 +2322,7 @@ class ChatProvider extends ChangeNotifier {
     }
 
     try {
+      await _applySendJitter();
       // pending.id doubles as the idempotency key — the same id rides along
       // if this send times out and is retried through the outbox, so the
       // server maps the retry onto the original row instead of duplicating.
@@ -2311,6 +2474,22 @@ class ChatProvider extends ChangeNotifier {
       confirmed.markDecryptionFailed();
       debugPrint('Failed to hydrate confirmed message plaintext: $error');
       debugPrintStack(stackTrace: stackTrace);
+    }
+    // The author of an MLS message can never re-decrypt it — the sender
+    // ratchet key is consumed at encrypt time. Persist the plaintext into the
+    // durable cache NOW (under the server-assigned id) or every message this
+    // user ever sent comes back as "Unable to decrypt" with an unknown sender
+    // after the next app restart.
+    if (confirmed.isDecrypted && _conversations[convID]?.usesMls == true) {
+      unawaited(
+        _cache.put(
+          confirmed.id,
+          convID,
+          confirmed.encryptedPayload,
+          plaintextPayload,
+          confirmed.senderId.isNotEmpty ? confirmed.senderId : _selfId,
+        ),
+      );
     }
     try {
       _hydrateMessageSender(confirmed);
@@ -3339,6 +3518,17 @@ class ChatProvider extends ChangeNotifier {
         // to the full refetch (the pre-resume reconnect behavior).
         unawaited(_catchUpAfterReconnect());
 
+      case WsEventType.convResyncRequired:
+        // One broadcast conversation's replay window couldn't bridge our
+        // conv_seq: refetch exactly that conversation, never the whole list.
+        final convID = event.data['conversation_id'] as String?;
+        if (convID != null && convID.isNotEmpty) {
+          unawaited(refreshConversation(convID));
+          if (_messages.containsKey(convID)) {
+            unawaited(loadMessages(convID));
+          }
+        }
+
       case WsEventType.gameUpdated:
         _ingestGameRound(event.data);
 
@@ -3393,6 +3583,25 @@ class ChatProvider extends ChangeNotifier {
       case WsEventType.joinRequest:
         if (!_joinRequestController.isClosed) {
           _joinRequestController.add(event.data);
+        }
+
+      case WsEventType.deviceWipe:
+        // Routed to the home shell, which verifies the PGP signature against
+        // our OWN account key and the target session id before wiping — the
+        // server (or anyone who can inject WS frames) cannot forge this.
+        final wipeHandler = deviceWipeRequestHandler;
+        if (wipeHandler != null) {
+          unawaited(wipeHandler(event.data));
+        }
+
+      case WsEventType.recoveryRequest:
+        if (!_recoveryEventsController.isClosed) {
+          _recoveryEventsController.add({'kind': 'request', ...event.data});
+        }
+
+      case WsEventType.recoveryShare:
+        if (!_recoveryEventsController.isClosed) {
+          _recoveryEventsController.add({'kind': 'share', ...event.data});
         }
 
       case WsEventType.memberJoined:
@@ -3639,6 +3848,20 @@ class ChatProvider extends ChangeNotifier {
       return;
     }
 
+    // A guardian share arriving in-band: persist it (it must survive
+    // restarts and ride this device's backups) and never render it.
+    final recoveryShare = msg.recoveryShareControl;
+    if (recoveryShare != null) {
+      if (msg.senderId != _selfId) {
+        unawaited(
+          SocialRecoveryService(
+            storage: _storage,
+          ).storeIncomingShare(recoveryShare),
+        );
+      }
+      return;
+    }
+
     // Realtime events don't carry sender profile info, so backfill from the
     // loaded members before the message reaches the bubble/avatar UI.
     _hydrateMessageSender(msg);
@@ -3678,7 +3901,9 @@ class ChatProvider extends ChangeNotifier {
 
     if (_selfId != null &&
         msg.senderId != _selfId &&
-        msg.type != MessageType.system) {
+        msg.type != MessageType.system &&
+        // Decoy sessions: a hidden conversation must not buzz or banner.
+        isConversationVisibleInVault(msg.conversationId)) {
       final senderName = msg.sender?.username != null
           ? '@${msg.sender!.username}'
           : 'Someone';
@@ -4305,8 +4530,10 @@ class ChatProvider extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _wsSub?.cancel();
+    vaultModeListenable.removeListener(_onVaultModeChanged);
     _depositProgressController.close();
     _joinRequestController.close();
+    _recoveryEventsController.close();
     NotificationService.setLiveLocationHandlers(onCancel: null);
     unawaited(_stopAllLiveLocationShares());
     _ws.removeListener(_onWsConnectionChanged);

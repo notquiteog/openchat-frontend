@@ -4,6 +4,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart' as lg;
 import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
+import '../../services/app_lock_state.dart';
 import '../../widgets/deposit_progress_view.dart';
 import '../../widgets/glass.dart';
 
@@ -433,16 +434,39 @@ class _WalletScreenState extends State<WalletScreen> {
   Widget build(BuildContext context) {
     final currentUserID = context.watch<AuthProvider>().currentUser?.id;
     final theme = Theme.of(context);
-    final allItems = _historyItems(currentUserID);
+    return ValueListenableBuilder<VaultMode>(
+      valueListenable: vaultModeListenable,
+      builder: (context, vaultMode, _) =>
+          _buildWallet(context, theme, currentUserID, vaultMode),
+    );
+  }
+
+  Widget _buildWallet(
+    BuildContext context,
+    ThemeData theme,
+    String? currentUserID,
+    VaultMode vaultMode,
+  ) {
+    // Decoy (duress-PIN) sessions render a genuinely unused wallet: zero
+    // balances, no pending deposits, no history, actions disabled. The real
+    // data stays in state but is never read — and crucially this is neither
+    // an error nor a visibly censored view.
+    final isDecoy = vaultMode == VaultMode.decoy;
+    final allItems = isDecoy
+        ? const <_WalletHistoryItem>[]
+        : _historyItems(currentUserID);
     final filteredItems = _historyFilter == _WalletCategory.all
         ? allItems
         : allItems.where((it) => it.category == _historyFilter).toList();
+    final pending = isDecoy
+        ? const <Map<String, dynamic>>[]
+        : pendingDeposits(_deposits);
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: const GlassAppBar(title: Text('Wallet')),
-      body: _loading
+      body: _loading && !isDecoy
           ? const Center(child: GlassProgressIndicator.circular())
-          : _error != null
+          : _error != null && !isDecoy
           ? Center(child: Text('Failed to load wallet: $_error'))
           : RefreshIndicator(
               onRefresh: _load,
@@ -492,7 +516,10 @@ class _WalletScreenState extends State<WalletScreen> {
                           ),
                           const SizedBox(height: 12),
                           Text(
-                            _formatCrypto(_balanceFor(provider), provider),
+                            _formatCrypto(
+                              isDecoy ? 0 : _balanceFor(provider),
+                              provider,
+                            ),
                             style: TextStyle(
                               fontSize: 22,
                               fontWeight: FontWeight.w800,
@@ -503,7 +530,9 @@ class _WalletScreenState extends State<WalletScreen> {
                           Row(
                             children: [
                               GlassButtonWidget.icon(
-                                onPressed: () => _createDeposit(provider),
+                                onPressed: isDecoy
+                                    ? null
+                                    : () => _createDeposit(provider),
                                 icon: const Icon(
                                   Icons.arrow_downward,
                                   size: 16,
@@ -512,7 +541,8 @@ class _WalletScreenState extends State<WalletScreen> {
                               ),
                               const SizedBox(width: 8),
                               GlassButtonWidget.icon(
-                                onPressed: _balanceFor(provider) > 0
+                                onPressed:
+                                    !isDecoy && _balanceFor(provider) > 0
                                     ? () => _withdraw(provider)
                                     : null,
                                 icon: const Icon(Icons.arrow_upward, size: 16),
@@ -525,8 +555,7 @@ class _WalletScreenState extends State<WalletScreen> {
                     ),
                     const SizedBox(height: 8),
                   ],
-                  if (pendingDeposits(_deposits) case final pending
-                      when pending.isNotEmpty) ...[
+                  if (pending.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     Padding(
                       padding: const EdgeInsets.only(left: 4, bottom: 10),

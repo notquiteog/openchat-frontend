@@ -565,9 +565,11 @@ class AttachmentService {
     final secretKey = await _cipher.newSecretKey();
     final nonce = _cipher.newNonce();
 
-    // 2. Encrypt the file bytes client-side.
+    // 2. Encrypt the file bytes client-side — padded to a size bucket first,
+    // so the ciphertext length the server (and any traffic observer) sees
+    // does not reveal the exact file size.
     final secretBox = await _cipher.encrypt(
-      bytes,
+      padAttachmentPlaintext(bytes),
       secretKey: secretKey,
       nonce: nonce,
     );
@@ -720,13 +722,72 @@ class AttachmentService {
       macLength: _cipher.macAlgorithm.macLength,
     );
     final plaintext = await _cipher.decrypt(secretBox, secretKey: secretKey);
-    final bytes = Uint8List.fromList(plaintext);
+    final bytes = stripAttachmentPadding(Uint8List.fromList(plaintext));
 
     _decryptedCache[attachmentId] = bytes;
     if (_decryptedCache.length > _maxCacheEntries) {
       _decryptedCache.remove(_decryptedCache.keys.first); // evict oldest
     }
     return bytes;
+  }
+
+  // ── Size-bucket padding ─────────────────────────────────────────────────────
+  // AES-GCM preserves plaintext length exactly, so without padding the stored
+  // ciphertext leaks the file's size to the byte — enough to fingerprint known
+  // files. Plaintext is framed as: 8-byte magic, uint64-LE true length, file
+  // bytes, zeros up to a padmé-style bucket (block = 2^(bitlen-3), ≥4KB) for a
+  // bounded ~12.5% max overhead. Pre-padding attachments lack the magic and
+  // pass through untouched.
+  static const _padMagic = <int>[0x4F, 0x43, 0x50, 0x41, 0x44, 0x31, 0x00, 0x00];
+  static const _padHeaderLength = 16; // magic + uint64 length
+  static const _padMinBlock = 4096;
+
+  @visibleForTesting
+  static int paddedAttachmentSize(int framedLength) {
+    var block = _padMinBlock;
+    // Block = 2^(bitLength-4): at most a sixteenth of the value, so one
+    // wasted block is ≤ ~12.5% overhead even just past a power of two, while
+    // nearby sizes still collapse into shared buckets.
+    final dynamicBlock = 1 << (framedLength.bitLength - 4);
+    if (dynamicBlock > block) block = dynamicBlock;
+    return ((framedLength + block - 1) ~/ block) * block;
+  }
+
+  @visibleForTesting
+  static Uint8List padAttachmentPlaintext(List<int> bytes) {
+    final framedLength = _padHeaderLength + bytes.length;
+    final padded = Uint8List(paddedAttachmentSize(framedLength));
+    padded.setRange(0, _padMagic.length, _padMagic);
+    ByteData.sublistView(
+      padded,
+      _padMagic.length,
+      _padHeaderLength,
+    ).setUint64(0, bytes.length, Endian.little);
+    padded.setRange(_padHeaderLength, _padHeaderLength + bytes.length, bytes);
+    return padded;
+  }
+
+  @visibleForTesting
+  static Uint8List stripAttachmentPadding(Uint8List bytes) {
+    if (bytes.length < _padHeaderLength) return bytes;
+    for (var i = 0; i < _padMagic.length; i++) {
+      if (bytes[i] != _padMagic[i]) return bytes; // legacy unpadded attachment
+    }
+    final trueLength = ByteData.sublistView(
+      bytes,
+      _padMagic.length,
+      _padHeaderLength,
+    ).getUint64(0, Endian.little);
+    // Compare against the available payload directly — computing
+    // header+length first could overflow on a corrupt huge value.
+    if (trueLength < 0 || trueLength > bytes.length - _padHeaderLength) {
+      return bytes;
+    }
+    return Uint8List.sublistView(
+      bytes,
+      _padHeaderLength,
+      _padHeaderLength + trueLength,
+    );
   }
 
   Future<Uint8List> downloadRaw({required String attachmentId}) async {

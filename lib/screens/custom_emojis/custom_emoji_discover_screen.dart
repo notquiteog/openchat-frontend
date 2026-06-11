@@ -5,17 +5,18 @@ import '../../config/api_config.dart';
 import '../../services/api_service.dart';
 import '../../widgets/glass.dart';
 
-/// Search publicly discoverable sticker packs and add them to the library.
-/// Backed by the `/discover/stickers` endpoint (Batch 6.2). Custom-emoji
-/// packs have their own screen: CustomEmojiDiscoverScreen.
-class StickerDiscoverScreen extends StatefulWidget {
-  const StickerDiscoverScreen({super.key});
+/// Search publicly discoverable custom-emoji packs and add them to the
+/// library. Backed by the `/discover/custom-emoji` endpoint. Sticker packs
+/// have their own screen: StickerDiscoverScreen.
+class CustomEmojiDiscoverScreen extends StatefulWidget {
+  const CustomEmojiDiscoverScreen({super.key});
 
   @override
-  State<StickerDiscoverScreen> createState() => _StickerDiscoverScreenState();
+  State<CustomEmojiDiscoverScreen> createState() =>
+      _CustomEmojiDiscoverScreenState();
 }
 
-class _StickerDiscoverScreenState extends State<StickerDiscoverScreen> {
+class _CustomEmojiDiscoverScreenState extends State<CustomEmojiDiscoverScreen> {
   final _queryCtrl = TextEditingController();
   List<dynamic> _results = const [];
   bool _loading = false;
@@ -38,7 +39,7 @@ class _StickerDiscoverScreenState extends State<StickerDiscoverScreen> {
     final api = context.read<ApiService>();
     final q = _queryCtrl.text.trim();
     try {
-      final results = await api.discoverStickerPacks(q);
+      final results = await api.discoverCustomEmojiPacks(q);
       if (!mounted) return;
       setState(() {
         _results = results;
@@ -54,7 +55,7 @@ class _StickerDiscoverScreenState extends State<StickerDiscoverScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final id = pack['id'] as String;
     try {
-      await api.addStickerPackToLibrary(id);
+      await api.addCustomEmojiPackToLibrary(id);
       if (mounted) setState(() => _added.add(id));
       messenger.showSnackBar(const SnackBar(content: Text('Added to library')));
     } catch (e) {
@@ -66,7 +67,7 @@ class _StickerDiscoverScreenState extends State<StickerDiscoverScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(title: const Text('Discover sticker packs')),
+      appBar: GlassAppBar(title: const Text('Discover emoji packs')),
       body: Column(
         children: [
           Padding(
@@ -81,7 +82,7 @@ class _StickerDiscoverScreenState extends State<StickerDiscoverScreen> {
               textInputAction: TextInputAction.search,
               onSubmitted: (_) => _search(),
               decoration: InputDecoration(
-                hintText: 'Search sticker packs',
+                hintText: 'Search emoji packs',
                 prefixIcon: const Icon(Icons.search_rounded),
                 suffixIcon: IconButton(
                   icon: const Icon(Icons.arrow_forward_rounded),
@@ -121,7 +122,7 @@ class _StickerDiscoverScreenState extends State<StickerDiscoverScreen> {
               ? CircleAvatar(
                   backgroundImage: NetworkImage(ApiConfig.resolveMedia(cover)),
                 )
-              : const CircleAvatar(child: Icon(Icons.emoji_emotions_outlined)),
+              : const CircleAvatar(child: Icon(Icons.add_reaction_outlined)),
           title: Text(pack['name'] as String? ?? 'Pack'),
           subtitle: Text(pack['description'] as String? ?? ''),
           trailing: added

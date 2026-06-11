@@ -96,4 +96,75 @@ void main() {
     await Future<void>.delayed(Duration.zero);
     expect(received, hasLength(2));
   });
+
+  // ── Broadcast-conversation (cid/cseq) stream ──────────────────────────────
+
+  String convFrame(String cid, int cseq, {int n = 0}) => jsonEncode({
+        'type': 'new_message',
+        'data': {'n': n},
+        'cid': cid,
+        'cseq': cseq,
+      });
+
+  test('cseq events never advance the per-user lastSeq', () async {
+    ws.handleRawFrame(frame(3));
+    ws.handleRawFrame(convFrame('conv-a', 99));
+    await Future<void>.delayed(Duration.zero);
+
+    expect(ws.lastSeq, 3, reason: 'broadcast events must not corrupt _lastSeq');
+    expect(ws.convSeqs['conv-a'], 99);
+    expect(received, hasLength(2));
+    expect(received.last.cid, 'conv-a');
+    expect(received.last.cseq, 99);
+  });
+
+  test('duplicate cseq within one conversation is dropped', () async {
+    ws.handleRawFrame(convFrame('conv-a', 5));
+    ws.handleRawFrame(convFrame('conv-a', 5));
+    await Future<void>.delayed(Duration.zero);
+
+    expect(received, hasLength(1));
+  });
+
+  test('the same cseq in different conversations is independent', () async {
+    ws.handleRawFrame(convFrame('conv-a', 5));
+    ws.handleRawFrame(convFrame('conv-b', 5));
+    await Future<void>.delayed(Duration.zero);
+
+    expect(received, hasLength(2));
+    expect(ws.convSeqs, {'conv-a': 5, 'conv-b': 5});
+  });
+
+  test('out-of-order live cseq below the max still delivers', () async {
+    ws.handleRawFrame(convFrame('conv-a', 10));
+    ws.handleRawFrame(convFrame('conv-a', 9));
+    await Future<void>.delayed(Duration.zero);
+
+    expect(received, hasLength(2));
+    expect(ws.convSeqs['conv-a'], 10);
+  });
+
+  test('conv_resync_required parses into its own event type', () async {
+    ws.handleRawFrame(jsonEncode({
+      'type': 'conv_resync_required',
+      'data': {'conversation_id': 'conv-a'},
+    }));
+    await Future<void>.delayed(Duration.zero);
+
+    expect(received.single.type, WsEventType.convResyncRequired);
+    expect(received.single.data['conversation_id'], 'conv-a');
+  });
+
+  test('resetSequence forgets broadcast positions too', () async {
+    ws.handleRawFrame(convFrame('conv-a', 7));
+    await Future<void>.delayed(Duration.zero);
+    expect(ws.convSeqs, isNotEmpty);
+
+    await ws.resetSequence();
+    expect(ws.convSeqs, isEmpty);
+
+    ws.handleRawFrame(convFrame('conv-a', 7));
+    await Future<void>.delayed(Duration.zero);
+    expect(received, hasLength(2), reason: 'same cseq deliverable post-reset');
+  });
 }

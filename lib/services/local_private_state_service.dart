@@ -27,6 +27,9 @@ const privateStateMessageDraftsKey = 'message_drafts';
 const privateStatePinnedChannelMessagesKey = 'pinned_channel_messages';
 const privateStatePinnedConversationsKey = 'pinned_conversations';
 const privateStateArchivedConversationsKey = 'archived_conversations';
+// Conversations hidden from decoy (duress-PIN) sessions. Stored only inside
+// this encrypted local state — never server-side, never in plain prefs.
+const privateStateHiddenConversationsKey = 'hidden_conversations';
 const privateStateUnreadMentionMessageIdsKey = 'unread_mention_message_ids';
 const privateStatePrivateContactsKey = 'private_contacts';
 const privateStatePrivacyOnboardingViewedUserIdsKey =

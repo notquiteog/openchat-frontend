@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart' as crypto;
 import 'package:http/http.dart' as http;
 import '../config/api_config.dart' show ApiConfig, IceServer;
 import '../crypto/pgp_service.dart';
+import 'app_lock_state.dart';
 import '../models/admin_audit_event.dart';
 import '../models/channel_analytics.dart';
 import '../models/channel_pinned_message.dart';
@@ -29,7 +30,12 @@ class ApiException implements Exception {
   final int statusCode;
   final String code;
   final String message;
-  ApiException(this.statusCode, this.code, this.message);
+
+  /// Extra fields the server attached to the error object (e.g. the signed
+  /// `wipe_command` riding a DEVICE_WIPED refresh rejection).
+  final Map<String, dynamic>? details;
+
+  ApiException(this.statusCode, this.code, this.message, {this.details});
   @override
   String toString() => 'ApiException($statusCode): $code - $message';
 }
@@ -190,15 +196,29 @@ class ApiService {
     if (refreshToken == null) {
       throw ApiException(401, 'NO_TOKEN', 'no refresh token');
     }
-    final resp = await _post('/api/v1/auth/refresh', {
-      'refresh_token': refreshToken,
-      'device_name': openChatDeviceName(),
-    }, authenticated: false);
-    final data = resp['data'] as Map<String, dynamic>;
-    await _storage.updateTokens(
-      accessToken: data['access_token'] as String,
-      refreshToken: data['refresh_token'] as String,
-    );
+    try {
+      final resp = await _post('/api/v1/auth/refresh', {
+        'refresh_token': refreshToken,
+        'device_name': openChatDeviceName(),
+      }, authenticated: false);
+      final data = resp['data'] as Map<String, dynamic>;
+      await _storage.updateTokens(
+        accessToken: data['access_token'] as String,
+        refreshToken: data['refresh_token'] as String,
+      );
+    } on ApiException catch (error) {
+      // A device that slept past the WS replay window learns about its remote
+      // wipe here: the refresh rejection carries the signed command. Hand it
+      // to the shell, which verifies the signature before destroying data.
+      if (error.code == 'DEVICE_WIPED') {
+        final command = error.details?['wipe_command']?.toString();
+        final wipeHandler = deviceWipeRequestHandler;
+        if (command != null && command.isNotEmpty && wipeHandler != null) {
+          unawaited(wipeHandler({'command': command}));
+        }
+      }
+      rethrow;
+    }
   }
 
   // ---- Users ----
@@ -2155,8 +2175,98 @@ class ApiService {
         .toList();
   }
 
+  /// Requests a remote wipe of [sessionId]. [command] is the full signed
+  /// command JSON (built and PGP-signed client-side); the server stores and
+  /// relays it opaquely and revokes the session immediately.
+  Future<void> wipeSession(String sessionId, {required String command}) async {
+    await _post('/api/v1/me/sessions/$sessionId/wipe', {'command': command});
+  }
+
   Future<void> revokeSession(String sessionId) async {
     await _delete('/api/v1/me/sessions/$sessionId');
+  }
+
+  // ---- Social key recovery (Shamir k-of-n among guardians) ----
+
+  /// Stores the recovery configuration: [blob] is the recovery bundle
+  /// AES-GCM-encrypted under a random secret that exists only as Shamir
+  /// shares (delivered to guardians as sealed messages, client-to-client).
+  Future<void> setupRecovery({
+    required String blob,
+    required String sha256,
+    required int threshold,
+    required List<String> guardianIds,
+  }) async {
+    await _put('/api/v1/me/recovery', {
+      'blob': blob,
+      'sha256': sha256,
+      'threshold': threshold,
+      'guardian_ids': guardianIds,
+    });
+  }
+
+  /// Own recovery configuration, or null when none exists.
+  Future<Map<String, dynamic>?> getRecoveryConfig() async {
+    try {
+      final resp = await _get('/api/v1/me/recovery');
+      return resp['data'] as Map<String, dynamic>;
+    } on ApiException catch (e) {
+      if (e.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  Future<void> deleteRecovery() => _delete('/api/v1/me/recovery');
+
+  /// Accounts the caller guards.
+  Future<List<Map<String, dynamic>>> listGuardedUsers() async {
+    final resp = await _get('/api/v1/me/recovery/guarded');
+    return ((resp['data'] as List?) ?? const [])
+        .map((e) => e as Map<String, dynamic>)
+        .toList();
+  }
+
+  /// Opens a recovery ceremony from a keyless device; guardians return
+  /// shares encrypted to [ephemeralPubkey].
+  Future<Map<String, dynamic>> startRecoveryRequest(
+    String ephemeralPubkey,
+  ) async {
+    final resp = await _post('/api/v1/me/recovery/requests', {
+      'ephemeral_pubkey': ephemeralPubkey,
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  /// Live ceremonies the caller can approve as a guardian.
+  Future<List<Map<String, dynamic>>> listGuardianRecoveryRequests() async {
+    final resp = await _get('/api/v1/me/recovery/requests/guardian');
+    return ((resp['data'] as List?) ?? const [])
+        .map((e) => e as Map<String, dynamic>)
+        .toList();
+  }
+
+  Future<void> submitRecoveryShare(
+    String requestId, {
+    required String encryptedShare,
+  }) async {
+    await _post('/api/v1/me/recovery/requests/$requestId/share', {
+      'encrypted_share': encryptedShare,
+    });
+  }
+
+  /// Ceremony progress + (for the owner) the blob and collected shares.
+  Future<Map<String, dynamic>> getRecoveryRequest(String requestId) async {
+    final resp = await _get('/api/v1/me/recovery/requests/$requestId');
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  Future<void> completeRecoveryRequest(
+    String requestId, {
+    required String status,
+  }) async {
+    await _post('/api/v1/me/recovery/requests/$requestId/complete', {
+      'status': status,
+    });
   }
 
   Future<Map<String, dynamic>> getBusinessProfile() async {
@@ -3064,6 +3174,7 @@ class ApiService {
         response.statusCode,
         error['code'] as String? ?? 'UNKNOWN',
         error['message'] as String? ?? 'Unknown error',
+        details: error,
       );
     }
     return body;

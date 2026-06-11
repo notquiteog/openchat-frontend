@@ -24,17 +24,42 @@ class EncryptedBackupService {
   }) : _storage = storage ?? SecureStorageService(),
        _privateState = privateState ?? LocalPrivateStateService();
 
+  /// The raw recovery bundle (also the payload social recovery encrypts under
+  /// its Shamir-split secret).
+  Future<Map<String, Object?>> buildRecoveryBundlePayload() async => {
+    'openchat_recovery_bundle': 1,
+    'created_at': DateTime.now().toUtc().toIso8601String(),
+    'secure_storage': await _storage.exportRecoverySecrets(),
+    'local_private_state': await _privateState.readState(),
+  };
+
+  /// Imports a decrypted recovery-bundle payload (the inverse of
+  /// [buildRecoveryBundlePayload]); shared by passphrase backups and social
+  /// recovery.
+  Future<void> importBundlePayload(dynamic payload) async {
+    if (payload is! Map || payload['openchat_recovery_bundle'] != 1) {
+      throw ArgumentError('Payload is not an OpenChat recovery bundle');
+    }
+    final secure = payload['secure_storage'];
+    if (secure is Map) {
+      await _storage.importRecoverySecrets(
+        secure.map((key, value) => MapEntry(key.toString(), value.toString())),
+      );
+    }
+    final privateState = payload['local_private_state'];
+    if (privateState is Map) {
+      await _privateState.writeState(
+        privateState.map((key, value) => MapEntry(key.toString(), value)),
+      );
+    }
+  }
+
   Future<String> exportBackup({required String passphrase}) async {
     final normalized = passphrase.trim();
     if (normalized.length < 12) {
       throw ArgumentError('Backup passphrase must be at least 12 characters');
     }
-    final payload = {
-      'openchat_recovery_bundle': 1,
-      'created_at': DateTime.now().toUtc().toIso8601String(),
-      'secure_storage': await _storage.exportRecoverySecrets(),
-      'local_private_state': await _privateState.readState(),
-    };
+    final payload = await buildRecoveryBundlePayload();
     final salt = _randomBytes(16);
     final key = await _deriveKey(normalized, salt, _defaultIterations);
     final box = await _cipher.encrypt(
@@ -87,22 +112,7 @@ class EncryptedBackupService {
       macLength: _cipher.macAlgorithm.macLength,
     );
     final clear = await _cipher.decrypt(box, secretKey: key);
-    final payload = jsonDecode(utf8.decode(clear));
-    if (payload is! Map || payload['openchat_recovery_bundle'] != 1) {
-      throw ArgumentError('Backup payload is not an OpenChat recovery bundle');
-    }
-    final secure = payload['secure_storage'];
-    if (secure is Map) {
-      await _storage.importRecoverySecrets(
-        secure.map((key, value) => MapEntry(key.toString(), value.toString())),
-      );
-    }
-    final privateState = payload['local_private_state'];
-    if (privateState is Map) {
-      await _privateState.writeState(
-        privateState.map((key, value) => MapEntry(key.toString(), value)),
-      );
-    }
+    await importBundlePayload(jsonDecode(utf8.decode(clear)));
   }
 
   /// Builds the encrypted bundle and stores it server-side as an opaque blob

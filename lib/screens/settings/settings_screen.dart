@@ -13,10 +13,12 @@ import 'package:local_auth/local_auth.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import '../../config/api_config.dart';
+import '../../crypto/pgp_service.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/key_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
+import '../../services/app_lock_state.dart';
 import '../../services/background_ws_service.dart';
 import '../../services/encrypted_backup_service.dart';
 import '../../services/local_private_state_service.dart';
@@ -49,6 +51,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _biometricAvailable = false;
   bool _biometricEnabled = false;
   bool _appLockEnabled = false;
+  bool _appPinConfigured = false;
+  bool _duressPinConfigured = false;
+  String _duressAction = 'decoy';
+  int _deadmanDays = 0;
   late final Future<PackageInfo> _packageInfoFuture;
 
   @override
@@ -63,11 +69,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final available = await _biometricsAvailable();
     final biometricEnabled = await storage.getBiometricEnabled();
     final appLockEnabled = await storage.getAppLockEnabled();
+    final appPinConfigured = await storage.hasAppLockPin();
+    final duressPinConfigured = await storage.hasDuressPin();
+    final duressAction = await storage.getDuressAction();
+    final deadmanDays = await storage.getDeadmanDays();
     if (mounted) {
       setState(() {
         _biometricAvailable = available;
         _biometricEnabled = biometricEnabled;
         _appLockEnabled = appLockEnabled;
+        _appPinConfigured = appPinConfigured;
+        _duressPinConfigured = duressPinConfigured;
+        _duressAction = duressAction;
+        _deadmanDays = deadmanDays;
       });
     }
   }
@@ -122,6 +136,262 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final storage = context.read<SecureStorageService>();
     await storage.setAppLockEnabled(value);
     if (mounted) setState(() => _appLockEnabled = value);
+  }
+
+  // ── App lock PIN + duress PIN + dead-man switch ───────────────────────────
+
+  /// Glass dialog with PIN + confirm fields (digits only, min 4). Returns the
+  /// PIN or null. [validate] runs after the local checks and returns an error
+  /// string to reject (e.g. a duress PIN colliding with the real PIN).
+  Future<String?> _promptNewPin({
+    required String title,
+    String? message,
+    Future<String?> Function(String pin)? validate,
+  }) async {
+    final pinCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    String? errorText;
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDlg) => GlassAlertDialog(
+            icon: const Icon(Icons.pin_outlined),
+            title: Text(title),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (message != null) ...[
+                  Text(message),
+                  const SizedBox(height: 12),
+                ],
+                TextField(
+                  controller: pinCtrl,
+                  obscureText: true,
+                  autofocus: true,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: InputDecoration(
+                    labelText: 'PIN (at least 4 digits)',
+                    errorText: errorText,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: confirmCtrl,
+                  obscureText: true,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: const InputDecoration(labelText: 'Confirm PIN'),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  final pin = pinCtrl.text.trim();
+                  if (pin.length < 4) {
+                    setDlg(() => errorText = 'Use at least 4 digits');
+                    return;
+                  }
+                  if (pin != confirmCtrl.text.trim()) {
+                    setDlg(() => errorText = 'PINs do not match');
+                    return;
+                  }
+                  final validationError = await validate?.call(pin);
+                  if (!ctx.mounted) return;
+                  if (validationError != null) {
+                    setDlg(() => errorText = validationError);
+                    return;
+                  }
+                  Navigator.pop(ctx, pin);
+                },
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } finally {
+      pinCtrl.dispose();
+      confirmCtrl.dispose();
+    }
+  }
+
+  Future<void> _setAppLockPinFlow({required String title}) async {
+    final storage = context.read<SecureStorageService>();
+    final pin = await _promptNewPin(title: title);
+    if (pin == null || !mounted) return;
+    await storage.setAppLockPin(pin);
+    appPinConfiguredListenable.value = true;
+    if (mounted) setState(() => _appPinConfigured = true);
+  }
+
+  Future<void> _manageAppLockPin() async {
+    if (!_appPinConfigured) {
+      await _setAppLockPinFlow(title: 'Set app lock PIN');
+      return;
+    }
+    String? choice;
+    await showGlassActionSheet<void>(
+      context: context,
+      title: 'App lock PIN',
+      actions: [
+        GlassActionSheetAction(
+          label: 'Change PIN',
+          onPressed: () => choice = 'change',
+        ),
+        GlassActionSheetAction(
+          label: 'Remove PIN',
+          style: GlassActionSheetStyle.destructive,
+          onPressed: () => choice = 'remove',
+        ),
+      ],
+    );
+    if (!mounted || choice == null) return;
+    if (choice == 'change') {
+      await _setAppLockPinFlow(title: 'Change app lock PIN');
+      return;
+    }
+    final storage = context.read<SecureStorageService>();
+    await storage.clearAppLockPin();
+    // A duress PIN without a real PIN to hide behind is meaningless (and the
+    // lock screen would treat any leftover code as the only unlock) — clear it.
+    await storage.clearDuressPin();
+    appPinConfiguredListenable.value = false;
+    if (mounted) {
+      setState(() {
+        _appPinConfigured = false;
+        _duressPinConfigured = false;
+      });
+    }
+  }
+
+  Future<void> _setDuressPinFlow() async {
+    final storage = context.read<SecureStorageService>();
+    final pin = await _promptNewPin(
+      title: _duressPinConfigured ? 'Change duress PIN' : 'Set duress PIN',
+      message:
+          'A second unlock code for coerced unlocks. It must differ from '
+          'your real PIN.',
+      validate: (pin) async =>
+          await storage.classifyAppLockPin(pin) == AppLockPinKind.real
+          ? 'This is your real PIN — choose a different one'
+          : null,
+    );
+    if (pin == null || !mounted) return;
+    await storage.setDuressPin(pin);
+    if (mounted) setState(() => _duressPinConfigured = true);
+  }
+
+  Future<void> _manageDuressPin() async {
+    if (!_duressPinConfigured) {
+      await _setDuressPinFlow();
+      return;
+    }
+    String? choice;
+    await showGlassActionSheet<void>(
+      context: context,
+      title: 'Duress PIN',
+      actions: [
+        GlassActionSheetAction(
+          label: 'Change duress PIN',
+          onPressed: () => choice = 'change',
+        ),
+        GlassActionSheetAction(
+          label: 'Remove duress PIN',
+          style: GlassActionSheetStyle.destructive,
+          onPressed: () => choice = 'remove',
+        ),
+      ],
+    );
+    if (!mounted || choice == null) return;
+    if (choice == 'change') {
+      await _setDuressPinFlow();
+      return;
+    }
+    await context.read<SecureStorageService>().clearDuressPin();
+    if (mounted) setState(() => _duressPinConfigured = false);
+  }
+
+  Future<void> _pickDuressAction() async {
+    String? choice;
+    await showGlassActionSheet<void>(
+      context: context,
+      title: 'Duress PIN action',
+      message: 'What happens when the duress PIN is entered.',
+      actions: [
+        GlassActionSheetAction(
+          icon: _duressAction == 'decoy'
+              ? const Icon(Icons.check_rounded)
+              : null,
+          label: 'Open decoy',
+          onPressed: () => choice = 'decoy',
+        ),
+        GlassActionSheetAction(
+          icon: _duressAction == 'wipe'
+              ? const Icon(Icons.check_rounded)
+              : null,
+          label: 'Wipe this device',
+          style: GlassActionSheetStyle.destructive,
+          onPressed: () => choice = 'wipe',
+        ),
+      ],
+    );
+    if (!mounted || choice == null || choice == _duressAction) return;
+    if (choice == 'wipe') {
+      var confirmed = false;
+      await GlassDialog.show<void>(
+        context: context,
+        title: 'Wipe on duress PIN?',
+        message:
+            'Entering this PIN under coercion silently destroys all local '
+            'data. Unrecoverable without your backup.',
+        actions: [
+          GlassDialogAction(
+            label: 'Cancel',
+            onPressed: () => Navigator.pop(context),
+          ),
+          GlassDialogAction(
+            label: 'Wipe device',
+            isDestructive: true,
+            onPressed: () {
+              confirmed = true;
+              Navigator.pop(context);
+            },
+          ),
+        ],
+      );
+      if (!confirmed || !mounted) return;
+    }
+    await context.read<SecureStorageService>().setDuressAction(choice!);
+    if (mounted) setState(() => _duressAction = choice!);
+  }
+
+  Future<void> _pickDeadmanDays() async {
+    int? choice;
+    await showGlassActionSheet<void>(
+      context: context,
+      title: 'Dead-man switch',
+      message:
+          'If the app sees no real unlock for this long, local data is '
+          'destroyed.',
+      actions: [
+        for (final days in const [0, 7, 14, 30, 90])
+          GlassActionSheetAction(
+            icon: _deadmanDays == days ? const Icon(Icons.check_rounded) : null,
+            label: days == 0 ? 'Off' : '$days days',
+            onPressed: () => choice = days,
+          ),
+      ],
+    );
+    if (!mounted || choice == null || choice == _deadmanDays) return;
+    await context.read<SecureStorageService>().setDeadmanDays(choice!);
+    if (mounted) setState(() => _deadmanDays = choice!);
   }
 
   Future<void> _setPushEnabled(bool value, SettingsProvider settings) async {
@@ -884,61 +1154,169 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _manageSessions() async {
     final api = context.read<ApiService>();
+    final storage = context.read<SecureStorageService>();
     final messenger = ScaffoldMessenger.of(context);
-    final sessions = await api.listSessions();
+    var sessions = await api.listSessions();
+    final currentSessionId = await storage.getSessionId();
     if (!mounted) return;
     await showDialog<void>(
       context: context,
-      builder: (ctx) => GlassAlertDialog(
-        title: const Text('Active sessions'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: sessions.isEmpty
-              ? const Text('No active sessions found')
-              : ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: sessions.length,
-                  itemBuilder: (_, i) {
-                    final session = sessions[i];
-                    return GlassListTile(
-                      leading: const Icon(CupertinoIcons.device_phone_portrait),
-                      title: Text(
-                        sessionDeviceDisplayLabel(session),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      subtitle: Text(
-                        session['last_seen_at'] as String? ?? '',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      trailing: GestureDetector(
-                        onTap: () async {
-                          await api.revokeSession(session['id'] as String);
-                          if (ctx.mounted) Navigator.pop(ctx);
-                          messenger.showSnackBar(
-                            const SnackBar(content: Text('Session revoked')),
-                          );
-                        },
-                        child: const Icon(
-                          CupertinoIcons.power,
-                          color: CupertinoColors.destructiveRed,
-                          size: 20,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => GlassAlertDialog(
+          title: const Text('Active sessions'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: sessions.isEmpty
+                ? const Text('No active sessions found')
+                : ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: sessions.length,
+                    itemBuilder: (_, i) {
+                      final session = sessions[i];
+                      final sessionId = session['id'] as String? ?? '';
+                      final isCurrent =
+                          currentSessionId != null &&
+                          sessionId == currentSessionId;
+                      return GlassListTile(
+                        leading: const Icon(
+                          CupertinoIcons.device_phone_portrait,
                         ),
-                      ),
-                      isLast: i == sessions.length - 1,
-                    );
-                  },
-                ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close'),
+                        title: Text(
+                          sessionDeviceDisplayLabel(session),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(
+                          session['last_seen_at'] as String? ?? '',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (!isCurrent) ...[
+                              GestureDetector(
+                                onTap: () async {
+                                  final wiped = await _wipeDeviceSession(
+                                    session,
+                                  );
+                                  if (!wiped) return;
+                                  final refreshed = await api.listSessions();
+                                  if (ctx.mounted) {
+                                    setDlg(() => sessions = refreshed);
+                                  }
+                                },
+                                child: const Icon(
+                                  Icons.phonelink_erase,
+                                  color: CupertinoColors.destructiveRed,
+                                  size: 20,
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                            ],
+                            GestureDetector(
+                              onTap: () async {
+                                await api.revokeSession(sessionId);
+                                if (ctx.mounted) Navigator.pop(ctx);
+                                messenger.showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Session revoked'),
+                                  ),
+                                );
+                              },
+                              child: const Icon(
+                                CupertinoIcons.power,
+                                color: CupertinoColors.destructiveRed,
+                                size: 20,
+                              ),
+                            ),
+                          ],
+                        ),
+                        isLast: i == sessions.length - 1,
+                      );
+                    },
+                  ),
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
       ),
     );
+  }
+
+  /// Confirms, signs, and sends a remote-wipe command for [session]. Returns
+  /// true once the command was accepted by the server. The signature binds
+  /// the session id and timestamp so the server can only relay — never forge.
+  Future<bool> _wipeDeviceSession(Map<String, dynamic> session) async {
+    final id = session['id'] as String? ?? '';
+    if (id.isEmpty) return false;
+    final api = context.read<ApiService>();
+    final storage = context.read<SecureStorageService>();
+    final messenger = ScaffoldMessenger.of(context);
+    var confirmed = false;
+    await GlassDialog.show<void>(
+      context: context,
+      title: 'Wipe device?',
+      message:
+          'This sends a signed self-destruct command to '
+          '"${sessionDeviceDisplayLabel(session)}". All OpenChat data on that '
+          'device — keys, messages, and settings — is destroyed as soon as it '
+          'receives the command. This cannot be undone.',
+      actions: [
+        GlassDialogAction(
+          label: 'Cancel',
+          onPressed: () => Navigator.pop(context),
+        ),
+        GlassDialogAction(
+          label: 'Wipe device',
+          isDestructive: true,
+          onPressed: () {
+            confirmed = true;
+            Navigator.pop(context);
+          },
+        ),
+      ],
+    );
+    if (!confirmed || !mounted) return false;
+    try {
+      final privateKey = await storage.getPrivateKey();
+      if (privateKey == null || privateKey.isEmpty) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No PGP private key on this device to sign the wipe command',
+            ),
+          ),
+        );
+        return false;
+      }
+      final issuedAt = DateTime.now().toUtc().toIso8601String();
+      final signature = await PgpService.sign(
+        data: PgpService.deviceWipeSignedData(
+          sessionId: id,
+          issuedAt: issuedAt,
+        ),
+        privateKeyArmored: privateKey,
+      );
+      final command = jsonEncode({
+        'openchat_device_wipe': 1,
+        'session_id': id,
+        'issued_at': issuedAt,
+        'signature': signature,
+      });
+      await api.wipeSession(id, command: command);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Wipe command sent')),
+      );
+      return true;
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Wipe failed: $e')));
+      return false;
+    }
   }
 
   Future<void> _manageBusinessProfile() async {
@@ -1807,12 +2185,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: 'Choose an exact inactivity period',
                   onTap: _manageAccountInactivityDeletion,
                 ),
-                _GlassDivider(),
-                _GlassTile(
-                  icon: Icons.devices_outlined,
-                  title: 'Active sessions',
-                  subtitle: 'Review and revoke signed-in devices',
-                  onTap: _manageSessions,
+                // Sessions are vault-only: a decoy session must not reveal —
+                // or be able to wipe/revoke — the account's other devices.
+                ValueListenableBuilder<VaultMode>(
+                  valueListenable: vaultModeListenable,
+                  builder: (context, vaultMode, _) =>
+                      vaultMode == VaultMode.real
+                      ? Column(
+                          children: [
+                            _GlassDivider(),
+                            _GlassTile(
+                              icon: Icons.devices_outlined,
+                              title: 'Active sessions',
+                              subtitle:
+                                  'Review, revoke, or wipe signed-in devices',
+                              onTap: _manageSessions,
+                            ),
+                          ],
+                        )
+                      : const SizedBox.shrink(),
                 ),
                 _GlassDivider(),
                 _GlassTile(
@@ -1846,6 +2237,83 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 8),
+          // ── PIN lock, duress PIN, dead-man switch ────────────────────────
+          // Vault-only: a decoy (duress-PIN) session must show nothing of
+          // this — its absence is what keeps the decoy indistinguishable
+          // from an account that never configured a vault.
+          ValueListenableBuilder<VaultMode>(
+            valueListenable: vaultModeListenable,
+            builder: (context, vaultMode, _) {
+              if (vaultMode != VaultMode.real) return const SizedBox.shrink();
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  GlassCard(
+                    padding: EdgeInsets.zero,
+                    child: Column(
+                      children: [
+                        _GlassTile(
+                          icon: Icons.pin_outlined,
+                          title: 'App lock PIN',
+                          subtitle: _appPinConfigured
+                              ? 'Set — change or remove the unlock PIN'
+                              : 'Set a PIN to unlock OpenChat',
+                          onTap: _manageAppLockPin,
+                        ),
+                        if (_appPinConfigured) ...[
+                          _GlassDivider(),
+                          _GlassTile(
+                            icon: Icons.theater_comedy_outlined,
+                            title: 'Duress PIN',
+                            subtitle: _duressPinConfigured
+                                ? 'Set — a second PIN for coerced unlocks'
+                                : 'A second PIN for coerced unlocks',
+                            onTap: _manageDuressPin,
+                          ),
+                          if (_duressPinConfigured) ...[
+                            _GlassDivider(),
+                            _GlassTile(
+                              icon: Icons.fork_right_rounded,
+                              title: 'Duress PIN action',
+                              subtitle: _duressAction == 'wipe'
+                                  ? 'Wipe this device'
+                                  : 'Open decoy',
+                              onTap: _pickDuressAction,
+                            ),
+                          ],
+                        ],
+                        _GlassDivider(),
+                        _GlassTile(
+                          icon: Icons.hourglass_bottom_outlined,
+                          title: 'Dead-man switch',
+                          subtitle:
+                              'If the app sees no real unlock for this long, '
+                              'local data is destroyed. Checked when the app '
+                              'opens — iOS cannot enforce this in the '
+                              'background.',
+                          trailing: GlassPicker(
+                            value: _deadmanDays == 0
+                                ? 'Off'
+                                : '$_deadmanDays days',
+                            width: 100,
+                            height: 38,
+                            textStyle: TextStyle(
+                              fontSize: 15,
+                              color: Theme.of(context).colorScheme.onSurface,
+                            ),
+                            onTap: _pickDeadmanDays,
+                          ),
+                          onTap: _pickDeadmanDays,
+                          isLast: true,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              );
+            },
+          ),
           GlassCard(
             padding: EdgeInsets.zero,
             child: _GlassSwitchTile(

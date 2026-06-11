@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
@@ -25,7 +26,9 @@ import 'screens/onboarding/privacy_onboarding_screen.dart';
 import 'screens/settings/pgp_keys_screen.dart';
 import 'services/api_service.dart';
 import 'services/app_access_gate.dart';
+import 'crypto/pgp_service.dart';
 import 'services/app_lock_state.dart';
+import 'services/local_wipe_service.dart';
 import 'services/background_ws_service.dart';
 import 'services/badge_service.dart';
 import 'services/desktop_startup_service.dart';
@@ -580,9 +583,18 @@ class _AppRootState extends State<_AppRoot> {
       // Cache the app-lock preference.
       final storage = context.read<SecureStorageService>();
       _appLockEnabled = await storage.getAppLockEnabled();
+      appPinConfiguredListenable.value = await storage.hasAppLockPin();
+      appPinUnlockHandler = _handleAppLockPin;
+      deviceWipeRequestHandler = _handleDeviceWipeCommand;
+      // Dead-man switch runs BEFORE any unlock: a device opened after the
+      // configured silence window wipes instead of presenting the lock.
+      await _checkDeadmanSwitch();
       final shouldLockOnLaunch = _appLockEnabled && await storage.isLoggedIn();
       if (mounted && shouldLockOnLaunch) {
         _setAppLocked(true);
+      } else if (await storage.isLoggedIn()) {
+        // No lock gate: opening the app is itself proof of presence.
+        unawaited(storage.recordRealUnlock());
       }
       _lifecycleListener = AppLifecycleListener(
         onHide: _onBackground,
@@ -912,6 +924,7 @@ class _AppRootState extends State<_AppRoot> {
     unawaited(BackgroundWsService.updateForegroundState(true));
     context.read<CallProvider>().refreshActiveCallNotification();
     _surfaceDueReminders();
+    unawaited(_checkDeadmanSwitch());
     if (context.read<AuthProvider>().state == AuthState.authenticated) {
       unawaited(context.read<ChatProvider>().connectWebSocket());
       unawaited(context.read<ChatProvider>().refreshConversationsSilently());
@@ -944,17 +957,122 @@ class _AppRootState extends State<_AppRoot> {
     try {
       final ok = await auth.authenticate(localizedReason: 'Unlock OpenChat');
       if (ok && mounted) {
-        _setAppLocked(false);
-        _drainPendingInviteLink();
-        _drainPendingContactLink();
-        _drainPendingPushConversation();
-        _drainPendingShare();
+        _completeRealUnlock();
       }
     } catch (_) {
       // If biometrics fail (e.g. no enrolled biometrics), stay locked but
-      // allow the user to try again via the lock-screen button.
+      // allow the user to try again via the lock-screen button or PIN.
     } finally {
       _promptingAppUnlock = false;
+    }
+  }
+
+  /// Shared tail of every REAL unlock (biometric or real PIN): the session
+  /// shows the real vault, the dead-man clock resets, queued intents drain.
+  void _completeRealUnlock() {
+    vaultModeListenable.value = VaultMode.real;
+    unawaited(context.read<SecureStorageService>().recordRealUnlock());
+    _setAppLocked(false);
+    _drainPendingInviteLink();
+    _drainPendingContactLink();
+    _drainPendingPushConversation();
+    _drainPendingShare();
+  }
+
+  /// PIN entry from the root lock screen. Returns false only for a WRONG pin —
+  /// the duress code reports success and is indistinguishable from the real
+  /// one to anyone watching the screen.
+  Future<bool> _handleAppLockPin(String pin) async {
+    final storage = context.read<SecureStorageService>();
+    switch (await storage.classifyAppLockPin(pin)) {
+      case AppLockPinKind.real:
+        if (mounted) _completeRealUnlock();
+        return true;
+      case AppLockPinKind.duress:
+        final action = await storage.getDuressAction();
+        if (action == 'wipe') {
+          // Silent: destroy local data, then land on the fresh-install
+          // landing screen as if the unlock simply succeeded into a clean app.
+          await _runLocalWipe();
+          return true;
+        }
+        if (mounted) {
+          vaultModeListenable.value = VaultMode.decoy;
+          // Deliberately NOT recording a real unlock: a coerced decoy session
+          // must not reset the dead-man clock.
+          _setAppLocked(false);
+        }
+        return true;
+      case AppLockPinKind.invalid:
+        return false;
+    }
+  }
+
+  /// Wipe local data when the app hasn't seen a real unlock for the
+  /// configured number of days. Runs at launch and on every foreground,
+  /// BEFORE the lock screen can be answered — a seized device opened past the
+  /// window destroys its keys without offering an unlock at all.
+  Future<void> _checkDeadmanSwitch() async {
+    final storage = context.read<SecureStorageService>();
+    final days = await storage.getDeadmanDays();
+    if (days <= 0 || !await storage.isLoggedIn()) return;
+    final last = await storage.getLastRealUnlockAt();
+    if (last == null) {
+      // Switch just armed: start the clock now instead of wiping instantly.
+      await storage.recordRealUnlock();
+      return;
+    }
+    if (DateTime.now().toUtc().difference(last) > Duration(days: days)) {
+      await _runLocalWipe();
+    }
+  }
+
+  /// Verifies and executes a remote device-wipe command. The signature must
+  /// validate against OUR OWN stored account public key and the target must
+  /// be THIS session — a malicious server cannot forge either.
+  Future<void> _handleDeviceWipeCommand(Map<String, dynamic> payload) async {
+    try {
+      final storage = context.read<SecureStorageService>();
+      final mySessionId = await storage.getSessionId();
+      final commandRaw = payload['command']?.toString() ?? '';
+      if (mySessionId == null || mySessionId.isEmpty || commandRaw.isEmpty) {
+        return;
+      }
+      final decoded = jsonDecode(commandRaw);
+      if (decoded is! Map || decoded['openchat_device_wipe'] != 1) return;
+      final target = decoded['session_id']?.toString() ?? '';
+      final issuedAt = decoded['issued_at']?.toString() ?? '';
+      final signature = decoded['signature']?.toString() ?? '';
+      if (target.toLowerCase() != mySessionId.toLowerCase() ||
+          signature.isEmpty) {
+        return;
+      }
+      final publicKey = await storage.getPublicKey() ?? '';
+      if (publicKey.isEmpty) return;
+      final ok = await PgpService.verify(
+        data: PgpService.deviceWipeSignedData(
+          sessionId: target,
+          issuedAt: issuedAt,
+        ),
+        signatureArmor: signature,
+        signerPublicKeyArmored: publicKey,
+      );
+      if (!ok) return;
+      await _runLocalWipe();
+    } catch (_) {
+      // Malformed command: ignore. Never wipe on anything unverified.
+    }
+  }
+
+  Future<void> _runLocalWipe() async {
+    final storage = context.read<SecureStorageService>();
+    final auth = context.read<AuthProvider>();
+    await LocalWipeService(storage).wipeEverything();
+    vaultModeListenable.value = VaultMode.real;
+    appPinConfiguredListenable.value = false;
+    if (mounted) {
+      _setAppLocked(false);
+      await auth.logout();
     }
   }
 
@@ -1399,9 +1517,43 @@ class _HomeShellState extends State<_HomeShell> {
   }
 }
 
-class _AppLockScreen extends StatelessWidget {
+class _AppLockScreen extends StatefulWidget {
   final VoidCallback onUnlock;
   const _AppLockScreen({required this.onUnlock});
+
+  @override
+  State<_AppLockScreen> createState() => _AppLockScreenState();
+}
+
+class _AppLockScreenState extends State<_AppLockScreen> {
+  final _pinController = TextEditingController();
+  bool _pinError = false;
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _pinController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submitPin() async {
+    final pin = _pinController.text;
+    if (pin.isEmpty || _submitting) return;
+    setState(() {
+      _submitting = true;
+      _pinError = false;
+    });
+    final handler = appPinUnlockHandler;
+    final ok = handler != null && await handler(pin);
+    if (!mounted) return;
+    setState(() {
+      _submitting = false;
+      // A duress PIN reports success too — the screen must never reveal that
+      // a second code exists, let alone which one was typed.
+      _pinError = !ok;
+      if (!ok) _pinController.clear();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1461,10 +1613,47 @@ class _AppLockScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 32),
+                    ValueListenableBuilder<bool>(
+                      valueListenable: appPinConfiguredListenable,
+                      builder: (context, pinConfigured, _) {
+                        if (!pinConfigured) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 16),
+                          child: TextField(
+                            key: const Key('app-lock-pin-field'),
+                            controller: _pinController,
+                            obscureText: true,
+                            autocorrect: false,
+                            enableSuggestions: false,
+                            keyboardType: TextInputType.number,
+                            textInputAction: TextInputAction.done,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              letterSpacing: 8,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            decoration: InputDecoration(
+                              hintText: 'PIN',
+                              errorText: _pinError ? 'Incorrect PIN' : null,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(18),
+                              ),
+                              suffixIcon: IconButton(
+                                icon: const Icon(
+                                  Icons.arrow_forward_rounded,
+                                ),
+                                onPressed: _submitting ? null : _submitPin,
+                              ),
+                            ),
+                            onSubmitted: (_) => _submitPin(),
+                          ),
+                        );
+                      },
+                    ),
                     SizedBox(
                       width: double.infinity,
                       child: GlassButtonWidget.icon(
-                        onPressed: onUnlock,
+                        onPressed: widget.onUnlock,
                         icon: const Icon(Icons.fingerprint_rounded, size: 20),
                         label: const Text('Unlock'),
                         padding: const EdgeInsets.symmetric(

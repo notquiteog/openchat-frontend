@@ -8,6 +8,7 @@ import '../../config/api_config.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
 import '../../widgets/glass.dart';
+import 'custom_emoji_discover_screen.dart';
 
 const _customEmojiPackNameMax = 128;
 const _customEmojiPackDescriptionMax = 2048;
@@ -121,6 +122,16 @@ class _CustomEmojiPackScreenState extends State<CustomEmojiPackScreen> {
       appBar: GlassAppBar(
         title: const Text('Custom Emoji Packs'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.search_rounded),
+            tooltip: 'Discover packs',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => const CustomEmojiDiscoverScreen(),
+              ),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.add_reaction_outlined),
             tooltip: 'New pack',
@@ -608,6 +619,35 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                     ),
                   ),
                 ),
+                if (isOwner)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: GlassListTile(
+                      leading: const Icon(Icons.search_rounded),
+                      title: const Text('Show in search'),
+                      subtitle: const Text(
+                        'Let anyone discover and add this pack',
+                      ),
+                      trailing: GlassSwitch(
+                        value: _pack['is_discoverable'] == true,
+                        onChanged: (v) async {
+                          final api = context.read<ApiService>();
+                          final messenger = ScaffoldMessenger.of(context);
+                          try {
+                            await api.updateCustomEmojiPack(
+                              _pack['id'] as String,
+                              isDiscoverable: v,
+                            );
+                            await _reload();
+                          } catch (e) {
+                            messenger.showSnackBar(
+                              SnackBar(content: Text('Failed: $e')),
+                            );
+                          }
+                        },
+                      ),
+                    ),
+                  ),
                 Expanded(
                   child: emojis.isEmpty
                       ? Center(

@@ -219,6 +219,7 @@ class SettingsProvider extends ChangeNotifier {
   final Set<String> _pinnedConversationIds = {};
   final Set<String> _closeFriendIds = {};
   final Set<String> _archivedConversationIds = {};
+  final Set<String> _hiddenConversationIds = {};
   final List<ChatFolder> _chatFolders = [];
   final List<BroadcastList> _broadcastLists = [];
   final Map<String, ContactBundle> _privateContacts = {};
@@ -249,6 +250,8 @@ class SettingsProvider extends ChangeNotifier {
   Set<String> get closeFriendIds => Set.unmodifiable(_closeFriendIds);
   Set<String> get archivedConversationIds =>
       Set.unmodifiable(_archivedConversationIds);
+  Set<String> get hiddenConversationIds =>
+      Set.unmodifiable(_hiddenConversationIds);
   List<ChatFolder> get chatFolders => List.unmodifiable(_chatFolders);
   List<BroadcastList> get broadcastLists => List.unmodifiable(_broadcastLists);
   Map<String, ContactBundle> get privateContacts =>
@@ -375,6 +378,13 @@ class SettingsProvider extends ChangeNotifier {
       ..addAll(
         _stringListFromPrivateState(
           privateState[privateStateArchivedConversationsKey],
+        ),
+      );
+    _hiddenConversationIds
+      ..clear()
+      ..addAll(
+        _stringListFromPrivateState(
+          privateState[privateStateHiddenConversationsKey],
         ),
       );
     _conversationNotificationPreferences
@@ -515,6 +525,21 @@ class SettingsProvider extends ChangeNotifier {
 
   Future<void> toggleConversationPinned(String convID) {
     return setConversationPinned(convID, !isConversationPinned(convID));
+  }
+
+  bool isConversationHidden(String convID) =>
+      _hiddenConversationIds.contains(convID);
+
+  /// Marks a conversation as vault-hidden: invisible in decoy (duress-PIN)
+  /// sessions — list, search, badges, notifications. Stored only inside the
+  /// encrypted local private state.
+  Future<void> setConversationHidden(String convID, bool hidden) async {
+    final changed = hidden
+        ? _hiddenConversationIds.add(convID)
+        : _hiddenConversationIds.remove(convID);
+    if (!changed) return;
+    notifyListeners();
+    await _persistPrivateLocalState();
   }
 
   bool isConversationArchived(String convID) =>
@@ -903,6 +928,9 @@ class SettingsProvider extends ChangeNotifier {
       privateStateCloseFriendsKey: _sortedStringList(_closeFriendIds),
       privateStateArchivedConversationsKey: _sortedStringList(
         _archivedConversationIds,
+      ),
+      privateStateHiddenConversationsKey: _sortedStringList(
+        _hiddenConversationIds,
       ),
       privateStateUnreadMentionMessageIdsKey: _encodePrivateStringMap(
         _unreadMentionMessageIds,

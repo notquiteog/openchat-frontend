@@ -1,28 +1,16 @@
-import 'dart:io';
-
-import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
-
-/// On-device subject segmentation (background removal) for the sticker creator.
+/// On-device "local AI" subject segmentation (background removal) for the
+/// sticker creator.
 ///
-/// Calls the native `openchat/segmentation` channel — Android ML Kit Subject
-/// Segmentation / iOS Vision `VNGenerateForegroundInstanceMaskRequest`. Returns
-/// foreground-only PNG bytes, or null when the platform can't segment (caller
-/// falls back to the original image; a manual eraser is the other fallback).
-class SegmentationService {
-  static const MethodChannel _channel = MethodChannel('openchat/segmentation');
+/// Implemented as pure-Dart ONNX inference (u2netp through ONNX Runtime FFI)
+/// so it works identically on Android/iOS/Linux/macOS/Windows — see
+/// segmentation_service_native.dart. The model is downloaded on first use
+/// (~4.7 MB, progress on [SegmentationService.downloadProgress]); web gets a
+/// graceful "unsupported" stub because ORT needs dart:ffi.
+///
+/// The pure preprocess/postprocess pipeline (and [SegmentationException]) is
+/// re-exported from segmentation_pipeline.dart.
+library;
 
-  static bool get isSupported =>
-      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
-
-  static Future<Uint8List?> removeBackground(Uint8List image) async {
-    if (!isSupported) return null;
-    try {
-      return await _channel.invokeMethod<Uint8List>('removeBackground', {
-        'image': image,
-      });
-    } catch (_) {
-      return null;
-    }
-  }
-}
+export 'segmentation_pipeline.dart';
+export 'segmentation_service_unsupported.dart'
+    if (dart.library.io) 'segmentation_service_native.dart';

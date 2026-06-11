@@ -118,7 +118,12 @@ class MessageBubble extends StatelessWidget {
     }
     final dice = message.dice;
     if (dice != null) {
-      return _DiceBubble(dice: dice, isMe: isMe);
+      return _DiceBubble(
+        dice: dice,
+        isMe: isMe,
+        messageId: message.id,
+        createdAt: message.createdAt,
+      );
     }
 
     final gameRoundId = message.gameRoundId;
@@ -609,7 +614,14 @@ class _ScreenshotNoticeChip extends StatelessWidget {
 class _DiceBubble extends StatefulWidget {
   final DiceContent dice;
   final bool isMe;
-  const _DiceBubble({required this.dice, required this.isMe});
+  final String messageId;
+  final DateTime createdAt;
+  const _DiceBubble({
+    required this.dice,
+    required this.isMe,
+    required this.messageId,
+    required this.createdAt,
+  });
 
   @override
   State<_DiceBubble> createState() => _DiceBubbleState();
@@ -617,15 +629,50 @@ class _DiceBubble extends StatefulWidget {
 
 class _DiceBubbleState extends State<_DiceBubble>
     with SingleTickerProviderStateMixin {
+  /// Die-face glyphs for a visual tumble that LANDS on the server value.
+  static const _dieFaces = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+
+  /// Rolls animate once per message per app run: a fresh roll tumbles, a
+  /// scrollback remount (or any list rebuild) renders the settled result.
+  static final Set<String> _rolledOnce = <String>{};
+
+  late final bool _animate =
+      !_rolledOnce.contains(widget.messageId) &&
+      DateTime.now().difference(widget.createdAt).abs() <
+          const Duration(minutes: 2);
+
   late final AnimationController _ctrl = AnimationController(
-    duration: const Duration(milliseconds: 900),
+    duration: const Duration(milliseconds: 1600),
     vsync: this,
-  )..forward();
+  );
+
+  bool get _isDie => widget.dice.emoji == '🎲' && widget.dice.max == 6;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_animate) {
+      _rolledOnce.add(widget.messageId);
+      _ctrl.forward();
+    } else {
+      _ctrl.value = 1.0;
+    }
+  }
 
   @override
   void dispose() {
     _ctrl.dispose();
     super.dispose();
+  }
+
+  /// The face shown at progress [t]: a deterministic pseudo-random tumble
+  /// (seeded by the message id, swap cadence slowing as t grows) that ends on
+  /// the server-decided value. Pure function of t — no setState per frame.
+  int _faceForProgress(double t) {
+    if (t >= 1.0) return widget.dice.value;
+    final step = (math.pow(t, 0.7) * 14).floor();
+    final hash = (widget.messageId.hashCode ^ (step * 2654435761)) & 0x7fffffff;
+    return 1 + hash % 6;
   }
 
   @override
@@ -640,35 +687,50 @@ class _DiceBubbleState extends State<_DiceBubble>
           color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
           borderRadius: BorderRadius.circular(18),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AnimatedBuilder(
-              animation: _ctrl,
-              builder: (context, _) {
-                // While rolling, jiggle scale; the emoji stays (server result).
-                final rolling = _ctrl.value < 1.0;
-                final scale = rolling
-                    ? 1.0 + 0.15 * (0.5 - (_ctrl.value % 0.25) * 4).abs()
-                    : 1.0;
-                return Transform.scale(
-                  scale: scale,
-                  child: Text(
-                    widget.dice.emoji,
-                    style: const TextStyle(fontSize: 44),
+        child: AnimatedBuilder(
+          animation: _ctrl,
+          builder: (context, _) {
+            final t = _ctrl.value;
+            final rolling = t < 1.0;
+            // Wobble + spin fade out as the die settles; a slight overshoot
+            // pop lands the result.
+            final wobble = rolling ? math.sin(t * math.pi * 10) * 0.35 * (1 - t) : 0.0;
+            final settlePop = rolling
+                ? 1.0 + 0.18 * (1 - t)
+                : 1.0;
+            final glyph = _isDie
+                ? _dieFaces[(_faceForProgress(t) - 1).clamp(0, 5)]
+                : widget.dice.emoji;
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Transform.rotate(
+                  angle: wobble,
+                  child: Transform.scale(
+                    scale: settlePop,
+                    child: Text(
+                      glyph,
+                      style: TextStyle(
+                        fontSize: _isDie ? 56 : 44,
+                        color: _isDie ? scheme.onSurface : null,
+                        height: 1.1,
+                      ),
+                    ),
                   ),
-                );
-              },
-            ),
-            const SizedBox(height: 4),
-            Text(
-              widget.dice.label,
-              style: TextStyle(
-                fontWeight: FontWeight.w800,
-                color: scheme.onSurface.withValues(alpha: 0.85),
-              ),
-            ),
-          ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  rolling ? 'Rolling…' : widget.dice.label,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: scheme.onSurface.withValues(
+                      alpha: rolling ? 0.55 : 0.85,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -2632,6 +2694,7 @@ class _InlineCustomEmoji extends StatefulWidget {
 
 class _InlineCustomEmojiState extends State<_InlineCustomEmoji> {
   String? _fileUrl;
+  String? _packId;
   bool _loading = false;
 
   @override
@@ -2649,6 +2712,7 @@ class _InlineCustomEmojiState extends State<_InlineCustomEmoji> {
     if (oldWidget.entity.customEmojiId != widget.entity.customEmojiId ||
         oldWidget.entity.fileUrl != widget.entity.fileUrl) {
       _fileUrl = widget.entity.fileUrl;
+      _packId = null;
       if (_fileUrl == null || _fileUrl!.isEmpty) {
         _load();
       }
@@ -2663,7 +2727,10 @@ class _InlineCustomEmojiState extends State<_InlineCustomEmoji> {
         widget.entity.customEmojiId,
       );
       if (!mounted) return;
-      setState(() => _fileUrl = data['file_url'] as String?);
+      setState(() {
+        _fileUrl = data['file_url'] as String?;
+        _packId = data['pack_id'] as String?;
+      });
     } catch (_) {
       if (mounted) setState(() => _fileUrl = null);
     } finally {
@@ -2671,22 +2738,58 @@ class _InlineCustomEmojiState extends State<_InlineCustomEmoji> {
     }
   }
 
+  /// Tap-to-add: resolve the emoji's pack and offer it as a library add,
+  /// mirroring the sticker bubble's pack sheet. Works regardless of the
+  /// pack's discoverability — the fetch endpoints don't gate (by design).
+  Future<void> _onTap() async {
+    if (widget.entity.customEmojiId.isEmpty) return;
+    final api = context.read<ApiService>();
+    var packId = _packId;
+    if (packId == null) {
+      try {
+        final data = await api.getCustomEmoji(widget.entity.customEmojiId);
+        packId = data['pack_id'] as String?;
+        _packId = packId;
+      } catch (_) {
+        return;
+      }
+    }
+    if (packId == null || !mounted) return;
+    final id = packId;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _CustomEmojiPackSheet(packID: id, api: api),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final fileUrl = _fileUrl;
+    final Widget child;
     if (fileUrl == null || fileUrl.isEmpty) {
-      return Text(widget.entity.emoji, style: const TextStyle(fontSize: 20));
+      child = Text(widget.entity.emoji, style: const TextStyle(fontSize: 20));
+    } else {
+      child = Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 1),
+        child: CachedNetworkImage(
+          imageUrl: ApiConfig.resolveMedia(fileUrl),
+          width: 22,
+          height: 22,
+          fit: BoxFit.contain,
+          errorWidget: (_, _, _) =>
+              Text(widget.entity.emoji, style: const TextStyle(fontSize: 20)),
+        ),
+      );
     }
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 1),
-      child: CachedNetworkImage(
-        imageUrl: ApiConfig.resolveMedia(fileUrl),
-        width: 22,
-        height: 22,
-        fit: BoxFit.contain,
-        errorWidget: (_, _, _) =>
-            Text(widget.entity.emoji, style: const TextStyle(fontSize: 20)),
-      ),
+    // GestureDetector is layout-transparent: the WidgetSpan keeps exactly the
+    // dimensions the manual TextPainter in _CollapsibleText supplies via
+    // setPlaceholderDimensions, so overflow measurement stays correct.
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _onTap,
+      child: child,
     );
   }
 }
@@ -5411,6 +5514,181 @@ class _StickerPackSheetState extends State<_StickerPackSheet> {
                                 )
                               : const Center(
                                   child: Icon(Icons.broken_image_outlined),
+                                ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Bottom sheet shown when an inline custom emoji is tapped: previews the
+/// emoji's pack and offers a one-tap library add. Mirrors _StickerPackSheet.
+class _CustomEmojiPackSheet extends StatefulWidget {
+  final String packID;
+  final ApiService api;
+  const _CustomEmojiPackSheet({required this.packID, required this.api});
+
+  @override
+  State<_CustomEmojiPackSheet> createState() => _CustomEmojiPackSheetState();
+}
+
+class _CustomEmojiPackSheetState extends State<_CustomEmojiPackSheet> {
+  Map<String, dynamic>? _pack;
+  bool _loading = true;
+  bool _adding = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final pack = await widget.api.getCustomEmojiPack(widget.packID);
+      if (mounted) {
+        setState(() {
+          _pack = pack;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _addToLibrary() async {
+    setState(() => _adding = true);
+    try {
+      await widget.api.addCustomEmojiPackToLibrary(widget.packID);
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Emoji pack added to your library')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _adding = false);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to add pack: $e')));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final emojis = (_pack?['custom_emojis'] as List? ?? [])
+        .cast<Map<String, dynamic>>();
+    final coverUrl = _pack?['cover_url'] as String?;
+
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.55,
+      minChildSize: 0.35,
+      maxChildSize: 0.85,
+      builder: (_, controller) => GlassSurface(
+        blur: 56,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Row(
+                children: [
+                  if (coverUrl != null) ...[
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: CachedNetworkImage(
+                        imageUrl: ApiConfig.resolveMedia(coverUrl),
+                        width: 40,
+                        height: 40,
+                        fit: BoxFit.cover,
+                        errorWidget: (_, _, _) => const SizedBox.shrink(),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _pack?['name'] as String? ?? 'Emoji Pack',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                          ),
+                        ),
+                        if (_pack?['description'] != null)
+                          Text(
+                            _pack!['description'] as String,
+                            style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: 13,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
+                    ),
+                  ),
+                  GlassButtonWidget.icon(
+                    onPressed: _adding ? null : _addToLibrary,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    icon: _adding
+                        ? const GlassProgressIndicator.circular(
+                            size: 16,
+                            strokeWidth: 2,
+                          )
+                        : const Icon(Icons.add, size: 18),
+                    label: const Text('Add to library'),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: _loading
+                  ? const Center(child: GlassProgressIndicator.circular())
+                  : emojis.isEmpty
+                  ? const Center(child: Text('No custom emoji in this pack'))
+                  : GridView.builder(
+                      controller: controller,
+                      padding: const EdgeInsets.all(8),
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 5,
+                            crossAxisSpacing: 6,
+                            mainAxisSpacing: 6,
+                          ),
+                      itemCount: emojis.length,
+                      itemBuilder: (_, i) {
+                        final em = emojis[i];
+                        final url = em['file_url'] as String?;
+                        return ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: url != null && url.isNotEmpty
+                              ? CachedNetworkImage(
+                                  imageUrl: ApiConfig.resolveMedia(url),
+                                  fit: BoxFit.contain,
+                                  errorWidget: (_, _, _) => Center(
+                                    child: Text(
+                                      em['emoji'] as String? ?? '🙂',
+                                    ),
+                                  ),
+                                )
+                              : Center(
+                                  child: Text(em['emoji'] as String? ?? '🙂'),
                                 ),
                         );
                       },

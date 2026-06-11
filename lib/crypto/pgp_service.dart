@@ -466,6 +466,15 @@ class PgpService {
     return 'openchat-pgp-sender-v1:$conversationId:$messageType:$encodedPayload';
   }
 
+  /// Canonical string signed by the account key to authorize a remote wipe of
+  /// one session. The target device verifies it against its OWN stored public
+  /// key — the server merely relays and can never forge a wipe.
+  static String deviceWipeSignedData({
+    required String sessionId,
+    required String issuedAt,
+  }) =>
+      'openchat-device-wipe:v1:${sessionId.trim().toLowerCase()}:${issuedAt.trim()}';
+
   static String deviceKeySignatureData({
     required String userId,
     required String deviceKey,

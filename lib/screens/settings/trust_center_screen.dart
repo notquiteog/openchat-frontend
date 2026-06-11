@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:local_auth/local_auth.dart';
 import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
 
+import '../../crypto/pgp_service.dart';
 import '../../models/conversation.dart';
 import '../../models/key_transparency_event.dart';
 import '../../models/key_trust_pin.dart';
@@ -15,6 +17,7 @@ import '../../providers/chat_provider.dart';
 import '../../providers/key_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
+import '../../services/app_lock_state.dart';
 import '../../services/mls_service.dart';
 import '../../services/secure_storage_service.dart';
 import '../../services/security_service.dart';
@@ -44,6 +47,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
   bool _loading = true;
   Map<String, dynamic> _security = const {};
   List<Map<String, dynamic>> _sessions = const [];
+  String? _currentSessionId;
   Map<String, KeyTrustPin> _keyPins = const {};
   List<KeyTransparencyEvent> _keyEvents = const [];
   MlsSignerStorage? _mlsSigner;
@@ -77,6 +81,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
       final keyPins = await storage.getKeyTrustPins();
       final forceTurn = await storage.getForceTurn();
       final screenSecurity = await storage.getScreenSecurity();
+      final currentSessionId = await storage.getSessionId();
       var keyEvents = <KeyTransparencyEvent>[];
       MlsSignerStorage? mlsSigner;
       if (user != null) {
@@ -96,6 +101,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
         _screenSecurity = screenSecurity;
         _security = results[2] as Map<String, dynamic>;
         _sessions = results[3] as List<Map<String, dynamic>>;
+        _currentSessionId = currentSessionId;
         _keyPins = keyPins;
         _keyEvents = keyEvents;
         _mlsSigner = mlsSigner;
@@ -259,6 +265,76 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
       messenger.showSnackBar(const SnackBar(content: Text('Session revoked')));
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+    }
+  }
+
+  /// Confirms, signs, and sends a remote-wipe command for [session]. The
+  /// signature binds the session id and timestamp so the server can only
+  /// relay the command — never forge one.
+  Future<void> _wipeDeviceSession(Map<String, dynamic> session) async {
+    final id = session['id'] as String?;
+    if (id == null || id.isEmpty) return;
+    final api = context.read<ApiService>();
+    final storage = context.read<SecureStorageService>();
+    final messenger = ScaffoldMessenger.of(context);
+    var confirmed = false;
+    await GlassDialog.show<void>(
+      context: context,
+      title: 'Wipe device?',
+      message:
+          'This sends a signed self-destruct command to '
+          '"${sessionDeviceDisplayLabel(session)}". All OpenChat data on that '
+          'device — keys, messages, and settings — is destroyed as soon as it '
+          'receives the command. This cannot be undone.',
+      actions: [
+        GlassDialogAction(
+          label: 'Cancel',
+          onPressed: () => Navigator.pop(context),
+        ),
+        GlassDialogAction(
+          label: 'Wipe device',
+          isDestructive: true,
+          onPressed: () {
+            confirmed = true;
+            Navigator.pop(context);
+          },
+        ),
+      ],
+    );
+    if (!confirmed || !mounted) return;
+    try {
+      final privateKey = await storage.getPrivateKey();
+      if (privateKey == null || privateKey.isEmpty) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No PGP private key on this device to sign the wipe command',
+            ),
+          ),
+        );
+        return;
+      }
+      final issuedAt = DateTime.now().toUtc().toIso8601String();
+      final signature = await PgpService.sign(
+        data: PgpService.deviceWipeSignedData(
+          sessionId: id,
+          issuedAt: issuedAt,
+        ),
+        privateKeyArmored: privateKey,
+      );
+      final command = jsonEncode({
+        'openchat_device_wipe': 1,
+        'session_id': id,
+        'issued_at': issuedAt,
+        'signature': signature,
+      });
+      await api.wipeSession(id, command: command);
+      await _load();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Wipe command sent')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Wipe failed: $e')));
     }
   }
 
@@ -788,21 +864,52 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                           : null,
                       isLast: true,
                     )
-                  : Column(
-                      children: [
-                        for (var index = 0; index < _sessions.length; index++)
-                          _TrustRow(
-                            icon: Icons.devices_outlined,
-                            title: sessionDeviceDisplayLabel(_sessions[index]),
-                            subtitle: _sessionSubtitle(_sessions[index]),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.logout_outlined),
-                              tooltip: 'Revoke session',
-                              onPressed: () => _revokeSession(_sessions[index]),
+                  : ValueListenableBuilder<VaultMode>(
+                      // Wipe is vault-only: a coerced decoy session must not
+                      // be able to send signed wipe commands to the account's
+                      // other devices.
+                      valueListenable: vaultModeListenable,
+                      builder: (context, vaultMode, _) => Column(
+                        children: [
+                          for (
+                            var index = 0;
+                            index < _sessions.length;
+                            index++
+                          )
+                            _TrustRow(
+                              icon: Icons.devices_outlined,
+                              title: sessionDeviceDisplayLabel(
+                                _sessions[index],
+                              ),
+                              subtitle: _sessionSubtitle(_sessions[index]),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (vaultMode == VaultMode.real &&
+                                      !(_currentSessionId != null &&
+                                          _sessions[index]['id'] ==
+                                              _currentSessionId))
+                                    IconButton(
+                                      icon: Icon(
+                                        Icons.phonelink_erase,
+                                        color: scheme.error,
+                                      ),
+                                      tooltip: 'Wipe device',
+                                      onPressed: () =>
+                                          _wipeDeviceSession(_sessions[index]),
+                                    ),
+                                  IconButton(
+                                    icon: const Icon(Icons.logout_outlined),
+                                    tooltip: 'Revoke session',
+                                    onPressed: () =>
+                                        _revokeSession(_sessions[index]),
+                                  ),
+                                ],
+                              ),
+                              isLast: index == _sessions.length - 1,
                             ),
-                            isLast: index == _sessions.length - 1,
-                          ),
-                      ],
+                        ],
+                      ),
                     ),
             ),
             const SizedBox(height: 20),
