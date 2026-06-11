@@ -20,9 +20,11 @@ import '../services/message_search_service.dart';
 import '../services/message_cache_service.dart';
 import '../services/mls_service.dart';
 import '../services/notification_service.dart';
+import '../services/mesh/mesh_outbox_drain.dart';
 import '../services/offline_outbox_service.dart';
 import '../services/push_notification_service.dart';
 import '../services/app_lock_state.dart';
+import '../services/kt_audit_service.dart';
 import '../services/secure_storage_service.dart';
 import '../services/social_recovery_service.dart';
 import '../services/websocket_service.dart';
@@ -479,6 +481,9 @@ class ChatProvider extends ChangeNotifier {
     // never matched (the join button never became "Ready up"), own messages
     // triggered notifications, mentions misattributed.
     await _hydrateSelfIdentity();
+    // Audit the key-transparency log (throttled internally): pin/verify the
+    // latest signed tree head and check append-only consistency.
+    unawaited(KtAuditService(storage: _storage).syncSth(_api));
     if (!silent) {
       _isLoading = true;
       notifyListeners();
@@ -631,6 +636,121 @@ class ChatProvider extends ChangeNotifier {
   }
 
   @visibleForTesting
+  void debugSeedMessages(String convID, List<Message> messages) {
+    _messages[convID] = List.of(messages);
+  }
+
+  // ── On-device intelligence: transcripts + translations ────────────────────
+
+  /// Voice-note transcripts live in the encrypted message cache under a
+  /// synthetic id, so they're at rest with the same key as message plaintext
+  /// and disappear with the cache on wipe/logout.
+  String _transcriptKey(String msgID) => '$msgID#transcript';
+
+  Future<String?> cachedTranscript(Message message) async {
+    final entry = await _cache.get(
+      _transcriptKey(message.id),
+      message.encryptedPayload,
+    );
+    final text = entry?.plaintext;
+    return (text == null || text.isEmpty) ? null : text;
+  }
+
+  Future<void> storeTranscript(Message message, String transcript) =>
+      _cache.put(
+        _transcriptKey(message.id),
+        message.conversationId,
+        message.encryptedPayload,
+        transcript,
+        null,
+      );
+
+  // ── Nearby mesh (BLE) integration ──────────────────────────────────────────
+
+  /// The existing DM whose OTHER participant holds [fingerprint]. Mesh
+  /// messaging deliberately requires a pre-existing DM: a new conversation
+  /// can't be created server-side while offline, and a verified stranger can
+  /// still exchange fingerprints to chat once online.
+  String? dmConversationIdForFingerprint(String fingerprint) {
+    final fp = fingerprint.toUpperCase();
+    for (final conv in _conversations.values) {
+      if (!conv.isDM) continue;
+      for (final member in conv.members) {
+        if (member.userId == _selfId) continue;
+        final memberFp = member.user?.keyFingerprint.toUpperCase() ?? '';
+        if (memberFp.isNotEmpty && memberFp == fp) return conv.id;
+      }
+    }
+    return null;
+  }
+
+  /// Queued outbox envelopes deliverable to a verified nearby peer.
+  Future<List<Map<String, dynamic>>> meshEnvelopesForFingerprint(
+    String fingerprint,
+  ) async {
+    final convID = dmConversationIdForFingerprint(fingerprint);
+    if (convID == null) return const [];
+    await _ensureOutboxLoaded();
+    return meshDeliverableItems(_outboxItems, convID)
+        .map(meshEnvelopeForItem)
+        .toList();
+  }
+
+  /// Ingests an envelope received over BLE from a peer whose key proof
+  /// already verified. Runs through the exact same decrypt/dedup path as a
+  /// WS message; the eventual server copy replaces the mesh copy by payload.
+  Future<bool> ingestMeshMessage(
+    Map<String, dynamic> envelope,
+    String senderFingerprint,
+  ) async {
+    final convID = envelope['conversation_id']?.toString() ?? '';
+    final payload = envelope['encrypted_payload']?.toString() ?? '';
+    final nonce = envelope['client_nonce']?.toString() ?? '';
+    if (convID.isEmpty || payload.isEmpty || nonce.isEmpty) return false;
+    // The conversation must exist here, and it must be the DM with the
+    // VERIFIED sender — a peer can't push envelopes into other chats.
+    if (dmConversationIdForFingerprint(senderFingerprint) != convID) {
+      return false;
+    }
+    final existing = _messages[convID] ?? const <Message>[];
+    final meshId = 'mesh-$nonce';
+    if (existing.any(
+      (m) => m.id == meshId || m.encryptedPayload == payload,
+    )) {
+      return true; // duplicate retransmit — already have it
+    }
+    final msg = Message(
+      id: meshId,
+      conversationId: convID,
+      senderId: '',
+      type: Message.parseType(envelope['message_type']?.toString() ?? 'text'),
+      encryptedPayload: payload,
+      signature: envelope['signature']?.toString() ?? '',
+      isEncrypted: true,
+      createdAt:
+          DateTime.tryParse(envelope['created_at']?.toString() ?? '') ??
+              DateTime.now(),
+    );
+    await _handleIncomingMessage(msg);
+    return true;
+  }
+
+  /// Ephemeral per-session translations (message id → translated text).
+  /// Deliberately NOT persisted: a translation is a view, not message state.
+  final Map<String, String> _messageTranslations = {};
+
+  String? translationFor(String msgID) => _messageTranslations[msgID];
+
+  void setMessageTranslation(String msgID, String? translated) {
+    if (translated == null || translated.isEmpty) {
+      if (_messageTranslations.remove(msgID) == null) return;
+    } else {
+      _messageTranslations[msgID] = translated;
+    }
+    notifyListeners();
+  }
+
+  @visibleForTesting
   void debugReplacePendingWithConfirmed({
     required String convID,
     required String? pendingID,
@@ -648,6 +768,10 @@ class ChatProvider extends ChangeNotifier {
   @visibleForTesting
   Future<void> debugHandleEditedMessage(Message message) =>
       _handleEditedMessage(message);
+
+  @visibleForTesting
+  Future<void> debugHandleIncomingMessage(Message message) =>
+      _handleIncomingMessage(message);
 
   @visibleForTesting
   static bool hasConversationListChanges({
@@ -2632,10 +2756,17 @@ class ChatProvider extends ChangeNotifier {
       ),
       privateKeyArmored: privateKey,
     ).timeout(const Duration(seconds: 30));
+    // STH gossip: piggyback our last VERIFIED key-transparency tree head
+    // inside the encrypted envelope. Recipients compare it against their own
+    // — two valid heads of equal size with different roots prove the server
+    // equivocated, and the server can't strip what it can't read. ~150 bytes,
+    // absorbed by the plaintext padding buckets.
+    final sthGossip = await KtAuditService(storage: _storage).gossipPayload();
     return jsonEncode({
       'openchat_message': 1,
       'type': messageType,
       'payload': plaintextPayload,
+      'kt_sth': ?sthGossip,
       'sender': {
         'id': senderId,
         'key_fingerprint': fingerprint,
@@ -3510,6 +3641,9 @@ class ChatProvider extends ChangeNotifier {
       case WsEventType.messageReaction:
         _handleMessageReactionUpdate(event.data);
 
+      case WsEventType.messageTipped:
+        _handleMessageTipped(event.data);
+
       case WsEventType.pollUpdated:
         _handlePollUpdate(event.data);
 
@@ -3636,6 +3770,67 @@ class ChatProvider extends ChangeNotifier {
       default:
         break;
     }
+  }
+
+  void _handleMessageTipped(Map<String, dynamic> data) {
+    final convID = data['conversation_id']?.toString();
+    final msgID = data['message_id']?.toString();
+    if (convID == null || msgID == null) return;
+    applyMessageTips(
+      convID: convID,
+      msgID: msgID,
+      tips: MessageTipTotal.listFrom(data['tips']),
+    );
+  }
+
+  /// Replaces a message's anonymous tip aggregates in memory and notifies.
+  /// Aggregates are ephemeral UI state (not part of message fetches), so a
+  /// miss — message not loaded — is fine.
+  void applyMessageTips({
+    required String convID,
+    required String msgID,
+    required List<MessageTipTotal> tips,
+  }) {
+    _updateMessageInMemory(
+      convID: convID,
+      msgID: msgID,
+      update: (msg) => msg.copyWith(tips: tips),
+    );
+  }
+
+  /// Tips a message from the app wallet and applies the returned aggregates.
+  Future<List<MessageTipTotal>> tipMessage({
+    required String convID,
+    required String msgID,
+    required String provider,
+    required double amount,
+  }) async {
+    final raw = await _api.tipMessage(
+      convID,
+      msgID,
+      provider: provider,
+      amount: amount,
+      isChannel: _conversations[convID]?.isChannel ?? false,
+    );
+    final tips = MessageTipTotal.listFrom(raw);
+    applyMessageTips(convID: convID, msgID: msgID, tips: tips);
+    return tips;
+  }
+
+  /// Lazily hydrates a message's tip aggregates (e.g. when the tip sheet
+  /// opens — the backend doesn't include them in message fetches).
+  Future<List<MessageTipTotal>> loadMessageTips({
+    required String convID,
+    required String msgID,
+  }) async {
+    final raw = await _api.getMessageTips(
+      convID,
+      msgID,
+      isChannel: _conversations[convID]?.isChannel ?? false,
+    );
+    final tips = MessageTipTotal.listFrom(raw);
+    applyMessageTips(convID: convID, msgID: msgID, tips: tips);
+    return tips;
   }
 
   void _handleMessageReactionUpdate(Map<String, dynamic> data) {
@@ -3875,7 +4070,20 @@ class ChatProvider extends ChangeNotifier {
 
     _applyPaymentTransferUpdate(displayMsg);
 
-    final list = _messages[msg.conversationId] ?? [];
+    var list = _messages[msg.conversationId] ?? [];
+    // A message that already arrived over the BLE mesh is superseded by its
+    // server copy (same encrypted payload, real id) — replace, don't double.
+    if (!msg.id.startsWith('mesh-') && msg.encryptedPayload.isNotEmpty) {
+      final meshIdx = list.indexWhere(
+        (m) =>
+            m.id.startsWith('mesh-') &&
+            m.encryptedPayload == msg.encryptedPayload,
+      );
+      if (meshIdx != -1) {
+        list = List<Message>.from(list)..removeAt(meshIdx);
+        _messages[msg.conversationId] = list;
+      }
+    }
     final idx = list.indexWhere((m) => m.id == msg.id);
     if (idx == -1) {
       _messages[msg.conversationId] = [...list, displayMsg];
@@ -4215,6 +4423,25 @@ class ChatProvider extends ChangeNotifier {
         (current.keyFingerprint.isEmpty && candidate.keyFingerprint.isNotEmpty);
   }
 
+  /// Picks up a key-transparency head gossiped inside a decrypted envelope
+  /// and feeds it to the auditor. Cheap string guard first — most messages
+  /// carry no gossip and never pay the JSON parse.
+  void _ingestSthGossip(String raw) {
+    if (!raw.contains('"kt_sth"')) return;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map || decoded['openchat_message'] != 1) return;
+      final gossip = decoded['kt_sth'];
+      if (gossip is! Map) return;
+      unawaited(
+        KtAuditService(storage: _storage).ingestGossipedHead(
+          _api,
+          Map<String, dynamic>.from(gossip),
+        ),
+      );
+    } catch (_) {}
+  }
+
   Future<void> _tryDecrypt(
     Message msg,
     String privateKey, {
@@ -4255,6 +4482,7 @@ class ChatProvider extends ChangeNotifier {
         encryptedPayload: msg.encryptedPayload,
       );
       if (raw != null && raw.isNotEmpty) {
+        _ingestSthGossip(raw);
         final verifiedSenderId = await _verifiedPgpSenderId(
           raw,
           msg.conversationId,
@@ -4305,6 +4533,7 @@ class ChatProvider extends ChangeNotifier {
         privateKeyArmored: privateKey,
       );
       if (raw.isNotEmpty) {
+        _ingestSthGossip(raw);
         final verifiedSenderId = await _verifiedPgpSenderId(
           raw,
           msg.conversationId,

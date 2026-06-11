@@ -1514,6 +1514,16 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           ),
         ),
         actions: [
+          // Public plaintext channels may have a server-side web mirror; the
+          // flag is a deployment opt-in, so resolve it at tap time.
+          if (channel.isPublic &&
+              channel.handle != null &&
+              !channel.encryptionMode.isEncrypted)
+            TextButton.icon(
+              icon: const Icon(Icons.public_rounded, size: 18),
+              label: const Text('Copy public link'),
+              onPressed: () => _copyPublicMirrorLink(ctx),
+            ),
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Close'),
@@ -1521,6 +1531,31 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _copyPublicMirrorLink(BuildContext dialogCtx) async {
+    final handle = channel.handle;
+    if (handle == null) return;
+    bool enabled;
+    try {
+      enabled = await context.read<ApiService>().isWebMirrorEnabled();
+    } catch (_) {
+      enabled = false;
+    }
+    if (!mounted) return;
+    if (!enabled) {
+      showAppToast(
+        context,
+        'This server has no public web mirror enabled',
+        isError: true,
+      );
+      return;
+    }
+    await Clipboard.setData(
+      ClipboardData(text: '${ApiConfig.baseUrl}/s/$handle'),
+    );
+    if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+    if (mounted) showAppToast(context, 'Public link copied');
   }
 
   Future<void> _editChannelSettings() async {
@@ -2034,6 +2069,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                     Icons.delete_sweep_outlined,
                   ChannelSettingsAction.subscriptionPlan =>
                     Icons.workspace_premium_outlined,
+                  ChannelSettingsAction.giftSubscription =>
+                    Icons.card_giftcard_rounded,
                 },
                 label: switch (item) {
                   ChannelSettingsAction.appearance => 'Chat appearance',
@@ -2050,6 +2087,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                     'Delete my messages',
                   ChannelSettingsAction.subscriptionPlan =>
                     'Subscription price',
+                  ChannelSettingsAction.giftSubscription =>
+                    'Gift a subscription',
                 },
                 color: item == ChannelSettingsAction.deleteOwnMessages
                     ? Colors.red
@@ -2103,6 +2142,14 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         _deleteOwnChannelMessages();
       case ChannelSettingsAction.subscriptionPlan:
         _setSubscriptionPrice();
+      case ChannelSettingsAction.giftSubscription:
+        unawaited(
+          showGiftSubscriptionSheet(
+            context,
+            channelId: channel.id,
+            channelName: channel.name ?? 'this channel',
+          ),
+        );
     }
   }
 

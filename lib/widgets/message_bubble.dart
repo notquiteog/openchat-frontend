@@ -29,6 +29,7 @@ import '../services/attachment_service.dart';
 import '../services/link_preview_service.dart';
 import '../services/network_service.dart';
 import '../services/security_service.dart';
+import '../services/transcription_service.dart';
 import '../utils/link_preview_utils.dart';
 import '../utils/mention_utils.dart';
 import '../utils/skill_game.dart';
@@ -187,6 +188,12 @@ class MessageBubble extends StatelessWidget {
                   onLongPress: onLongPress,
                   child: _buildBubble(context),
                 ),
+                if (message.tips.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: _TipChips(tips: message.tips),
+                  ),
+                _TranslationLine(messageId: message.id),
                 if (isMe && readByOthers)
                   const Padding(
                     padding: EdgeInsets.only(top: 3, right: 4),
@@ -2894,6 +2901,96 @@ class _ReactionChips extends StatelessWidget {
   }
 }
 
+/// Ephemeral on-device translation shown under the original bubble. Reads
+/// ChatProvider's per-session map; widget-test trees without providers just
+/// render nothing (same defensive pattern as the other provider consumers).
+class _TranslationLine extends StatelessWidget {
+  final String messageId;
+
+  const _TranslationLine({required this.messageId});
+
+  @override
+  Widget build(BuildContext context) {
+    String? text;
+    try {
+      text = context.select<ChatProvider, String?>(
+        (chat) => chat.translationFor(messageId),
+      );
+    } on ProviderNotFoundException {
+      return const SizedBox.shrink();
+    }
+    if (text == null) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(top: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      constraints: const BoxConstraints(maxWidth: 320),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(text, style: const TextStyle(fontSize: 13.5)),
+          const SizedBox(height: 2),
+          Text(
+            'Translated on-device',
+            style: TextStyle(
+              fontSize: 10,
+              color: scheme.onSurface.withValues(alpha: 0.5),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Anonymous tip aggregates, one small chip per provider ("⚡ 0.75 BTC · 2").
+/// Sits under the bubble next to the reactions row. Never shows tipper names —
+/// the server doesn't reveal them. Width-capped + ellipsized so a pathological
+/// total can't break the bubble column layout.
+class _TipChips extends StatelessWidget {
+  final List<MessageTipTotal> tips;
+
+  const _TipChips({required this.tips});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Wrap(
+      spacing: 4,
+      runSpacing: 4,
+      children: [
+        for (final tip in tips)
+          Container(
+            constraints: const BoxConstraints(maxWidth: 180),
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+            decoration: BoxDecoration(
+              color: scheme.tertiaryContainer.withValues(alpha: 0.55),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: scheme.tertiary.withValues(alpha: 0.35),
+              ),
+            ),
+            child: Text(
+              '⚡ ${tip.total} ${tip.provider.toUpperCase()} · ${tip.tippers}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: scheme.onTertiaryContainer,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 class _PaymentEnvelope {
   final String kind;
   final String id;
@@ -4467,6 +4564,10 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
   Duration _position = Duration.zero;
   Duration? _duration;
   bool _playing = false;
+  String? _transcript;
+  bool _transcriptVisible = false;
+  bool _transcribing = false;
+  String? _transcribeStatus;
 
   @override
   void initState() {
@@ -4606,6 +4707,119 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
     return file;
   }
 
+  Future<Uint8List> _audioBytes() async {
+    final attachmentId = widget.content.attachmentId;
+    if (attachmentId == null) throw StateError('no attachment');
+    final svc = AttachmentService(context.read<ApiService>());
+    if (widget.content.fileKey != null && widget.content.fileNonce != null) {
+      return svc.downloadAndDecrypt(
+        attachmentId: attachmentId,
+        fileKeyB64: widget.content.fileKey!,
+        fileNonceB64: widget.content.fileNonce!,
+      );
+    }
+    if (!widget.message.isEncrypted) {
+      return svc.downloadRaw(attachmentId: attachmentId);
+    }
+    throw StateError('missing attachment key');
+  }
+
+  Future<void> _onTranscribePressed() async {
+    if (_transcribing) return;
+    // Already transcribed this session — just toggle.
+    if (_transcript != null) {
+      setState(() => _transcriptVisible = !_transcriptVisible);
+      return;
+    }
+    ChatProvider? chat;
+    try {
+      chat = context.read<ChatProvider>();
+    } on ProviderNotFoundException {
+      chat = null;
+    }
+    // Cached from an earlier session?
+    final cached = await chat?.cachedTranscript(widget.message);
+    if (!mounted) return;
+    if (cached != null) {
+      setState(() {
+        _transcript = cached;
+        _transcriptVisible = true;
+      });
+      return;
+    }
+    if (!TranscriptionService.isSupported) {
+      showAppToast(
+        context,
+        'Transcription is not supported on this platform',
+        isError: true,
+      );
+      return;
+    }
+    if (!await TranscriptionService.isModelCached()) {
+      if (!mounted) return;
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => GlassAlertDialog(
+          title: const Text('Download speech model?'),
+          content: const Text(
+            'Transcription runs entirely on this device. The one-time '
+            'Whisper model download is about 90 MB; manage it later under '
+            'Settings → On-device intelligence.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Download'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+    setState(() {
+      _transcribing = true;
+      _transcribeStatus = 'Preparing…';
+    });
+    StreamSubscription<double>? progressSub;
+    try {
+      progressSub = TranscriptionService.downloadProgress.listen((p) {
+        if (mounted && _transcribing) {
+          setState(
+            () => _transcribeStatus =
+                'Downloading model ${(p * 100).round()}%',
+          );
+        }
+      });
+      await TranscriptionService.ensureModel();
+      if (!mounted) return;
+      setState(() => _transcribeStatus = 'Transcribing…');
+      final bytes = await _audioBytes();
+      final text = await TranscriptionService.transcribeM4a(bytes);
+      if (!mounted) return;
+      final result = text.isEmpty ? '(no speech detected)' : text;
+      await chat?.storeTranscript(widget.message, result);
+      if (!mounted) return;
+      setState(() {
+        _transcript = result;
+        _transcriptVisible = true;
+      });
+    } catch (e) {
+      if (mounted) showAppToast(context, e.toString(), isError: true);
+    } finally {
+      unawaited(progressSub?.cancel());
+      if (mounted) {
+        setState(() {
+          _transcribing = false;
+          _transcribeStatus = null;
+        });
+      }
+    }
+  }
+
   double get _progress {
     final duration = _duration;
     if (duration == null || duration.inMilliseconds <= 0) return 0;
@@ -4656,7 +4870,9 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
                   Row(
                     children: [
                       Text(
-                        error ? 'Tap to retry' : _timeLabel,
+                        error
+                            ? 'Tap to retry'
+                            : (_transcribeStatus ?? _timeLabel),
                         style: TextStyle(
                           color: widget.textColor.withValues(alpha: 0.76),
                           fontSize: 11,
@@ -4664,12 +4880,43 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
                         ),
                       ),
                       const Spacer(),
+                      GestureDetector(
+                        onTap: _onTranscribePressed,
+                        child: _transcribing
+                            ? GlassProgressIndicator.circular(size: 13)
+                            : Icon(
+                                _transcriptVisible
+                                    ? Icons.subtitles_rounded
+                                    : Icons.subtitles_outlined,
+                                size: 16,
+                                color:
+                                    widget.textColor.withValues(alpha: 0.76),
+                              ),
+                      ),
+                      const SizedBox(width: 8),
                       _Timestamp(
                         message: widget.message,
                         textColor: widget.textColor,
                       ),
                     ],
                   ),
+                  if (_transcriptVisible && _transcript != null) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      _transcript!,
+                      style: TextStyle(
+                        color: widget.textColor.withValues(alpha: 0.9),
+                        fontSize: 13,
+                      ),
+                    ),
+                    Text(
+                      'Transcribed on-device',
+                      style: TextStyle(
+                        color: widget.textColor.withValues(alpha: 0.5),
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

@@ -5,6 +5,11 @@ allprojects {
     }
 }
 
+val openchatAndroidCompileSdk =
+    providers.gradleProperty("openchat.android.compileSdk")
+        .map(String::toInt)
+        .getOrElse(36)
+
 val newBuildDir: Directory =
     rootProject.layout.buildDirectory
         .dir("../../build")
@@ -27,6 +32,14 @@ subprojects {
             compilerOptions {
                 jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
             }
+        }
+    }
+
+    afterEvaluate {
+        extensions.findByType(com.android.build.gradle.BaseExtension::class.java)?.apply {
+            // Some Flutter plugins pin lower compileSdk values in their own
+            // Gradle files. Lift every Android module to the app API level.
+            compileSdkVersion(openchatAndroidCompileSdk)
         }
     }
 }

@@ -29,6 +29,7 @@ import '../../services/notification_service.dart';
 import '../../services/attachment_service.dart';
 import '../../services/proxy_service.dart';
 import '../../services/secure_storage_service.dart';
+import '../../services/translation_service.dart';
 import '../call/stage_room_screen.dart';
 import '../../widgets/pin_lock_gate.dart';
 import '../../utils/custom_emoji_payload.dart';
@@ -3675,6 +3676,22 @@ class _ChatScreenState extends State<ChatScreen> {
             icon: Icons.alarm_add_outlined,
             label: 'Remind me',
           ),
+        // Channels route unattributed posts' tips to the owner, so any
+        // non-self post qualifies there; elsewhere we need a visible sender.
+        if (!isMe && !isSystem && (conv.isChannel || msg.sender != null))
+          const MessageActionSheetItem(
+            value: 'tip',
+            icon: Icons.bolt_rounded,
+            label: 'Tip',
+          ),
+        if (hasCopyableText && TranslationService.isSupported)
+          MessageActionSheetItem(
+            value: 'translate',
+            icon: Icons.translate_rounded,
+            label: context.read<ChatProvider>().translationFor(msg.id) == null
+                ? 'Translate'
+                : 'Hide translation',
+          ),
         if (canDownloadMessageAttachment(msg))
           MessageActionSheetItem(
             value: 'download',
@@ -3744,6 +3761,10 @@ class _ChatScreenState extends State<ChatScreen> {
         await _shareMessage(msg);
       case 'remind':
         await _remindAboutMessage(msg);
+      case 'tip':
+        await _showTipSheet(msg);
+      case 'translate':
+        await _translateMessage(msg);
       case 'download':
         await _downloadMessageAttachment(msg);
       case 'sender':
@@ -3762,6 +3783,229 @@ class _ChatScreenState extends State<ChatScreen> {
         await _reportMessage(msg);
       case 'delete':
         this.context.read<ChatProvider>().deleteMessage(conv.id, msg.id);
+    }
+  }
+
+  /// On-device translate-toggle for a message. Detection + translation run
+  /// through ML Kit locally; packs download on first use for that language.
+  Future<void> _translateMessage(Message msg) async {
+    final chat = context.read<ChatProvider>();
+    if (chat.translationFor(msg.id) != null) {
+      chat.setMessageTranslation(msg.id, null);
+      return;
+    }
+    final text = msg.decryptedContent ?? '';
+    if (text.trim().isEmpty) return;
+    final localeCode = Localizations.localeOf(context).languageCode;
+    final target = BCP47Code.fromRawValue(localeCode) ??
+        TranslateLanguage.english;
+    showAppToast(context, 'Translating on-device…');
+    try {
+      final source = await TranslationService.detectLanguage(text);
+      if (!mounted) return;
+      if (source == null) {
+        showAppToast(context, 'Could not detect the language', isError: true);
+        return;
+      }
+      if (source == target) {
+        showAppToast(context, 'Message is already in your language');
+        return;
+      }
+      final translated = await TranslationService.translate(
+        text,
+        source: source,
+        target: target,
+      );
+      if (!mounted) return;
+      chat.setMessageTranslation(msg.id, translated);
+    } catch (e) {
+      if (mounted) {
+        showAppToast(context, 'Translation failed: $e', isError: true);
+      }
+    }
+  }
+
+  /// Wallet tip for someone else's post. Anonymous: the server only ever
+  /// shares per-provider aggregates, so there is no "from" UI here at all.
+  Future<void> _showTipSheet(Message msg) async {
+    final api = context.read<ApiService>();
+    var providers = <String>['btc', 'xmr'];
+    var balances = <Map<String, dynamic>>[];
+    try {
+      final status = await api.getBillingStatus();
+      if (status['enabled'] != true) {
+        if (mounted) {
+          showAppToast(
+            context,
+            'Payments are not enabled on this server',
+            isError: true,
+          );
+        }
+        return;
+      }
+      final enabled = ((status['providers'] as List?) ?? const [])
+          .whereType<String>()
+          .where((p) => p == 'btc' || p == 'xmr')
+          .toList();
+      if (enabled.isNotEmpty) providers = enabled;
+      balances = (await api.getPaymentBalances())
+          .whereType<Map<String, dynamic>>()
+          .toList();
+    } catch (_) {}
+    if (!mounted) return;
+
+    var provider = providers.first;
+    var submitting = false;
+    final amountCtrl = TextEditingController();
+    const presets = {
+      'btc': [0.0001, 0.0005, 0.001],
+      'xmr': [0.01, 0.05, 0.1],
+    };
+
+    double balanceFor(String provider) {
+      for (final balance in balances) {
+        if (balance['provider'] == provider) {
+          final available = balance['available'];
+          if (available is num) return available.toDouble();
+          if (available is String) return double.tryParse(available) ?? 0;
+        }
+      }
+      return 0;
+    }
+
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        barrierColor: Colors.black.withValues(alpha: 0.18),
+        elevation: 0,
+        builder: (sheetCtx) => StatefulBuilder(
+          builder: (sheetCtx, setSheet) {
+            Future<void> submit() async {
+              if (submitting) return;
+              final amount = double.tryParse(amountCtrl.text.trim()) ?? 0;
+              if (amount <= 0) {
+                showAppToast(context, 'Enter an amount', isError: true);
+                return;
+              }
+              if (amount > balanceFor(provider)) {
+                showAppToast(
+                  context,
+                  'Not enough app wallet balance',
+                  isError: true,
+                );
+                return;
+              }
+              setSheet(() => submitting = true);
+              try {
+                await context.read<ChatProvider>().tipMessage(
+                  convID: conv.id,
+                  msgID: msg.id,
+                  provider: provider,
+                  amount: amount,
+                );
+                if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+                if (mounted) showAppToast(context, 'Tip sent');
+              } catch (e) {
+                if (mounted) showAppToast(context, e.toString(), isError: true);
+              } finally {
+                if (sheetCtx.mounted) setSheet(() => submitting = false);
+              }
+            }
+
+            final available = balanceFor(provider);
+            return GlassBottomSheetFrame(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const GlassSheetGrabber(),
+                  GlassSheetHeader(
+                    icon: Icons.bolt_rounded,
+                    title: 'Tip this post',
+                    subtitle:
+                        'Paid instantly from your app wallet. Tips are anonymous.',
+                    onClose: () => Navigator.pop(sheetCtx),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: GlassSegmentedControl(
+                            segments: [
+                              for (final p in providers) p.toUpperCase(),
+                            ],
+                            selectedIndex: providers
+                                .indexOf(provider)
+                                .clamp(0, providers.length - 1),
+                            onSegmentSelected: (i) =>
+                                setSheet(() => provider = providers[i]),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 7,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHighest
+                                .withValues(alpha: 0.45),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            '${available.toStringAsFixed(provider == 'btc' ? 8 : 12)} ${provider.toUpperCase()}',
+                            style: Theme.of(context).textTheme.labelMedium
+                                ?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final preset in presets[provider] ?? const [0.001])
+                        ActionChip(
+                          label: Text('$preset'),
+                          onPressed: () => setSheet(
+                            () => amountCtrl.text = preset.toString(),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: amountCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: InputDecoration(
+                      labelText: 'Amount (${provider.toUpperCase()})',
+                      border: const OutlineInputBorder(),
+                    ),
+                    onChanged: (_) => setSheet(() {}),
+                  ),
+                  const SizedBox(height: 14),
+                  FilledButton.icon(
+                    onPressed: submitting ? null : submit,
+                    icon: const Icon(Icons.bolt_rounded),
+                    label: Text(submitting ? 'Sending…' : 'Send tip'),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      );
+    } finally {
+      amountCtrl.dispose();
     }
   }
 

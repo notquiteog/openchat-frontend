@@ -715,6 +715,10 @@ class Message {
   final bool silent;
   final String? controlToken;
   final List<MessageReactionSummary> reactions;
+  // Anonymous per-provider tip aggregates. NOT part of message fetch payloads —
+  // hydrated lazily from the tips endpoint or message_tipped WS events, so an
+  // empty list just means "not (yet) hydrated".
+  final List<MessageTipTotal> tips;
   Poll? poll;
   final DateTime createdAt;
   final DateTime? editedAt;
@@ -747,6 +751,7 @@ class Message {
     this.silent = false,
     this.controlToken,
     this.reactions = const [],
+    this.tips = const [],
     this.poll,
     required this.createdAt,
     this.editedAt,
@@ -967,6 +972,9 @@ class Message {
     return isDecrypted ? (decryptedContent ?? '') : '🔒 Encrypted';
   }
 
+  /// Public wire-name → enum mapping (mesh ingest builds messages directly).
+  static MessageType parseType(String t) => _parseType(t);
+
   static MessageType _parseType(String t) => switch (t) {
     'sticker' => MessageType.sticker,
     'file' => MessageType.file,
@@ -1037,6 +1045,7 @@ class Message {
     String? encryptedPayload,
     String? signature,
     List<MessageReactionSummary>? reactions,
+    List<MessageTipTotal>? tips,
     Poll? poll,
     DateTime? editedAt,
     User? sender,
@@ -1062,6 +1071,7 @@ class Message {
       silent: silent,
       controlToken: controlToken ?? this.controlToken,
       reactions: reactions ?? this.reactions,
+      tips: tips ?? this.tips,
       poll: poll ?? this.poll,
       createdAt: createdAt,
       editedAt: editedAt ?? this.editedAt,
@@ -1238,6 +1248,37 @@ class PollOption {
     voterCount: voterCount ?? this.voterCount,
     persistentId: persistentId,
   );
+}
+
+/// Per-provider tip aggregate for one message. Tips are anonymous by design:
+/// the server only ever exposes {provider, total, tippers} — never who tipped.
+/// [total] stays the server's decimal string (no float round-tripping).
+class MessageTipTotal {
+  final String provider;
+  final String total;
+  final int tippers;
+
+  const MessageTipTotal({
+    required this.provider,
+    required this.total,
+    required this.tippers,
+  });
+
+  factory MessageTipTotal.fromJson(Map<String, dynamic> json) =>
+      MessageTipTotal(
+        provider: json['provider']?.toString() ?? '',
+        total: json['total']?.toString() ?? '0',
+        tippers: (json['tippers'] as num?)?.toInt() ?? 0,
+      );
+
+  static List<MessageTipTotal> listFrom(Object? raw) {
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((e) => MessageTipTotal.fromJson(Map<String, dynamic>.from(e)))
+        .where((tip) => tip.provider.isNotEmpty)
+        .toList(growable: false);
+  }
 }
 
 class MessageReactionSummary {

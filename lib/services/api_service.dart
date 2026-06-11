@@ -872,6 +872,76 @@ class ApiService {
     });
   }
 
+  // ---- Creator monetization (tips / gifted subs / super-chats) ----
+
+  String _tipBase(String convID, bool isChannel) => isChannel
+      ? '/api/v1/channels/$convID/posts'
+      : '/api/v1/conversations/$convID/messages';
+
+  /// Tips a message from the app wallet. Anonymous by design — the response
+  /// (and the message_tipped broadcast) only carries per-provider aggregates
+  /// [{provider, total, tippers}], never the tipper.
+  Future<List<Map<String, dynamic>>> tipMessage(
+    String convID,
+    String msgID, {
+    required String provider,
+    required double amount,
+    bool isChannel = false,
+  }) async {
+    final resp = await _post('${_tipBase(convID, isChannel)}/$msgID/tip', {
+      'provider': provider,
+      'amount': amount,
+    });
+    return _tipAggregates(resp);
+  }
+
+  Future<List<Map<String, dynamic>>> getMessageTips(
+    String convID,
+    String msgID, {
+    bool isChannel = false,
+  }) async {
+    final resp = await _get('${_tipBase(convID, isChannel)}/$msgID/tips');
+    return _tipAggregates(resp);
+  }
+
+  List<Map<String, dynamic>> _tipAggregates(Map<String, dynamic> resp) {
+    final data = resp['data'] as Map<String, dynamic>? ?? const {};
+    return ((data['tips'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+  }
+
+  /// Gifts a channel subscription to [beneficiaryUserID], charging this
+  /// account's wallet the plan price for [provider] (wallet-only, no on-chain
+  /// flow).
+  Future<void> giftChannelSubscription(
+    String chanID, {
+    required String provider,
+    required String beneficiaryUserID,
+  }) async {
+    await _post('/api/v1/channels/$chanID/subscribe/gift', {
+      'provider': provider,
+      'user_id': beneficiaryUserID,
+    });
+  }
+
+  /// Sends a paid, publicly-attributed super-chat to an active stage room.
+  /// Returns the fresh stage state (its `superchats` list includes the entry).
+  Future<Map<String, dynamic>> sendStageSuperchat(
+    String convID, {
+    required String provider,
+    required double amount,
+    required String message,
+  }) async {
+    final resp = await _post('/api/v1/conversations/$convID/stage/superchat', {
+      'provider': provider,
+      'amount': amount,
+      'message': message,
+    });
+    return resp['data'] as Map<String, dynamic>;
+  }
+
   Future<List<Message>> getChannelPosts(
     String chanID, {
     String? beforeID,
@@ -2186,6 +2256,31 @@ class ApiService {
     await _delete('/api/v1/me/sessions/$sessionId');
   }
 
+  // ---- Key-transparency Merkle log (public, unauthenticated) ----
+
+  /// Latest signed tree head + the log's public key.
+  Future<Map<String, dynamic>> getKtSth() async {
+    final resp = await _get('/api/v1/transparency/sth');
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  /// Inclusion proof for one KT event hash against the latest signed head.
+  Future<Map<String, dynamic>> getKtInclusionProof(String eventHash) async {
+    final encoded = Uri.encodeQueryComponent(eventHash);
+    final resp = await _get(
+      '/api/v1/transparency/proof/inclusion?event_hash=$encoded',
+    );
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  /// Consistency proof between two published head sizes.
+  Future<Map<String, dynamic>> getKtConsistencyProof(int from, int to) async {
+    final resp = await _get(
+      '/api/v1/transparency/proof/consistency?from=$from&to=$to',
+    );
+    return resp['data'] as Map<String, dynamic>;
+  }
+
   // ---- Social key recovery (Shamir k-of-n among guardians) ----
 
   /// Stores the recovery configuration: [blob] is the recovery bundle
@@ -2385,6 +2480,21 @@ class ApiService {
     final resp =
         await _get('/api/v1/conversations/$conversationId/active-call');
     return resp['data'] as Map<String, dynamic>;
+  }
+
+  /// Whether this deployment serves the public read-only channel mirror at
+  /// /s/:handle (WEB_MIRROR_ENABLED). Cached for the session — it's a
+  /// deployment flag, not per-user state.
+  bool? _webMirrorEnabled;
+  Future<bool> isWebMirrorEnabled() async {
+    final cached = _webMirrorEnabled;
+    if (cached != null) return cached;
+    final resp = await _get('/api/v1/config', authenticated: false);
+    final data = resp['data'];
+    final enabled =
+        data is Map<String, dynamic> && data['web_mirror'] == true;
+    _webMirrorEnabled = enabled;
+    return enabled;
   }
 
   Future<List<IceServer>> getIceServers() async {

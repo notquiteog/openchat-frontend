@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../../models/user.dart';
 import '../../services/api_service.dart';
 import '../../widgets/deposit_progress_view.dart';
 import '../../widgets/glass.dart';
@@ -24,6 +27,227 @@ Future<bool> showChannelPaywall(
     ),
   );
   return result ?? false;
+}
+
+/// Gift one subscription period of a paid channel to another user, charged
+/// to the gifter's app wallet (wallet-only — there is no on-chain gift flow).
+Future<void> showGiftSubscriptionSheet(
+  BuildContext context, {
+  required String channelId,
+  required String channelName,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (_) => _GiftSubscriptionSheet(
+      channelId: channelId,
+      channelName: channelName,
+    ),
+  );
+}
+
+class _GiftSubscriptionSheet extends StatefulWidget {
+  final String channelId;
+  final String channelName;
+  const _GiftSubscriptionSheet({
+    required this.channelId,
+    required this.channelName,
+  });
+
+  @override
+  State<_GiftSubscriptionSheet> createState() => _GiftSubscriptionSheetState();
+}
+
+class _GiftSubscriptionSheetState extends State<_GiftSubscriptionSheet> {
+  bool _loading = true;
+  String? _error;
+  List<Map<String, dynamic>> _plans = const [];
+  bool _busy = false;
+
+  final _searchCtrl = TextEditingController();
+  Timer? _searchDebounce;
+  List<User> _results = const [];
+  User? _recipient;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final data = await context.read<ApiService>().getChannelSubscription(
+        widget.channelId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _plans = ((data['plans'] as List?) ?? const [])
+            .cast<Map<String, dynamic>>();
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  void _onSearchChanged(String query) {
+    _searchDebounce?.cancel();
+    final q = query.trim();
+    if (q.length < 2) {
+      setState(() => _results = const []);
+      return;
+    }
+    _searchDebounce = Timer(const Duration(milliseconds: 350), () async {
+      try {
+        final users = await context.read<ApiService>().searchUsers(q);
+        if (!mounted || _searchCtrl.text.trim() != q) return;
+        setState(() => _results = users);
+      } catch (_) {}
+    });
+  }
+
+  Future<void> _gift(Map<String, dynamic> plan) async {
+    final recipient = _recipient;
+    if (recipient == null) return;
+    setState(() => _busy = true);
+    try {
+      await context.read<ApiService>().giftChannelSubscription(
+        widget.channelId,
+        provider: plan['provider'] as String,
+        beneficiaryUserID: recipient.id,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      showAppToast(context, 'Gifted to @${recipient.username} 🎁');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      showAppToast(context, 'Gift failed: $e', isError: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return GlassBottomSheetFrame(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const GlassSheetGrabber(),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Icon(Icons.card_giftcard_rounded,
+                  color: theme.colorScheme.primary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Gift ${widget.channelName}',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(child: GlassProgressIndicator.circular()),
+            )
+          else if (_error != null)
+            Text('Could not load plans: $_error',
+                style: TextStyle(color: theme.colorScheme.error))
+          else if (_plans.isEmpty)
+            const Text('This channel has no subscription plan.')
+          else ...[
+            if (_recipient == null) ...[
+              TextField(
+                controller: _searchCtrl,
+                onChanged: _onSearchChanged,
+                decoration: const InputDecoration(
+                  labelText: 'Find a user to gift to',
+                  prefixIcon: Icon(Icons.search_rounded),
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              // Cap the result list so long matches scroll inside the sheet.
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 220),
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final user in _results)
+                      GlassListTile(
+                        leading: CircleAvatar(
+                          child: Text(
+                            user.username.isNotEmpty
+                                ? user.username[0].toUpperCase()
+                                : '?',
+                          ),
+                        ),
+                        title: Text(user.displayName),
+                        subtitle: Text('@${user.username}'),
+                        onTap: () => setState(() => _recipient = user),
+                      ),
+                  ],
+                ),
+              ),
+            ] else ...[
+              GlassListTile(
+                leading: CircleAvatar(
+                  child: Text(
+                    _recipient!.username.isNotEmpty
+                        ? _recipient!.username[0].toUpperCase()
+                        : '?',
+                  ),
+                ),
+                title: Text(_recipient!.displayName),
+                subtitle: Text('@${_recipient!.username}'),
+                trailing: IconButton(
+                  icon: const Icon(Icons.close_rounded),
+                  onPressed: _busy
+                      ? null
+                      : () => setState(() => _recipient = null),
+                ),
+              ),
+              const SizedBox(height: 12),
+              for (final plan in _plans)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: GlassButtonWidget(
+                    onPressed: _busy ? null : () => _gift(plan),
+                    child: Text(
+                      'Gift ${plan['price']} '
+                      '${(plan['provider'] as String? ?? '').toUpperCase()}'
+                      ' · ${plan['period_days'] ?? 30} days (from wallet)',
+                    ),
+                  ),
+                ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 class _ChannelPaywallSheet extends StatefulWidget {
@@ -137,8 +361,20 @@ class _ChannelPaywallSheetState extends State<_ChannelPaywallSheet> {
             _depositInstructions(theme)
           else if (_plans.isEmpty)
             const Text('This channel has no subscription plan.')
-          else
+          else ...[
             ..._plans.map((p) => _planTile(theme, p)),
+            TextButton.icon(
+              onPressed: _busy
+                  ? null
+                  : () => showGiftSubscriptionSheet(
+                        context,
+                        channelId: widget.channelId,
+                        channelName: widget.channelName,
+                      ),
+              icon: const Icon(Icons.card_giftcard_rounded),
+              label: const Text('Gift this subscription to someone'),
+            ),
+          ],
         ],
       ),
     );

@@ -35,7 +35,11 @@ import '../stickers/sticker_pack_screen.dart';
 import 'device_pairing_screen.dart';
 import 'pgp_keys_screen.dart';
 import 'premium_screen.dart';
+import '../../services/mesh/nearby_mesh_service.dart';
+import '../nearby/nearby_screen.dart';
+import 'on_device_ai_screen.dart';
 import 'proxy_settings_screen.dart';
+import 'social_recovery_screen.dart';
 import 'trust_center_screen.dart';
 import 'wallet_screen.dart';
 
@@ -2097,6 +2101,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                   ),
+                  _GlassDivider(),
+                  _GlassTile(
+                    icon: Icons.psychology_outlined,
+                    title: 'On-device intelligence',
+                    subtitle:
+                        'Transcription, translation, and sticker AI models',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const OnDeviceAiScreen(),
+                      ),
+                    ),
+                  ),
+                  if (NearbyMeshService.isSupported) ...[
+                    _GlassDivider(),
+                    _GlassTile(
+                      icon: Icons.bluetooth_audio_rounded,
+                      title: 'Nearby',
+                      subtitle: 'Exchange queued messages over Bluetooth',
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const NearbyScreen(),
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
                 _GlassDivider(),
                 _GlassTile(
@@ -2149,6 +2180,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   title: 'Delete server backup',
                   subtitle: 'Remove the stored blob from the server',
                   onTap: _deleteServerBackup,
+                ),
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.diversity_3_outlined,
+                  title: 'Recover with guardians',
+                  subtitle:
+                      'Rebuild your keys from shares your guardians hold',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const SocialRecoveryScreen(),
+                    ),
+                  ),
                 ),
                 if (!kIsWeb) ...[
                   _GlassDivider(),

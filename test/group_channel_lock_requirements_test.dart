@@ -154,6 +154,7 @@ void main() {
         ChannelSettingsAction.sharedContent,
         ChannelSettingsAction.scheduledPosts,
         ChannelSettingsAction.deleteOwnMessages,
+        ChannelSettingsAction.giftSubscription,
       ]);
     });
 

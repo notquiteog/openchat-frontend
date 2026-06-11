@@ -7,6 +7,46 @@ import '../services/api_service.dart';
 import '../services/secure_storage_service.dart';
 import '../services/websocket_service.dart';
 
+/// One paid, publicly-attributed super-chat on a stage. Unlike post tips
+/// (anonymous aggregates), the sender's name IS the product here. [amount]
+/// stays the server's decimal string — no float round-tripping.
+class StageSuperchat {
+  final String id;
+  final String userId;
+  final String name;
+  final String provider;
+  final String amount;
+  final String message;
+  final DateTime at;
+
+  const StageSuperchat({
+    required this.id,
+    required this.userId,
+    required this.name,
+    required this.provider,
+    required this.amount,
+    required this.message,
+    required this.at,
+  });
+
+  static StageSuperchat? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final id = raw['id']?.toString() ?? '';
+    if (id.isEmpty) return null;
+    return StageSuperchat(
+      id: id,
+      userId: raw['user_id']?.toString() ?? '',
+      name: raw['name']?.toString() ?? '',
+      provider: raw['provider']?.toString() ?? '',
+      amount: raw['amount']?.toString() ?? '0',
+      message: raw['message']?.toString() ?? '',
+      at: DateTime.fromMillisecondsSinceEpoch(
+        ((raw['at'] as num?)?.toInt() ?? 0) * 1000,
+      ),
+    );
+  }
+}
+
 /// Live state of a Voice Stage Room (audio-only LiveKit room with host /
 /// speaker / listener roles + a raise-hand queue). Media runs over a [Room];
 /// role + membership state comes from the backend and `stage_state` WS events.
@@ -31,6 +71,13 @@ class StageRoomProvider extends ChangeNotifier {
   bool _connecting = false;
   bool _micEnabled = false;
   String? _error;
+  List<StageSuperchat> _superchats = const [];
+  bool _superchatsPrimed = false;
+  final Set<String> _seenSuperchatIds = {};
+  // Fresh super-chats only (each id announced once) — the screen turns these
+  // into transient highlight banners; [superchats] keeps the recent backlog.
+  final StreamController<StageSuperchat> _superchatAnnouncements =
+      StreamController.broadcast();
 
   String? get conversationId => _conversationId;
   bool get isActive => _room != null;
@@ -44,6 +91,9 @@ class StageRoomProvider extends ChangeNotifier {
   int get listenerCount => _listenerCount;
   bool get micEnabled => _micEnabled;
   String? get error => _error;
+  List<StageSuperchat> get superchats => _superchats;
+  Stream<StageSuperchat> get superchatAnnouncements =>
+      _superchatAnnouncements.stream;
 
   Future<void> join(String conversationId) async {
     if (_connecting || _room != null) return;
@@ -127,6 +177,25 @@ class StageRoomProvider extends ChangeNotifier {
     if (c != null && isHost) await _api.removeStageSpeaker(c, userId);
   }
 
+  /// Sends a paid super-chat to the host and applies the returned state (the
+  /// broadcast also arrives over WS — _applyState dedups by entry id).
+  Future<void> sendSuperchat({
+    required String provider,
+    required double amount,
+    required String message,
+  }) async {
+    final c = _conversationId;
+    if (c == null) throw StateError('not in a stage room');
+    final data = await _api.sendStageSuperchat(
+      c,
+      provider: provider,
+      amount: amount,
+      message: message,
+    );
+    _applyState(data['state'] as Map<String, dynamic>?);
+    notifyListeners();
+  }
+
   void _onWsEvent(WsEvent event) {
     if (event.type != WsEventType.stageState) return;
     if (event.data['conversation_id'] != _conversationId) return;
@@ -174,6 +243,9 @@ class StageRoomProvider extends ChangeNotifier {
     }
   }
 
+  @visibleForTesting
+  void debugApplyState(Map<String, dynamic> state) => _applyState(state);
+
   void _applyState(Map<String, dynamic>? state) {
     if (state == null) return;
     _hostId = state['host_id'] as String?;
@@ -184,6 +256,22 @@ class StageRoomProvider extends ChangeNotifier {
         .map((e) => e.toString())
         .toList();
     _listenerCount = (state['listener_count'] as num? ?? 0).toInt();
+    if (state.containsKey('superchats')) {
+      final entries = (state['superchats'] as List? ?? const [])
+          .map(StageSuperchat.fromJson)
+          .whereType<StageSuperchat>()
+          .toList(growable: false);
+      // The first state after joining seeds the backlog silently — those
+      // super-chats predate us. Later applies announce unseen ids,
+      // oldest-first so banner order matches arrival order.
+      for (final sc in entries.reversed) {
+        if (_seenSuperchatIds.add(sc.id) && _superchatsPrimed) {
+          _superchatAnnouncements.add(sc);
+        }
+      }
+      _superchatsPrimed = true;
+      _superchats = entries;
+    }
   }
 
   Future<void> _teardown() async {
@@ -208,11 +296,15 @@ class StageRoomProvider extends ChangeNotifier {
     _raisedHands = const [];
     _listenerCount = 0;
     _micEnabled = false;
+    _superchats = const [];
+    _superchatsPrimed = false;
+    _seenSuperchatIds.clear();
   }
 
   @override
   void dispose() {
     unawaited(_teardown());
+    unawaited(_superchatAnnouncements.close());
     super.dispose();
   }
 }

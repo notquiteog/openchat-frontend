@@ -78,6 +78,8 @@ class SecureStorageService {
   static const _keyDeadmanDays = 'deadman_days_v1';
   static const _keyLastRealUnlockAt = 'last_real_unlock_at_v1';
   static const _keyRecoveryShareHeldPrefix = 'recovery_share_held_v1';
+  static const _keyKtSthCache = 'kt_sth_cache_v1';
+  static const _keyKtLogAlarm = 'kt_log_alarm_v1';
   static const _keyForceTurn = 'force_turn_calls';
   static const _keyScreenSecurity = 'screen_security_enabled';
   static const _keyProxyConfig = 'proxy_config_v1';
@@ -832,6 +834,39 @@ class SecureStorageService {
     } catch (_) {}
     return null;
   }
+
+  // ── Key-transparency log audit state ──────────────────────────────────────
+
+  /// The last VERIFIED signed tree head + the pinned log public key, JSON:
+  /// {tree_size, root_hash, signature, public_key}.
+  Future<Map<String, dynamic>?> getKtSthCache() async {
+    final raw = await _readOrNull(_keyKtSthCache);
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> saveKtSthCache(Map<String, dynamic> head) =>
+      _storage.write(key: _keyKtSthCache, value: jsonEncode(head));
+
+  /// A detected log-integrity violation (equivocation/rollback), JSON with
+  /// reason + evidence. Deliberately sticky: only explicit user action in the
+  /// Trust Center should ever clear it.
+  Future<Map<String, dynamic>?> getKtLogAlarm() async {
+    final raw = await _readOrNull(_keyKtLogAlarm);
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> saveKtLogAlarm(Map<String, dynamic> alarm) =>
+      _storage.write(key: _keyKtLogAlarm, value: jsonEncode(alarm));
 
   // ── Held recovery shares (guardian side) ──────────────────────────────────
   // One Shamir share per account this device guards. Stored verbatim (the

@@ -20,6 +20,8 @@ enum WsEventType {
   messageDeleted,
   messageEdited,
   messageReaction,
+  // Anonymous tip aggregates changed for a message (carries the full list).
+  messageTipped,
   pollUpdated,
   paymentRequestUpdated,
   // User-scoped on-chain deposit confirmation progress (owner only).
@@ -628,6 +630,7 @@ class WebSocketService extends ChangeNotifier {
     'message_deleted' => WsEventType.messageDeleted,
     'message_edited' => WsEventType.messageEdited,
     'message_reaction' => WsEventType.messageReaction,
+    'message_tipped' => WsEventType.messageTipped,
     'poll_updated' => WsEventType.pollUpdated,
     'payment_request_updated' => WsEventType.paymentRequestUpdated,
     'deposit_progress' => WsEventType.depositProgress,

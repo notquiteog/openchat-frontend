@@ -25,6 +25,7 @@ enum ChannelSettingsAction {
   encryption,
   deleteOwnMessages,
   subscriptionPlan,
+  giftSubscription,
 }
 
 class ChannelActionPlacement {
@@ -97,6 +98,9 @@ class ChannelActionPolicy {
       }
       settings.add(ChannelSettingsAction.scheduledPosts);
       settings.add(ChannelSettingsAction.deleteOwnMessages);
+      // Whether the channel actually sells subscriptions is only known after
+      // a plans fetch — the handler explains itself when there is no plan.
+      settings.add(ChannelSettingsAction.giftSubscription);
     }
 
     if (managesInfo) {

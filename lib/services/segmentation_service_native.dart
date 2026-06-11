@@ -46,6 +46,27 @@ class SegmentationService {
   static Future<bool> isModelCached() async =>
       _looksLikeOnnxModel(File(await _modelPath()));
 
+  /// Disk footprint of the cached model (0 = not downloaded). Surfaced on
+  /// the On-device intelligence screen.
+  static Future<int> cachedModelSizeBytes() async {
+    try {
+      final file = File(await _modelPath());
+      return await file.exists() ? await file.length() : 0;
+    } on IOException {
+      return 0;
+    }
+  }
+
+  static Future<void> deleteModel() async {
+    _session = null;
+    try {
+      final file = File(await _modelPath());
+      if (await file.exists()) await file.delete();
+    } on IOException {
+      // Best effort.
+    }
+  }
+
   /// Legacy lenient API: null on any failure (caller keeps the original
   /// image). Prefer [removeBackgroundOrThrow] where the failure reason can be
   /// surfaced to the user.

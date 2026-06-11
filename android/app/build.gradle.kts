@@ -22,9 +22,18 @@ val keyProperties = Properties().apply {
     if (keyPropertiesFile.exists()) load(keyPropertiesFile.inputStream())
 }
 
+val openchatCompileSdk =
+    providers.gradleProperty("openchat.android.compileSdk")
+        .map(String::toInt)
+        .getOrElse(flutter.compileSdkVersion)
+val openchatTargetSdk =
+    providers.gradleProperty("openchat.android.targetSdk")
+        .map(String::toInt)
+        .getOrElse(flutter.targetSdkVersion)
+
 android {
     namespace = "com.openchat.openchat"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = openchatCompileSdk
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -36,7 +45,7 @@ android {
     defaultConfig {
         applicationId = "com.openchat.openchat"
         minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        targetSdk = openchatTargetSdk
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }

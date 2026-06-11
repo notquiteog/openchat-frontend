@@ -17,6 +17,10 @@ class SegmentationService {
 
   static Future<bool> isModelCached() async => false;
 
+  static Future<int> cachedModelSizeBytes() async => 0;
+
+  static Future<void> deleteModel() async {}
+
   static Future<Uint8List?> removeBackground(Uint8List image) async => null;
 
   static Future<Uint8List> removeBackgroundOrThrow(Uint8List image) async {
