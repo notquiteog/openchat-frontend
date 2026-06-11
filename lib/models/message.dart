@@ -1200,6 +1200,10 @@ class Poll {
     String? description,
     List<PollOption>? options,
     List<String>? voterOptionIds,
+    bool? isClosed,
+    int? totalVoterCount,
+    List<int>? correctOptionIds,
+    String? explanation,
   }) => Poll(
     id: id,
     messageId: messageId,
@@ -1209,12 +1213,12 @@ class Poll {
     isAnonymous: isAnonymous,
     allowsMultipleAnswers: allowsMultipleAnswers,
     allowsRevoting: allowsRevoting,
-    isClosed: isClosed,
-    totalVoterCount: totalVoterCount,
+    isClosed: isClosed ?? this.isClosed,
+    totalVoterCount: totalVoterCount ?? this.totalVoterCount,
     options: options ?? this.options,
     voterOptionIds: voterOptionIds ?? this.voterOptionIds,
-    correctOptionIds: correctOptionIds,
-    explanation: explanation,
+    correctOptionIds: correctOptionIds ?? this.correctOptionIds,
+    explanation: explanation ?? this.explanation,
   );
 }
 

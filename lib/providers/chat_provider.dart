@@ -367,6 +367,7 @@ class ChatProvider extends ChangeNotifier {
     // vote tokens above them in secure storage).
     _myPollVotes.clear();
     _myPollVotesLoading.clear();
+    _pollSnapshots.clear();
     _outboxItems = const [];
     // Reset identity too — the provider outlives a logout/login cycle, and a
     // stale _selfId misattributes own-message suppression, self-reactions, and
@@ -448,6 +449,10 @@ class ChatProvider extends ChangeNotifier {
   Future<void> _catchUpAfterReconnect() async {
     final token = await _storage.getAccessToken();
     if (token == null) return;
+    // Poll broadcasts missed while offline make the snapshots stale; the
+    // refetch below carries fresher tallies — don't let an old snapshot
+    // overlay them in the bubbles.
+    _pollSnapshots.clear();
     await refreshConversationsSilently();
     await drainOutbox();
     final loadedConversationIds = _messages.keys.toList(growable: false);
@@ -1923,6 +1928,17 @@ class ChatProvider extends ChangeNotifier {
   final Map<String, List<String>> _myPollVotes = {};
   final Set<String> _myPollVotesLoading = {};
 
+  // The freshest server-side poll state, from vote responses and poll_updated
+  // broadcasts. Kept independently of _messages because some screens (channel
+  // posts, shared-content sheets) render message snapshots that are never
+  // refreshed from this provider — the poll bubble overlays this on whatever
+  // message object its host gave it.
+  final Map<String, Poll> _pollSnapshots = {};
+
+  /// The freshest known server state for [pollID], if any update arrived this
+  /// session (vote response or poll_updated broadcast).
+  Poll? pollSnapshot(String pollID) => _pollSnapshots[pollID];
+
   /// The option ids this device voted for in [pollID] (empty until known).
   /// Triggers a lazy storage read on first ask and notifies when it lands.
   List<String> myPollVotes(String pollID) {
@@ -1933,11 +1949,14 @@ class ChatProvider extends ChangeNotifier {
         _storage
             .getPollVoteSelections(pollID)
             .then((ids) {
+              // A vote cast while this read was in flight is fresher than
+              // what storage held when the read started — don't clobber it.
+              if (_myPollVotes.containsKey(pollID)) return;
               _myPollVotes[pollID] = ids;
               if (ids.isNotEmpty) notifyListeners();
             })
             .catchError((Object _) {
-              _myPollVotes[pollID] = const <String>[];
+              _myPollVotes.putIfAbsent(pollID, () => const <String>[]);
             }),
       );
     }
@@ -1957,13 +1976,19 @@ class ChatProvider extends ChangeNotifier {
     required String convID,
     required String pollID,
     required List<String> optionIDs,
+    // The caller (poll bubble) knows the poll's anonymity even when the
+    // message isn't in _messages — channel posts live in screen-local lists,
+    // and guessing false there would route an anonymous poll to the
+    // attributed endpoint, which the server rejects.
+    bool? isAnonymous,
   }) async {
     final list = _messages[convID];
     final pollMessage = list?.where((m) => m.poll?.id == pollID).firstOrNull;
-    final isAnonymous = pollMessage?.poll?.isAnonymous ?? false;
+    final anonymous =
+        isAnonymous ?? pollMessage?.poll?.isAnonymous ?? false;
 
     final Poll updatedPoll;
-    if (isAnonymous) {
+    if (anonymous) {
       // Blind-token vote: the server stores the choice against the token's
       // hash, never this account. The raw token is issued once and cached so
       // revoting (and "you voted X") keep working on this device.
@@ -1985,22 +2010,26 @@ class ChatProvider extends ChangeNotifier {
       updatedPoll = await _api.votePoll(pollID, optionIDs);
     }
     // Persist the selection so the marked bubble survives chat re-entry
-    // (refetched polls don't echo the viewer's own votes).
+    // (refetched anonymous polls can't echo the viewer's own votes).
     _rememberPollVote(pollID, optionIDs);
+    _pollSnapshots[pollID] = updatedPoll;
 
-    if (list == null) return;
-    final idx = list.indexWhere((m) => m.poll?.id == pollID);
-    if (idx == -1) return;
-    final updated = List<Message>.from(list);
-    final current = updated[idx];
-    updated[idx] = current.copyWith(
-      poll: _pollWithArtifactLabels(
-        updatedPoll,
-        current.artifact,
-        fallback: current.poll,
-      ),
-    );
-    _messages[convID] = updated;
+    final idx = list?.indexWhere((m) => m.poll?.id == pollID) ?? -1;
+    if (list != null && idx != -1) {
+      final updated = List<Message>.from(list);
+      final current = updated[idx];
+      updated[idx] = current.copyWith(
+        poll: _pollWithArtifactLabels(
+          updatedPoll,
+          current.artifact,
+          fallback: current.poll,
+        ),
+      );
+      _messages[convID] = updated;
+    }
+    // Notify even when the message isn't in _messages — channel screens
+    // render their own post snapshots and pick the result up from
+    // pollSnapshot()/myPollVotes().
     notifyListeners();
   }
 
@@ -3938,7 +3967,15 @@ class ChatProvider extends ChangeNotifier {
     final poll = Poll.fromJson(Map<String, dynamic>.from(rawPoll));
     msgID ??= poll.messageId;
     if (msgID == null) return;
-    _updateMessageInMemory(
+    // Track the freshest server state per poll. Broadcasts are voter-stripped
+    // (a shared payload can't carry per-viewer votes), so keep the previously
+    // known selection rather than blanking it.
+    final prev = _pollSnapshots[poll.id];
+    _pollSnapshots[poll.id] =
+        poll.voterOptionIds.isEmpty && (prev?.voterOptionIds.isNotEmpty ?? false)
+        ? poll.copyWith(voterOptionIds: prev!.voterOptionIds)
+        : poll;
+    final messageUpdated = _updateMessageInMemory(
       convID: convID,
       msgID: msgID,
       update: (msg) {
@@ -3960,6 +3997,9 @@ class ChatProvider extends ChangeNotifier {
         return msg.copyWith(poll: nextPoll);
       },
     );
+    // Conversations without loaded messages (channel post lists) still have
+    // bubbles watching pollSnapshot() — let them repaint.
+    if (!messageUpdated) notifyListeners();
   }
 
   void _handleReadReceipt(Map<String, dynamic> data) {

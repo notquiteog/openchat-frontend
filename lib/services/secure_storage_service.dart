@@ -324,9 +324,10 @@ class SecureStorageService {
     );
   }
 
-  /// The option ids this device voted for in a poll. Refetched poll payloads
-  /// don't carry the viewer's own votes (and for anonymous polls they can't,
-  /// by design), so the marked-bubble state survives chat re-entry via here.
+  /// The option ids this device voted for in a poll. Refetched anonymous
+  /// polls can't carry the viewer's own votes (the server never stores who
+  /// voted), so the marked-bubble state survives chat re-entry via here.
+  /// Non-anonymous refetches do echo them (`voter_option_ids`).
   Future<List<String>> getPollVoteSelections(String pollID) async {
     final raw = await _readOrNull(_scopedKey(_keyPollMyVotesPrefix, pollID));
     if (raw == null || raw.isEmpty) return const [];

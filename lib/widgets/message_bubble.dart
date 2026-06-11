@@ -3597,20 +3597,58 @@ class _PollBubble extends StatefulWidget {
 class _PollBubbleState extends State<_PollBubble> {
   bool _voting = false;
 
-  /// The poll with the viewer's own votes restored. Refetched poll payloads
-  /// don't echo the viewer's selections (anonymous polls can't, by design),
-  /// so re-entering a chat would un-mark the voted bubble without merging
-  /// the device-local vote memory back in.
-  Poll _mergedPoll(List<String> localVotes) {
-    final base = widget.message.poll!;
+  /// The poll as it should render: the host's message poll, overlaid with the
+  /// freshest server state (some hosts — channel post lists, shared-content
+  /// sheets — render message snapshots that never refresh after a vote or a
+  /// poll_updated broadcast), then with the viewer's own votes restored.
+  /// Refetched anonymous polls can't echo the viewer's selections by design,
+  /// so without the device-local vote memory the voted bubble would un-mark.
+  Poll _mergedPoll(List<String> localVotes, Poll? snapshot) {
+    var base = widget.message.poll!;
+    if (snapshot != null && snapshot.id == base.id) {
+      // Tallies and lifecycle come from the snapshot; labels stay with base —
+      // E2EE polls carry their option texts in the encrypted payload, which
+      // server-sourced snapshots don't have.
+      final countById = {
+        for (final o in snapshot.options) o.id: o.voterCount,
+      };
+      final countByIndex = {
+        for (final o in snapshot.options) o.index: o.voterCount,
+      };
+      base = base.copyWith(
+        options: [
+          for (final o in base.options)
+            o.copyWith(
+              voterCount:
+                  countById[o.id] ?? countByIndex[o.index] ?? o.voterCount,
+            ),
+        ],
+        totalVoterCount: snapshot.totalVoterCount,
+        isClosed: base.isClosed || snapshot.isClosed,
+        // Broadcasts are voter-stripped — only a snapshot that knows the
+        // viewer's selection (vote response) may override the base echo.
+        voterOptionIds: snapshot.voterOptionIds.isNotEmpty
+            ? snapshot.voterOptionIds
+            : base.voterOptionIds,
+        correctOptionIds: snapshot.correctOptionIds.isNotEmpty
+            ? snapshot.correctOptionIds
+            : base.correctOptionIds,
+        explanation: snapshot.explanation,
+      );
+    }
     if (base.voterOptionIds.isNotEmpty || localVotes.isEmpty) return base;
     return base.copyWith(voterOptionIds: localVotes);
   }
 
   Future<void> _vote(PollOption option) async {
     final base = widget.message.poll;
-    if (base == null || base.isClosed || _voting) return;
-    final poll = _mergedPoll(context.read<ChatProvider>().myPollVotes(base.id));
+    if (base == null || _voting) return;
+    final chat = context.read<ChatProvider>();
+    final poll = _mergedPoll(
+      chat.myPollVotes(base.id),
+      chat.pollSnapshot(base.id),
+    );
+    if (poll.isClosed) return;
     final selected = poll.voterOptionIds.toSet();
     final next = poll.allowsMultipleAnswers
         ? (selected.contains(option.id)
@@ -3620,10 +3658,11 @@ class _PollBubbleState extends State<_PollBubble> {
     if (next.isEmpty) return;
     setState(() => _voting = true);
     try {
-      await context.read<ChatProvider>().votePoll(
+      await chat.votePoll(
         convID: widget.message.conversationId,
         pollID: poll.id,
         optionIDs: next,
+        isAnonymous: base.isAnonymous,
       );
     } finally {
       if (mounted) setState(() => _voting = false);
@@ -3680,10 +3719,25 @@ class _PollBubbleState extends State<_PollBubble> {
     }
   }
 
+  /// The provider's freshest server poll state, watched so bubbles hosted on
+  /// never-refreshed message snapshots (channel posts) repaint after votes
+  /// and poll_updated broadcasts.
+  Poll? _watchSnapshot(BuildContext context, String pollId) {
+    try {
+      return context.select<ChatProvider, Poll?>(
+        (chat) => chat.pollSnapshot(pollId),
+      );
+    } on ProviderNotFoundException {
+      return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final pollId = widget.message.poll!.id;
     final poll = _mergedPoll(
-      _watchLocalVotes(context, widget.message.poll!.id),
+      _watchLocalVotes(context, pollId),
+      _watchSnapshot(context, pollId),
     );
     final cs = Theme.of(context).colorScheme;
     final total = math.max(1, poll.totalVoterCount);
