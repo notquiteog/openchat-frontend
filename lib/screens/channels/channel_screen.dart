@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart' as lg;
 import 'package:provider/provider.dart';
@@ -40,6 +41,7 @@ import '../../widgets/custom_emoji_text_controller.dart';
 import '../../widgets/disappearing_messages_picker.dart';
 import '../../widgets/game_launcher.dart';
 import '../../widgets/day_separator.dart';
+import '../../widgets/desktop.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/message_action_sheet.dart';
 import '../../widgets/mention_autocomplete_panel.dart';
@@ -402,10 +404,15 @@ class ChannelFeedScreen extends StatefulWidget {
   final Conversation channel;
   final String? initialPostId;
 
+  /// True when rendered inside the desktop split view: hides the back button
+  /// since there is no route to pop.
+  final bool embedded;
+
   const ChannelFeedScreen({
     super.key,
     required this.channel,
     this.initialPostId,
+    this.embedded = false,
   });
 
   @override
@@ -444,6 +451,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   bool _archived = false;
   bool _showStickers = false;
   bool _showCustomEmojis = false;
+
+  /// True while a desktop drag carries files over the feed; drives the
+  /// drop-highlight overlay.
+  bool _dropHovering = false;
   bool _sendSilent = false;
   DateTime? _scheduledFor;
   AttachmentUploadProgress? _attachmentUploadProgress;
@@ -3189,6 +3200,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   bool get _canPostInBroadcastMode =>
       _hasChannelPermission(AdminPermission.postMessages);
 
+  /// Same gate as the composer: drops are only accepted where the user could
+  /// post the file through the attachment picker anyway.
+  bool get _canAcceptDroppedFiles =>
+      (_canPostInBroadcastMode || (!channel.ownerOnlyPost && _isSubscribed)) &&
+      !_archived &&
+      !channel.isArchived;
+
   bool get _canPinChannelPosts {
     final user = context.read<AuthProvider>().currentUser;
     return _hasChannelPermission(AdminPermission.managePins) ||
@@ -3794,6 +3812,16 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       return;
     }
 
+    await _postPreparedAttachment(pending, attachmentService);
+  }
+
+  /// Uploads an encrypted attachment and posts it to the channel, falling
+  /// back to the offline outbox when disconnected. Shared by the attachment
+  /// picker and desktop drag-and-drop.
+  Future<void> _postPreparedAttachment(
+    EncryptedAttachmentUpload pending,
+    AttachmentService attachmentService,
+  ) async {
     try {
       _setAttachmentUploadProgress(
         const AttachmentUploadProgress(stage: AttachmentUploadStage.sending),
@@ -3826,6 +3854,38 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       showAppToast(context, 'Upload failed: $e', isError: true);
     } finally {
       _clearAttachmentUploadProgress();
+    }
+  }
+
+  /// Posts files dropped onto the channel feed (desktop drag-and-drop)
+  /// through the same encrypt-upload-post path as the attachment picker.
+  Future<void> _sendDroppedFiles(List<XFile> files) async {
+    if (files.isEmpty || !mounted) return;
+    final attachmentService = AttachmentService(context.read<ApiService>());
+    for (final file in files) {
+      EncryptedAttachmentUpload pending;
+      try {
+        _setAttachmentUploadProgress(
+          const AttachmentUploadProgress(
+            stage: AttachmentUploadStage.preparing,
+          ),
+        );
+        final prepared = await AttachmentService.prepareSelectedFileForUpload(
+          file,
+        );
+        pending = await attachmentService.encryptPreparedAttachment(
+          prepared,
+          onProgress: _setAttachmentUploadProgress,
+        );
+      } catch (e) {
+        _clearAttachmentUploadProgress();
+        if (!mounted) return;
+        showAppToast(context, 'Could not send ${file.name}: $e', isError: true);
+        continue;
+      }
+      if (!mounted) return;
+      await _postPreparedAttachment(pending, attachmentService);
+      if (!mounted) return;
     }
   }
 
@@ -4060,6 +4120,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       resizeToAvoidBottomInset: false,
       appBar: GlassAppBar(
         titleSpacing: 0,
+        automaticallyImplyLeading: !widget.embedded,
         title: InkWell(
           onTap: _showChannelInfo,
           child: Row(
@@ -4122,211 +4183,230 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             TextButton(onPressed: _subscribe, child: const Text('Subscribe')),
         ],
       ),
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: DecoratedBox(decoration: _channelBackground()),
-          ),
-          AnimatedPadding(
-            padding: EdgeInsets.only(bottom: keyboardInset),
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOutCubic,
-            child: Column(
-              children: [
-                SizedBox(
-                  height: MediaQuery.paddingOf(context).top + kToolbarHeight,
-                ),
-                if (_archived || channel.isArchived)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Theme.of(
-                          context,
-                        ).colorScheme.onSurface.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
+      body: DropTarget(
+        onDragEntered: (_) {
+          if (_canAcceptDroppedFiles) setState(() => _dropHovering = true);
+        },
+        onDragExited: (_) => setState(() => _dropHovering = false),
+        onDragDone: (details) {
+          setState(() => _dropHovering = false);
+          if (!_canAcceptDroppedFiles) return;
+          unawaited(_sendDroppedFiles(details.files));
+        },
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: DecoratedBox(decoration: _channelBackground()),
+            ),
+            AnimatedPadding(
+              padding: EdgeInsets.only(bottom: keyboardInset),
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              child: Column(
+                children: [
+                  SizedBox(
+                    height: MediaQuery.paddingOf(context).top + kToolbarHeight,
+                  ),
+                  if (_archived || channel.isArchived)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
                           color: Theme.of(
                             context,
-                          ).colorScheme.onSurface.withValues(alpha: 0.16),
-                          width: 0.7,
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.archive_outlined,
-                            size: 15,
+                          ).colorScheme.onSurface.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
                             color: Theme.of(
                               context,
-                            ).colorScheme.onSurface.withValues(alpha: 0.55),
+                            ).colorScheme.onSurface.withValues(alpha: 0.16),
+                            width: 0.7,
                           ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'This channel has been archived and is read-only.',
-                              style: TextStyle(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurface.withValues(alpha: 0.60),
-                                fontSize: 13,
-                              ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.archive_outlined,
+                              size: 15,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurface.withValues(alpha: 0.55),
                             ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                if (pinnedMessages.isNotEmpty)
-                  _PinnedChannelMessagesBar(
-                    latestPinnedMessage: pinnedMessages.first,
-                    pinnedCount: pinnedMessages.length,
-                    onTap: () => _jumpToPinnedMessage(pinnedMessages.first),
-                    onShowAll: () =>
-                        _showPinnedMessagesSheet(pinnedMessages, canManagePins),
-                  ),
-                Expanded(
-                  child: _loading
-                      ? const Center(child: GlassProgressIndicator.circular())
-                      : _posts.isEmpty
-                      ? Center(
-                          child: GlassContainer(
-                            shape: LiquidRoundedSuperellipse(borderRadius: 999),
-                            allowElevation: true,
-                            glowIntensity: 0.05,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 20,
-                                vertical: 12,
-                              ),
+                            const SizedBox(width: 8),
+                            Expanded(
                               child: Text(
-                                'No posts yet',
+                                'This channel has been archived and is read-only.',
                                 style: TextStyle(
-                                  fontSize: 14,
                                   color: Theme.of(context).colorScheme.onSurface
-                                      .withValues(alpha: 0.55),
-                                  fontWeight: FontWeight.w500,
+                                      .withValues(alpha: 0.60),
+                                  fontSize: 13,
                                 ),
                               ),
                             ),
-                          ),
-                        )
-                      : ListView.builder(
-                          controller: _scrollCtrl,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 8,
-                          ),
-                          itemCount: _posts.length,
-                          itemBuilder: (context, i) {
-                            final msg = _posts[i];
-                            final isMe = msg.senderId == currentUserId;
-                            final isPinned = settings.isChannelMessagePinned(
-                              channel.id,
-                              msg.id,
-                            );
-                            final showAvatar =
-                                !isMe &&
-                                (i == _posts.length - 1 ||
-                                    _posts[i + 1].senderId != msg.senderId);
-                            final postKey = _postKeys.putIfAbsent(
-                              msg.id,
-                              GlobalKey.new,
-                            );
-                            // First post of a calendar day gets a centered
-                            // day chip above it (mirrors the chat stream).
-                            final showDayHeader =
-                                i == 0 ||
-                                !isSameCalendarDay(
-                                  _posts[i - 1].createdAt,
-                                  msg.createdAt,
-                                );
-                            final post = KeyedSubtree(
-                              key: postKey,
-                              child: _AnimatedChannelPost(
-                                id: msg.id,
-                                child: _PinnedChannelPostFrame(
-                                  isPinned: isPinned,
-                                  isHighlighted: _highlightedPostId == msg.id,
-                                  isMe: isMe,
-                                  child: MessageBubble(
-                                    message: msg,
-                                    isMe: isMe,
-                                    isChannel: true,
-                                    showAvatar: showAvatar,
-                                    meBubbleColor: meBubbleColor,
-                                    onTap: () => _showReactionMenu(msg),
-                                    onReactionTap: (emoji) =>
-                                        _toggleReaction(msg, emoji),
-                                    onLongPress: () => _showPostMenu(msg, isMe),
-                                    onSecondaryTapUp: (details) =>
-                                        _showPostMenu(
-                                          msg,
-                                          isMe,
-                                          anchor: details.globalPosition,
-                                        ),
-                                    onAvatarTap: msg.sender != null
-                                        ? () => _showChannelUserActions(msg)
-                                        : null,
+                          ],
+                        ),
+                      ),
+                    ),
+                  if (pinnedMessages.isNotEmpty)
+                    _PinnedChannelMessagesBar(
+                      latestPinnedMessage: pinnedMessages.first,
+                      pinnedCount: pinnedMessages.length,
+                      onTap: () => _jumpToPinnedMessage(pinnedMessages.first),
+                      onShowAll: () => _showPinnedMessagesSheet(
+                        pinnedMessages,
+                        canManagePins,
+                      ),
+                    ),
+                  Expanded(
+                    child: _loading
+                        ? const Center(child: GlassProgressIndicator.circular())
+                        : _posts.isEmpty
+                        ? Center(
+                            child: GlassContainer(
+                              shape: LiquidRoundedSuperellipse(
+                                borderRadius: 999,
+                              ),
+                              allowElevation: true,
+                              glowIntensity: 0.05,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 20,
+                                  vertical: 12,
+                                ),
+                                child: Text(
+                                  'No posts yet',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurface
+                                        .withValues(alpha: 0.55),
+                                    fontWeight: FontWeight.w500,
                                   ),
                                 ),
                               ),
-                            );
-                            if (!showDayHeader) return post;
-                            return Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                DaySeparator(
-                                  label: daySeparatorLabel(msg.createdAt),
+                            ),
+                          )
+                        : ListView.builder(
+                            controller: _scrollCtrl,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 8,
+                            ),
+                            itemCount: _posts.length,
+                            itemBuilder: (context, i) {
+                              final msg = _posts[i];
+                              final isMe = msg.senderId == currentUserId;
+                              final isPinned = settings.isChannelMessagePinned(
+                                channel.id,
+                                msg.id,
+                              );
+                              final showAvatar =
+                                  !isMe &&
+                                  (i == _posts.length - 1 ||
+                                      _posts[i + 1].senderId != msg.senderId);
+                              final postKey = _postKeys.putIfAbsent(
+                                msg.id,
+                                GlobalKey.new,
+                              );
+                              // First post of a calendar day gets a centered
+                              // day chip above it (mirrors the chat stream).
+                              final showDayHeader =
+                                  i == 0 ||
+                                  !isSameCalendarDay(
+                                    _posts[i - 1].createdAt,
+                                    msg.createdAt,
+                                  );
+                              final post = KeyedSubtree(
+                                key: postKey,
+                                child: _AnimatedChannelPost(
+                                  id: msg.id,
+                                  child: _PinnedChannelPostFrame(
+                                    isPinned: isPinned,
+                                    isHighlighted: _highlightedPostId == msg.id,
+                                    isMe: isMe,
+                                    child: MessageBubble(
+                                      message: msg,
+                                      isMe: isMe,
+                                      isChannel: true,
+                                      showAvatar: showAvatar,
+                                      meBubbleColor: meBubbleColor,
+                                      onTap: () => _showReactionMenu(msg),
+                                      onReactionTap: (emoji) =>
+                                          _toggleReaction(msg, emoji),
+                                      onLongPress: () =>
+                                          _showPostMenu(msg, isMe),
+                                      onSecondaryTapUp: (details) =>
+                                          _showPostMenu(
+                                            msg,
+                                            isMe,
+                                            anchor: details.globalPosition,
+                                          ),
+                                      onAvatarTap: msg.sender != null
+                                          ? () => _showChannelUserActions(msg)
+                                          : null,
+                                    ),
+                                  ),
                                 ),
-                                post,
-                              ],
-                            );
-                          },
-                        ),
-                ),
+                              );
+                              if (!showDayHeader) return post;
+                              return Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  DaySeparator(
+                                    label: daySeparatorLabel(msg.createdAt),
+                                  ),
+                                  post,
+                                ],
+                              );
+                            },
+                          ),
+                  ),
 
-                if (_showCustomEmojis)
-                  CustomEmojiPicker(onEmojiSelected: _insertCustomEmoji),
-                if (_showStickers)
-                  StickerPicker(onStickerSelected: _sendSticker),
-                if (_attachmentUploadProgress != null)
-                  AttachmentUploadProgressChip(
-                    progress: _attachmentUploadProgress!,
-                  ),
-                // Admins can always post. When admin-only posting is OFF, any
-                // subscriber can post too. Archived channels are read-only.
-                if ((_canPostInBroadcastMode ||
-                        (!channel.ownerOnlyPost && _isSubscribed)) &&
-                    !_archived &&
-                    !channel.isArchived)
-                  ChannelPostBar(
-                    controller: _inputCtrl,
-                    showStickers: _showStickers,
-                    showCustomEmojis: _showCustomEmojis,
-                    onToggleCustomEmojis: () => setState(() {
-                      _showCustomEmojis = !_showCustomEmojis;
-                      if (_showCustomEmojis) _showStickers = false;
-                    }),
-                    onToggleStickers: () => setState(() {
-                      _showStickers = !_showStickers;
-                      if (_showStickers) _showCustomEmojis = false;
-                    }),
-                    onAttach: _showAttachmentPicker,
-                    onOptions: _showSendOptions,
-                    hasOptions: _sendSilent || _scheduledFor != null,
-                    mentionSuggestions: mentionSuggestions,
-                    onMentionSelected: _insertMention,
-                    onPost: _post,
-                  ),
-              ],
+                  if (_showCustomEmojis)
+                    CustomEmojiPicker(onEmojiSelected: _insertCustomEmoji),
+                  if (_showStickers)
+                    StickerPicker(onStickerSelected: _sendSticker),
+                  if (_attachmentUploadProgress != null)
+                    AttachmentUploadProgressChip(
+                      progress: _attachmentUploadProgress!,
+                    ),
+                  // Admins can always post. When admin-only posting is OFF, any
+                  // subscriber can post too. Archived channels are read-only.
+                  if ((_canPostInBroadcastMode ||
+                          (!channel.ownerOnlyPost && _isSubscribed)) &&
+                      !_archived &&
+                      !channel.isArchived)
+                    ChannelPostBar(
+                      controller: _inputCtrl,
+                      showStickers: _showStickers,
+                      showCustomEmojis: _showCustomEmojis,
+                      onToggleCustomEmojis: () => setState(() {
+                        _showCustomEmojis = !_showCustomEmojis;
+                        if (_showCustomEmojis) _showStickers = false;
+                      }),
+                      onToggleStickers: () => setState(() {
+                        _showStickers = !_showStickers;
+                        if (_showStickers) _showCustomEmojis = false;
+                      }),
+                      onAttach: _showAttachmentPicker,
+                      onOptions: _showSendOptions,
+                      hasOptions: _sendSilent || _scheduledFor != null,
+                      mentionSuggestions: mentionSuggestions,
+                      onMentionSelected: _insertMention,
+                      onPost: _post,
+                    ),
+                ],
+              ),
             ),
-          ),
-        ],
+            // Desktop drag-and-drop affordance while files hover over the feed.
+            if (_dropHovering) const DropFilesOverlay(),
+          ],
+        ),
       ),
     );
   }

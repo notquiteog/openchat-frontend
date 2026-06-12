@@ -359,6 +359,62 @@ class _RailButtonState extends State<_RailButton> {
   }
 }
 
+// ── Drag-and-drop overlay ───────────────────────────────────────────────────
+
+/// Full-pane highlight shown while a desktop drag carries files over a
+/// message surface. Place as the last child of the screen's body Stack.
+class DropFilesOverlay extends StatelessWidget {
+  const DropFilesOverlay({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: Container(
+          margin: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: scheme.primary.withValues(alpha: 0.07),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: scheme.primary.withValues(alpha: 0.55),
+              width: 2,
+            ),
+          ),
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+              decoration: BoxDecoration(
+                color: scheme.primary,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.file_upload_outlined,
+                    color: scheme.onPrimary,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Drop files to send',
+                    style: TextStyle(
+                      color: scheme.onPrimary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ── Split-view sidebar resize handle ────────────────────────────────────────
 
 /// Invisible-until-hovered drag strip between the inbox sidebar and the chat

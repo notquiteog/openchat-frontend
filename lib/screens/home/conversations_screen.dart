@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
@@ -47,8 +48,8 @@ double? storiesSnapTarget(double offset, double extent) {
 class ConversationsScreenState extends State<ConversationsScreen> {
   String? _selectedFolderId;
 
-  /// Desktop split view: the conversation open in the right pane. Channels
-  /// keep their full-screen feed; everything else embeds.
+  /// Desktop split view: the conversation (chat or channel feed) open in the
+  /// right pane.
   String? _splitSelectedId;
   String? _splitInitialMessageId;
 
@@ -407,46 +408,68 @@ class ConversationsScreenState extends State<ConversationsScreen> {
           SettingsProvider.maxDesktopSidebarWidth,
         )
         .toDouble();
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SizedBox(width: sidebarWidth, child: inbox),
-        SidebarResizeHandle(
-          onDragDelta: (dx) => setState(() {
-            _draggingSidebarWidth =
-                ((_draggingSidebarWidth ?? sidebarWidth) + dx)
-                    .clamp(
-                      SettingsProvider.minDesktopSidebarWidth,
-                      SettingsProvider.maxDesktopSidebarWidth,
-                    )
-                    .toDouble();
-          }),
-          onDragEnd: () {
-            final width = _draggingSidebarWidth;
-            if (width == null) return;
-            settings.setDesktopSidebarWidth(width);
-            setState(() => _draggingSidebarWidth = null);
-          },
-          onReset: () {
-            settings.setDesktopSidebarWidth(
-              SettingsProvider.defaultDesktopSidebarWidth,
-            );
-            setState(() => _draggingSidebarWidth = null);
-          },
-        ),
-        Expanded(
-          child: selected == null
-              ? _SplitViewPlaceholder()
-              : ChatScreen(
-                  // Keyed by conversation so switching chats rebuilds state
-                  // (controllers, drafts, read receipts) from scratch.
-                  key: ValueKey('split-${selected.id}'),
-                  conversation: selected,
-                  initialMessageId: _splitInitialMessageId,
-                  embedded: true,
-                ),
-        ),
-      ],
+    // Esc closes the open pane. CallbackShortcuts fires from any focused
+    // descendant, including the embedded composer's text field.
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): () {
+          if (_splitSelectedId == null) return;
+          setState(() {
+            _splitSelectedId = null;
+            _splitInitialMessageId = null;
+          });
+        },
+      },
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(width: sidebarWidth, child: inbox),
+          SidebarResizeHandle(
+            onDragDelta: (dx) => setState(() {
+              _draggingSidebarWidth =
+                  ((_draggingSidebarWidth ?? sidebarWidth) + dx)
+                      .clamp(
+                        SettingsProvider.minDesktopSidebarWidth,
+                        SettingsProvider.maxDesktopSidebarWidth,
+                      )
+                      .toDouble();
+            }),
+            onDragEnd: () {
+              final width = _draggingSidebarWidth;
+              if (width == null) return;
+              settings.setDesktopSidebarWidth(width);
+              setState(() => _draggingSidebarWidth = null);
+            },
+            onReset: () {
+              settings.setDesktopSidebarWidth(
+                SettingsProvider.defaultDesktopSidebarWidth,
+              );
+              setState(() => _draggingSidebarWidth = null);
+            },
+          ),
+          Expanded(
+            child: selected == null
+                ? _SplitViewPlaceholder()
+                : selected.isChannel
+                ? ChannelFeedScreen(
+                    // Keyed by conversation so switching rebuilds state from
+                    // scratch (feed, composer, member loads).
+                    key: ValueKey('split-${selected.id}'),
+                    channel: selected,
+                    initialPostId: _splitInitialMessageId,
+                    embedded: true,
+                  )
+                : ChatScreen(
+                    // Keyed by conversation so switching chats rebuilds state
+                    // (controllers, drafts, read receipts) from scratch.
+                    key: ValueKey('split-${selected.id}'),
+                    conversation: selected,
+                    initialMessageId: _splitInitialMessageId,
+                    embedded: true,
+                  ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -735,9 +758,9 @@ class ConversationsScreenState extends State<ConversationsScreen> {
     Conversation conv, {
     String? initialMessageId,
   }) {
-    // Wide desktop windows open chats beside the inbox instead of pushing a
-    // full-screen route. Channels keep their feed screen for now.
-    if (!conv.isChannel && _useSplitView(context)) {
+    // Wide desktop windows open chats and channel feeds beside the inbox
+    // instead of pushing a full-screen route.
+    if (_useSplitView(context)) {
       setState(() {
         _splitSelectedId = conv.id;
         _splitInitialMessageId = initialMessageId;

@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.5.54+130
+version: 0.5.55+130
 publish_to: 'none'
 
 environment:
@@ -138,7 +138,7 @@ dependencies:
   # Direct use: the 3D die needs Vector3 normals (same library Flutter's
   # Matrix4 comes from; exact version pinned in dependency_overrides).
   vector_math: ^2.4.0
-
+  desktop_drop: ^0.7.1
 flutter:
   uses-material-design: true
   assets:

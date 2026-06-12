@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   app_links
   ble_peripheral
   connectivity_plus
+  desktop_drop
   file_selector_windows
   firebase_core
   flutter_blue_ce_winrt
