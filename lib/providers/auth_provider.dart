@@ -7,7 +7,9 @@ import '../crypto/pgp_service.dart';
 import '../models/key_trust_pin.dart';
 import '../models/user.dart';
 import '../services/api_service.dart';
+import '../services/call_history_service.dart';
 import '../services/key_cache_service.dart';
+import '../services/local_private_state_service.dart';
 import '../services/secure_storage_service.dart';
 
 enum AuthState { unknown, unauthenticated, authenticated }
@@ -15,6 +17,12 @@ enum AuthState { unknown, unauthenticated, authenticated }
 class AuthProvider extends ChangeNotifier {
   final ApiService _api;
   final SecureStorageService _storage;
+  // Device-global stores wiped at logout so the next account on this device
+  // can't inherit the previous one's call log or drafts/private local state.
+  // Inject the app's shared instances where available (main.dart passes the
+  // live CallHistoryService) so their cached key material is reset too.
+  final CallHistoryService _callHistory;
+  final LocalPrivateStateService _privateState;
 
   AuthState _state = AuthState.unknown;
   User? _currentUser;
@@ -31,7 +39,15 @@ class AuthProvider extends ChangeNotifier {
   bool get isLoading => _isLoading;
   bool get isAuthenticated => _state == AuthState.authenticated;
 
-  AuthProvider(this._api, this._storage);
+  AuthProvider(
+    this._api,
+    this._storage, {
+    CallHistoryService? callHistoryService,
+    LocalPrivateStateService? localPrivateStateService,
+  }) : _callHistory = callHistoryService ?? CallHistoryService(_storage),
+       _privateState =
+           localPrivateStateService ??
+           LocalPrivateStateService(storage: _storage);
 
   Future<void> initialize() async {
     try {
@@ -234,11 +250,30 @@ class AuthProvider extends ChangeNotifier {
     } catch (_) {}
   }
 
+  /// Clears the session plus every device-global plaintext store the next
+  /// account must not inherit. Each wipe is individually best-effort: one
+  /// failing store must never leave the user stuck logged in (the duress /
+  /// remote-wipe path additionally runs LocalWipeService.wipeEverything()
+  /// BEFORE calling this, which destroys keys and files wholesale).
+  /// ChatProvider.clearState() — invoked by the app shell when this state
+  /// change lands — wipes the remaining stores it owns: decrypted-message
+  /// cache (+ its at-rest key), search index, and offline outbox.
   Future<void> logout() async {
     await _storage.clearSession();
     // Clear the public-key cache so stale entries from this session can't
     // affect the next login (different user, or same user with a new key).
-    await KeyCacheService.clear();
+    try {
+      await KeyCacheService.clear();
+    } catch (_) {}
+    // Local call log: rows are not user-scoped.
+    try {
+      await _callHistory.clear();
+    } catch (_) {}
+    // Encrypted private local state: drafts, folders, private contacts,
+    // hidden conversations — all belong to the account logging out.
+    try {
+      await _privateState.clearState();
+    } catch (_) {}
     _currentUser = null;
     _state = AuthState.unauthenticated;
     _error = null;

@@ -4,7 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:provider/provider.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
-    show GlassButton, GlassModalSheet, SheetState;
+    show GlassModalSheet, SheetState;
 import '../../models/chat_folder.dart';
 import '../../models/conversation.dart';
 import '../../models/message.dart';
@@ -369,28 +369,8 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                 ],
               ),
             ),
-      floatingActionButton: Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.paddingOf(context).bottom),
-        child: Tooltip(
-          message: 'New chat',
-          child: GlassButton(
-            icon: const Icon(
-              Icons.edit_outlined,
-              color: Colors.white,
-              size: 24,
-            ),
-            label: '',
-            onTap: () => showNewConversation(),
-            width: 56,
-            height: 56,
-            iconColor: Colors.white,
-            glowColor: Theme.of(context).colorScheme.primary,
-            glowRadius: 1.2,
-            interactionScale: 1.08,
-            stretch: 0.6,
-          ),
-        ),
-      ),
+      // New chat lives in the 3-dot "Chats menu" sheet (and Ctrl/Cmd+N on
+      // desktop) — no floating compose button crowding the list.
     );
 
     if (!_useSplitView(context)) return inbox;
@@ -477,7 +457,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
     await GlassModalSheet.show<void>(
       context: context,
       initialState: SheetState.half,
-      halfSize: 0.36,
+      halfSize: 0.44,
       enableInteractionGlow: true,
       builder: (sheetContext) {
         void runAfterClose(VoidCallback action) {
@@ -499,6 +479,12 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                 title: 'Chats menu',
                 subtitle: 'Organize, browse stories, or tune OpenChat.',
                 onClose: () => Navigator.of(sheetContext).pop(),
+              ),
+              GlassActionTile(
+                icon: Icons.edit_outlined,
+                label: 'New chat',
+                subtitle: 'Message a person, or start a group or channel',
+                onTap: () => runAfterClose(() => showNewConversation()),
               ),
               GlassActionTile(
                 icon: Icons.folder_outlined,

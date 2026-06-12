@@ -689,9 +689,33 @@ class _DiceBubbleState extends State<_DiceBubble>
     super.dispose();
   }
 
-  /// The 🎲 path: a perspective cube tumbling through seeded spins, hopping
-  /// twice off the ground, and easing onto the server-decided face. Pure
-  /// function of t, like the glyph path.
+  /// Die height above the ground at [t]: an initial drop from the "throw",
+  /// then three gravity rebounds with geometrically decaying apexes — each
+  /// arc is a true parabola, so the motion reads as weight, not as a wave.
+  static double _bounceHeight(double t) {
+    if (t < 0.40) {
+      final s = t / 0.40;
+      return 26.0 * (1 - s * s);
+    }
+    if (t < 0.68) {
+      final s = (t - 0.40) / 0.28;
+      return 12.0 * 4 * s * (1 - s);
+    }
+    if (t < 0.86) {
+      final s = (t - 0.68) / 0.18;
+      return 4.5 * 4 * s * (1 - s);
+    }
+    if (t < 0.95) {
+      final s = (t - 0.86) / 0.09;
+      return 1.5 * 4 * s * (1 - s);
+    }
+    return 0.0;
+  }
+
+  /// The 🎲 path: a perspective cube thrown in from one side, tumbling
+  /// through seeded spins, rebounding off the ground with decaying gravity
+  /// arcs, and settling onto the server-decided face. Pure function of t,
+  /// like the glyph path.
   Widget _die3d(double t) {
     const dieSize = 54.0;
     final seed = widget.messageId.hashCode & 0x7fffffff;
@@ -700,41 +724,58 @@ class _DiceBubbleState extends State<_DiceBubble>
     final spinsY =
         (3 + (seed >> 3) % 2) * (((seed >> 7) & 1) == 0 ? 1.0 : -1.0);
     final (targetX, targetY) = Die3D.targetRotationFor(widget.dice.value);
-    // A fixed presentation tilt keeps two extra edges visible once settled —
-    // composed OUTSIDE the spin so the landed face still points at the
-    // viewer.
+    // A fixed presentation tilt (viewer slightly above table level, so the
+    // TOP face shows) keeps two extra edges visible once settled — composed
+    // OUTSIDE the spin so the landed face still points at the viewer.
     final rotation = Matrix4.identity()
-      ..rotateX(-0.30)
+      ..rotateX(0.30)
       ..rotateY(0.36)
       ..rotateX(targetX + spinsX * 2 * math.pi * (1 - ease))
       ..rotateY(targetY + spinsY * 2 * math.pi * (1 - ease));
-    final hop = t < 1.0
-        ? 24.0 * (1 - t) * math.sin(t * math.pi * 3).abs()
-        : 0.0;
-    final lift = hop / 24.0;
+    final hop = _bounceHeight(t);
+    final lift = (hop / 26.0).clamp(0.0, 1.0);
+    // Sideways skid from the throw, dying out as the die settles.
+    final drift = 11.0 *
+        (1 - Curves.easeOutCubic.transform(t)) *
+        (((seed >> 9) & 1) == 0 ? 1.0 : -1.0);
     return SizedBox(
       width: 96,
-      height: 88,
+      height: 92,
       child: Stack(
         alignment: Alignment.bottomCenter,
         clipBehavior: Clip.none,
         children: [
+          // Contact shadow: soft-edged, and it spreads/lightens as the die
+          // rises, snapping tight and dark on each landing.
           Positioned(
-            bottom: 2,
-            child: Container(
-              width: dieSize * (1.0 - 0.3 * lift),
-              height: 9,
-              decoration: BoxDecoration(
-                borderRadius: const BorderRadius.all(
-                  Radius.elliptical(27, 4.5),
+            bottom: 4,
+            child: Transform.translate(
+              offset: Offset(drift * 0.6, 0),
+              child: Container(
+                width: dieSize * (1.02 - 0.30 * lift),
+                height: 7,
+                decoration: BoxDecoration(
+                  borderRadius: const BorderRadius.all(
+                    Radius.elliptical(27, 3.5),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(
+                        alpha: 0.30 - 0.19 * lift,
+                      ),
+                      blurRadius: 5 + 7 * lift,
+                    ),
+                  ],
                 ),
-                color: Colors.black.withValues(alpha: 0.28 - 0.16 * lift),
               ),
             ),
           ),
           Positioned(
             bottom: 12 + hop,
-            child: Die3D(rotation: rotation, size: dieSize),
+            child: Transform.translate(
+              offset: Offset(drift, 0),
+              child: Die3D(rotation: rotation, size: dieSize),
+            ),
           ),
         ],
       ),

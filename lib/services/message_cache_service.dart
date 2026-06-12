@@ -143,20 +143,51 @@ class MessageCacheService {
     } catch (_) {}
   }
 
-  Future<sqlite.Database> _open() {
+  /// Logout wipe: the cache DB is device-global, so without this the next
+  /// account logging in on this device gets cache hits on the previous
+  /// account's decrypted MLS plaintext. Deletes every row AND the at-rest key
+  /// so residual ciphertext in sqlite free pages / WAL is garbage too. The
+  /// next account mints a fresh key on its first cache write.
+  Future<void> clearAll() async {
+    if (kIsWeb) return;
+    try {
+      final db = await _open();
+      db.execute('DELETE FROM message_cache');
+    } catch (_) {}
+    // Drop cached key material so the next put() picks up the fresh key
+    // rather than encrypting new rows with the deleted one.
+    _secretKey = null;
+    _keyBytes = null;
+    try {
+      await _storage.deleteMessageCacheKey();
+    } catch (_) {}
+  }
+
+  Future<sqlite.Database> _open() async {
     final existing = _db;
-    if (existing != null) return Future.value(existing);
-    final opening = _opening;
-    if (opening != null) return opening;
-    _opening = _openDatabase();
-    return _opening!;
+    if (existing != null) return existing;
+
+    final inFlight = _opening;
+    if (inFlight != null) return inFlight;
+
+    // Clear _opening in `finally` (mirrors KeyCacheService): caching a FAILED
+    // open future forever would turn one transient failure (locked keyring,
+    // slow disk at launch) into a cache disabled until app restart.
+    final opening = _openDatabase();
+    _opening = opening;
+    try {
+      final db = await opening;
+      _db = db;
+      return db;
+    } finally {
+      _opening = null;
+    }
   }
 
   Future<sqlite.Database> _openDatabase() async {
     final path = _databasePath ?? await _defaultDatabasePath();
     final db = sqlite.sqlite3.open(path);
     _migrate(db);
-    _db = db;
     return db;
   }
 

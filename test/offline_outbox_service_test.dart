@@ -110,10 +110,129 @@ void main() {
     },
   );
 
-  test('ignores unreadable encrypted store data', () async {
-    await File(storePath).writeAsString('not encrypted outbox data');
+  test(
+    'quarantines an unreadable store instead of silently losing it',
+    () async {
+      await File(storePath).writeAsString('not encrypted outbox data');
+
+      expect(await service.list(), isEmpty);
+
+      final quarantined = File('$storePath.corrupt');
+      expect(
+        await quarantined.exists(),
+        isTrue,
+        reason:
+            'corrupt bytes must be moved aside for recovery, not '
+            'overwritten by the next write',
+      );
+      expect(await quarantined.readAsString(), 'not encrypted outbox data');
+      expect(await File(storePath).exists(), isFalse);
+
+      // The store must keep working after quarantine.
+      await service.upsert(
+        _item(
+          id: 'after-corruption',
+          action: OfflineOutboxAction.sendMessage,
+          createdAt: DateTime.utc(2026, 1, 1),
+        ),
+      );
+      expect((await service.list()).single.id, 'after-corruption');
+    },
+  );
+
+  test('quarantines a truncated store file on read', () async {
+    await service.upsert(
+      _item(
+        id: 'outbox-1',
+        action: OfflineOutboxAction.sendMessage,
+        createdAt: DateTime.utc(2026, 1, 1),
+        data: {'plaintext': 'queued while offline'},
+      ),
+    );
+
+    // Simulate a torn write from a crash: keep a prefix whose length is not
+    // a multiple of 4 so the damage is structurally detectable.
+    final file = File(storePath);
+    final encoded = await file.readAsString();
+    await file.writeAsString(encoded.substring(0, (encoded.length ~/ 2) | 1));
 
     expect(await service.list(), isEmpty);
+    expect(await File('$storePath.corrupt').exists(), isTrue);
+    expect(await file.exists(), isFalse);
+  });
+
+  test('a wrong key reads empty WITHOUT quarantining the store', () async {
+    await service.upsert(
+      _item(
+        id: 'outbox-1',
+        action: OfflineOutboxAction.sendMessage,
+        createdAt: DateTime.utc(2026, 1, 1),
+      ),
+    );
+
+    // A throwaway session key (locked Linux keyring at launch) must not move
+    // the intact store aside — it recovers next session with the real key.
+    final wrongKeyReader = OfflineOutboxService(
+      SecureStorageService(),
+      storePath: storePath,
+      attachmentDirPath: p.join(tempDir.path, 'attachments'),
+      keyLoader: () async => List<int>.generate(32, (index) => 255 - index),
+    );
+
+    expect(await wrongKeyReader.list(), isEmpty);
+    expect(await File('$storePath.corrupt').exists(), isFalse);
+    expect(await File(storePath).exists(), isTrue);
+    expect((await service.list()).single.id, 'outbox-1');
+  });
+
+  test('writes are atomic: no .tmp sibling survives and concurrent writers '
+      'never drop each other\'s items', () async {
+    final items = List.generate(
+      8,
+      (i) => _item(
+        id: 'outbox-$i',
+        action: OfflineOutboxAction.sendMessage,
+        createdAt: DateTime.utc(2026, 1, 1 + i),
+      ),
+    );
+
+    // Unserialized read-modify-write cycles would each read the same initial
+    // store and clobber one another (last writer wins).
+    await Future.wait(items.map(service.upsert));
+
+    final restored = await service.list();
+    expect(
+      restored.map((item) => item.id),
+      items.map((item) => item.id),
+      reason:
+          'concurrent upserts must be serialized through the mutation '
+          'chain',
+    );
+    expect(await File('$storePath.tmp').exists(), isFalse);
+
+    // Mixed mutations stay serialized too.
+    await Future.wait([
+      service.remove('outbox-0'),
+      service.upsert(
+        _item(
+          id: 'outbox-9',
+          action: OfflineOutboxAction.sendMessage,
+          createdAt: DateTime.utc(2026, 1, 20),
+        ),
+      ),
+      service.remove('outbox-3'),
+    ]);
+
+    expect((await service.list()).map((item) => item.id), [
+      'outbox-1',
+      'outbox-2',
+      'outbox-4',
+      'outbox-5',
+      'outbox-6',
+      'outbox-7',
+      'outbox-9',
+    ]);
+    expect(await File('$storePath.tmp').exists(), isFalse);
   });
 
   test('keeps custom outbox stores isolated', () async {

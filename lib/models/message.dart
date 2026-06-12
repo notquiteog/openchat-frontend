@@ -1173,7 +1173,11 @@ class Poll {
     isAnonymous: json['is_anonymous'] as bool? ?? true,
     allowsMultipleAnswers: json['allows_multiple_answers'] as bool? ?? false,
     allowsRevoting: json['allows_revoting'] as bool? ?? false,
-    isClosed: (json['is_closed'] as bool?) ?? json['closed_at'] != null,
+    // The server sends a derived is_closed (explicit stop OR close_date
+    // passed); older payloads fall back to the same derivation client-side.
+    isClosed:
+        (json['is_closed'] as bool?) ??
+        (json['closed_at'] != null || _closeDatePassed(json['close_date'])),
     totalVoterCount: json['total_voter_count'] as int? ?? 0,
     options: (json['options'] as List? ?? [])
         .map((e) => PollOption.fromJson(e as Map<String, dynamic>))
@@ -1186,6 +1190,14 @@ class Poll {
         .toList(),
     explanation: json['explanation'] as String?,
   );
+
+  /// A poll past its close_date no longer accepts votes server-side — render
+  /// it closed even when no explicit closed_at/is_closed arrived.
+  static bool _closeDatePassed(Object? closeDate) {
+    if (closeDate is! String) return false;
+    final parsed = DateTime.tryParse(closeDate);
+    return parsed != null && !parsed.isAfter(DateTime.now());
+  }
 
   bool get isQuiz => type == 'quiz';
   bool get isMeeting => type == 'meeting';

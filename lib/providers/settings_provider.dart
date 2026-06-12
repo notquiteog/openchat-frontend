@@ -470,6 +470,35 @@ class SettingsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Drops all account-scoped private state from memory without persisting.
+  ///
+  /// Called on logout *after* the on-disk encrypted blob is wiped: a later
+  /// `_persistPrivateLocalState` must not resurrect the previous account's
+  /// drafts/contacts/folders from these mirrors, and the next account must
+  /// not see them before its own load. Device-level prefs (theme, font
+  /// scale, …) intentionally survive.
+  void resetPrivateLocalState() {
+    final notificationDefaults = decodePrivateNotificationSettings(null);
+    _pushEnabled = notificationDefaults.pushEnabled;
+    _wsBgEnabled = notificationDefaults.wsBackgroundEnabled;
+    _notifSensitive = notificationDefaults.sensitiveContent;
+    _messageDrafts.clear();
+    _pinnedChannelMessages.clear();
+    _pinnedConversationIds.clear();
+    _closeFriendIds.clear();
+    _archivedConversationIds.clear();
+    _hiddenConversationIds.clear();
+    _conversationNotificationPreferences.clear();
+    _chatFolders.clear();
+    _broadcastLists.clear();
+    _privateContacts.clear();
+    _unreadMentionMessageIds.clear();
+    _privacyOnboardingViewedUserIds.clear();
+    _messageReminders.clear();
+    _viewedOnceMediaMessageIds.clear();
+    notifyListeners();
+  }
+
   Future<void> setSeedColor(Color color) async {
     _seedColor = color.toARGB32();
     notifyListeners();

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -105,6 +106,12 @@ class OfflineOutboxService {
   SecretKey? _secretKey;
   List<int>? _keyBytes;
 
+  /// Tail of the mutation chain. Every read-modify-write of the store file is
+  /// appended here, so concurrent writers (ChatProvider's upsert/update paths
+  /// racing drainOutbox) can never interleave their reads and writes and drop
+  /// each other's items.
+  Future<void> _mutationQueue = Future.value();
+
   OfflineOutboxService(
     SecureStorageService storage, {
     String? storePath,
@@ -132,7 +139,7 @@ class OfflineOutboxService {
 
   Future<List<OfflineOutboxItem>> list() => _readItems();
 
-  Future<void> upsert(OfflineOutboxItem item) async {
+  Future<void> upsert(OfflineOutboxItem item) => _enqueueMutation(() async {
     final items = List<OfflineOutboxItem>.from(await _readItems());
     final index = items.indexWhere((existing) => existing.id == item.id);
     if (index == -1) {
@@ -142,15 +149,16 @@ class OfflineOutboxService {
     }
     items.sort((a, b) => a.createdAt.compareTo(b.createdAt));
     await _writeItems(items);
-  }
+  });
 
-  Future<void> replaceAll(List<OfflineOutboxItem> items) async {
-    final sorted = List<OfflineOutboxItem>.from(items)
-      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-    await _writeItems(sorted);
-  }
+  Future<void> replaceAll(List<OfflineOutboxItem> items) =>
+      _enqueueMutation(() async {
+        final sorted = List<OfflineOutboxItem>.from(items)
+          ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        await _writeItems(sorted);
+      });
 
-  Future<void> remove(String id) async {
+  Future<void> remove(String id) => _enqueueMutation(() async {
     final items = List<OfflineOutboxItem>.from(await _readItems());
     final removed = items.where((item) => item.id == id).toList();
     items.removeWhere((item) => item.id == id);
@@ -161,14 +169,23 @@ class OfflineOutboxService {
         await deleteAttachmentCiphertext(path);
       }
     }
-  }
+  });
 
-  Future<void> clearAll() async {
+  Future<void> clearAll() => _enqueueMutation(() async {
     await _writeItems(const []);
     try {
       final dir = await _attachmentDir();
       if (await dir.exists()) await dir.delete(recursive: true);
     } catch (_) {}
+  });
+
+  /// Appends [action] to the single mutation chain. A failed action must not
+  /// wedge the chain, so the stored tail swallows the error while the caller
+  /// still receives it.
+  Future<void> _enqueueMutation(Future<void> Function() action) {
+    final result = _mutationQueue.then((_) => action());
+    _mutationQueue = result.catchError((_) {});
+    return result;
   }
 
   Future<String> saveAttachmentCiphertext(
@@ -210,8 +227,35 @@ class OfflineOutboxService {
           )
           .where((item) => item.id.isNotEmpty && item.conversationId.isNotEmpty)
           .toList();
-    } catch (_) {
+    } on SecretBoxAuthenticationError {
+      // Wrong key, not a damaged file — typically the throwaway session key
+      // minted while the Linux keyring is locked at launch. The store on disk
+      // is intact and recovers next session, so it must NOT be quarantined:
+      // read empty for this session (see getOrCreateOutboxKey).
       return const [];
+    } catch (error) {
+      // Truncated/corrupt store (e.g. power loss mid-write before the atomic
+      // rename existed). Move it aside instead of pretending it's empty, so
+      // the bytes survive for recovery rather than being silently overwritten
+      // by the next write — which would also orphan any ciphertexts in the
+      // attachment dir that only the store references.
+      await _quarantineCorruptStore(file, error);
+      return const [];
+    }
+  }
+
+  Future<void> _quarantineCorruptStore(File file, Object error) async {
+    debugPrint(
+      'OfflineOutboxService: unreadable outbox store ${file.path} '
+      '($error); moving aside to ${p.basename(file.path)}.corrupt',
+    );
+    try {
+      await file.rename('${file.path}.corrupt');
+    } catch (renameError) {
+      debugPrint(
+        'OfflineOutboxService: failed to quarantine corrupt store: '
+        '$renameError',
+      );
     }
   }
 
@@ -222,7 +266,13 @@ class OfflineOutboxService {
       'version': 1,
       'items': items.map((item) => item.toJson()).toList(),
     });
-    await file.writeAsString(encrypted, flush: true);
+    // Crash-safe write: never rewrite the only copy of queued messages in
+    // place. Write a sibling, flush it, then atomically rename over the store
+    // so a crash mid-write leaves either the old or the new file — never a
+    // truncated one.
+    final tmp = File('${file.path}.tmp');
+    await tmp.writeAsString(encrypted, flush: true);
+    await tmp.rename(file.path);
   }
 
   Future<File> _storeFile() async {

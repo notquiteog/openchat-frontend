@@ -227,7 +227,12 @@ class _Providers extends StatelessWidget {
         ChangeNotifierProvider<WebSocketService>.value(value: ws),
         Provider<CallService>.value(value: callService),
         ChangeNotifierProvider(create: (_) => SettingsProvider()..load()),
-        ChangeNotifierProvider(create: (_) => AuthProvider(api, storage)),
+        // Pass the shared call-history instance so logout's wipe also resets
+        // its cached at-rest key material (not just the rows on disk).
+        ChangeNotifierProvider(
+          create: (_) =>
+              AuthProvider(api, storage, callHistoryService: callHistory),
+        ),
         ChangeNotifierProvider(create: (_) => KeyProvider(storage)),
         // SettingsProvider must be registered before ChatProvider so the
         // create callback can read it via ctx.read<SettingsProvider>().

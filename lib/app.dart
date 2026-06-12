@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
@@ -1192,6 +1193,10 @@ class _AppRootState extends State<_AppRoot> {
     } else if (auth.state == AuthState.unauthenticated &&
         _lastAuthState == AuthState.authenticated) {
       context.read<ChatProvider>().clearState();
+      // The persisted private blob was wiped in logout(); drop the in-memory
+      // mirrors too so nothing can re-persist the old account's state and the
+      // next account never sees its drafts/folders/contacts.
+      context.read<SettingsProvider>().resetPrivateLocalState();
       // Drop any pushed routes (Settings, an open chat, etc.) so the rebuilt
       // root shows the login screen instead of stranding the user on top of a
       // now-defunct authenticated screen.
@@ -1600,6 +1605,26 @@ class _HomeShellState extends State<_HomeShell> {
               selectedIndex: _tab,
               onTabSelected: _onTabSelected,
               isSearchActive: _searchActive,
+              // The package's icon-color fallback is an unresolved
+              // CupertinoColors.label, which paints light-mode black even in
+              // dark themes — so wire icons to the Material scheme instead.
+              selectedIconColor: scheme.onSurface,
+              unselectedIconColor: scheme.onSurface.withValues(alpha: 0.70),
+              // The package default carries chromaticAberration: 0.3, whose
+              // Impeller dispersion splits refracted light into an RGB
+              // "rainbow" fringe along the pill's bottom edge when the
+              // search bar is active. Same recipe, aberration zeroed.
+              settings: LiquidGlassSettings(
+                thickness: 30,
+                blur: 3,
+                chromaticAberration: 0,
+                lightIntensity: 0.6,
+                refractiveIndex: 1.59,
+                saturation: 0.7,
+                ambientStrength: 1,
+                lightAngle: 0.75 * math.pi,
+                glassColor: const Color(0x3DFFFFFF),
+              ),
               // Physics + glow for the iOS 26 feel.
               glowBlurRadius: 18,
               glowSpreadRadius: 2,
@@ -1614,6 +1639,11 @@ class _HomeShellState extends State<_HomeShell> {
                 onSearchToggle: _setSearchActive,
                 onChanged: (q) => setState(() => _searchQuery = q),
                 onCancelTap: () => _setSearchActive(false),
+                searchIconColor: scheme.onSurface.withValues(alpha: 0.80),
+                micIconColor: scheme.onSurface.withValues(alpha: 0.80),
+                textColor: scheme.onSurface,
+                cursorColor: scheme.primary,
+                cancelButtonColor: scheme.primary,
               ),
             ),
           ),

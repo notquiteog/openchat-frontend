@@ -393,6 +393,12 @@ class ChatProvider extends ChangeNotifier {
     _wasWsMonitoring = false;
     unawaited(_search.clearAll());
     unawaited(_outbox.clearAll());
+    // The decrypted-MLS-plaintext cache is device-global, keyed only by
+    // message id: without this wipe the next account's loadMessages gets
+    // cache hits on the previous account's plaintext. clearAll also deletes
+    // the at-rest cache key (shared with call history, which AuthProvider
+    // clears at logout) so residual sqlite pages are garbage.
+    unawaited(_cache.clearAll());
     unawaited(_stopAllLiveLocationShares());
     // The resume position belongs to this account; the next login must not
     // try to resume another user's event stream.
@@ -4092,13 +4098,25 @@ class ChatProvider extends ChangeNotifier {
     final rawPoll = data['poll'];
     if (convID == null || rawPoll is! Map) return;
 
-    final poll = Poll.fromJson(Map<String, dynamic>.from(rawPoll));
+    var poll = Poll.fromJson(Map<String, dynamic>.from(rawPoll));
     msgID ??= poll.messageId;
     if (msgID == null) return;
     // Track the freshest server state per poll. Broadcasts are voter-stripped
     // (a shared payload can't carry per-viewer votes), so keep the previously
-    // known selection rather than blanking it.
+    // known selection rather than blanking it. Quiz reveal fields are likewise
+    // least-privilege-stripped from open-poll broadcasts — an answer this
+    // device already learned (via its vote response) must not be blanked by a
+    // later stripped broadcast, so they only ever fill in, never clear.
     final prev = _pollSnapshots[poll.id];
+    if (prev != null) {
+      if (poll.correctOptionIds.isEmpty && prev.correctOptionIds.isNotEmpty) {
+        poll = poll.copyWith(correctOptionIds: prev.correctOptionIds);
+      }
+      if ((poll.explanation == null || poll.explanation!.isEmpty) &&
+          (prev.explanation?.isNotEmpty ?? false)) {
+        poll = poll.copyWith(explanation: prev.explanation);
+      }
+    }
     _pollSnapshots[poll.id] =
         poll.voterOptionIds.isEmpty && (prev?.voterOptionIds.isNotEmpty ?? false)
         ? poll.copyWith(voterOptionIds: prev!.voterOptionIds)
@@ -4120,6 +4138,18 @@ class ChatProvider extends ChangeNotifier {
             nextPoll = nextPoll.copyWith(
               voterOptionIds: currentPoll.voterOptionIds,
             );
+          }
+          // Same reveal-field gap-fill against the rendered message's poll,
+          // which may hold the answer when no snapshot existed yet.
+          if (nextPoll.correctOptionIds.isEmpty &&
+              currentPoll!.correctOptionIds.isNotEmpty) {
+            nextPoll = nextPoll.copyWith(
+              correctOptionIds: currentPoll.correctOptionIds,
+            );
+          }
+          if ((nextPoll.explanation == null || nextPoll.explanation!.isEmpty) &&
+              (currentPoll!.explanation?.isNotEmpty ?? false)) {
+            nextPoll = nextPoll.copyWith(explanation: currentPoll.explanation);
           }
         }
         return msg.copyWith(poll: nextPoll);

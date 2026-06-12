@@ -157,39 +157,8 @@ class _ChatSearchResultsViewState extends State<ChatSearchResultsView> {
         return ListView(
           keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           children: [
-            _MessageSearchFilters(
-              selected: _messageCategory,
-              onSelected: (category) =>
-                  setState(() => _messageCategory = category),
-            ),
-            if (results.messages.isNotEmpty) ...[
-              _SearchSectionHeader(
-                label: _messageCategory == null
-                    ? 'Messages on this device'
-                    : '${_messageCategoryLabel(_messageCategory!)} on this device',
-              ),
-              for (final message in results.messages)
-                GlassListTile(
-                  leading: CircleAvatar(
-                    child: Icon(_messageCategoryIcon(message.category)),
-                  ),
-                  title: Text(
-                    message.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  subtitle: Text(
-                    _messageSubtitle(chat, currentUserId, message),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: Text(
-                    timeago.format(message.createdAt),
-                    style: Theme.of(context).textTheme.labelSmall,
-                  ),
-                  onTap: () => widget.onSelect(MessageSearchSelection(message)),
-                ),
-            ],
+            // People lead the results; the on-device message section (with its
+            // category filter chips) follows.
             if (results.users.isNotEmpty)
               const _SearchSectionHeader(label: 'People and bots'),
             for (final u in results.users)
@@ -231,6 +200,39 @@ class _ChatSearchResultsViewState extends State<ChatSearchResultsView> {
                 ),
                 onTap: () => widget.onSelect(UserSearchSelection(u.id)),
               ),
+            _MessageSearchFilters(
+              selected: _messageCategory,
+              onSelected: (category) =>
+                  setState(() => _messageCategory = category),
+            ),
+            if (results.messages.isNotEmpty) ...[
+              _SearchSectionHeader(
+                label: _messageCategory == null
+                    ? 'Messages on this device'
+                    : '${_messageCategoryLabel(_messageCategory!)} on this device',
+              ),
+              for (final message in results.messages)
+                GlassListTile(
+                  leading: CircleAvatar(
+                    child: Icon(_messageCategoryIcon(message.category)),
+                  ),
+                  title: Text(
+                    message.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(
+                    _messageSubtitle(chat, currentUserId, message),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: Text(
+                    timeago.format(message.createdAt),
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+                  onTap: () => widget.onSelect(MessageSearchSelection(message)),
+                ),
+            ],
             if (results.channels.isNotEmpty)
               const _SearchSectionHeader(label: 'Channels'),
             for (final ch in results.channels)

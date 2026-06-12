@@ -202,6 +202,13 @@ class SecureStorageService {
   Future<String> getOrCreateMessageCacheKey() =>
       _getOrCreateProtectedKey(_keyMessageCacheKey);
 
+  /// Deletes the at-rest cache key (shared by the message cache and call
+  /// history DBs). Called at logout after their rows are cleared so any
+  /// residual ciphertext (sqlite free pages, WAL) becomes undecryptable
+  /// garbage; the next account mints a fresh key on first use.
+  Future<void> deleteMessageCacheKey() =>
+      _storage.delete(key: _keyMessageCacheKey);
+
   Future<Map<String, KeyTrustPin>> getKeyTrustPins() async {
     final raw = await _readOrNull(_keyTrustPins);
     if (raw == null || raw.isEmpty) return {};

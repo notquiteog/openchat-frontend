@@ -132,12 +132,20 @@ class CallHistoryService {
     }
   }
 
+  /// Logout wipe — the log is device-global (rows aren't user-scoped), so the
+  /// next account must not inherit it.
   Future<void> clear() async {
     if (kIsWeb) return;
     try {
       final db = await _open();
       db.execute('DELETE FROM call_history');
     } catch (_) {}
+    // The at-rest key is shared with the message cache, which deletes it at
+    // logout (MessageCacheService.clearAll). Drop the cached copy so the next
+    // record() re-reads the freshly minted key instead of encrypting rows
+    // with the deleted one (which would be unreadable after a restart).
+    _secretKey = null;
+    _keyBytes = null;
   }
 
   static String? _nullable(Object? v) {
@@ -154,10 +162,24 @@ class CallHistoryService {
         _ => CallOutcomeKind.missed,
       };
 
-  Future<sqlite.Database> _open() {
+  Future<sqlite.Database> _open() async {
     final existing = _db;
-    if (existing != null) return Future.value(existing);
-    return _opening ??= _openDatabase();
+    if (existing != null) return existing;
+
+    final inFlight = _opening;
+    if (inFlight != null) return inFlight;
+
+    // Clear _opening in `finally` (mirrors KeyCacheService): caching a FAILED
+    // open future forever would disable call logging until app restart.
+    final opening = _openDatabase();
+    _opening = opening;
+    try {
+      final db = await opening;
+      _db = db;
+      return db;
+    } finally {
+      _opening = null;
+    }
   }
 
   Future<sqlite.Database> _openDatabase() async {
@@ -174,7 +196,6 @@ class CallHistoryService {
     db.execute(
       'CREATE INDEX IF NOT EXISTS idx_call_history_time ON call_history (started_at_ms DESC)',
     );
-    _db = db;
     return db;
   }
 
