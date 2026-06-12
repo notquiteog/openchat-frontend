@@ -7,6 +7,7 @@ import '../services/call_history_service.dart';
 import '../services/call_media_permissions.dart';
 import '../services/call_service.dart';
 import '../services/notification_service.dart';
+import '../services/sfu_call_controller.dart';
 
 /// Exposed to the UI; wraps CallService and notifies listeners on state changes.
 class CallProvider extends ChangeNotifier {
@@ -274,7 +275,10 @@ class CallProvider extends ChangeNotifier {
   }
 
   void _onCallEnded(CallEndedEvent ev) {
-    _lastEndedCall = ev;
+    // Only an OUTGOING ending posts the DM call event (app.dart consumes
+    // lastEndedCall) — if both sides posted it, every call would show twice.
+    // History below is recorded for both directions.
+    if (!ev.isIncoming) _lastEndedCall = ev;
     final hs = _historySession;
     if (hs != null) {
       _recordHistory(
@@ -294,6 +298,25 @@ class CallProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Records a finished SFU group call (join→leave) in the device call log.
+  /// Wired to [SfuCallController.onCallEnded] at the composition root —
+  /// mirrors how P2P history lands via [_onCallEnded]. Joining an SFU room is
+  /// an explicit user action, so it's logged as an answered outgoing call.
+  void recordSfuCallEnded(SfuCallEnd end) {
+    _recordHistory(
+      id: end.historyId,
+      conversationId: end.conversationId,
+      peerUserId: null,
+      peerUsername: end.title,
+      isVideo: end.isVideo,
+      direction: CallDirection.outgoing,
+      outcome: CallOutcomeKind.answered,
+      startedAt: end.joinedAt,
+      durationSecs: end.durationSecs,
+      sfu: true,
+    );
+  }
+
   void _recordHistory({
     required String id,
     String? conversationId,
@@ -304,6 +327,7 @@ class CallProvider extends ChangeNotifier {
     required CallOutcomeKind outcome,
     required DateTime startedAt,
     int durationSecs = 0,
+    bool sfu = false,
   }) {
     final svc = _callHistory;
     if (svc == null) return;
@@ -318,6 +342,7 @@ class CallProvider extends ChangeNotifier {
           direction: direction,
           outcome: outcome,
           startedAt: startedAt,
+          sfu: sfu,
           durationSecs: durationSecs,
         ),
       ),

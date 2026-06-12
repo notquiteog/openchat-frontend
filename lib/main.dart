@@ -280,7 +280,15 @@ class _Providers extends StatelessWidget {
         ChangeNotifierProvider(
           create: (_) => CallProvider(callService, callHistory: callHistory),
         ),
-        ChangeNotifierProvider(create: (_) => SfuCallController(api, ws)),
+        // SFU call ends are logged through CallProvider so the device call
+        // history covers group SFU calls too (sfu = true entries).
+        ChangeNotifierProvider(
+          create: (ctx) => SfuCallController(
+            api,
+            ws,
+            onCallEnded: ctx.read<CallProvider>().recordSfuCallEnded,
+          ),
+        ),
         ChangeNotifierProvider(
           create: (_) => StageRoomProvider(api, ws, storage),
         ),

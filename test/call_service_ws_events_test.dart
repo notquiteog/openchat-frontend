@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openchat/services/api_service.dart';
 import 'package:openchat/services/call_service.dart';
@@ -9,13 +10,42 @@ import 'package:openchat/services/secure_storage_service.dart';
 import 'package:openchat/services/websocket_service.dart';
 
 /// WebSocketService whose event stream is test-driven; never connects.
+/// Outbound call signals are recorded instead of queued.
 class _FakeWebSocketService extends WebSocketService {
   _FakeWebSocketService() : super(SecureStorageService());
 
   final _controller = StreamController<WsEvent>.broadcast();
+  final hangups = <Map<String, String>>[];
+  final rejects = <Map<String, String>>[];
 
   @override
   Stream<WsEvent> get events => _controller.stream;
+
+  @override
+  void sendCallHangup({
+    required String targetUserId,
+    required String conversationId,
+    required String callId,
+  }) {
+    hangups.add({'target': targetUserId, 'call_id': callId});
+  }
+
+  @override
+  void sendCallReject({
+    required String targetUserId,
+    required String conversationId,
+    required String callId,
+    String? reason,
+  }) {
+    rejects.add({'target': targetUserId, 'call_id': callId});
+  }
+
+  @override
+  void sendCallRinging({
+    required String targetUserId,
+    required String conversationId,
+    required String callId,
+  }) {}
 
   void close() => _controller.close();
 }
@@ -24,11 +54,13 @@ CallSession _session({
   required String callId,
   CallState state = CallState.calling,
   bool isIncoming = false,
+  List<String> participantUserIds = const [],
 }) => CallSession(
   callId: callId,
   remoteUserId: 'remote-user',
   remoteUsername: 'alice',
   conversationId: 'conv-1',
+  participantUserIds: participantUserIds,
   isVideo: false,
   isIncoming: isIncoming,
   state: state,
@@ -148,6 +180,185 @@ void main() {
     );
   });
 
+  group('incoming participants and hangup targets', () {
+    test('group offer participants are {caller} ∪ received − self', () {
+      service.debugSelfUserId = 'me';
+      expect(
+        service.handleIncomingCallPayload({
+          'call_id': 'c-group',
+          'caller_id': 'caller-1',
+          'conversation_id': 'conv-1',
+          'participant_user_ids': ['me', 'invitee-2'],
+        }),
+        isTrue,
+      );
+      final pending = service.debugPendingIncoming!;
+      expect(pending.participantUserIds.toSet(), {'caller-1', 'invitee-2'});
+      expect(pending.isGroupCall, isTrue);
+
+      // Clear the pending ring timer, then adopt the session as accepted.
+      service.debugHandleWsEvent(
+        WsEvent(type: WsEventType.callCancel, data: {'call_id': 'c-group'}),
+      );
+      service.debugSession = pending
+        ..state = CallState.connected
+        ..wasConnected = true;
+
+      service.hangup();
+
+      expect(
+        ws.hangups.map((h) => h['target']).toSet(),
+        {'caller-1', 'invitee-2'},
+      );
+      expect(ws.hangups.every((h) => h['call_id'] == 'c-group'), isTrue);
+    });
+
+    test('1:1 incoming hangup signals the caller, not the callee', () {
+      service.debugSelfUserId = 'me';
+      expect(
+        service.handleIncomingCallPayload({
+          'call_id': 'c-dm',
+          'caller_id': 'caller-1',
+          'conversation_id': 'conv-1',
+          // The caller's recipient list — it contains US, never the caller.
+          'participant_user_ids': ['me'],
+        }),
+        isTrue,
+      );
+      final pending = service.debugPendingIncoming!;
+      expect(pending.isGroupCall, isFalse);
+      expect(pending.participantUserIds, ['caller-1']);
+
+      service.debugHandleWsEvent(
+        WsEvent(type: WsEventType.callCancel, data: {'call_id': 'c-dm'}),
+      );
+      service.debugSession = pending
+        ..state = CallState.connected
+        ..wasConnected = true;
+
+      service.hangup();
+
+      expect(ws.hangups, hasLength(1));
+      expect(ws.hangups.single['target'], 'caller-1');
+    });
+
+    test('a renegotiation offer arriving after hangup does not re-ring', () {
+      service.debugSession = _session(
+        callId: 'c-ended',
+        state: CallState.connected,
+      )..wasConnected = true;
+
+      service.hangup();
+      expect(service.currentSession, isNull);
+
+      // The peer's ICE-restart offer (same call id) races our hangup — it
+      // must not ring as a brand-new incoming call (false missed call).
+      expect(
+        service.handleIncomingCallPayload({
+          'call_id': 'c-ended',
+          'caller_id': 'remote-user',
+          'conversation_id': 'conv-1',
+          'sdp': 'v=0\r\n',
+        }),
+        isFalse,
+      );
+      expect(service.debugPendingIncoming, isNull);
+    });
+  });
+
+  group('call_reject routing', () {
+    test('ignores a stale reject carrying a different call id', () {
+      service.debugSession = _session(
+        callId: 'call-1',
+        state: CallState.connected,
+      )..wasConnected = true;
+
+      service.debugHandleWsEvent(
+        WsEvent(
+          type: WsEventType.callReject,
+          data: {'call_id': 'previous-call', 'caller_id': 'remote-user'},
+        ),
+      );
+
+      expect(service.currentSession, isNotNull);
+      expect(service.currentSession?.state, CallState.connected);
+    });
+
+    test('stale group reject does not remove a live peer', () async {
+      service.debugSession = _session(
+        callId: 'group-call',
+        state: CallState.connected,
+        participantUserIds: ['remote-user', 'peer-2'],
+      )..wasConnected = true;
+
+      final emissions = <CallSession?>[];
+      final sub = service.sessionStream.listen(emissions.add);
+
+      service.debugHandleWsEvent(
+        WsEvent(
+          type: WsEventType.callReject,
+          data: {'call_id': 'old-call', 'caller_id': 'remote-user'},
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      // Ignored entirely: no peer removal, not even a UI refresh emission.
+      expect(emissions, isEmpty);
+      expect(service.currentSession?.callId, 'group-call');
+      expect(service.currentSession?.state, CallState.connected);
+      await sub.cancel();
+    });
+
+    test('stale reject does not dismiss a pending incoming ring', () async {
+      service.debugPendingIncoming = _session(
+        callId: 'fresh-ring',
+        isIncoming: true,
+        state: CallState.ringing,
+      );
+
+      final missed = <CallSession>[];
+      final sub = service.missedCalls.listen(missed.add);
+
+      service.debugHandleWsEvent(
+        WsEvent(
+          type: WsEventType.callReject,
+          data: {'call_id': 'old-call', 'caller_id': 'remote-user'},
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(service.debugPendingIncoming, isNotNull);
+      expect(missed, isEmpty);
+      await sub.cancel();
+    });
+  });
+
+  group('stale group hangup', () {
+    test('does not remove a live peer', () async {
+      service.debugSession = _session(
+        callId: 'group-call',
+        state: CallState.connected,
+        participantUserIds: ['remote-user', 'peer-2'],
+      )..wasConnected = true;
+
+      final emissions = <CallSession?>[];
+      final sub = service.sessionStream.listen(emissions.add);
+
+      service.debugHandleWsEvent(
+        WsEvent(
+          type: WsEventType.callHangup,
+          data: {'call_id': 'old-call', 'caller_id': 'remote-user'},
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(emissions, isEmpty);
+      expect(service.currentSession?.callId, 'group-call');
+      expect(service.currentSession?.state, CallState.connected);
+      await sub.cancel();
+    });
+  });
+
   group('call_cancel routing', () {
     test(
       'dismisses the matching pending ring while another call is active',
@@ -212,6 +423,190 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       expect(service.debugPendingIncoming, isNull);
+    });
+
+    test(
+      'cancel after this device also accepted tears down silently',
+      () async {
+        // Two devices answered; the other one won first-answer-wins and the
+        // server cancelled us while we were still connecting.
+        service.debugSession = _session(
+          callId: 'c-won-elsewhere',
+          isIncoming: true,
+          state: CallState.connecting,
+        );
+
+        final cancelled = <CallSession>[];
+        final sub = service.cancelledCalls.listen(cancelled.add);
+
+        service.debugHandleWsEvent(
+          WsEvent(
+            type: WsEventType.callCancel,
+            data: {'call_id': 'c-won-elsewhere'},
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        expect(service.currentSession, isNull);
+        expect(cancelled.map((c) => c.callId), ['c-won-elsewhere']);
+        // Critically: no call_hangup signal — it would carry the ACTIVE call
+        // id and tear down the caller's live call with the winning device.
+        expect(ws.hangups, isEmpty);
+        await sub.cancel();
+      },
+    );
+
+    test('cancel never tears down a CONNECTED incoming call', () {
+      service.debugSession = _session(
+        callId: 'c-live',
+        isIncoming: true,
+        state: CallState.connected,
+      )..wasConnected = true;
+
+      service.debugHandleWsEvent(
+        WsEvent(type: WsEventType.callCancel, data: {'call_id': 'c-live'}),
+      );
+
+      expect(service.currentSession?.callId, 'c-live');
+      expect(service.currentSession?.state, CallState.connected);
+    });
+  });
+
+  group('call ended events', () {
+    test(
+      'remote hangup of an answered incoming call emits an ended event',
+      () async {
+        service.debugSession = _session(
+          callId: 'call-1',
+          isIncoming: true,
+          state: CallState.connected,
+        )
+          ..wasConnected = true
+          ..connectedAt = DateTime.now().subtract(const Duration(seconds: 42));
+
+        final ended = <CallEndedEvent>[];
+        final sub = service.callEnded.listen(ended.add);
+
+        service.debugHandleWsEvent(
+          WsEvent(
+            type: WsEventType.callHangup,
+            data: {'call_id': 'call-1', 'caller_id': 'remote-user'},
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        expect(ended, hasLength(1));
+        expect(ended.single.isIncoming, isTrue);
+        expect(ended.single.answered, isTrue);
+        expect(ended.single.conversationId, 'conv-1');
+        expect(ended.single.durationSecs, inInclusiveRange(41, 44));
+        expect(service.currentSession, isNull);
+        await sub.cancel();
+      },
+    );
+
+    test('an outgoing ending still reports isIncoming false', () async {
+      service.debugSession = _session(
+        callId: 'call-out',
+        state: CallState.connected,
+      )
+        ..wasConnected = true
+        ..connectedAt = DateTime.now();
+
+      final ended = <CallEndedEvent>[];
+      final sub = service.callEnded.listen(ended.add);
+
+      service.hangup();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(ended.single.isIncoming, isFalse);
+      expect(ended.single.answered, isTrue);
+      await sub.cancel();
+    });
+  });
+
+  group('sealed offer replay guard', () {
+    test('a stale sealed offer is rejected and never rings', () {
+      final old = DateTime.now()
+          .toUtc()
+          .subtract(const Duration(minutes: 5))
+          .toIso8601String();
+      expect(
+        service.handleIncomingCallPayload({
+          'call_id': 'replayed-call',
+          'caller_id': 'mallory',
+          'conversation_id': 'conv-1',
+          'encryption_mode': 'pgp',
+          'created_at': old,
+        }),
+        isFalse,
+      );
+      expect(service.debugPendingIncoming, isNull);
+    });
+
+    test('a fresh sealed offer still rings', () {
+      final now = DateTime.now().toUtc().toIso8601String();
+      expect(
+        service.handleIncomingCallPayload({
+          'call_id': 'fresh-call',
+          'caller_id': 'alice-id',
+          'conversation_id': 'conv-1',
+          'encryption_mode': 'pgp',
+          'created_at': now,
+        }),
+        isTrue,
+      );
+      expect(service.debugPendingIncoming?.callId, 'fresh-call');
+
+      service.debugHandleWsEvent(
+        WsEvent(type: WsEventType.callCancel, data: {'call_id': 'fresh-call'}),
+      );
+      expect(service.debugPendingIncoming, isNull);
+    });
+
+    test('a sealed offer without a timestamp passes (older clients)', () {
+      expect(
+        service.handleIncomingCallPayload({
+          'call_id': 'no-ts-call',
+          'caller_id': 'bob-id',
+          'conversation_id': 'conv-1',
+          'encryption_mode': 'pgp',
+        }),
+        isTrue,
+      );
+      service.debugHandleWsEvent(
+        WsEvent(type: WsEventType.callCancel, data: {'call_id': 'no-ts-call'}),
+      );
+      expect(service.debugPendingIncoming, isNull);
+    });
+  });
+
+  group('ring timer independence', () {
+    test('dialing out does not cancel a pending incoming missed-call timer',
+        () {
+      fakeAsync((async) {
+        final missed = <CallSession>[];
+        final sub = service.missedCalls.listen(missed.add);
+
+        service.handleIncomingCallPayload({
+          'call_id': 'c-ring',
+          'caller_id': 'caller-1',
+          'conversation_id': 'conv-1',
+        });
+        expect(service.debugPendingIncoming, isNotNull);
+
+        // Starting an outgoing dial used to clobber the shared timer field,
+        // so the pending ring never timed out into a missed call.
+        service.debugStartOutgoingRingTimer();
+
+        async.elapse(CallService.ringTimeout + const Duration(seconds: 1));
+        async.flushMicrotasks();
+
+        expect(missed.map((m) => m.callId), ['c-ring']);
+        expect(service.debugPendingIncoming, isNull);
+        sub.cancel();
+        async.flushMicrotasks();
+      });
     });
   });
 

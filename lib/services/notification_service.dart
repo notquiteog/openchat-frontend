@@ -14,7 +14,7 @@ void openChatNotificationBackgroundHandler(NotificationResponse response) {
 }
 
 /// Thin wrapper around flutter_local_notifications for OS-level notifications.
-/// The plugin has no Windows/web implementation, so every entry point is guarded
+/// The plugin has no web implementation, so every entry point is guarded
 /// by [_supported]; on unsupported platforms the call is a no-op.
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _plugin =

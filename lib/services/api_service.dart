@@ -2508,8 +2508,12 @@ class ApiService {
     return enabled;
   }
 
+  /// ICE servers for WebRTC, fetched fresh at call setup. Authenticated:
+  /// the server only mints TURN relay credentials for logged-in callers —
+  /// an anonymous fetch would come back STUN-only and calls behind
+  /// symmetric NAT would fail to connect.
   Future<List<IceServer>> getIceServers() async {
-    final resp = await _get('/api/v1/config', authenticated: false);
+    final resp = await _get('/api/v1/config');
     final data = resp['data'];
     final list =
         (data is Map<String, dynamic> ? data['ice_servers'] : null) as List? ??

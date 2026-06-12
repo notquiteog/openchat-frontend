@@ -32,11 +32,36 @@ rm -rf "$WORK_ROOT"
 mkdir -p "$SOURCE_DIR/openchat-bundle" "$OUTPUT_DIR"
 cp -a "$BUNDLE_DIR/." "$SOURCE_DIR/openchat-bundle/"
 
+# tray_manager's plugin links libayatana-appindicator3, which the GNOME
+# runtime does not ship. The whole bundle is host-built anyway, so bundle the
+# library and its ayatana/dbusmenu dependency chain from the build host into
+# the lib dir already on the wrapper's LD_LIBRARY_PATH.
+AYATANA_LIBS=(
+  libayatana-appindicator3.so.1
+  libayatana-indicator3.so.7
+  libayatana-ido3-0.4.so.0
+  libdbusmenu-glib.so.4
+  libdbusmenu-gtk3.so.4
+)
+for lib in "${AYATANA_LIBS[@]}"; do
+  lib_path="$(ldconfig -p | awk -v lib="$lib" '$1 == lib {print $NF; exit}')"
+  if [ -z "$lib_path" ]; then
+    echo "Host library $lib not found — install libayatana-appindicator (tray support)." >&2
+    exit 1
+  fi
+  install -Dm644 "$(readlink -f "$lib_path")" "$SOURCE_DIR/openchat-bundle/lib/$lib"
+done
+
 install -Dm644 "$ROOT_DIR/packaging/linux/shared/${APP_ID}.desktop" \
   "$SOURCE_DIR/${APP_ID}.desktop"
 install -Dm644 "$ROOT_DIR/packaging/linux/shared/${APP_ID}.metainfo.xml" \
   "$SOURCE_DIR/${APP_ID}.metainfo.xml"
 install -Dm644 "$ROOT_DIR/web/icons/Icon-512.png" "$SOURCE_DIR/${APP_ID}.png"
+# Tray icons inside the sandbox are resolved by NAME on the host (the
+# compositor can't read sandbox paths), so DesktopTrayService passes these
+# themed ids; both must be installed (and exported) from hicolor.
+install -Dm644 "$ROOT_DIR/packaging/linux/shared/${APP_ID}.unread.png" \
+  "$SOURCE_DIR/${APP_ID}.unread.png"
 
 if command -v desktop-file-validate >/dev/null 2>&1; then
   desktop-file-validate "$SOURCE_DIR/${APP_ID}.desktop" >&2
@@ -74,10 +99,10 @@ finish-args:
   - --talk-name=org.freedesktop.secrets
   - --talk-name=org.kde.StatusNotifierWatcher
   - --talk-name=com.canonical.StatusNotifierWatcher
-  # nativeapi 0.1.3 owns a dynamic StatusNotifierItem name like
-  # org.kde.StatusNotifierItem-<pid>-<index>. Flatpak only supports wildcard
-  # bus permissions that end in .*, so org.kde.* is the narrowest valid rule
-  # that keeps tray icons working inside the sandbox.
+  # tray_manager (libayatana-appindicator) owns a dynamic StatusNotifierItem
+  # name like org.kde.StatusNotifierItem-<pid>-<index>. Flatpak only supports
+  # wildcard bus permissions that end in .*, so org.kde.* is the narrowest
+  # valid rule that keeps tray icons working inside the sandbox.
   - --own-name=org.kde.*
 modules:
   - name: openchat
@@ -89,6 +114,7 @@ modules:
       - install -Dm644 ${APP_ID}.desktop /app/share/applications/${APP_ID}.desktop
       - install -Dm644 ${APP_ID}.metainfo.xml /app/share/metainfo/${APP_ID}.metainfo.xml
       - install -Dm644 ${APP_ID}.png /app/share/icons/hicolor/512x512/apps/${APP_ID}.png
+      - install -Dm644 ${APP_ID}.unread.png /app/share/icons/hicolor/512x512/apps/${APP_ID}.unread.png
     sources:
       - type: dir
         path: ${SOURCE_DIR}

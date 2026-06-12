@@ -233,6 +233,13 @@ class PrivacyCallSignalCodec implements CallSignalCodec {
       if (payload['video_upgrade'] == true) 'video_upgrade': true,
       'encryption_mode': mode.apiValue,
     };
+    // Sealed sender timestamp — the replay guard in CallService rejects
+    // offers older than its window (a server can't forge this: it rides
+    // inside the ciphertext).
+    final createdAt = payload['created_at'];
+    if (createdAt is String && createdAt.isNotEmpty) {
+      out['created_at'] = createdAt;
+    }
     final e2eeKey = payload['e2ee_key'];
     if (e2eeKey is String && e2eeKey.isNotEmpty) out['e2ee_key'] = e2eeKey;
     final sdp = payload['sdp'];

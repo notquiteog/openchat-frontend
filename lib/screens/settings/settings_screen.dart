@@ -467,8 +467,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         title: 'Battery notice',
         message:
             'Background WebSocket keeps a live connection even when the '
-            'app is closed, providing real-time notifications without Firebase. '
-            'On iOS the OS may still suspend it.',
+            'app is closed, providing real-time notifications without '
+            'Firebase.',
         actions: [
           GlassDialogAction(
             label: 'Cancel',
@@ -2403,14 +2403,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   _GlassDivider(),
                 ],
-                _GlassSwitchTile(
-                  icon: Icons.wifi_tethering,
-                  title: 'Background WebSocket',
-                  subtitle: 'Live connection for real-time notifications',
-                  value: settings.wsBackgroundEnabled,
-                  onChanged: (v) => _setWsBackground(v, settings),
-                ),
-                _GlassDivider(),
+                // Hidden on iOS: the OS kills persistent background sockets,
+                // so BackgroundWsService.start() always refuses there and the
+                // toggle could never turn on — push is the iOS channel.
+                if (kIsWeb ||
+                    defaultTargetPlatform != TargetPlatform.iOS) ...[
+                  _GlassSwitchTile(
+                    icon: Icons.wifi_tethering,
+                    title: 'Background WebSocket',
+                    subtitle: 'Live connection for real-time notifications',
+                    value: settings.wsBackgroundEnabled,
+                    onChanged: (v) => _setWsBackground(v, settings),
+                  ),
+                  _GlassDivider(),
+                ],
                 _GlassSwitchTile(
                   icon: Icons.visibility_outlined,
                   title: 'Strict Privacy',

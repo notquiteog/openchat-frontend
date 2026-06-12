@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.5.56+130
+version: 0.5.57+130
 publish_to: 'none'
 
 environment:
@@ -93,8 +93,8 @@ dependencies:
   # see lib/services/background_ws_service.dart for the required native setup.
   flutter_background_service: ^5.0.0
 
-  # Local OS notifications (missed calls). No Windows/web implementation — usage
-  # is guarded by platform in NotificationService; those fall back to in-app.
+  # Local OS notifications. No web implementation — usage is guarded by
+  # platform in NotificationService; web falls back to in-app.
   flutter_local_notifications: 22.0.0
   timezone: ^0.11.0
 
@@ -105,6 +105,10 @@ dependencies:
   package_info_plus: 10.1.0
   window_manager: ^0.5.1
   tray_manager: ^0.5.3
+  # Session-bus probe for org.kde.StatusNotifierWatcher before enabling
+  # hide-to-tray on Linux (already in the graph via the Linux notification
+  # plugin; pinned in dependency_overrides).
+  dbus: 0.7.14
   app_badge_plus: ^1.3.1
   record: ^7.1.0
   permission_handler: ^12.0.3
@@ -151,6 +155,8 @@ flutter:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  # Pinned by flutter_test; declared so tests may import it directly.
+  fake_async: ^1.3.0
   flutter_lints: ^6.0.0
   build_runner: ^2.15.0
   drift_dev: ^2.34.0

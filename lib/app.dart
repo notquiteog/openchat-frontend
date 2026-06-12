@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:app_links/app_links.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:local_auth/local_auth.dart';
@@ -1190,8 +1191,21 @@ class _AppRootState extends State<_AppRoot> {
       // before this, the persisted setting only took effect again the next
       // time the settings toggle was flipped.
       unawaited(_startBackgroundWsIfEnabled());
+      // macOS delivers nothing while authorization is notDetermined, and
+      // unlike Android/iOS no other flow (FCM registration, the background-WS
+      // toggle) asks early — without this, plain message notifications were
+      // silently dropped until the user happened to start a call or set a
+      // reminder.
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS) {
+        unawaited(NotificationService.requestPermission());
+      }
     } else if (auth.state == AuthState.unauthenticated &&
         _lastAuthState == AuthState.authenticated) {
+      // Tear down the background notification channel: without this the
+      // Android foreground service kept reconnecting with the logged-out
+      // session's token (and resurrected itself after reboot). The persisted
+      // setting stays on, so the next login restarts it.
+      unawaited(BackgroundWsService.stop());
       context.read<ChatProvider>().clearState();
       // The persisted private blob was wiped in logout(); drop the in-memory
       // mirrors too so nothing can re-persist the old account's state and the

@@ -5,7 +5,6 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openchat/providers/settings_provider.dart';
 import 'package:openchat/services/background_ws_service.dart';
-import 'package:openchat/services/foreground_ws_notification_router.dart';
 import 'package:openchat/services/local_private_state_service.dart';
 import 'package:openchat/services/notification_service.dart';
 import 'package:openchat/services/push_notification_service.dart';
@@ -486,64 +485,42 @@ void main() {
     });
   });
 
-  group('Foreground desktop websocket notification routing', () {
-    test(
-      'routes desktop new_message events into message notification intents',
-      () {
-        final intent = ForegroundWsNotificationRouter.intentForEvent(
-          WsEvent(
-            type: WsEventType.newMessage,
-            data: {'conversation_id': 'conv-1', 'sender_username': 'alice'},
-          ),
-          showSensitive: true,
-          isDesktop: true,
-        );
-
-        expect(intent, isNotNull);
-        expect(intent!.kind, NotificationIntentKind.message);
-        expect(intent.notificationId, 'conv-1'.hashCode);
-        expect(intent.title, '@alice');
-        expect(intent.body, 'New message');
-      },
-    );
-
-    test('suppresses muted desktop websocket message intents', () {
-      final intent = ForegroundWsNotificationRouter.intentForEvent(
-        WsEvent(
-          type: WsEventType.newMessage,
-          data: {'conversation_id': 'conv-1', 'sender_username': 'alice'},
-        ),
+  group('Foreground websocket notification intents', () {
+    test('maps new_message events into message notification intents', () {
+      final intent = BackgroundWsService.notificationIntentFromEvent(
+        type: 'new_message',
+        data: {'conversation_id': 'conv-1', 'sender_username': 'alice'},
         showSensitive: true,
-        isDesktop: true,
+      );
+
+      expect(intent, isNotNull);
+      expect(intent!.kind, NotificationIntentKind.message);
+      expect(intent.notificationId, 'conv-1'.hashCode);
+      expect(intent.title, '@alice');
+      expect(intent.body, 'New message');
+    });
+
+    test('suppresses muted message intents', () {
+      final intent = BackgroundWsService.notificationIntentFromEvent(
+        type: 'new_message',
+        data: {'conversation_id': 'conv-1', 'sender_username': 'alice'},
+        showSensitive: true,
         mutedConversationIds: {'conv-1'},
       );
 
       expect(intent, isNull);
     });
 
-    test('routes desktop join_request events into notification intents', () {
-      final intent = ForegroundWsNotificationRouter.intentForEvent(
-        WsEvent(
-          type: WsEventType.joinRequest,
-          data: {'conversation_id': 'conv-1', 'user_id': 'u-9'},
-        ),
+    test('maps join_request events into notification intents', () {
+      final intent = BackgroundWsService.notificationIntentFromEvent(
+        type: 'join_request',
+        data: {'conversation_id': 'conv-1', 'user_id': 'u-9'},
         showSensitive: true,
-        isDesktop: true,
       );
 
       expect(intent, isNotNull);
       expect(intent!.kind, NotificationIntentKind.message);
       expect(intent.body, 'New join request');
-    });
-
-    test('ignores mobile foreground websocket events', () {
-      final intent = ForegroundWsNotificationRouter.intentForEvent(
-        WsEvent(type: WsEventType.callOffer, data: const {}),
-        showSensitive: true,
-        isDesktop: false,
-      );
-
-      expect(intent, isNull);
     });
   });
 

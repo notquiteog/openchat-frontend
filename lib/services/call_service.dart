@@ -79,11 +79,17 @@ class CallEndedEvent {
   final bool isVideo;
   final int durationSecs;
 
+  /// Direction of the ended call. Incoming endings are recorded in the local
+  /// call history but must NOT post a DM call event — the caller's side owns
+  /// that (otherwise both sides would write a duplicate event).
+  final bool isIncoming;
+
   const CallEndedEvent({
     required this.conversationId,
     required this.answered,
     required this.isVideo,
     required this.durationSecs,
+    this.isIncoming = false,
   });
 }
 
@@ -238,8 +244,31 @@ class CallService {
 
   static const ringTimeout = Duration(seconds: 30);
   static const connectTimeout = Duration(seconds: 30);
-  Timer? _ringTimer;
+
+  /// Sealed offers older than this are treated as replays and never ring.
+  /// Generous enough to absorb modest clock skew between devices plus
+  /// delivery delay; a captured offer re-sent by a malicious or buggy server
+  /// later than this is rejected at ingest.
+  static const sealedOfferMaxAge = Duration(minutes: 2);
+
+  // Two independent ring timers: the outgoing dial timeout and the pending
+  // incoming missed-call timeout can overlap (dialing out while another call
+  // rings in) — sharing one Timer field made one cancel the other.
+  Timer? _ringTimer; // outgoing: give up dialing after [ringTimeout]
+  Timer? _incomingRingTimer; // pending incoming: missed call after [ringTimeout]
   Timer? _connectTimer;
+
+  /// Local user id, used to normalize incoming participant lists (the
+  /// caller's recipient list contains US, never the caller). Prefetched from
+  /// storage at construction and re-checked before each offer is ingested.
+  String? _selfUserId;
+
+  /// Call ids that ended on this device recently. A late renegotiation offer
+  /// (e.g. the peer's ICE restart racing our hangup) reuses the old call id;
+  /// without this it would ring as a brand-new call and turn into a false
+  /// missed call. Call ids are UUIDs, so a legit new call never collides.
+  final Set<String> _recentlyEndedCallIds = <String>{};
+  static const _recentlyEndedCap = 8;
 
   StreamSubscription<WsEvent>? _wsSub;
 
@@ -255,6 +284,10 @@ class CallService {
   CallSession? get debugPendingIncoming => _pendingIncoming;
   @visibleForTesting
   void debugHandleWsEvent(WsEvent event) => _handleWsEvent(event);
+  @visibleForTesting
+  set debugSelfUserId(String? userId) => _selfUserId = userId;
+  @visibleForTesting
+  void debugStartOutgoingRingTimer() => _startRingTimer();
 
   bool get hasLocalMedia => _localStream != null;
   bool get usingFrontCamera => _usingFrontCamera;
@@ -283,6 +316,16 @@ class CallService {
        // ignore: prefer_initializing_formals
        _storage = storage {
     _wsSub = _ws.events.listen(_handleWsEvent);
+    unawaited(_ensureSelfUserId());
+  }
+
+  Future<void> _ensureSelfUserId() async {
+    if (_selfUserId != null && _selfUserId!.trim().isNotEmpty) return;
+    final storage = _storage;
+    if (storage == null) return;
+    try {
+      _selfUserId = await storage.getUserID();
+    } catch (_) {}
   }
 
   // ── Outgoing call ───────────────────────────────────────────────────────────
@@ -403,7 +446,7 @@ class CallService {
 
   Future<void> acceptIncomingCall(CallSession session) async {
     debugPrint('CallService: acceptIncomingCall start (callId=${session.callId})');
-    _cancelRingTimer();
+    _cancelIncomingRingTimer();
     _pendingIncoming = null;
     _session = session..state = CallState.connecting;
     _sessionController.add(_session);
@@ -495,7 +538,7 @@ class CallService {
   }
 
   void rejectCall(CallSession session) {
-    _cancelRingTimer();
+    _cancelIncomingRingTimer();
     _pendingIncoming = null;
     _pendingRemoteSdp = null;
     _pendingRemoteCandidates.clear();
@@ -510,8 +553,10 @@ class CallService {
     final ids = session.participantUserIds.isEmpty
         ? <String>[session.remoteUserId]
         : session.participantUserIds;
+    final self = _selfUserId?.trim() ?? '';
     return ids
-        .where((id) => id.trim().isNotEmpty)
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty && (self.isEmpty || id != self))
         .toSet()
         .toList(growable: false);
   }
@@ -590,7 +635,7 @@ class CallService {
             hangupCallId.isNotEmpty &&
             hangupCallId == pending.callId &&
             hangupCallId != _session!.callId) {
-          _cancelRingTimer();
+          _cancelIncomingRingTimer();
           _pendingIncoming = null;
           _pendingRemoteSdp = null;
           _pendingRemoteCandidates.clear();
@@ -605,35 +650,50 @@ class CallService {
           final fromCaller =
               hangupFromId.isEmpty || hangupFromId == pending.remoteUserId;
           if (matchesCall && fromCaller) {
+            _cancelIncomingRingTimer();
             _pendingIncoming = null;
             _pendingRemoteSdp = null;
             _pendingRemoteCandidates.clear();
             _missedCallController.add(pending);
           }
+        } else if (_session != null &&
+            hangupCallId.isNotEmpty &&
+            hangupCallId != _session!.callId) {
+          // Stale hangup from a previous call — must not end the active one
+          // NOR remove a live group peer whose caller_id happens to match.
+          // (Checked BEFORE the group branch for exactly that reason.)
+          debugPrint('CallService: hangup for stale call $hangupCallId ignored');
         } else if (_session?.isGroupCall == true &&
             _session?.state == CallState.connected) {
           // One participant left a connected group call: tear down just their
           // peer (otherwise their connection and frozen tile leak until ICE
           // times out). Everyone else stays in the call.
           _removePeer(hangupFromId);
-        } else if (_session != null &&
-            hangupCallId.isNotEmpty &&
-            hangupCallId != _session!.callId) {
-          // Stale hangup from a previous call — must not end the active one.
-          debugPrint('CallService: hangup for stale call $hangupCallId ignored');
         } else {
           debugPrint('CallService: remote hangup signal -> cleanup');
           _cleanup();
         }
 
       case WsEventType.callReject:
+        final rejectCallId = event.data['call_id']?.toString() ?? '';
         final s = _session;
         if (s == null && _pendingIncoming != null) {
-          final missed = _pendingIncoming!;
-          _pendingIncoming = null;
-          _pendingRemoteSdp = null;
-          _pendingRemoteCandidates.clear();
-          _missedCallController.add(missed);
+          // Dismiss the ring only for a matching (or id-less) reject — a
+          // stale reject from a previous call must not kill a fresh ring.
+          final pending = _pendingIncoming!;
+          if (rejectCallId.isEmpty || rejectCallId == pending.callId) {
+            _cancelIncomingRingTimer();
+            _pendingIncoming = null;
+            _pendingRemoteSdp = null;
+            _pendingRemoteCandidates.clear();
+            _missedCallController.add(pending);
+          }
+        } else if (s != null &&
+            rejectCallId.isNotEmpty &&
+            rejectCallId != s.callId) {
+          // Stale reject from a previous call — must not end the active one
+          // NOR remove a live group peer whose caller_id happens to match.
+          debugPrint('CallService: reject for stale call $rejectCallId ignored');
         } else if (s != null && s.isGroupCall) {
           // One invitee declined a group call — drop just their peer; the
           // call continues for everyone else.
@@ -669,6 +729,24 @@ class CallService {
         // This user answered or declined on ANOTHER device — stop ringing
         // here silently (it was handled, so it is not a missed call).
         final cancelId = event.data['call_id']?.toString() ?? '';
+        final acceptedHere = _session;
+        // First-answer-wins: this device ALSO accepted, but another device
+        // won the race and the server cancelled us. Tear the connecting
+        // session down silently — signaling call_hangup here would carry the
+        // ACTIVE call id and destroy the caller's live call with the winner.
+        if (acceptedHere != null &&
+            acceptedHere.isIncoming &&
+            !acceptedHere.wasConnected &&
+            cancelId.isNotEmpty &&
+            cancelId == acceptedHere.callId) {
+          debugPrint(
+            'CallService: call ${acceptedHere.callId} answered on another '
+            'device -> silent teardown',
+          );
+          _cancelledCallController.add(acceptedHere);
+          _cleanup(emitEndedEvent: false);
+          break;
+        }
         final pendingCancel = _pendingIncoming;
         // Dismiss the matching pending ring even while another call is
         // active — answering the second call on a different device must stop
@@ -680,7 +758,7 @@ class CallService {
                 : (cancelId.isNotEmpty &&
                       cancelId == pendingCancel.callId &&
                       cancelId != _session!.callId))) {
-          _cancelRingTimer();
+          _cancelIncomingRingTimer();
           _pendingIncoming = null;
           _pendingRemoteSdp = null;
           _pendingRemoteCandidates.clear();
@@ -694,7 +772,11 @@ class CallService {
 
   Future<void> _handleCallOffer(Map<String, dynamic> data) async {
     final decoded = await _decodeCallSignal(data);
-    if (decoded != null) _handleIncomingCallPayload(decoded);
+    if (decoded == null) return;
+    // The local user id is needed to normalize the offer's participant list
+    // (it contains us, never the caller); usually already prefetched.
+    await _ensureSelfUserId();
+    _handleIncomingCallPayload(decoded);
   }
 
   Future<void> _handleCallAnswer(Map<String, dynamic> data) async {
@@ -991,6 +1073,13 @@ class CallService {
 
     if (callId.isEmpty) return false;
 
+    // A late renegotiation offer for a call that already ended here (e.g.
+    // the peer's ICE restart racing our hangup) must not ring as a new call.
+    if (_recentlyEndedCallIds.contains(callId)) {
+      debugPrint('CallService: offer for recently ended call $callId ignored');
+      return false;
+    }
+
     // The backend delivers each offer over BOTH the WebSocket and FCM. A
     // second copy of an offer we already know about must be ignored — busy-
     // rejecting it would tear down our own pending/active call.
@@ -1012,6 +1101,14 @@ class CallService {
           ),
         );
       }
+      return false;
+    }
+
+    // Replay guard: a sealed offer carries the sender's created_at inside the
+    // ciphertext — a server replaying a captured offer can't forge it. Note
+    // plaintext offers carry no timestamp at all, so they can't be checked.
+    if (_sealedOfferExpired(data)) {
+      debugPrint('CallService: stale sealed offer $callId rejected (replay)');
       return false;
     }
 
@@ -1083,8 +1180,8 @@ class CallService {
       );
     }
 
-    _ringTimer?.cancel();
-    _ringTimer = Timer(ringTimeout, () {
+    _incomingRingTimer?.cancel();
+    _incomingRingTimer = Timer(ringTimeout, () {
       if (_session == null && _pendingIncoming == incoming) {
         _pendingIncoming = null;
         _pendingRemoteSdp = null;
@@ -1095,15 +1192,36 @@ class CallService {
     return true;
   }
 
+  /// True when a sealed payload's `created_at` is older than
+  /// [sealedOfferMaxAge]. Payloads without a (parseable) timestamp pass —
+  /// older clients don't send one. Future timestamps (peer clock ahead of
+  /// ours) also pass: the guard only rejects provably old offers.
+  bool _sealedOfferExpired(Map<String, dynamic> data) {
+    if (!sealedCallPayload(data)) return false;
+    final raw = data['created_at']?.toString() ?? '';
+    if (raw.isEmpty) return false;
+    final createdAt = DateTime.tryParse(raw);
+    if (createdAt == null) return false;
+    final age = DateTime.now().toUtc().difference(createdAt.toUtc());
+    return age > sealedOfferMaxAge;
+  }
+
   bool handleIncomingCallPayload(Map<String, dynamic> data) =>
       _handleIncomingCallPayload(data);
 
   Future<bool> handleIncomingCallPushPayload(Map<String, dynamic> data) async {
     final decoded = await _decodeCallSignal(data);
     if (decoded == null) return false;
+    await _ensureSelfUserId();
     return _handleIncomingCallPayload(decoded);
   }
 
+  /// Participants of an incoming call from OUR perspective. The caller built
+  /// `participant_user_ids` as ITS recipient list — it contains us and the
+  /// other invitees but never the caller — so take {caller} ∪ received − self.
+  /// Without this, hangup() signaled the recipient list as-is and the caller
+  /// was never told we hung up (its PC then failed, ICE-restarted, and rang
+  /// us again as a false missed call).
   List<String> _participantUserIds(
     Map<String, dynamic> data,
     String callerId,
@@ -1117,9 +1235,11 @@ class CallService {
         if (trimmed.isNotEmpty) ids.add(trimmed);
       }
     }
-    if (ids.isEmpty && callerId.trim().isNotEmpty) {
+    if (callerId.trim().isNotEmpty) {
       ids.add(callerId.trim());
     }
+    final self = _selfUserId?.trim() ?? '';
+    if (self.isNotEmpty) ids.remove(self);
     return ids.toList(growable: false);
   }
 
@@ -1603,9 +1723,17 @@ class CallService {
     });
   }
 
+  /// Cancels the OUTGOING dial timer only — the pending-incoming missed-call
+  /// timer ([_incomingRingTimer]) is deliberately independent: connecting an
+  /// outgoing call must not silence another caller's pending ring.
   void _cancelRingTimer() {
     _ringTimer?.cancel();
     _ringTimer = null;
+  }
+
+  void _cancelIncomingRingTimer() {
+    _incomingRingTimer?.cancel();
+    _incomingRingTimer = null;
   }
 
   /// Fails the call if it never reaches connected after answering — without
@@ -1796,10 +1924,11 @@ class CallService {
     _iceRestartTimer = null;
 
     final ending = _session;
-    if (emitEndedEvent &&
-        ending != null &&
-        !ending.isIncoming &&
-        ending.conversationId != null) {
+    if (ending != null) _rememberEndedCallId(ending.callId);
+    // Emitted for BOTH directions: the listener records call history from it
+    // (an answered incoming call must land in the log too). The DM call event
+    // stays caller-side only — receivers key off [CallEndedEvent.isIncoming].
+    if (emitEndedEvent && ending != null && ending.conversationId != null) {
       final dur = ending.wasConnected && ending.connectedAt != null
           ? DateTime.now().difference(ending.connectedAt!).inSeconds
           : 0;
@@ -1809,6 +1938,7 @@ class CallService {
           answered: ending.wasConnected,
           isVideo: ending.isVideo,
           durationSecs: dur,
+          isIncoming: ending.isIncoming,
         ),
       );
     }
@@ -1865,6 +1995,15 @@ class CallService {
     _isCleaningUp = false;
   }
 
+  void _rememberEndedCallId(String callId) {
+    if (callId.isEmpty) return;
+    _recentlyEndedCallIds.remove(callId); // re-insert → most recent
+    _recentlyEndedCallIds.add(callId);
+    while (_recentlyEndedCallIds.length > _recentlyEndedCap) {
+      _recentlyEndedCallIds.remove(_recentlyEndedCallIds.first);
+    }
+  }
+
   Future<void> _stopLocalStream(MediaStream? stream) async {
     if (stream == null) return;
     for (final track in stream.getTracks()) {
@@ -1880,6 +2019,7 @@ class CallService {
   void dispose() {
     _cleanup();
     _cancelRingTimer();
+    _cancelIncomingRingTimer();
     _connectTimer?.cancel();
     _wsSub?.cancel();
     _sessionController.close();

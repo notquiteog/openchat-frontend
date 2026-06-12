@@ -49,8 +49,9 @@ class BadgeService {
 
   final Future<void> Function(int count) _applyPlatformBadge;
 
-  /// Desktop tray hook (icon swap + tooltip); injected by DesktopStartupService
-  /// where a tray exists, left null elsewhere.
+  /// Desktop tray hook (icon swap + tooltip); the app shell wires it to
+  /// DesktopStartupService.tray's setUnreadBadge where a tray exists, left
+  /// null elsewhere.
   Future<void> Function(bool unread, int count)? _applyTrayBadge;
 
   ChatProvider? _chat;

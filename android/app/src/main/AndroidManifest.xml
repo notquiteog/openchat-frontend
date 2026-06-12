@@ -94,10 +94,12 @@
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_color"
             android:resource="@color/notification_color" />
+        <!-- Background WS notifications only run as remoteMessaging; live
+             location uses geolocator's own location-typed service. -->
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:exported="false"
-            android:foregroundServiceType="location|remoteMessaging"
+            android:foregroundServiceType="remoteMessaging"
             android:stopWithTask="false"
             tools:replace="android:exported" />
         <service

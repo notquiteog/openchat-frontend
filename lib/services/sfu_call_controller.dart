@@ -8,6 +8,30 @@ import 'api_service.dart';
 import 'call_platform_controls.dart';
 import 'websocket_service.dart';
 
+/// A finished SFU group call from this device's perspective (join → leave),
+/// reported so the local call history can log it (see
+/// CallProvider.recordSfuCallEnded).
+class SfuCallEnd {
+  final String conversationId;
+  final String? title;
+  final bool isVideo;
+  final DateTime joinedAt;
+  final int durationSecs;
+
+  const SfuCallEnd({
+    required this.conversationId,
+    required this.title,
+    required this.isVideo,
+    required this.joinedAt,
+    required this.durationSecs,
+  });
+
+  /// Stable history id — one row per join, unique across re-joins of the
+  /// same conversation's call.
+  String get historyId =>
+      'sfu-$conversationId-${joinedAt.toUtc().millisecondsSinceEpoch}';
+}
+
 /// Drives a premium "Call with SFU" group call via a LiveKit [Room].
 ///
 /// Deliberately self-contained and independent of the P2P CallService /
@@ -15,14 +39,25 @@ import 'websocket_service.dart';
 /// 1:1 calls never use this. Registered app-wide so a call survives navigating
 /// away from the call screen (enabling "leave/join an active call any time").
 class SfuCallController extends ChangeNotifier {
-  SfuCallController(this._api, this._ws);
+  SfuCallController(this._api, this._ws, {this.onCallEnded});
 
   final ApiService _api;
   final WebSocketService _ws;
 
+  /// Invoked once per successful join when the call ends (leave, remote
+  /// disconnect, or dispose) — wired to the call-history recorder.
+  final void Function(SfuCallEnd end)? onCallEnded;
+
   Room? _room;
   EventsListener<RoomEvent>? _listener;
   Timer? _heartbeat;
+
+  /// Bumped by every [_teardown]. An in-flight [join] captures the value at
+  /// entry and re-checks it after each await: if leave() ran meanwhile, the
+  /// join lost and must dispose its freshly-connected room instead of
+  /// re-enabling the mic on a room nobody can reach.
+  int _epoch = 0;
+  DateTime? _joinedAt;
   final CallPlatformControls _platformControls = const CallPlatformControls();
   bool _usingFrontCamera = true;
   String? _conversationId;
@@ -79,6 +114,8 @@ class SfuCallController extends ChangeNotifier {
     String? e2eeKeyB64,
   }) async {
     if (isActive) return;
+    final epoch = _epoch;
+    bool lostRace() => _epoch != epoch;
     _conversationId = conversationId;
     _title = title;
     _isVideo = isVideo;
@@ -90,6 +127,11 @@ class SfuCallController extends ChangeNotifier {
 
     try {
       final data = await _api.getLiveKitToken(conversationId);
+      if (lostRace()) {
+        _connecting = false;
+        notifyListeners();
+        return;
+      }
       final url = data['url'] as String?;
       final token = data['token'] as String?;
       if (url == null || url.isEmpty || token == null || token.isEmpty) {
@@ -100,6 +142,11 @@ class SfuCallController extends ChangeNotifier {
       if (e2eeKeyB64 != null && e2eeKeyB64.isNotEmpty) {
         e2ee = await E2EEOptions.sharedKey(e2eeKeyB64);
         _mediaE2EE = true;
+      }
+      if (lostRace()) {
+        _connecting = false;
+        notifyListeners();
+        return;
       }
       final room = Room(
         roomOptions: RoomOptions(
@@ -114,17 +161,33 @@ class SfuCallController extends ChangeNotifier {
       _bind(room, listener);
 
       await room.connect(url, token);
+      if (lostRace()) {
+        // leave() ran while connect was in flight — _teardown already nulled
+        // our state; make sure THIS room is dead too (no live mic in a room
+        // the UI no longer knows about).
+        await _disposeOrphan(room, listener);
+        _connecting = false;
+        notifyListeners();
+        return;
+      }
       await room.localParticipant?.setMicrophoneEnabled(true);
       if (isVideo) {
         await room.localParticipant?.setCameraEnabled(true);
       }
+      if (lostRace()) {
+        await _disposeOrphan(room, listener);
+        _connecting = false;
+        notifyListeners();
+        return;
+      }
+      _joinedAt = DateTime.now();
       // Announce presence so other members see a join banner, then re-announce
       // periodically as a heartbeat (the server ends the call when it stops).
       _ws.sendGroupCallJoin(conversationId);
       _startHeartbeat();
     } catch (e) {
       _error = e.toString();
-      await _teardown();
+      if (!lostRace()) await _teardown();
       _connecting = false;
       notifyListeners();
       rethrow;
@@ -132,6 +195,27 @@ class SfuCallController extends ChangeNotifier {
 
     _connecting = false;
     notifyListeners();
+  }
+
+  /// Disposes a room that finished connecting after losing to a concurrent
+  /// [_teardown] (which may have already disconnected it — every step is
+  /// individually guarded).
+  Future<void> _disposeOrphan(
+    Room room,
+    EventsListener<RoomEvent> listener,
+  ) async {
+    try {
+      room.removeListener(_onRoomChange);
+    } catch (_) {}
+    try {
+      await listener.dispose();
+    } catch (_) {}
+    try {
+      await room.disconnect();
+    } catch (_) {}
+    try {
+      await room.dispose();
+    } catch (_) {}
   }
 
   void _bind(Room room, EventsListener<RoomEvent> listener) {
@@ -238,13 +322,18 @@ class SfuCallController extends ChangeNotifier {
   }
 
   Future<void> _teardown() async {
+    _epoch++; // any in-flight join() now knows it lost
     final room = _room;
     final listener = _listener;
     final convID = _conversationId;
+    final title = _title;
+    final isVideo = _isVideo;
+    final joinedAt = _joinedAt;
     _room = null;
     _listener = null;
     _conversationId = null;
     _title = null;
+    _joinedAt = null;
     _sawRemote = false;
     _mediaE2EE = false;
     _heartbeat?.cancel();
@@ -252,6 +341,21 @@ class SfuCallController extends ChangeNotifier {
     unawaited(_platformControls.stopMediaProjection());
     if (convID != null) {
       _ws.sendGroupCallLeave(convID);
+      // Report join→leave once per successful join so the device's call log
+      // gets an sfu=true entry (P2P calls are logged via CallEndedEvent).
+      if (joinedAt != null) {
+        try {
+          onCallEnded?.call(
+            SfuCallEnd(
+              conversationId: convID,
+              title: title,
+              isVideo: isVideo,
+              joinedAt: joinedAt,
+              durationSecs: DateTime.now().difference(joinedAt).inSeconds,
+            ),
+          );
+        } catch (_) {}
+      }
     }
     room?.removeListener(_onRoomChange);
     try {

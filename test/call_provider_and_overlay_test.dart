@@ -9,8 +9,10 @@ import 'package:openchat/screens/call/call_screen.dart';
 import 'package:openchat/services/app_lock_state.dart';
 import 'package:openchat/services/call_audio.dart';
 import 'package:openchat/services/call_foreground_service.dart';
+import 'package:openchat/services/call_history_service.dart';
 import 'package:openchat/services/call_media_permissions.dart';
 import 'package:openchat/services/call_service.dart';
+import 'package:openchat/services/sfu_call_controller.dart';
 import 'package:openchat/services/api_service.dart';
 import 'package:openchat/services/notification_service.dart';
 import 'package:openchat/services/secure_storage_service.dart';
@@ -1022,6 +1024,139 @@ void main() {
     });
   });
 
+  group('Call history recording', () {
+    test(
+      'an answered incoming call lands in history with direction and duration',
+      () async {
+        final history = _FakeCallHistory();
+        final service = _FakeCallService();
+        final provider = CallProvider(
+          service,
+          audio: _FakeCallAudio(),
+          callHistory: history,
+        );
+
+        final session = CallSession(
+          callId: 'c-history-in',
+          remoteUserId: 'u-peer',
+          remoteUsername: 'peer',
+          conversationId: 'conv-h',
+          isVideo: false,
+          isIncoming: true,
+          state: CallState.connected,
+        )
+          ..wasConnected = true
+          ..connectedAt = DateTime.now();
+        service.emitSession(session);
+        await Future<void>.delayed(Duration.zero);
+
+        service.emitEnded(
+          const CallEndedEvent(
+            conversationId: 'conv-h',
+            answered: true,
+            isVideo: false,
+            durationSecs: 42,
+            isIncoming: true,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        final entry = history.entries.single;
+        expect(entry.id, 'c-history-in');
+        expect(entry.conversationId, 'conv-h');
+        expect(entry.peerUserId, 'u-peer');
+        expect(entry.direction, CallDirection.incoming);
+        expect(entry.outcome, CallOutcomeKind.answered);
+        expect(entry.durationSecs, 42);
+        expect(entry.sfu, isFalse);
+        // The DM call event stays caller-side only.
+        expect(provider.lastEndedCall, isNull);
+
+        provider.dispose();
+        service.dispose();
+      },
+    );
+
+    test(
+      'an outgoing ending records history AND surfaces the DM event',
+      () async {
+        final history = _FakeCallHistory();
+        final service = _FakeCallService();
+        final provider = CallProvider(
+          service,
+          audio: _FakeCallAudio(),
+          callHistory: history,
+        );
+
+        final session = CallSession(
+          callId: 'c-history-out',
+          remoteUserId: 'u-peer',
+          remoteUsername: 'peer',
+          conversationId: 'conv-h',
+          isVideo: true,
+          isIncoming: false,
+          state: CallState.connected,
+        )
+          ..wasConnected = true
+          ..connectedAt = DateTime.now();
+        service.emitSession(session);
+        await Future<void>.delayed(Duration.zero);
+
+        service.emitEnded(
+          const CallEndedEvent(
+            conversationId: 'conv-h',
+            answered: true,
+            isVideo: true,
+            durationSecs: 7,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        final entry = history.entries.single;
+        expect(entry.direction, CallDirection.outgoing);
+        expect(entry.outcome, CallOutcomeKind.answered);
+        expect(provider.lastEndedCall, isNotNull);
+        expect(provider.lastEndedCall?.durationSecs, 7);
+
+        provider.dispose();
+        service.dispose();
+      },
+    );
+
+    test('a finished SFU group call is recorded with sfu set', () {
+      final history = _FakeCallHistory();
+      final service = _FakeCallService();
+      final provider = CallProvider(
+        service,
+        audio: _FakeCallAudio(),
+        callHistory: history,
+      );
+
+      final joinedAt = DateTime.utc(2026, 6, 12, 10);
+      provider.recordSfuCallEnded(
+        SfuCallEnd(
+          conversationId: 'conv-sfu',
+          title: 'Weekend crew',
+          isVideo: true,
+          joinedAt: joinedAt,
+          durationSecs: 300,
+        ),
+      );
+
+      final entry = history.entries.single;
+      expect(entry.sfu, isTrue);
+      expect(entry.conversationId, 'conv-sfu');
+      expect(entry.peerUsername, 'Weekend crew');
+      expect(entry.isVideo, isTrue);
+      expect(entry.outcome, CallOutcomeKind.answered);
+      expect(entry.durationSecs, 300);
+      expect(entry.startedAt, joinedAt);
+
+      provider.dispose();
+      service.dispose();
+    });
+  });
+
   group('App lock gating', () {
     testWidgets('call UI never paints over the app lock screen', (
       tester,
@@ -1273,6 +1408,17 @@ class _FakeCallForeground implements CallForegroundController {
   }
 }
 
+class _FakeCallHistory extends CallHistoryService {
+  _FakeCallHistory() : super(SecureStorageService());
+
+  final entries = <CallHistoryEntry>[];
+
+  @override
+  Future<void> record(CallHistoryEntry e) async {
+    entries.add(e);
+  }
+}
+
 class _FakeCallService extends CallService {
   _FakeCallService({
     this.throwOnSelectAudioOutput = false,
@@ -1318,6 +1464,10 @@ class _FakeCallService extends CallService {
 
   void emitIncoming(CallSession session) {
     _incomingController.add(session);
+  }
+
+  void emitEnded(CallEndedEvent event) {
+    _endedController.add(event);
   }
 
   @override

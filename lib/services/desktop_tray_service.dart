@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:dbus/dbus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
@@ -17,10 +18,39 @@ import 'notification_service.dart';
 /// so Dart's GC cannot collect it while the app is running.
 class DesktopTrayService with WindowListener, TrayListener {
   static const _appName = 'OpenChat';
-  static const _appIconAsset = 'assets/images/logo.png';
+
+  // Themed icon ids installed into hicolor by packaging/linux/* — what the
+  // host resolves when tray_manager forwards the string as an icon NAME.
+  static const _linuxThemedIcon = 'win.openchat.OpenChat';
+  static const _linuxThemedIconUnread = 'win.openchat.OpenChat.unread';
+
+  /// Mirrors tray_manager's `runningInSandbox()`: the exact condition under
+  /// which its `setIcon` forwards the string verbatim as a themed-icon name
+  /// instead of resolving it to a bundle file path (the host compositor can't
+  /// see sandbox paths).
+  static bool get _linuxIconByName =>
+      Platform.environment.containsKey('FLATPAK_ID') ||
+      Platform.environment.containsKey('SNAP') ||
+      (Platform.environment['container']?.isNotEmpty ?? false) ||
+      FileSystemEntity.isFileSync('/.dockerenv');
+
+  /// Per-platform tray icon. Windows MUST get an .ico: Shell_NotifyIcon loads
+  /// via LoadImage(IMAGE_ICON, LR_LOADFROMFILE), which only reads .ico files —
+  /// a PNG yields a null HICON (invisible tray icon) while still reporting
+  /// success to Dart.
+  static String get _appIconAsset {
+    if (Platform.isWindows) return 'assets/images/logo.ico';
+    if (Platform.isLinux && _linuxIconByName) return _linuxThemedIcon;
+    return 'assets/images/logo.png';
+  }
+
   // Same logo with a red dot — tray_manager can only swap whole images, so
   // the unread state is a pre-rendered icon variant plus a tooltip count.
-  static const _appIconUnreadAsset = 'assets/images/logo_unread.png';
+  static String get _appIconUnreadAsset {
+    if (Platform.isWindows) return 'assets/images/logo_unread.ico';
+    if (Platform.isLinux && _linuxIconByName) return _linuxThemedIconUnread;
+    return 'assets/images/logo_unread.png';
+  }
 
   bool _initialized = false;
   bool _trayInitialized = false;
@@ -47,6 +77,18 @@ class DesktopTrayService with WindowListener, TrayListener {
   }
 
   Future<void> _initTray() async {
+    // Stock GNOME ships no StatusNotifierWatcher (the AppIndicator extension
+    // provides one), and ayatana registration still "succeeds" against the
+    // bus — the icon just never renders. Hiding the window in that state
+    // strands it, so stay un-initialized and let close/minimize fall back to
+    // a normal taskbar minimize.
+    if (Platform.isLinux && !await _linuxHasStatusNotifierWatcher()) {
+      debugPrint(
+        'DesktopTrayService: no org.kde.StatusNotifierWatcher on the session '
+        'bus — tray disabled, close/minimize will minimize to the taskbar.',
+      );
+      return;
+    }
     try {
       trayManager.addListener(this);
       await trayManager.setIcon(_appIconAsset);
@@ -93,6 +135,30 @@ class DesktopTrayService with WindowListener, TrayListener {
         // Cosmetic only; not implemented on Linux.
       }
     } catch (_) {}
+  }
+
+  /// True when something on the session bus implements the StatusNotifier
+  /// protocol (KDE, GNOME with the AppIndicator extension, most other DEs).
+  /// Errors default to true so an odd bus setup degrades to "try the tray
+  /// anyway" rather than silently losing the feature.
+  static Future<bool> _linuxHasStatusNotifierWatcher() async {
+    DBusClient? client;
+    try {
+      client = DBusClient.session();
+      final reply = await client.callMethod(
+        destination: 'org.freedesktop.DBus',
+        path: DBusObjectPath('/org/freedesktop/DBus'),
+        interface: 'org.freedesktop.DBus',
+        name: 'NameHasOwner',
+        values: const [DBusString('org.kde.StatusNotifierWatcher')],
+        replySignature: DBusSignature('b'),
+      );
+      return reply.returnValues.first.asBoolean();
+    } catch (_) {
+      return true;
+    } finally {
+      if (client != null) unawaited(client.close());
+    }
   }
 
   // ── TrayListener ──────────────────────────────────────────────────────────

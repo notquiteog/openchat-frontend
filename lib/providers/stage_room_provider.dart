@@ -61,6 +61,11 @@ class StageRoomProvider extends ChangeNotifier {
   Room? _room;
   StreamSubscription<WsEvent>? _wsSub;
   Timer? _heartbeat;
+  // Bumped on every teardown. [join] captures the value at entry and re-checks
+  // it after each await: if a leave()/dispose() raced the in-flight connect,
+  // the join continuation must not resurrect provider state (live mic +
+  // heartbeat on a room the teardown already let go of).
+  int _generation = 0;
 
   String? _conversationId;
   String _role = 'listener';
@@ -97,12 +102,21 @@ class StageRoomProvider extends ChangeNotifier {
 
   Future<void> join(String conversationId) async {
     if (_connecting || _room != null) return;
+    final gen = _generation;
     _connecting = true;
     _error = null;
     notifyListeners();
+    Room? room;
     try {
       _selfId ??= await _storage.getUserID();
+      if (gen != _generation) return;
       final data = await _api.joinStage(conversationId);
+      if (gen != _generation) {
+        // leave() raced the join API call. We registered server-side but never
+        // connected; undo the registration and stop without touching state.
+        unawaited(_api.leaveStage(conversationId).catchError((_) {}));
+        return;
+      }
       final url = data['url'] as String?;
       final token = data['token'] as String?;
       _role = data['role'] as String? ?? 'listener';
@@ -110,14 +124,25 @@ class StageRoomProvider extends ChangeNotifier {
       if (url == null || token == null || url.isEmpty || token.isEmpty) {
         throw Exception('Stage room is unavailable');
       }
-      final room = Room(
+      room = Room(
         roomOptions: const RoomOptions(adaptiveStream: true),
       );
       _room = room;
       _conversationId = conversationId;
       await room.connect(url, token);
+      if (gen != _generation) {
+        // leave()/dispose() tore down mid-connect. Its disconnect() may have
+        // been a no-op on a still-connecting room, so drop the freshly
+        // connected room ourselves — and don't resurrect any provider state.
+        await _disposeRoom(room);
+        return;
+      }
       if (canSpeak) {
         await room.localParticipant?.setMicrophoneEnabled(true);
+        if (gen != _generation) {
+          await _disposeRoom(room);
+          return;
+        }
         _micEnabled = true;
       }
       _wsSub = _ws.events.listen(_onWsEvent);
@@ -132,8 +157,16 @@ class StageRoomProvider extends ChangeNotifier {
         }
       });
     } catch (e) {
+      if (gen != _generation) {
+        // A concurrent leave already tore everything down; just make sure the
+        // locally created room (if any) doesn't leak its native resources.
+        if (room != null) await _disposeRoom(room);
+        return;
+      }
       _error = e.toString();
       await _teardown();
+      notifyListeners();
+      return;
     }
     _connecting = false;
     notifyListeners();
@@ -274,21 +307,32 @@ class StageRoomProvider extends ChangeNotifier {
     }
   }
 
+  /// Disconnects and disposes a room. Used by [_teardown] and by a [join]
+  /// continuation that lost the generation race (its room is no longer ours,
+  /// but must not leak its connection or native resources).
+  Future<void> _disposeRoom(Room room) async {
+    try {
+      await room.disconnect();
+    } catch (_) {}
+    // Dispose like SfuCallController does — disconnect alone leaks the native
+    // room resources across repeated stage joins.
+    try {
+      await room.dispose();
+    } catch (_) {}
+  }
+
   Future<void> _teardown() async {
+    // Invalidate any in-flight join: its continuations re-check _generation
+    // after every await and bail out (cleaning up their own room) on mismatch.
+    _generation++;
+    _connecting = false;
     _heartbeat?.cancel();
     _heartbeat = null;
     await _wsSub?.cancel();
     _wsSub = null;
     final room = _room;
     _room = null;
-    try {
-      await room?.disconnect();
-    } catch (_) {}
-    // Dispose like SfuCallController does — disconnect alone leaks the native
-    // room resources across repeated stage joins.
-    try {
-      await room?.dispose();
-    } catch (_) {}
+    if (room != null) await _disposeRoom(room);
     _conversationId = null;
     _role = 'listener';
     _hostId = null;

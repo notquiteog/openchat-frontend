@@ -2334,8 +2334,10 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  /// Groups let the user pick the call backend: P2P mesh, or the premium SFU.
-  /// 1:1 chats are always P2P (no chooser).
+  /// Groups let the user pick the call backend: P2P (a star topology — the
+  /// caller's device holds one peer connection per participant and relays
+  /// everyone's media), or the premium SFU. 1:1 chats are always P2P (no
+  /// chooser).
   void _onCallPressed({required bool isVideo}) {
     // Calls use UDP media that can't be tunnelled through a TCP SOCKS proxy;
     // with the strict toggle on, refuse rather than leak the real IP.
@@ -2358,10 +2360,11 @@ class _ChatScreenState extends State<ChatScreen> {
   void _showGroupCallChooser({required bool isVideo}) {
     final isPremium =
         context.read<AuthProvider>().currentUser?.isPremium == true;
-    // A P2P mesh gets CPU/bandwidth-bound fast: every participant uplinks to
-    // every other. Past ~3 remote participants, nudge toward the SFU by
-    // listing it first (still a free choice — P2P stays available).
-    final preferSfu = conv.members.length > 4 && isPremium;
+    // Group P2P is a star, not a mesh: only the caller holds a peer connection
+    // per participant, so the caller's CPU/uplink is the bottleneck (see
+    // call_service.dart). Past ~4 members, nudge toward the SFU by listing it
+    // first as recommended (still a free choice — P2P stays available).
+    final preferSfu = conv.members.length > 4;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -2371,8 +2374,10 @@ class _ChatScreenState extends State<ChatScreen> {
           icon: Icons.lan_outlined,
           label: 'Call with P2P',
           subtitle: preferSfu
-              ? 'Direct peer-to-peer mesh — may struggle at this group size'
-              : 'Direct peer-to-peer mesh',
+              ? 'Direct peer-to-peer — your device relays media for '
+                    'everyone; may struggle at this group size'
+              : 'Direct peer-to-peer — media flows through your device, '
+                    'no server access. Best for 2–3 people',
           onTap: () {
             Navigator.pop(sheetCtx);
             _startCall(isVideo: isVideo);
@@ -2382,10 +2387,13 @@ class _ChatScreenState extends State<ChatScreen> {
           icon: Icons.hub_outlined,
           label: 'Call with SFU',
           subtitle: !isPremium
-              ? 'Requires OpenChat Premium'
+              ? preferSfu
+                    ? 'Recommended for this group size — requires '
+                          'OpenChat Premium'
+                    : 'Requires OpenChat Premium'
               : preferSfu
-              ? 'Recommended for this group size'
-              : 'Routed through the server — scales to larger groups',
+              ? 'Recommended for this group size — the server forwards media'
+              : 'The server forwards media — scales to larger groups',
           trailing: isPremium
               ? null
               : const Icon(Icons.workspace_premium_outlined, size: 20),
