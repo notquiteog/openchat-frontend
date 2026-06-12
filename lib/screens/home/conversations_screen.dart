@@ -16,6 +16,7 @@ import '../../config/api_config.dart';
 import '../../utils/local_conversation_preferences.dart';
 import '../../utils/smart_inbox_filter.dart';
 import '../../widgets/chat_search_results_view.dart';
+import '../../widgets/desktop.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/conversation_notification_controls_sheet.dart';
 import '../../widgets/stories_strip.dart';
@@ -28,7 +29,7 @@ import '../settings/settings_screen.dart';
 class ConversationsScreen extends StatefulWidget {
   const ConversationsScreen({super.key});
   @override
-  State<ConversationsScreen> createState() => _ConversationsScreenState();
+  State<ConversationsScreen> createState() => ConversationsScreenState();
 }
 
 /// Where a drag that ended at [offset] should settle when the stories strip
@@ -41,7 +42,9 @@ double? storiesSnapTarget(double offset, double extent) {
   return offset < extent / 2 ? 0.0 : extent;
 }
 
-class _ConversationsScreenState extends State<ConversationsScreen> {
+/// Public so the home shell can drive the new-conversation flow from desktop
+/// keyboard shortcuts (Ctrl/Cmd+N) via a GlobalKey.
+class ConversationsScreenState extends State<ConversationsScreen> {
   String? _selectedFolderId;
 
   /// Desktop split view: the conversation open in the right pane. Channels
@@ -49,8 +52,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
   String? _splitSelectedId;
   String? _splitInitialMessageId;
 
-  static bool _useSplitView(BuildContext context) =>
-      MediaQuery.sizeOf(context).width >= 900;
+  /// Live sidebar width while the resize handle is being dragged; the settled
+  /// value persists through SettingsProvider on drag end.
+  double? _draggingSidebarWidth;
+
+  static bool _useSplitView(BuildContext context) => isDesktopShell(context);
 
   /// StoriesStrip height (96) + its hairline divider (0.5 + 2 margin). The
   /// list starts scrolled past this, so the strip hides above the fold until
@@ -325,6 +331,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                           conversation: conversations[index],
                           showDivider: index < conversations.length - 1,
                           draft: drafts[conversations[index].id],
+                          isSelected:
+                              _useSplitView(context) &&
+                              conversations[index].id == _splitSelectedId,
                           isPinned: pinnedConversationIds.contains(
                             conversations[index].id,
                           ),
@@ -348,6 +357,12 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                             context,
                             conversations[index],
                           ),
+                          onSecondaryTapUp: (position) =>
+                              _showConversationActions(
+                                context,
+                                conversations[index],
+                                anchor: position,
+                              ),
                         ),
                       ),
                 ],
@@ -355,17 +370,24 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
             ),
       floatingActionButton: Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.paddingOf(context).bottom),
-        child: GlassButton(
-          icon: const Icon(Icons.edit_outlined, color: Colors.white, size: 24),
-          label: '',
-          onTap: () => _showNewConversation(context),
-          width: 56,
-          height: 56,
-          iconColor: Colors.white,
-          glowColor: Theme.of(context).colorScheme.primary,
-          glowRadius: 1.2,
-          interactionScale: 1.08,
-          stretch: 0.6,
+        child: Tooltip(
+          message: 'New chat',
+          child: GlassButton(
+            icon: const Icon(
+              Icons.edit_outlined,
+              color: Colors.white,
+              size: 24,
+            ),
+            label: '',
+            onTap: () => showNewConversation(),
+            width: 56,
+            height: 56,
+            iconColor: Colors.white,
+            glowColor: Theme.of(context).colorScheme.primary,
+            glowRadius: 1.2,
+            interactionScale: 1.08,
+            stretch: 0.6,
+          ),
         ),
       ),
     );
@@ -378,18 +400,39 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     // deleted conversation simply empties the pane.
     final selected = _splitSelectedId == null
         ? null
-        : chat.conversations
-              .where((c) => c.id == _splitSelectedId)
-              .firstOrNull;
+        : chat.conversations.where((c) => c.id == _splitSelectedId).firstOrNull;
+    final sidebarWidth = (_draggingSidebarWidth ?? settings.desktopSidebarWidth)
+        .clamp(
+          SettingsProvider.minDesktopSidebarWidth,
+          SettingsProvider.maxDesktopSidebarWidth,
+        )
+        .toDouble();
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SizedBox(width: 380, child: inbox),
-        Container(
-          width: 0.5,
-          color: Theme.of(context).colorScheme.onSurface.withValues(
-            alpha: 0.08,
-          ),
+        SizedBox(width: sidebarWidth, child: inbox),
+        SidebarResizeHandle(
+          onDragDelta: (dx) => setState(() {
+            _draggingSidebarWidth =
+                ((_draggingSidebarWidth ?? sidebarWidth) + dx)
+                    .clamp(
+                      SettingsProvider.minDesktopSidebarWidth,
+                      SettingsProvider.maxDesktopSidebarWidth,
+                    )
+                    .toDouble();
+          }),
+          onDragEnd: () {
+            final width = _draggingSidebarWidth;
+            if (width == null) return;
+            settings.setDesktopSidebarWidth(width);
+            setState(() => _draggingSidebarWidth = null);
+          },
+          onReset: () {
+            settings.setDesktopSidebarWidth(
+              SettingsProvider.defaultDesktopSidebarWidth,
+            );
+            setState(() => _draggingSidebarWidth = null);
+          },
         ),
         Expanded(
           child: selected == null
@@ -461,8 +504,9 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
 
   Future<void> _showConversationActions(
     BuildContext context,
-    Conversation conv,
-  ) async {
+    Conversation conv, {
+    Offset? anchor,
+  }) async {
     final settings = context.read<SettingsProvider>();
     final isPinned = settings.isConversationPinned(conv.id);
     final isArchived = settings.isConversationArchived(conv.id);
@@ -475,52 +519,75 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     final notificationLabel = settings.notificationLabelForConversation(
       conv.id,
     );
-    final selected = await GlassModalSheet.show<String>(
-      context: context,
-      initialState: SheetState.half,
-      halfSize: inRealVault ? 0.48 : 0.42,
-      enableInteractionGlow: true,
-      builder: (ctx) => SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            _SheetTile(
-              icon: isPinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
-              label: isPinned ? 'Unpin Chat' : 'Pin Chat',
-              onTap: () => Navigator.pop(ctx, 'pin'),
-            ),
-            _SheetTile(
-              icon: _notificationPreferenceIcon(notificationPreference),
-              label: 'Notifications: $notificationLabel',
-              onTap: () => Navigator.pop(ctx, 'notifications'),
-            ),
-            _SheetTile(
-              icon: isArchived
-                  ? Icons.unarchive_outlined
-                  : Icons.archive_outlined,
-              label: isArchived ? 'Unarchive Chat' : 'Archive Chat',
-              onTap: () => Navigator.pop(ctx, 'archive'),
-            ),
-            if (inRealVault)
-              _SheetTile(
-                icon: isHidden
-                    ? Icons.visibility_outlined
-                    : Icons.visibility_off_outlined,
-                label: isHidden ? 'Unhide Chat' : 'Hide Chat',
-                onTap: () => Navigator.pop(ctx, 'hide'),
-              ),
-            _SheetTile(
-              icon: Icons.delete_outline_rounded,
-              label: _deleteActionLabel(context, conv),
-              onTap: () => Navigator.pop(ctx, 'delete'),
-            ),
-            const SizedBox(height: 12),
-          ],
-        ),
+    final scheme = Theme.of(context).colorScheme;
+
+    // One action list feeds both surfaces: the long-press bottom sheet on
+    // touch and the cursor-anchored context menu on desktop.
+    final actions = <GlassContextMenuItem<String>>[
+      GlassContextMenuItem(
+        value: 'pin',
+        icon: isPinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
+        label: isPinned ? 'Unpin Chat' : 'Pin Chat',
       ),
-    );
+      GlassContextMenuItem(
+        value: 'notifications',
+        icon: _notificationPreferenceIcon(notificationPreference),
+        label: 'Notifications: $notificationLabel',
+      ),
+      GlassContextMenuItem(
+        value: 'archive',
+        icon: isArchived ? Icons.unarchive_outlined : Icons.archive_outlined,
+        label: isArchived ? 'Unarchive Chat' : 'Archive Chat',
+      ),
+      if (inRealVault)
+        GlassContextMenuItem(
+          value: 'hide',
+          icon: isHidden
+              ? Icons.visibility_outlined
+              : Icons.visibility_off_outlined,
+          label: isHidden ? 'Unhide Chat' : 'Hide Chat',
+        ),
+      GlassContextMenuItem(
+        value: 'delete',
+        icon: Icons.delete_outline_rounded,
+        label: _deleteActionLabel(context, conv),
+        color: scheme.error,
+        dividerBefore: true,
+      ),
+    ];
+
+    final String? selected;
+    if (anchor != null) {
+      selected = await showGlassContextMenu<String>(
+        context: context,
+        anchor: anchor,
+        items: actions,
+      );
+    } else {
+      selected = await GlassModalSheet.show<String>(
+        context: context,
+        initialState: SheetState.half,
+        halfSize: inRealVault ? 0.48 : 0.42,
+        enableInteractionGlow: true,
+        builder: (ctx) => SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              for (final action in actions)
+                _SheetTile(
+                  icon: action.icon,
+                  label: action.label,
+                  color: action.color,
+                  onTap: () => Navigator.pop(ctx, action.value),
+                ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        ),
+      );
+    }
     if (selected == 'pin') {
       await settings.toggleConversationPinned(conv.id);
     } else if (selected == 'notifications' && context.mounted) {
@@ -806,7 +873,11 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
     );
   }
 
-  Future<void> _showNewConversation(BuildContext context) async {
+  /// Opens the new-conversation sheet. Public: the desktop shell triggers it
+  /// from the Ctrl/Cmd+N shortcut through a GlobalKey.
+  Future<void> showNewConversation() async {
+    if (!mounted) return;
+    final context = this.context;
     await GlassModalSheet.show(
       context: context,
       initialState: SheetState.half,
@@ -1944,10 +2015,11 @@ class _AnimatedConversationTileState extends State<_AnimatedConversationTile>
 
 // ── Conversation Tile ─────────────────────────────────────────────────────────
 
-class _ConversationTile extends StatelessWidget {
+class _ConversationTile extends StatefulWidget {
   final Conversation conversation;
   final MessageDraft? draft;
   final bool isPinned;
+  final bool isSelected;
   final bool showDivider;
   final ConversationNotificationPreference notificationPreference;
   final String? unreadMentionMessageId;
@@ -1956,10 +2028,15 @@ class _ConversationTile extends StatelessWidget {
   final ValueChanged<String>? onUnreadMentionTap;
   final VoidCallback? onLongPress;
 
+  /// Desktop right-click: receives the global cursor position so the handler
+  /// can anchor a context menu at it.
+  final ValueChanged<Offset>? onSecondaryTapUp;
+
   const _ConversationTile({
     required this.conversation,
     this.draft,
     this.isPinned = false,
+    this.isSelected = false,
     this.showDivider = false,
     this.notificationPreference =
         const ConversationNotificationPreference.all(),
@@ -1968,7 +2045,27 @@ class _ConversationTile extends StatelessWidget {
     required this.onTap,
     this.onUnreadMentionTap,
     this.onLongPress,
+    this.onSecondaryTapUp,
   });
+
+  @override
+  State<_ConversationTile> createState() => _ConversationTileState();
+}
+
+class _ConversationTileState extends State<_ConversationTile> {
+  bool _hovered = false;
+
+  Conversation get conversation => widget.conversation;
+  MessageDraft? get draft => widget.draft;
+  bool get isPinned => widget.isPinned;
+  ConversationNotificationPreference get notificationPreference =>
+      widget.notificationPreference;
+  String? get unreadMentionMessageId => widget.unreadMentionMessageId;
+  String get currentUserID => widget.currentUserID;
+  VoidCallback get onTap => widget.onTap;
+  ValueChanged<String>? get onUnreadMentionTap => widget.onUnreadMentionTap;
+  VoidCallback? get onLongPress => widget.onLongPress;
+  bool get showDivider => widget.showDivider;
 
   @override
   Widget build(BuildContext context) {
@@ -1988,237 +2085,284 @@ class _ConversationTile extends StatelessWidget {
         notificationPreference.mode ==
         ConversationNotificationMode.mentionsOnly;
 
+    // Pointer affordances: hover tint and a persistent highlight for the
+    // conversation open in the split-view pane. Both render as an inset
+    // rounded fill (the iPadOS sidebar pattern) so they read as states of the
+    // row, not full-bleed stripes.
+    final Color? fill = widget.isSelected
+        ? scheme.primary.withValues(alpha: isDark ? 0.20 : 0.12)
+        : _hovered
+        ? scheme.onSurface.withValues(alpha: 0.05)
+        : null;
+
     return Column(
       children: [
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onTap,
-            onLongPress: onLongPress,
-            splashColor: scheme.primary.withValues(alpha: 0.06),
-            highlightColor: scheme.primary.withValues(alpha: 0.03),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 9, 16, 9),
-              child: Row(
-                children: [
-                  // Hero wraps the avatar so it morphs smoothly into the chat
-                  // header avatar when the conversation is opened.
-                  Hero(
-                    tag: 'avatar_${conversation.id}',
-                    child: _ConvAvatar(
-                      avatarUrl: avatar,
-                      name: name,
-                      isGroup: conversation.isGroup,
-                      isChannel: conversation.isChannel,
-                      isSelf: conversation.isSelf,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
+        MouseRegion(
+          onEnter: (_) => setState(() => _hovered = true),
+          onExit: (_) => setState(() => _hovered = false),
+          child: GestureDetector(
+            onSecondaryTapUp: widget.onSecondaryTapUp == null
+                ? null
+                : (details) => widget.onSecondaryTapUp!(details.globalPosition),
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 6),
+              decoration: BoxDecoration(
+                color: fill,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: onTap,
+                  onLongPress: onLongPress,
+                  borderRadius: BorderRadius.circular(14),
+                  splashColor: scheme.primary.withValues(alpha: 0.06),
+                  highlightColor: scheme.primary.withValues(alpha: 0.03),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+                    child: Row(
                       children: [
-                        Row(
-                          children: [
-                            if (conversation.isChannel)
-                              Padding(
-                                padding: const EdgeInsets.only(right: 4),
-                                child: Icon(
-                                  Icons.campaign_rounded,
-                                  size: 14,
-                                  color: scheme.onSurface.withValues(
-                                    alpha: 0.44,
-                                  ),
-                                ),
-                              ),
-                            if (isBot)
-                              Padding(
-                                padding: const EdgeInsets.only(right: 4),
-                                child: Icon(
-                                  Icons.smart_toy_outlined,
-                                  size: 13,
-                                  color: scheme.onSurface.withValues(
-                                    alpha: 0.44,
-                                  ),
-                                ),
-                              ),
-                            if (isPinned)
-                              Padding(
-                                padding: const EdgeInsets.only(right: 4),
-                                child: Icon(
-                                  Icons.push_pin_rounded,
-                                  size: 13,
-                                  color: scheme.primary.withValues(alpha: 0.72),
-                                ),
-                              ),
-                            if (isMuted)
-                              Padding(
-                                padding: const EdgeInsets.only(right: 4),
-                                child: Icon(
-                                  Icons.notifications_off_outlined,
-                                  size: 13,
-                                  color: scheme.onSurface.withValues(
-                                    alpha: 0.38,
-                                  ),
-                                ),
-                              ),
-                            if (isPriority)
-                              Padding(
-                                padding: const EdgeInsets.only(right: 4),
-                                child: Icon(
-                                  Icons.star_outline_rounded,
-                                  size: 13,
-                                  color: scheme.primary.withValues(alpha: 0.70),
-                                ),
-                              ),
-                            if (isMentionsOnly)
-                              Padding(
-                                padding: const EdgeInsets.only(right: 4),
-                                child: Icon(
-                                  Icons.notification_important_outlined,
-                                  size: 13,
-                                  color: scheme.primary.withValues(alpha: 0.70),
-                                ),
-                              ),
-                            if (hasUnreadMention)
-                              Padding(
-                                padding: const EdgeInsets.only(right: 4),
-                                child: Tooltip(
-                                  message: 'Jump to mention',
-                                  child: Semantics(
-                                    button: true,
-                                    label: 'Jump to unread mention',
-                                    child: GestureDetector(
-                                      behavior: HitTestBehavior.opaque,
-                                      onTap: onUnreadMentionTap == null
-                                          ? null
-                                          : () => onUnreadMentionTap!(
-                                              unreadMentionMessageId!,
+                        // Hero wraps the avatar so it morphs smoothly into the chat
+                        // header avatar when the conversation is opened.
+                        Hero(
+                          tag: 'avatar_${conversation.id}',
+                          child: _ConvAvatar(
+                            avatarUrl: avatar,
+                            name: name,
+                            isGroup: conversation.isGroup,
+                            isChannel: conversation.isChannel,
+                            isSelf: conversation.isSelf,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Row(
+                                children: [
+                                  if (conversation.isChannel)
+                                    Padding(
+                                      padding: const EdgeInsets.only(right: 4),
+                                      child: Icon(
+                                        Icons.campaign_rounded,
+                                        size: 14,
+                                        color: scheme.onSurface.withValues(
+                                          alpha: 0.44,
+                                        ),
+                                      ),
+                                    ),
+                                  if (isBot)
+                                    Padding(
+                                      padding: const EdgeInsets.only(right: 4),
+                                      child: Icon(
+                                        Icons.smart_toy_outlined,
+                                        size: 13,
+                                        color: scheme.onSurface.withValues(
+                                          alpha: 0.44,
+                                        ),
+                                      ),
+                                    ),
+                                  if (isPinned)
+                                    Padding(
+                                      padding: const EdgeInsets.only(right: 4),
+                                      child: Icon(
+                                        Icons.push_pin_rounded,
+                                        size: 13,
+                                        color: scheme.primary.withValues(
+                                          alpha: 0.72,
+                                        ),
+                                      ),
+                                    ),
+                                  if (isMuted)
+                                    Padding(
+                                      padding: const EdgeInsets.only(right: 4),
+                                      child: Icon(
+                                        Icons.notifications_off_outlined,
+                                        size: 13,
+                                        color: scheme.onSurface.withValues(
+                                          alpha: 0.38,
+                                        ),
+                                      ),
+                                    ),
+                                  if (isPriority)
+                                    Padding(
+                                      padding: const EdgeInsets.only(right: 4),
+                                      child: Icon(
+                                        Icons.star_outline_rounded,
+                                        size: 13,
+                                        color: scheme.primary.withValues(
+                                          alpha: 0.70,
+                                        ),
+                                      ),
+                                    ),
+                                  if (isMentionsOnly)
+                                    Padding(
+                                      padding: const EdgeInsets.only(right: 4),
+                                      child: Icon(
+                                        Icons.notification_important_outlined,
+                                        size: 13,
+                                        color: scheme.primary.withValues(
+                                          alpha: 0.70,
+                                        ),
+                                      ),
+                                    ),
+                                  if (hasUnreadMention)
+                                    Padding(
+                                      padding: const EdgeInsets.only(right: 4),
+                                      child: Tooltip(
+                                        message: 'Jump to mention',
+                                        child: Semantics(
+                                          button: true,
+                                          label: 'Jump to unread mention',
+                                          child: GestureDetector(
+                                            behavior: HitTestBehavior.opaque,
+                                            onTap: onUnreadMentionTap == null
+                                                ? null
+                                                : () => onUnreadMentionTap!(
+                                                    unreadMentionMessageId!,
+                                                  ),
+                                            child: SizedBox.square(
+                                              dimension: 22,
+                                              child: Center(
+                                                child: Icon(
+                                                  Icons.alternate_email_rounded,
+                                                  size: 14,
+                                                  color: scheme.primary,
+                                                ),
+                                              ),
                                             ),
-                                      child: SizedBox.square(
-                                        dimension: 22,
-                                        child: Center(
-                                          child: Icon(
-                                            Icons.alternate_email_rounded,
-                                            size: 14,
-                                            color: scheme.primary,
                                           ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                ),
-                              ),
-                            Expanded(
-                              child: Text(
-                                name,
-                                style: TextStyle(
-                                  fontWeight: hasUnread
-                                      ? FontWeight.w700
-                                      : FontWeight.w600,
-                                  fontSize: 16.5,
-                                  letterSpacing: -0.2,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            if (hasDraft || last != null) ...[
-                              const SizedBox(width: 8),
-                              Text(
-                                timeago.format(
-                                  hasDraft ? draft!.updatedAt : last!.createdAt,
-                                  locale: 'en_short',
-                                ),
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: hasDraft
-                                      ? scheme.error.withValues(alpha: 0.74)
-                                      : isMuted
-                                      ? scheme.onSurface.withValues(alpha: 0.36)
-                                      : hasUnread
-                                      ? scheme.primary
-                                      : scheme.onSurface.withValues(alpha: 0.4),
-                                  fontWeight: hasUnread
-                                      ? FontWeight.w600
-                                      : FontWeight.w400,
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
-                        if (hasDraft || last != null) ...[
-                          const SizedBox(height: 3),
-                          Text.rich(
-                            TextSpan(
-                              children: [
-                                if (hasDraft)
-                                  TextSpan(
-                                    text: 'Draft: ',
-                                    style: TextStyle(
-                                      color: scheme.error.withValues(
-                                        alpha: 0.82,
+                                  Expanded(
+                                    child: Text(
+                                      name,
+                                      style: TextStyle(
+                                        fontWeight: hasUnread
+                                            ? FontWeight.w700
+                                            : FontWeight.w600,
+                                        fontSize: 16.5,
+                                        letterSpacing: -0.2,
                                       ),
-                                      fontWeight: FontWeight.w600,
+                                      overflow: TextOverflow.ellipsis,
                                     ),
                                   ),
-                                TextSpan(
-                                  text: hasDraft
-                                      ? draftPreview
-                                      : last?.listPreview ?? '',
+                                  if (hasDraft || last != null) ...[
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      timeago.format(
+                                        hasDraft
+                                            ? draft!.updatedAt
+                                            : last!.createdAt,
+                                        locale: 'en_short',
+                                      ),
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: hasDraft
+                                            ? scheme.error.withValues(
+                                                alpha: 0.74,
+                                              )
+                                            : isMuted
+                                            ? scheme.onSurface.withValues(
+                                                alpha: 0.36,
+                                              )
+                                            : hasUnread
+                                            ? scheme.primary
+                                            : scheme.onSurface.withValues(
+                                                alpha: 0.4,
+                                              ),
+                                        fontWeight: hasUnread
+                                            ? FontWeight.w600
+                                            : FontWeight.w400,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                              if (hasDraft || last != null) ...[
+                                const SizedBox(height: 3),
+                                Text.rich(
+                                  TextSpan(
+                                    children: [
+                                      if (hasDraft)
+                                        TextSpan(
+                                          text: 'Draft: ',
+                                          style: TextStyle(
+                                            color: scheme.error.withValues(
+                                              alpha: 0.82,
+                                            ),
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      TextSpan(
+                                        text: hasDraft
+                                            ? draftPreview
+                                            : last?.listPreview ?? '',
+                                      ),
+                                    ],
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    height: 1.25,
+                                    color: hasDraft
+                                        ? scheme.onSurface.withValues(
+                                            alpha: 0.6,
+                                          )
+                                        : hasUnread
+                                        ? scheme.onSurface.withValues(
+                                            alpha: 0.72,
+                                          )
+                                        : scheme.onSurface.withValues(
+                                            alpha: 0.5,
+                                          ),
+                                    fontSize: 14.5,
+                                    fontWeight: FontWeight.w400,
+                                  ),
                                 ),
                               ],
+                            ],
+                          ),
+                        ),
+                        // Compact unread count, vertically centred against the avatar.
+                        if (hasUnread) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            constraints: const BoxConstraints(minWidth: 18),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 1,
                             ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              height: 1.25,
-                              color: hasDraft
-                                  ? scheme.onSurface.withValues(alpha: 0.6)
-                                  : hasUnread
-                                  ? scheme.onSurface.withValues(alpha: 0.72)
-                                  : scheme.onSurface.withValues(alpha: 0.5),
-                              fontSize: 14.5,
-                              fontWeight: FontWeight.w400,
+                            decoration: BoxDecoration(
+                              // iOS systemGray for muted badges keeps white text
+                              // legible in both themes.
+                              color: isMuted
+                                  ? const Color(0xFF8E8E93)
+                                  : scheme.primary,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              conversation.unreadCount > 99
+                                  ? '99+'
+                                  : '${conversation.unreadCount}',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                                height: 1.3,
+                                letterSpacing: 0,
+                              ),
                             ),
                           ),
                         ],
                       ],
                     ),
                   ),
-                  // Compact unread count, vertically centred against the avatar.
-                  if (hasUnread) ...[
-                    const SizedBox(width: 8),
-                    Container(
-                      constraints: const BoxConstraints(minWidth: 18),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 1,
-                      ),
-                      decoration: BoxDecoration(
-                        // iOS systemGray for muted badges keeps white text
-                        // legible in both themes.
-                        color: isMuted
-                            ? const Color(0xFF8E8E93)
-                            : scheme.primary,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        conversation.unreadCount > 99
-                            ? '99+'
-                            : '${conversation.unreadCount}',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w700,
-                          height: 1.3,
-                          letterSpacing: 0,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
+                ),
               ),
             ),
           ),
@@ -2310,17 +2454,19 @@ class _ChatSearchDelegate extends SearchDelegate<ChatSearchSelection?> {
 class _SheetTile extends StatelessWidget {
   final IconData icon;
   final String label;
+  final Color? color;
   final VoidCallback onTap;
 
   const _SheetTile({
     required this.icon,
     required this.label,
+    this.color,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) =>
-      GlassActionTile(icon: icon, label: label, onTap: onTap);
+      GlassActionTile(icon: icon, label: label, color: color, onTap: onTap);
 }
 
 /// Right pane of the desktop split view before a chat is chosen.
@@ -2328,6 +2474,8 @@ class _SplitViewPlaceholder extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final isMac = Theme.of(context).platform == TargetPlatform.macOS;
+    final mod = isMac ? '⌘' : 'Ctrl';
     return Scaffold(
       body: Center(
         child: Column(
@@ -2360,9 +2508,62 @@ class _SplitViewPlaceholder extends StatelessWidget {
                 color: scheme.onSurface.withValues(alpha: 0.45),
               ),
             ),
+            const SizedBox(height: 28),
+            _ShortcutHint(keys: '$mod K', label: 'Search'),
+            const SizedBox(height: 8),
+            _ShortcutHint(keys: '$mod N', label: 'New chat'),
           ],
         ),
       ),
+    );
+  }
+}
+
+/// A `⌘ K  Search`-style keyboard hint row on the split-view placeholder.
+class _ShortcutHint extends StatelessWidget {
+  final String keys;
+  final String label;
+
+  const _ShortcutHint({required this.keys, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: scheme.onSurface.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: scheme.onSurface.withValues(alpha: 0.12),
+              width: 0.5,
+            ),
+          ),
+          child: Text(
+            keys,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.3,
+              color: scheme.onSurface.withValues(alpha: 0.6),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        SizedBox(
+          width: 72,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12.5,
+              color: scheme.onSurface.withValues(alpha: 0.5),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

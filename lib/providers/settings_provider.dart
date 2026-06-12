@@ -181,6 +181,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kAutoDlMaxMb = 'auto_download_max_mb';
   static const _kReduceTransparency = 'reduce_transparency';
   static const _kSmartInboxFilter = 'smart_inbox_filter';
+  static const _kDesktopSidebarWidth = 'desktop_sidebar_width';
   static const _kPinnedConversations = 'pinned_conversations';
   static const _kArchivedConversations = 'archived_conversations';
   static const _kMutedConversations = mutedConversationsPreferenceKey;
@@ -190,6 +191,11 @@ class SettingsProvider extends ChangeNotifier {
 
   /// OpenChat brand blue — the historical default seed.
   static const int defaultSeed = 0xFF3D5AFE;
+
+  /// Desktop split-view sidebar: default and drag bounds.
+  static const double defaultDesktopSidebarWidth = 380;
+  static const double minDesktopSidebarWidth = 300;
+  static const double maxDesktopSidebarWidth = 480;
 
   final LocalPrivateStateService _privateState;
 
@@ -214,6 +220,7 @@ class SettingsProvider extends ChangeNotifier {
   int _autoDownloadMaxMb = 0; // 0 = no size cap
   bool _reduceTransparency = false;
   SmartInboxFilter _smartInboxFilter = SmartInboxFilter.all;
+  double _desktopSidebarWidth = defaultDesktopSidebarWidth;
   final Map<String, MessageDraft> _messageDrafts = {};
   final Map<String, List<ChannelPinnedMessage>> _pinnedChannelMessages = {};
   final Set<String> _pinnedConversationIds = {};
@@ -359,6 +366,9 @@ class SettingsProvider extends ChangeNotifier {
     _smartInboxFilter = smartInboxFilterFromName(
       _prefs!.getString(_kSmartInboxFilter),
     );
+    _desktopSidebarWidth =
+        (_prefs!.getDouble(_kDesktopSidebarWidth) ?? defaultDesktopSidebarWidth)
+            .clamp(minDesktopSidebarWidth, maxDesktopSidebarWidth);
     _pinnedConversationIds
       ..clear()
       ..addAll(
@@ -369,9 +379,7 @@ class SettingsProvider extends ChangeNotifier {
     _closeFriendIds
       ..clear()
       ..addAll(
-        _stringListFromPrivateState(
-          privateState[privateStateCloseFriendsKey],
-        ),
+        _stringListFromPrivateState(privateState[privateStateCloseFriendsKey]),
       );
     _archivedConversationIds
       ..clear()
@@ -404,7 +412,9 @@ class SettingsProvider extends ChangeNotifier {
     _broadcastLists
       ..clear()
       ..addAll(
-        decodePrivateBroadcastLists(privateState[privateStateBroadcastListsKey]),
+        decodePrivateBroadcastLists(
+          privateState[privateStateBroadcastListsKey],
+        ),
       );
     _privateContacts
       ..clear()
@@ -508,6 +518,16 @@ class SettingsProvider extends ChangeNotifier {
     _smartInboxFilter = filter;
     notifyListeners();
     await _prefs?.setString(_kSmartInboxFilter, filter.name);
+  }
+
+  double get desktopSidebarWidth => _desktopSidebarWidth;
+
+  Future<void> setDesktopSidebarWidth(double width) async {
+    final clamped = width.clamp(minDesktopSidebarWidth, maxDesktopSidebarWidth);
+    if (clamped == _desktopSidebarWidth) return;
+    _desktopSidebarWidth = clamped;
+    notifyListeners();
+    await _prefs?.setDouble(_kDesktopSidebarWidth, clamped);
   }
 
   bool isConversationPinned(String convID) =>

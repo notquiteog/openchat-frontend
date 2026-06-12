@@ -46,6 +46,9 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback? onTap;
   final GestureTapUpCallback? onTapUp;
   final VoidCallback? onLongPress;
+
+  /// Desktop right-click: the pointer-native way to open the message menu.
+  final GestureTapUpCallback? onSecondaryTapUp;
   final VoidCallback? onAvatarTap;
   final ValueChanged<String>? onReactionTap;
   final Message? replyPreview;
@@ -74,6 +77,7 @@ class MessageBubble extends StatelessWidget {
     this.onTap,
     this.onTapUp,
     this.onLongPress,
+    this.onSecondaryTapUp,
     this.onAvatarTap,
     this.onReactionTap,
     this.replyPreview,
@@ -111,11 +115,14 @@ class MessageBubble extends StatelessWidget {
     // bubble — they're conversation metadata, not a message from either party.
     final callEvent = message.callEvent;
     if (callEvent != null) {
-      return _CallEventChip(
-        event: callEvent,
-        time: message.createdAt,
-        onTap: onTap,
-        onLongPress: onLongPress,
+      return GestureDetector(
+        onSecondaryTapUp: onSecondaryTapUp,
+        child: _CallEventChip(
+          event: callEvent,
+          time: message.createdAt,
+          onTap: onTap,
+          onLongPress: onLongPress,
+        ),
       );
     }
     if (message.isScreenshotNotice) {
@@ -193,6 +200,7 @@ class MessageBubble extends StatelessWidget {
                   onTap: onTap,
                   onTapUp: onTapUp,
                   onLongPress: onLongPress,
+                  onSecondaryTapUp: onSecondaryTapUp,
                   child: _buildBubble(context),
                 ),
                 if (message.tips.isNotEmpty)
@@ -609,11 +617,7 @@ class _ScreenshotNoticeChip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              Icons.screenshot_monitor_outlined,
-              size: 15,
-              color: cs.error,
-            ),
+            Icon(Icons.screenshot_monitor_outlined, size: 15, color: cs.error),
             const SizedBox(width: 6),
             Flexible(
               child: Text(
@@ -692,8 +696,7 @@ class _DiceBubbleState extends State<_DiceBubble>
     const dieSize = 54.0;
     final seed = widget.messageId.hashCode & 0x7fffffff;
     final ease = Curves.easeOutQuart.transform(t);
-    final spinsX =
-        (2 + seed % 2) * (((seed >> 5) & 1) == 0 ? 1.0 : -1.0);
+    final spinsX = (2 + seed % 2) * (((seed >> 5) & 1) == 0 ? 1.0 : -1.0);
     final spinsY =
         (3 + (seed >> 3) % 2) * (((seed >> 7) & 1) == 0 ? 1.0 : -1.0);
     final (targetX, targetY) = Die3D.targetRotationFor(widget.dice.value);
@@ -705,8 +708,9 @@ class _DiceBubbleState extends State<_DiceBubble>
       ..rotateY(0.36)
       ..rotateX(targetX + spinsX * 2 * math.pi * (1 - ease))
       ..rotateY(targetY + spinsY * 2 * math.pi * (1 - ease));
-    final hop =
-        t < 1.0 ? 24.0 * (1 - t) * math.sin(t * math.pi * 3).abs() : 0.0;
+    final hop = t < 1.0
+        ? 24.0 * (1 - t) * math.sin(t * math.pi * 3).abs()
+        : 0.0;
     final lift = hop / 24.0;
     return SizedBox(
       width: 96,
@@ -878,9 +882,7 @@ class _GameBubbleState extends State<_GameBubble> {
         child: round == null
             ? const SizedBox(
                 height: 40,
-                child: Center(
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
+                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
               )
             : _content(context, round, chat.selfId, scheme),
       ),
@@ -998,7 +1000,10 @@ class _GameBubbleState extends State<_GameBubble> {
       );
       children.add(const SizedBox(height: 8));
       children.add(
-        _commit('Server seed (revealed)', round['server_seed'] as String? ?? ''),
+        _commit(
+          'Server seed (revealed)',
+          round['server_seed'] as String? ?? '',
+        ),
       );
       children.add(const SizedBox(height: 4));
       children.add(
@@ -1012,7 +1017,9 @@ class _GameBubbleState extends State<_GameBubble> {
         ),
       );
     } else {
-      children.add(_commit('Commitment', round['server_seed_hash'] as String? ?? ''));
+      children.add(
+        _commit('Commitment', round['server_seed_hash'] as String? ?? ''),
+      );
       children.add(const SizedBox(height: 10));
       if (isReal) {
         children.add(
@@ -1048,8 +1055,7 @@ class _GameBubbleState extends State<_GameBubble> {
                 ChoiceChip(
                   label: Text(_faceLabel(emoji, n)),
                   selected:
-                      myBet != null &&
-                      (myBet['selection'] as num).toInt() == n,
+                      myBet != null && (myBet['selection'] as num).toInt() == n,
                   onSelected: _busy
                       ? null
                       : (_) => _run(
@@ -1187,7 +1193,11 @@ class _GameBubbleState extends State<_GameBubble> {
           Map<String, dynamic>.from(seat),
           scheme,
           trailing: seat['ready'] == true
-              ? Icon(Icons.check_circle_rounded, size: 16, color: scheme.primary)
+              ? Icon(
+                  Icons.check_circle_rounded,
+                  size: 16,
+                  color: scheme.primary,
+                )
               : Icon(
                   Icons.hourglass_empty_rounded,
                   size: 14,
@@ -1383,9 +1393,8 @@ class _GameBubbleState extends State<_GameBubble> {
   ) {
     final sorted = seats.whereType<Map>().toList()
       ..sort(
-        (a, b) => ((b['score'] as num?) ?? 0).compareTo(
-          (a['score'] as num?) ?? 0,
-        ),
+        (a, b) =>
+            ((b['score'] as num?) ?? 0).compareTo((a['score'] as num?) ?? 0),
       );
     return [
       for (var i = 0; i < sorted.length; i++)
@@ -1486,7 +1495,9 @@ class _ReplyContextPreview extends StatelessWidget {
       onTap: onTap,
       child: Container(
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.sizeOf(context).width * 0.68,
+          // Tracks the bubble cap (560) so the quote never outgrows the
+          // message it decorates on wide desktop panes.
+          maxWidth: math.min(520.0, MediaQuery.sizeOf(context).width * 0.68),
         ),
         margin: const EdgeInsets.only(bottom: 3, left: 2, right: 2),
         padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
@@ -1566,7 +1577,11 @@ class _BubbleShell extends StatelessWidget {
     // BackdropFilter per message). A soft ambient shadow lifts it off the canvas.
     return Container(
       constraints: BoxConstraints(
-        maxWidth: maxWidth ?? MediaQuery.of(context).size.width * 0.75,
+        // Capped so bubbles keep a readable measure on desktop panes, where
+        // 75% of the window would be a multi-thousand-pixel line.
+        maxWidth:
+            maxWidth ??
+            math.min(560.0, MediaQuery.sizeOf(context).width * 0.75),
       ),
       decoration: BoxDecoration(
         color: color,
@@ -1619,8 +1634,8 @@ class _TextBubble extends StatelessWidget {
     }
     final embeddedPreview = message.content!.linkPreview;
     // Honor a per-message "no link preview" flag — skips the IP-leaking fetch.
-    final previewUrl = (linkPreviewsEnabled &&
-            !message.content!.suppressLinkPreview)
+    final previewUrl =
+        (linkPreviewsEnabled && !message.content!.suppressLinkPreview)
         ? embeddedPreview?.url ?? firstLinkPreviewUrl(message.content!.text)
         : null;
     // OpenChat invite links resolve via our own API (no third-party fetch), so
@@ -1652,8 +1667,11 @@ class _TextBubble extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.forward_rounded,
-                      size: 13, color: textColor.withValues(alpha: 0.6)),
+                  Icon(
+                    Icons.forward_rounded,
+                    size: 13,
+                    color: textColor.withValues(alpha: 0.6),
+                  ),
                   const SizedBox(width: 4),
                   Flexible(
                     child: Text(
@@ -3613,9 +3631,7 @@ class _PollBubbleState extends State<_PollBubble> {
       // Tallies and lifecycle come from the snapshot; labels stay with base —
       // E2EE polls carry their option texts in the encrypted payload, which
       // server-sourced snapshots don't have.
-      final countById = {
-        for (final o in snapshot.options) o.id: o.voterCount,
-      };
+      final countById = {for (final o in snapshot.options) o.id: o.voterCount};
       final countByIndex = {
         for (final o in snapshot.options) o.index: o.voterCount,
       };
@@ -3686,8 +3702,18 @@ class _PollBubbleState extends State<_PollBubble> {
     final d = DateTime.tryParse(iso)?.toLocal();
     if (d == null) return iso;
     const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     final hh = d.hour.toString().padLeft(2, '0');
     final mm = d.minute.toString().padLeft(2, '0');
@@ -3749,9 +3775,7 @@ class _PollBubbleState extends State<_PollBubble> {
     try {
       // No select needed: authority only flips together with a new snapshot
       // instance, which the snapshot watcher already rebuilds on.
-      return context.read<ChatProvider>().isPollVoterStateAuthoritative(
-        pollId,
-      );
+      return context.read<ChatProvider>().isPollVoterStateAuthoritative(pollId);
     } on ProviderNotFoundException {
       return false;
     }
@@ -3769,7 +3793,8 @@ class _PollBubbleState extends State<_PollBubble> {
     final total = math.max(1, poll.totalVoterCount);
     // Quiz: reveal the correct answer + explanation once the user has voted
     // (or the poll closed).
-    final quizRevealed = poll.isQuiz &&
+    final quizRevealed =
+        poll.isQuiz &&
         poll.correctOptionIds.isNotEmpty &&
         (poll.voterOptionIds.isNotEmpty || poll.isClosed);
 
@@ -3838,7 +3863,8 @@ class _PollBubbleState extends State<_PollBubble> {
               option: option,
               percent: option.voterCount / total,
               selected: poll.isSelected(option.id),
-              enabled: !poll.isClosed &&
+              enabled:
+                  !poll.isClosed &&
                   !_voting &&
                   !(poll.isQuiz && poll.voterOptionIds.isNotEmpty) &&
                   // No revoting = the vote is final: no moving, no retracting.
@@ -3846,8 +3872,9 @@ class _PollBubbleState extends State<_PollBubble> {
               textColor: widget.textColor,
               quizReveal: quizRevealed,
               isCorrect: poll.isCorrectOption(option.index),
-              labelOverride:
-                  poll.isMeeting ? _formatMeetingSlot(option.text) : null,
+              labelOverride: poll.isMeeting
+                  ? _formatMeetingSlot(option.text)
+                  : null,
               onTap: () => _vote(option),
             ),
             const SizedBox(height: 6),
@@ -3878,8 +3905,11 @@ class _PollBubbleState extends State<_PollBubble> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.lightbulb_outline_rounded,
-                      size: 16, color: widget.textColor.withValues(alpha: 0.7)),
+                  Icon(
+                    Icons.lightbulb_outline_rounded,
+                    size: 16,
+                    color: widget.textColor.withValues(alpha: 0.7),
+                  ),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
@@ -3988,11 +4018,7 @@ class _PollOptionRow extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  Icon(
-                    icon,
-                    size: 18,
-                    color: iconColor,
-                  ),
+                  Icon(icon, size: 18, color: iconColor),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -4063,8 +4089,11 @@ class _SpoilerGateState extends State<_SpoilerGate> {
             child: const Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.visibility_off_outlined,
-                    size: 16, color: Colors.white),
+                Icon(
+                  Icons.visibility_off_outlined,
+                  size: 16,
+                  color: Colors.white,
+                ),
                 SizedBox(width: 6),
                 Text(
                   'Spoiler',
@@ -4554,10 +4583,10 @@ class _AlbumGridBubble extends StatelessWidget {
   }
 
   Widget _tile(Message m, double width, double height) => SizedBox(
-        width: width,
-        height: height,
-        child: _AlbumTile(message: m),
-      );
+    width: width,
+    height: height,
+    child: _AlbumTile(message: m),
+  );
 
   Widget _grid(double w) {
     final half = (w - _gap) / 2;
@@ -4596,14 +4625,16 @@ class _AlbumGridBubble extends StatelessWidget {
         final rows = <Widget>[];
         for (var i = 0; i + 1 < messages.length; i += 2) {
           if (rows.isNotEmpty) rows.add(const SizedBox(height: _gap));
-          rows.add(Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _tile(messages[i], half, half),
-              const SizedBox(width: _gap),
-              _tile(messages[i + 1], half, half),
-            ],
-          ));
+          rows.add(
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _tile(messages[i], half, half),
+                const SizedBox(width: _gap),
+                _tile(messages[i + 1], half, half),
+              ],
+            ),
+          );
         }
         if (messages.length.isOdd) {
           rows.add(const SizedBox(height: _gap));
@@ -4668,40 +4699,36 @@ class _AlbumTileState extends State<_AlbumTile> {
   Widget build(BuildContext context) {
     return switch (_state) {
       _LoadState.done => GestureDetector(
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(
-              fullscreenDialog: true,
-              builder: (_) => Scaffold(
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            fullscreenDialog: true,
+            builder: (_) => Scaffold(
+              backgroundColor: Colors.black,
+              appBar: AppBar(
                 backgroundColor: Colors.black,
-                appBar: AppBar(
-                  backgroundColor: Colors.black,
-                  foregroundColor: Colors.white,
-                ),
-                body: Center(
-                  child: InteractiveViewer(child: Image.memory(_bytes!)),
-                ),
+                foregroundColor: Colors.white,
+              ),
+              body: Center(
+                child: InteractiveViewer(child: Image.memory(_bytes!)),
               ),
             ),
           ),
-          child: Image.memory(
-            _bytes!,
-            fit: BoxFit.cover,
-            gaplessPlayback: true,
-          ),
         ),
+        child: Image.memory(_bytes!, fit: BoxFit.cover, gaplessPlayback: true),
+      ),
       _LoadState.error => Container(
-          color: Colors.black12,
-          child: const Center(
-            child: Icon(Icons.broken_image, color: Colors.grey, size: 20),
-          ),
+        color: Colors.black12,
+        child: const Center(
+          child: Icon(Icons.broken_image, color: Colors.grey, size: 20),
         ),
+      ),
       _ => Container(
-          color: Colors.black12,
-          child: const Center(
-            child: GlassProgressIndicator.circular(size: 18, strokeWidth: 2),
-          ),
+        color: Colors.black12,
+        child: const Center(
+          child: GlassProgressIndicator.circular(size: 18, strokeWidth: 2),
         ),
+      ),
     };
   }
 }
@@ -5146,8 +5173,7 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
       progressSub = TranscriptionService.downloadProgress.listen((p) {
         if (mounted && _transcribing) {
           setState(
-            () => _transcribeStatus =
-                'Downloading model ${(p * 100).round()}%',
+            () => _transcribeStatus = 'Downloading model ${(p * 100).round()}%',
           );
         }
       });
@@ -5246,8 +5272,7 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
                                     ? Icons.subtitles_rounded
                                     : Icons.subtitles_outlined,
                                 size: 16,
-                                color:
-                                    widget.textColor.withValues(alpha: 0.76),
+                                color: widget.textColor.withValues(alpha: 0.76),
                               ),
                       ),
                       const SizedBox(width: 8),
@@ -5626,8 +5651,11 @@ class _ContactBubble extends StatelessWidget {
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.person_rounded,
-                          size: 14, color: textColor.withValues(alpha: 0.7)),
+                      Icon(
+                        Icons.person_rounded,
+                        size: 14,
+                        color: textColor.withValues(alpha: 0.7),
+                      ),
                       const SizedBox(width: 4),
                       Text(
                         label,
@@ -5662,8 +5690,11 @@ class _ContactBubble extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.fingerprint_rounded,
-                      size: 14, color: scheme.primary),
+                  Icon(
+                    Icons.fingerprint_rounded,
+                    size: 14,
+                    color: scheme.primary,
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     fp.length > 16 ? '${fp.substring(0, 16)}…' : fp,
@@ -5698,7 +5729,8 @@ class _Timestamp extends StatelessWidget {
         : null;
     // A still-queued message that a verified peer already confirmed over the
     // nearby mesh: the server copy is pending, but the human has it.
-    final meshDelivered = pending != null &&
+    final meshDelivered =
+        pending != null &&
         pending.status != PendingMessageStatus.failed &&
         context.select<ChatProvider, bool>(
           (chat) => chat.meshDelivered(pending.id),
@@ -5748,12 +5780,12 @@ class _Timestamp extends StatelessWidget {
           pending == null
               ? timeago.format(message.createdAt, locale: 'en_short')
               : meshDelivered
-                  ? 'delivered nearby'
-                  : switch (pending.status) {
-                      PendingMessageStatus.sending => 'sending',
-                      PendingMessageStatus.queued => 'queued',
-                      PendingMessageStatus.failed => 'retrying',
-                    },
+              ? 'delivered nearby'
+              : switch (pending.status) {
+                  PendingMessageStatus.sending => 'sending',
+                  PendingMessageStatus.queued => 'queued',
+                  PendingMessageStatus.failed => 'retrying',
+                },
           style: TextStyle(
             fontSize: 10,
             color: textColor.withValues(alpha: 0.6),
@@ -5849,10 +5881,7 @@ class _AutoDeleteIndicatorState extends State<_AutoDeleteIndicator> {
             ),
           ),
           const SizedBox(width: 3),
-          Text(
-            _label(remaining),
-            style: TextStyle(fontSize: 10, color: color),
-          ),
+          Text(_label(remaining), style: TextStyle(fontSize: 10, color: color)),
         ],
       ),
     );
@@ -6309,9 +6338,7 @@ class _CustomEmojiPackSheetState extends State<_CustomEmojiPackSheet> {
                                   imageUrl: ApiConfig.resolveMedia(url),
                                   fit: BoxFit.contain,
                                   errorWidget: (_, _, _) => Center(
-                                    child: Text(
-                                      em['emoji'] as String? ?? '🙂',
-                                    ),
+                                    child: Text(em['emoji'] as String? ?? '🙂'),
                                   ),
                                 )
                               : Center(

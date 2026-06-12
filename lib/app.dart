@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:local_auth/local_auth.dart';
 import 'package:provider/provider.dart';
 import 'package:share_handler/share_handler.dart';
@@ -24,6 +25,7 @@ import 'screens/home/conversations_screen.dart';
 import 'screens/invites/invite_preview_screen.dart';
 import 'screens/onboarding/privacy_onboarding_screen.dart';
 import 'screens/settings/pgp_keys_screen.dart';
+import 'screens/settings/settings_screen.dart';
 import 'services/api_service.dart';
 import 'services/app_access_gate.dart';
 import 'crypto/pgp_service.dart';
@@ -41,6 +43,7 @@ import 'theme/app_theme.dart';
 import 'utils/invite_links.dart';
 import 'utils/identity_qr.dart';
 import 'widgets/chat_search_results_view.dart';
+import 'widgets/desktop.dart';
 import 'widgets/glass.dart';
 
 class OpenChatApp extends StatelessWidget {
@@ -717,7 +720,10 @@ class _AppRootState extends State<_AppRoot> {
                     alignment: Alignment.centerLeft,
                     child: Text(
                       'Share to',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ),
@@ -1384,6 +1390,11 @@ class _HomeShellState extends State<_HomeShell> {
   int _tab = 0;
   late final _pageController = PageController(initialPage: 0);
 
+  /// Lets desktop keyboard shortcuts (Ctrl/Cmd+N) and the rail reach into the
+  /// inbox for the new-conversation flow.
+  final GlobalKey<ConversationsScreenState> _conversationsKey =
+      GlobalKey<ConversationsScreenState>();
+
   // Bottom-bar search (Apple Music-style morphing pill). The query drives the
   // shared ChatSearchResultsView overlaid on the tab content.
   bool _searchActive = false;
@@ -1431,10 +1442,11 @@ class _HomeShellState extends State<_HomeShell> {
   Widget build(BuildContext context) {
     final user = context.watch<AuthProvider>().currentUser;
     final settings = context.watch<SettingsProvider>();
+    final desktop = isDesktopShell(context);
 
     // Chats is always present. Channels and Bots get their own tab only when
     // the user opts in; otherwise those conversations surface inside Chats.
-    final screens = <Widget>[const ConversationsScreen()];
+    final screens = <Widget>[ConversationsScreen(key: _conversationsKey)];
     final scheme = Theme.of(context).colorScheme;
     final tabs = <GlassBottomBarTab>[
       GlassBottomBarTab(
@@ -1480,71 +1492,152 @@ class _HomeShellState extends State<_HomeShell> {
             children: screens,
           );
 
-    return Scaffold(
-      // Let content flow behind the translucent glass bar.
-      extendBody: true,
-      body: Column(
-        children: [
-          if (user != null && user.isKeyExpired) _ExpiredKeyBanner(user: user),
-          Expanded(
-            child: Stack(
-              children: [
-                tabContent,
-                // Search results replace the tab content while the bar's
-                // search pill is open. removeBottom: the searching bar
-                // reports a taller size with the keyboard up (package docs);
-                // without this the results list gets double bottom padding.
-                if (_searchActive)
-                  Positioned.fill(
-                    child: MediaQuery.removePadding(
-                      context: context,
-                      removeBottom: true,
-                      child: ColoredBox(
-                        color: Theme.of(context).colorScheme.surface,
-                        child: SafeArea(
-                          bottom: false,
-                          child: ChatSearchResultsView(
-                            query: _searchQuery,
-                            onSelect: (selection) =>
-                                unawaited(_onSearchSelect(selection)),
+    final searchOverlay = !_searchActive
+        ? null
+        // Search results replace the tab content while search is open.
+        // removeBottom: the searching bar reports a taller size with the
+        // keyboard up (package docs); without this the results list gets
+        // double bottom padding.
+        : Positioned.fill(
+            child: MediaQuery.removePadding(
+              context: context,
+              removeBottom: true,
+              child: ColoredBox(
+                color: Theme.of(context).colorScheme.surface,
+                child: SafeArea(
+                  bottom: false,
+                  child: Column(
+                    children: [
+                      // The mobile shell types into the bottom bar's morphing
+                      // pill; the desktop shell has no bottom bar, so search
+                      // gets a proper inline field above the results.
+                      if (desktop)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+                          child: GlassTextField(
+                            controller: _searchCtrl,
+                            focusNode: _searchFocus,
+                            placeholder: 'Search chats, messages, people',
+                            autofocus: true,
+                            prefixIcon: const Icon(Icons.search, size: 20),
+                            suffixIcon: const Icon(
+                              Icons.close_rounded,
+                              size: 20,
+                            ),
+                            onSuffixTap: () => _setSearchActive(false),
+                            onChanged: (q) => setState(() => _searchQuery = q),
                           ),
                         ),
+                      Expanded(
+                        child: ChatSearchResultsView(
+                          query: _searchQuery,
+                          onSelect: (selection) =>
+                              unawaited(_onSearchSelect(selection)),
+                        ),
                       ),
-                    ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+
+    final body = Column(
+      children: [
+        if (user != null && user.isKeyExpired) _ExpiredKeyBanner(user: user),
+        Expanded(child: Stack(children: [tabContent, ?searchOverlay])),
+      ],
+    );
+
+    final Widget shell;
+    if (desktop) {
+      // Desktop shell: left navigation rail, no bottom bar. The rail carries
+      // the tab destinations, search, and a settings shortcut.
+      final chat = context.watch<ChatProvider>();
+      var unread = 0;
+      for (final c in chat.conversations) {
+        unread += c.unreadCount;
+      }
+      shell = Scaffold(
+        body: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            DesktopNavRail(
+              tabs: [
+                for (var i = 0; i < tabs.length; i++)
+                  DesktopNavRailTab(
+                    icon: (tabs[i].icon as Icon).icon!,
+                    activeIcon: (tabs[i].activeIcon as Icon).icon!,
+                    label: tabs[i].label ?? '',
+                    badgeCount: i == 0 ? unread : 0,
                   ),
               ],
+              selectedIndex: _tab,
+              onTabSelected: _onTabSelected,
+              searchActive: _searchActive,
+              onSearchTap: () => _setSearchActive(!_searchActive),
+              onSettingsTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              ),
             ),
-          ),
-        ],
-      ),
-      // The bar always shows: even single-tab setups host the search pill
-      // (the iOS 26 searchable-bottom-bar pattern).
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-          child: GlassSearchableBottomBar(
-            tabs: tabs,
-            selectedIndex: _tab,
-            onTabSelected: _onTabSelected,
-            isSearchActive: _searchActive,
-            // Physics + glow for the iOS 26 feel.
-            glowBlurRadius: 18,
-            glowSpreadRadius: 2,
-            glowOpacity: 0.55,
-            barBorderRadius: 999,
-            barHeight: 60,
-            searchConfig: GlassSearchBarConfig(
-              hintText: 'Search',
-              controller: _searchCtrl,
-              focusNode: _searchFocus,
-              autoFocusOnExpand: true,
-              onSearchToggle: _setSearchActive,
-              onChanged: (q) => setState(() => _searchQuery = q),
-              onCancelTap: () => _setSearchActive(false),
+            Expanded(child: body),
+          ],
+        ),
+      );
+    } else {
+      shell = Scaffold(
+        // Let content flow behind the translucent glass bar.
+        extendBody: true,
+        body: body,
+        // The bar always shows: even single-tab setups host the search pill
+        // (the iOS 26 searchable-bottom-bar pattern).
+        bottomNavigationBar: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: GlassSearchableBottomBar(
+              tabs: tabs,
+              selectedIndex: _tab,
+              onTabSelected: _onTabSelected,
+              isSearchActive: _searchActive,
+              // Physics + glow for the iOS 26 feel.
+              glowBlurRadius: 18,
+              glowSpreadRadius: 2,
+              glowOpacity: 0.55,
+              barBorderRadius: 999,
+              barHeight: 60,
+              searchConfig: GlassSearchBarConfig(
+                hintText: 'Search',
+                controller: _searchCtrl,
+                focusNode: _searchFocus,
+                autoFocusOnExpand: true,
+                onSearchToggle: _setSearchActive,
+                onChanged: (q) => setState(() => _searchQuery = q),
+                onCancelTap: () => _setSearchActive(false),
+              ),
             ),
           ),
         ),
-      ),
+      );
+    }
+
+    // Desktop keyboard shortcuts. CallbackShortcuts (not Shortcuts/Actions):
+    // these fire from any focused descendant, including text fields' parents.
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyK, control: true): () =>
+            _setSearchActive(!_searchActive),
+        const SingleActivator(LogicalKeyboardKey.keyK, meta: true): () =>
+            _setSearchActive(!_searchActive),
+        const SingleActivator(LogicalKeyboardKey.keyN, control: true): () =>
+            _conversationsKey.currentState?.showNewConversation(),
+        const SingleActivator(LogicalKeyboardKey.keyN, meta: true): () =>
+            _conversationsKey.currentState?.showNewConversation(),
+        const SingleActivator(LogicalKeyboardKey.escape): () {
+          if (_searchActive) _setSearchActive(false);
+        },
+      },
+      child: FocusScope(autofocus: true, child: shell),
     );
   }
 }
@@ -1671,9 +1764,7 @@ class _AppLockScreenState extends State<_AppLockScreen> {
                                 borderRadius: BorderRadius.circular(18),
                               ),
                               suffixIcon: IconButton(
-                                icon: const Icon(
-                                  Icons.arrow_forward_rounded,
-                                ),
+                                icon: const Icon(Icons.arrow_forward_rounded),
                                 onPressed: _submitting ? null : _submitPin,
                               ),
                             ),

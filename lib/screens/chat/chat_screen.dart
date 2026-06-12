@@ -50,6 +50,8 @@ import '../../widgets/custom_emoji_picker.dart';
 import '../../widgets/custom_emoji_text_controller.dart';
 import '../../widgets/disappearing_messages_picker.dart';
 import '../../widgets/game_launcher.dart';
+import '../../widgets/day_separator.dart';
+import '../../widgets/desktop.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/location_map_preview.dart';
 import '../../widgets/message_action_sheet.dart';
@@ -2516,156 +2518,207 @@ class _ChatScreenState extends State<ChatScreen> {
                                     ),
                                   ),
                                 )
-                              : ListView.builder(
-                                  controller: _scrollCtrl,
-                                  reverse: true,
-                                  physics: const BouncingScrollPhysics(
-                                    parent: AlwaysScrollableScrollPhysics(),
-                                  ),
-                                  scrollCacheExtent:
-                                      const ScrollCacheExtent.pixels(720),
-                                  keyboardDismissBehavior:
-                                      ScrollViewKeyboardDismissBehavior.onDrag,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 8,
-                                  ),
-                                  itemCount:
-                                      messages.length + (_loadingMore ? 1 : 0),
-                                  itemBuilder: (context, i) {
-                                    if (i == messages.length) {
-                                      return const Padding(
-                                        padding: EdgeInsets.symmetric(
-                                          vertical: 12,
-                                        ),
-                                        child: Center(
-                                          child:
-                                              GlassProgressIndicator.circular(
-                                                size: 20,
-                                                strokeWidth: 2,
-                                              ),
-                                        ),
-                                      );
-                                    }
+                              : LayoutBuilder(
+                                  builder: (context, constraints) => ListView.builder(
+                                    controller: _scrollCtrl,
+                                    reverse: true,
+                                    physics: const BouncingScrollPhysics(
+                                      parent: AlwaysScrollableScrollPhysics(),
+                                    ),
+                                    scrollCacheExtent:
+                                        const ScrollCacheExtent.pixels(720),
+                                    keyboardDismissBehavior:
+                                        ScrollViewKeyboardDismissBehavior
+                                            .onDrag,
+                                    // Symmetric gutters keep the stream a
+                                    // readable column when the pane outgrows
+                                    // kChatContentMaxWidth (maximized desktop
+                                    // windows, ultrawides).
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal:
+                                          8 +
+                                          math.max(
+                                            0,
+                                            (constraints.maxWidth -
+                                                    kChatContentMaxWidth) /
+                                                2,
+                                          ),
+                                      vertical: 8,
+                                    ),
+                                    itemCount:
+                                        messages.length +
+                                        (_loadingMore ? 1 : 0),
+                                    itemBuilder: (context, i) {
+                                      if (i == messages.length) {
+                                        return const Padding(
+                                          padding: EdgeInsets.symmetric(
+                                            vertical: 12,
+                                          ),
+                                          child: Center(
+                                            child:
+                                                GlassProgressIndicator.circular(
+                                                  size: 20,
+                                                  strokeWidth: 2,
+                                                ),
+                                          ),
+                                        );
+                                      }
 
-                                    final messageIndex =
-                                        messages.length - 1 - i;
-                                    final msg = messages[messageIndex];
-                                    // Media albums: the run renders once, on
-                                    // its newest member; the other members
-                                    // keep their rows (so index math, keys,
-                                    // and reply jumps survive) at zero
-                                    // height.
-                                    final albumRun = albumRunAt(
-                                      messages,
-                                      messageIndex,
-                                    );
-                                    if (albumRun != null &&
-                                        albumRun.last.id != msg.id) {
-                                      return SizedBox.shrink(
+                                      final messageIndex =
+                                          messages.length - 1 - i;
+                                      final msg = messages[messageIndex];
+                                      // Media albums: the run renders once, on
+                                      // its newest member; the other members
+                                      // keep their rows (so index math, keys,
+                                      // and reply jumps survive) at zero
+                                      // height.
+                                      final albumRun = albumRunAt(
+                                        messages,
+                                        messageIndex,
+                                      );
+                                      if (albumRun != null &&
+                                          albumRun.last.id != msg.id) {
+                                        return SizedBox.shrink(
+                                          key: _messageKeys.putIfAbsent(
+                                            msg.id,
+                                            () => GlobalKey(),
+                                          ),
+                                        );
+                                      }
+                                      final isMe =
+                                          msg.senderId == currentUserID;
+                                      final isLocationMessage =
+                                          msg.type == MessageType.location &&
+                                          msg.location != null;
+                                      final showAvatar =
+                                          !isMe &&
+                                          (messageIndex ==
+                                                  messages.length - 1 ||
+                                              messages[messageIndex + 1]
+                                                      .senderId !=
+                                                  msg.senderId);
+                                      final highlighted =
+                                          _highlightedMessageId == msg.id;
+                                      final replyPreview = _replyPreviewFor(
+                                        msg,
+                                        messages,
+                                      );
+                                      // First message of a calendar day gets
+                                      // a centered day chip above it.
+                                      final showDayHeader =
+                                          messageIndex == 0 ||
+                                          !isSameCalendarDay(
+                                            messages[messageIndex - 1]
+                                                .createdAt,
+                                            msg.createdAt,
+                                          );
+                                      final entry = _AnimatedMessageEntry(
                                         key: _messageKeys.putIfAbsent(
                                           msg.id,
                                           () => GlobalKey(),
                                         ),
-                                      );
-                                    }
-                                    final isMe = msg.senderId == currentUserID;
-                                    final isLocationMessage =
-                                        msg.type == MessageType.location &&
-                                        msg.location != null;
-                                    final showAvatar =
-                                        !isMe &&
-                                        (messageIndex == messages.length - 1 ||
-                                            messages[messageIndex + 1]
-                                                    .senderId !=
-                                                msg.senderId);
-                                    final highlighted =
-                                        _highlightedMessageId == msg.id;
-                                    final replyPreview = _replyPreviewFor(
-                                      msg,
-                                      messages,
-                                    );
-                                    return _AnimatedMessageEntry(
-                                      key: _messageKeys.putIfAbsent(
-                                        msg.id,
-                                        () => GlobalKey(),
-                                      ),
-                                      id: msg.id,
-                                      child: AnimatedContainer(
-                                        duration: const Duration(
-                                          milliseconds: 220,
-                                        ),
-                                        curve: Curves.easeOutCubic,
-                                        decoration: BoxDecoration(
-                                          color: highlighted
-                                              ? Theme.of(context)
-                                                    .colorScheme
-                                                    .primary
-                                                    .withValues(alpha: 0.14)
-                                              : Colors.transparent,
-                                          borderRadius: BorderRadius.circular(
-                                            chatStyle.bubbleRadius + 10,
+                                        id: msg.id,
+                                        child: AnimatedContainer(
+                                          duration: const Duration(
+                                            milliseconds: 220,
                                           ),
-                                        ),
-                                        child: MessageBubble(
-                                          message: msg,
-                                          isMe: isMe,
-                                          isChannel: conv.isChannel,
-                                          albumMessages: albumRun,
-                                          showAvatar: showAvatar,
-                                          readByOthers:
-                                              isMe &&
-                                              chat.messageReadByOthers(
-                                                conv.id,
-                                                msg,
-                                                currentUserID,
-                                              ),
-                                          meBubbleColor: meBubbleColor,
-                                          bubbleRadius: chatStyle.bubbleRadius,
-                                          onTap: isLocationMessage
-                                              ? () => _openLocationMessage(msg)
-                                              : null,
-                                          onTapUp: isLocationMessage
-                                              ? null
-                                              : (details) => _showReactionMenu(
+                                          curve: Curves.easeOutCubic,
+                                          decoration: BoxDecoration(
+                                            color: highlighted
+                                                ? Theme.of(context)
+                                                      .colorScheme
+                                                      .primary
+                                                      .withValues(alpha: 0.14)
+                                                : Colors.transparent,
+                                            borderRadius: BorderRadius.circular(
+                                              chatStyle.bubbleRadius + 10,
+                                            ),
+                                          ),
+                                          child: MessageBubble(
+                                            message: msg,
+                                            isMe: isMe,
+                                            isChannel: conv.isChannel,
+                                            albumMessages: albumRun,
+                                            showAvatar: showAvatar,
+                                            readByOthers:
+                                                isMe &&
+                                                chat.messageReadByOthers(
+                                                  conv.id,
+                                                  msg,
+                                                  currentUserID,
+                                                ),
+                                            meBubbleColor: meBubbleColor,
+                                            bubbleRadius:
+                                                chatStyle.bubbleRadius,
+                                            onTap: isLocationMessage
+                                                ? () =>
+                                                      _openLocationMessage(msg)
+                                                : null,
+                                            onTapUp: isLocationMessage
+                                                ? null
+                                                : (details) =>
+                                                      _showReactionMenu(
+                                                        context,
+                                                        msg,
+                                                        details.globalPosition,
+                                                      ),
+                                            onReactionTap: (emoji) =>
+                                                _toggleReaction(msg, emoji),
+                                            replyPreview: replyPreview,
+                                            onReplyTap:
+                                                msg.effectiveReplyTo == null
+                                                ? null
+                                                : () => _jumpToReply(msg),
+                                            isLiveLocationSharing:
+                                                isMe &&
+                                                msg.location?.isLive == true &&
+                                                chat.isLiveLocationActive(
+                                                  msg.id,
+                                                ),
+                                            onCancelLiveLocation: () => context
+                                                .read<ChatProvider>()
+                                                .stopLiveLocation(msg.id),
+                                            onLongPress: () => _showMessageMenu(
+                                              context,
+                                              msg,
+                                              isMe,
+                                            ),
+                                            onSecondaryTapUp: (details) =>
+                                                _showMessageMenu(
                                                   context,
                                                   msg,
-                                                  details.globalPosition,
+                                                  isMe,
+                                                  anchor:
+                                                      details.globalPosition,
                                                 ),
-                                          onReactionTap: (emoji) =>
-                                              _toggleReaction(msg, emoji),
-                                          replyPreview: replyPreview,
-                                          onReplyTap:
-                                              msg.effectiveReplyTo == null
-                                              ? null
-                                              : () => _jumpToReply(msg),
-                                          isLiveLocationSharing:
-                                              isMe &&
-                                              msg.location?.isLive == true &&
-                                              chat.isLiveLocationActive(msg.id),
-                                          onCancelLiveLocation: () => context
-                                              .read<ChatProvider>()
-                                              .stopLiveLocation(msg.id),
-                                          onLongPress: () => _showMessageMenu(
-                                            context,
-                                            msg,
-                                            isMe,
+                                            onAvatarTap: msg.sender != null
+                                                ? () => Navigator.push(
+                                                    context,
+                                                    MaterialPageRoute(
+                                                      builder: (_) =>
+                                                          UserProfileScreen(
+                                                            user: msg.sender!,
+                                                          ),
+                                                    ),
+                                                  )
+                                                : null,
                                           ),
-                                          onAvatarTap: msg.sender != null
-                                              ? () => Navigator.push(
-                                                  context,
-                                                  MaterialPageRoute(
-                                                    builder: (_) =>
-                                                        UserProfileScreen(
-                                                          user: msg.sender!,
-                                                        ),
-                                                  ),
-                                                )
-                                              : null,
                                         ),
-                                      ),
-                                    );
-                                  },
+                                      );
+                                      if (!showDayHeader) return entry;
+                                      return Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          DaySeparator(
+                                            label: daySeparatorLabel(
+                                              msg.createdAt,
+                                            ),
+                                          ),
+                                          entry,
+                                        ],
+                                      );
+                                    },
+                                  ),
                                 ),
                         ),
                         Positioned(
@@ -3018,14 +3071,13 @@ class _ChatScreenState extends State<ChatScreen> {
     // Bluetooth link (Nearby screen open or keep-alive on), so messages
     // written here deliver offline, instantly.
     final mesh = context.watch<NearbyMeshService>();
-    final meshLinked = conv.isDM &&
+    final meshLinked =
+        conv.isDM &&
         mesh.peers.any((peer) {
           final fp = peer.fingerprint;
           return peer.session.authenticated &&
               fp != null &&
-              context.read<ChatProvider>().dmConversationIdForFingerprint(
-                    fp,
-                  ) ==
+              context.read<ChatProvider>().dmConversationIdForFingerprint(fp) ==
                   conv.id;
         });
 
@@ -3339,108 +3391,117 @@ class _ChatScreenState extends State<ChatScreen> {
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 2, 12, 14),
-        child: GlassContainer(
-          shape: const LiquidRoundedSuperellipse(borderRadius: 28),
-          allowElevation: true,
-          glowIntensity: 0.06,
-          padding: const EdgeInsets.fromLTRB(4, 4, 6, 4),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (mentionSuggestions.isNotEmpty || specialMentions.isNotEmpty)
-                MentionAutocompletePanel(
-                  members: mentionSuggestions,
-                  specialMentions: specialMentions,
-                  onSelected: _insertMention,
-                  onSpecialSelected: _insertSpecialMention,
-                ),
-              if (_replyingTo != null) _buildReplyPreview(context),
-              Row(
+        // Tracks the message stream's max content width so the composer and
+        // the bubbles share gutters on wide desktop panes.
+        child: Align(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: kChatContentMaxWidth),
+            child: GlassContainer(
+              shape: const LiquidRoundedSuperellipse(borderRadius: 28),
+              allowElevation: true,
+              glowIntensity: 0.06,
+              padding: const EdgeInsets.fromLTRB(4, 4, 6, 4),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  IconButton(
-                    icon: Icon(
-                      _showCustomEmojis
-                          ? Icons.keyboard
-                          : Icons.add_reaction_outlined,
+                  if (mentionSuggestions.isNotEmpty ||
+                      specialMentions.isNotEmpty)
+                    MentionAutocompletePanel(
+                      members: mentionSuggestions,
+                      specialMentions: specialMentions,
+                      onSelected: _insertMention,
+                      onSpecialSelected: _insertSpecialMention,
                     ),
-                    tooltip: _showCustomEmojis ? 'Keyboard' : 'Custom emoji',
-                    onPressed: () => setState(() {
-                      _showCustomEmojis = !_showCustomEmojis;
-                      if (_showCustomEmojis) _showStickers = false;
-                    }),
-                  ),
-                  IconButton(
-                    icon: Icon(
-                      _showStickers
-                          ? Icons.keyboard
-                          : Icons.sticky_note_2_outlined,
-                    ),
-                    tooltip: _showStickers ? 'Keyboard' : 'Stickers',
-                    onPressed: () => setState(() {
-                      _showStickers = !_showStickers;
-                      if (_showStickers) _showCustomEmojis = false;
-                    }),
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: _inputCtrl,
-                      onChanged: (_) => _onTyping(),
-                      onSubmitted: (_) => _sendMessage(),
-                      maxLines: null,
-                      textInputAction: TextInputAction.send,
-                      // Punchier weight to stay legible over the refracting glass.
-                      style: const TextStyle(fontWeight: FontWeight.w500),
-                      decoration: InputDecoration(
-                        hintText: 'Message',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(22),
-                          borderSide: BorderSide.none,
+                  if (_replyingTo != null) _buildReplyPreview(context),
+                  Row(
+                    children: [
+                      IconButton(
+                        icon: Icon(
+                          _showCustomEmojis
+                              ? Icons.keyboard
+                              : Icons.add_reaction_outlined,
                         ),
-                        filled: true,
-                        fillColor: scheme.surfaceContainerHighest.withValues(
-                          alpha: 0.30,
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 10,
-                        ),
-                        isDense: true,
+                        tooltip: _showCustomEmojis
+                            ? 'Keyboard'
+                            : 'Custom emoji',
+                        onPressed: () => setState(() {
+                          _showCustomEmojis = !_showCustomEmojis;
+                          if (_showCustomEmojis) _showStickers = false;
+                        }),
                       ),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  GlassCircleIconButton(
-                    onPressed: _showAttachmentPicker,
-                    tooltip: 'Attach file',
-                    icon: const Icon(Icons.attach_file_outlined, size: 22),
-                  ),
-                  const SizedBox(width: 4),
-                  Tooltip(
-                    message: 'Hold for send options',
-                    child: GestureDetector(
-                      onTap: _sendMessage,
-                      onLongPress: _showSendOptions,
-                      child: GlassContainer(
-                        shape: const LiquidRoundedSuperellipse(
-                          borderRadius: 999,
+                      IconButton(
+                        icon: Icon(
+                          _showStickers
+                              ? Icons.keyboard
+                              : Icons.sticky_note_2_outlined,
                         ),
-                        allowElevation: true,
-                        glowIntensity: 0.08,
-                        padding: const EdgeInsets.all(12),
-                        child: Icon(
-                          _scheduledFor != null
-                              ? Icons.schedule_send_outlined
-                              : _sendSilent
-                              ? Icons.notifications_off_outlined
-                              : Icons.send,
-                          size: 18,
+                        tooltip: _showStickers ? 'Keyboard' : 'Stickers',
+                        onPressed: () => setState(() {
+                          _showStickers = !_showStickers;
+                          if (_showStickers) _showCustomEmojis = false;
+                        }),
+                      ),
+                      Expanded(
+                        child: TextField(
+                          controller: _inputCtrl,
+                          onChanged: (_) => _onTyping(),
+                          onSubmitted: (_) => _sendMessage(),
+                          maxLines: null,
+                          textInputAction: TextInputAction.send,
+                          // Punchier weight to stay legible over the refracting glass.
+                          style: const TextStyle(fontWeight: FontWeight.w500),
+                          decoration: InputDecoration(
+                            hintText: 'Message',
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(22),
+                              borderSide: BorderSide.none,
+                            ),
+                            filled: true,
+                            fillColor: scheme.surfaceContainerHighest
+                                .withValues(alpha: 0.30),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 10,
+                            ),
+                            isDense: true,
+                          ),
                         ),
                       ),
-                    ),
+                      const SizedBox(width: 4),
+                      GlassCircleIconButton(
+                        onPressed: _showAttachmentPicker,
+                        tooltip: 'Attach file',
+                        icon: const Icon(Icons.attach_file_outlined, size: 22),
+                      ),
+                      const SizedBox(width: 4),
+                      Tooltip(
+                        message: 'Hold for send options',
+                        child: GestureDetector(
+                          onTap: _sendMessage,
+                          onLongPress: _showSendOptions,
+                          child: GlassContainer(
+                            shape: const LiquidRoundedSuperellipse(
+                              borderRadius: 999,
+                            ),
+                            allowElevation: true,
+                            glowIntensity: 0.08,
+                            padding: const EdgeInsets.all(12),
+                            child: Icon(
+                              _scheduledFor != null
+                                  ? Icons.schedule_send_outlined
+                                  : _sendSilent
+                                  ? Icons.notifications_off_outlined
+                                  : Icons.send,
+                              size: 18,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -3662,8 +3723,9 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _showMessageMenu(
     BuildContext context,
     Message msg,
-    bool isMe,
-  ) async {
+    bool isMe, {
+    Offset? anchor,
+  }) async {
     final isSystem = msg.type == MessageType.system;
     final canDelete = isMe || conv.isDM;
     final hasCopyableText =
@@ -3677,6 +3739,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final selected = await showMessageActionSheet<String>(
       context: context,
       message: msg,
+      anchor: anchor,
       actions: [
         if (!isSystem)
           const MessageActionSheetItem(
@@ -3861,8 +3924,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = msg.decryptedContent ?? '';
     if (text.trim().isEmpty) return;
     final localeCode = Localizations.localeOf(context).languageCode;
-    final target = BCP47Code.fromRawValue(localeCode) ??
-        TranslateLanguage.english;
+    final target =
+        BCP47Code.fromRawValue(localeCode) ?? TranslateLanguage.english;
     showAppToast(context, 'Translating on-device…');
     try {
       final source = await TranslationService.detectLanguage(text);

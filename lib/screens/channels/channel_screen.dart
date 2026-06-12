@@ -39,6 +39,7 @@ import '../../widgets/custom_emoji_picker.dart';
 import '../../widgets/custom_emoji_text_controller.dart';
 import '../../widgets/disappearing_messages_picker.dart';
 import '../../widgets/game_launcher.dart';
+import '../../widgets/day_separator.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/message_action_sheet.dart';
 import '../../widgets/mention_autocomplete_panel.dart';
@@ -2910,7 +2911,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     );
   }
 
-  Future<void> _showPostMenu(Message msg, bool isMe) async {
+  Future<void> _showPostMenu(Message msg, bool isMe, {Offset? anchor}) async {
     final isSystem = msg.type == MessageType.system;
     final canDelete = isMe || _canDeleteChannelMessages;
     final settings = context.read<SettingsProvider>();
@@ -2921,6 +2922,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final selected = await showMessageActionSheet<String>(
       context: context,
       message: msg,
+      anchor: anchor,
       actions: [
         if (canPin)
           MessageActionSheetItem(
@@ -4235,7 +4237,15 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                               msg.id,
                               GlobalKey.new,
                             );
-                            return KeyedSubtree(
+                            // First post of a calendar day gets a centered
+                            // day chip above it (mirrors the chat stream).
+                            final showDayHeader =
+                                i == 0 ||
+                                !isSameCalendarDay(
+                                  _posts[i - 1].createdAt,
+                                  msg.createdAt,
+                                );
+                            final post = KeyedSubtree(
                               key: postKey,
                               child: _AnimatedChannelPost(
                                 id: msg.id,
@@ -4253,12 +4263,28 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                                     onReactionTap: (emoji) =>
                                         _toggleReaction(msg, emoji),
                                     onLongPress: () => _showPostMenu(msg, isMe),
+                                    onSecondaryTapUp: (details) =>
+                                        _showPostMenu(
+                                          msg,
+                                          isMe,
+                                          anchor: details.globalPosition,
+                                        ),
                                     onAvatarTap: msg.sender != null
                                         ? () => _showChannelUserActions(msg)
                                         : null,
                                   ),
                                 ),
                               ),
+                            );
+                            if (!showDayHeader) return post;
+                            return Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                DaySeparator(
+                                  label: daySeparatorLabel(msg.createdAt),
+                                ),
+                                post,
+                              ],
                             );
                           },
                         ),

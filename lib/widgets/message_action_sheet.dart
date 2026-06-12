@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/message.dart';
+import 'desktop.dart';
 import 'glass.dart';
 
 class MessageActionSheetItem<T> {
@@ -25,7 +26,26 @@ Future<T?> showMessageActionSheet<T>({
   required BuildContext context,
   required Message message,
   required List<MessageActionSheetItem<T>> actions,
+  // Set on right-click: renders a cursor-anchored desktop context menu
+  // instead of the touch bottom sheet.
+  Offset? anchor,
 }) {
+  if (anchor != null) {
+    return showGlassContextMenu<T>(
+      context: context,
+      anchor: anchor,
+      items: [
+        for (final action in actions)
+          GlassContextMenuItem(
+            value: action.value,
+            icon: action.icon,
+            label: action.label,
+            color: action.color,
+            dividerBefore: action.dividerBefore,
+          ),
+      ],
+    );
+  }
   return showModalBottomSheet<T>(
     context: context,
     isScrollControlled: true,
