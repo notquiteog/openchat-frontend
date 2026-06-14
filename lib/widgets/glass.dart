@@ -53,6 +53,9 @@ export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
         GlassPage,
         GlassStatusBarStyle,
         GlassScrollEdgeEffect,
+        // Content-aware brightness (iOS 26 light/dark adaptation)
+        GlassContentAwareScope,
+        GlassContentAwareContent,
         // Config & types
         GlassQuality,
         LiquidGlassSettings,

@@ -1421,6 +1421,11 @@ class _HomeShellState extends State<_HomeShell> {
   final TextEditingController _searchCtrl = TextEditingController();
   final FocusNode _searchFocus = FocusNode();
 
+  // Content-aware bottom-bar brightness: the latest verdict from the glass
+  // bar's content sampler (null until the first flip). Drives the pill's glyph
+  // color so icons/labels stay legible over whatever scrolls underneath.
+  Brightness? _barContentBrightness;
+
   @override
   void dispose() {
     _pageController.dispose();
@@ -1605,59 +1610,79 @@ class _HomeShellState extends State<_HomeShell> {
         ),
       );
     } else {
-      shell = Scaffold(
-        // Let content flow behind the translucent glass bar.
-        extendBody: true,
-        body: body,
-        // The bar always shows: even single-tab setups host the search pill
-        // (the iOS 26 searchable-bottom-bar pattern).
-        bottomNavigationBar: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-            child: GlassSearchableBottomBar(
-              tabs: tabs,
-              selectedIndex: _tab,
-              onTabSelected: _onTabSelected,
-              isSearchActive: _searchActive,
-              // The package's icon-color fallback is an unresolved
-              // CupertinoColors.label, which paints light-mode black even in
-              // dark themes — so wire icons to the Material scheme instead.
-              selectedIconColor: scheme.onSurface,
-              unselectedIconColor: scheme.onSurface.withValues(alpha: 0.70),
-              // The package default carries chromaticAberration: 0.3, whose
-              // Impeller dispersion splits refracted light into an RGB
-              // "rainbow" fringe along the pill's bottom edge when the
-              // search bar is active. Same recipe, aberration zeroed.
-              settings: LiquidGlassSettings(
-                thickness: 30,
-                blur: 3,
-                chromaticAberration: 0,
-                lightIntensity: 0.6,
-                refractiveIndex: 1.59,
-                saturation: 0.7,
-                ambientStrength: 1,
-                lightAngle: 0.75 * math.pi,
-                glassColor: const Color(0x3DFFFFFF),
-              ),
-              // Physics + glow for the iOS 26 feel.
-              glowBlurRadius: 18,
-              glowSpreadRadius: 2,
-              glowOpacity: 0.55,
-              barBorderRadius: 999,
-              barHeight: 60,
-              searchConfig: GlassSearchBarConfig(
-                hintText: 'Search',
-                controller: _searchCtrl,
-                focusNode: _searchFocus,
-                autoFocusOnExpand: true,
-                onSearchToggle: _setSearchActive,
-                onChanged: (q) => setState(() => _searchQuery = q),
-                onCancelTap: () => _setSearchActive(false),
-                searchIconColor: scheme.onSurface.withValues(alpha: 0.80),
-                micIconColor: scheme.onSurface.withValues(alpha: 0.80),
-                textColor: scheme.onSurface,
-                cursorColor: scheme.primary,
-                cancelButtonColor: scheme.primary,
+      // Content-aware glyph color (iOS 26 light/dark adaptation): the bar
+      // reports Brightness.light when bright content scrolls under it
+      // (→ dark glyphs) and Brightness.dark over dark content (→ light
+      // glyphs). Before the first verdict we keep the theme's onSurface, so
+      // the bar matches the ambient theme exactly as it did before.
+      final Color glyph = switch (_barContentBrightness) {
+        Brightness.light => const Color(0xFF1C1C1E),
+        Brightness.dark => Colors.white,
+        null => scheme.onSurface,
+      };
+      shell = GlassContentAwareScope(
+        child: Scaffold(
+          // Let content flow behind the translucent glass bar.
+          extendBody: true,
+          // Sample the tab content behind the bar so the pill's glyphs flip
+          // to keep contrast over whatever scrolls underneath.
+          body: GlassContentAwareContent(child: body),
+          // The bar always shows: even single-tab setups host the search pill
+          // (the iOS 26 searchable-bottom-bar pattern).
+          bottomNavigationBar: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: GlassSearchableBottomBar(
+                tabs: tabs,
+                selectedIndex: _tab,
+                onTabSelected: _onTabSelected,
+                isSearchActive: _searchActive,
+                // Opt into content-aware brightness. The verdict drives
+                // `glyph` above via onBrightnessChanged — the bar can't see
+                // our Material-scheme icon colors, so we flip them ourselves.
+                adaptiveBrightness: true,
+                onBrightnessChanged: (b) =>
+                    setState(() => _barContentBrightness = b),
+                // The package's icon-color fallback is an unresolved
+                // CupertinoColors.label, which paints light-mode black even in
+                // dark themes — so wire icons to the resolved glyph instead.
+                selectedIconColor: glyph,
+                unselectedIconColor: glyph.withValues(alpha: 0.70),
+                // The package default carries chromaticAberration: 0.3, whose
+                // Impeller dispersion splits refracted light into an RGB
+                // "rainbow" fringe along the pill's bottom edge when the
+                // search bar is active. Same recipe, aberration zeroed.
+                settings: LiquidGlassSettings(
+                  thickness: 30,
+                  blur: 3,
+                  chromaticAberration: 0,
+                  lightIntensity: 0.6,
+                  refractiveIndex: 1.59,
+                  saturation: 0.7,
+                  ambientStrength: 1,
+                  lightAngle: 0.75 * math.pi,
+                  glassColor: const Color(0x3DFFFFFF),
+                ),
+                // Physics + glow for the iOS 26 feel.
+                glowBlurRadius: 18,
+                glowSpreadRadius: 2,
+                glowOpacity: 0.55,
+                barBorderRadius: 999,
+                barHeight: 60,
+                searchConfig: GlassSearchBarConfig(
+                  hintText: 'Search',
+                  controller: _searchCtrl,
+                  focusNode: _searchFocus,
+                  autoFocusOnExpand: true,
+                  onSearchToggle: _setSearchActive,
+                  onChanged: (q) => setState(() => _searchQuery = q),
+                  onCancelTap: () => _setSearchActive(false),
+                  searchIconColor: glyph.withValues(alpha: 0.80),
+                  micIconColor: glyph.withValues(alpha: 0.80),
+                  textColor: glyph,
+                  cursorColor: scheme.primary,
+                  cancelButtonColor: scheme.primary,
+                ),
               ),
             ),
           ),
