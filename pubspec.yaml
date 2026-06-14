@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.5.58+130
+version: 0.5.59+130
 publish_to: 'none'
 
 environment:
@@ -57,7 +57,7 @@ dependencies:
   image: ^4.8.0
 
   # P2P WebRTC — handles media, ICE, SDP negotiation.
-  flutter_webrtc: 1.4.1
+  flutter_webrtc: ^1.5.1
 
   # SFU for premium "Call with SFU" group calls. 1:1 and the default group path
   # stay on the P2P mesh above; LiveKit is an additional, premium-only option.
@@ -171,10 +171,10 @@ dependency_overrides:
       url: https://github.com/notquiteog/flutter_image_compress.git
       ref: flutter_image_compress_common-v1.0.6-ios26.1
       path: packages/flutter_image_compress_common
-  # livekit_client 2.8.0 hard-pins flutter_webrtc 1.4.0, but we keep 1.4.1
-  # (a patch over 1.4.0 — Dart-API compatible). Force 1.4.1 app-wide so the P2P
-  # mesh and the LiveKit SFU share a single flutter_webrtc native plugin.
-  flutter_webrtc: 1.4.1
+  # livekit_client 2.8.0 hard-pins flutter_webrtc 1.4.0, but we force 1.5.1+
+  # (Dart-API compatible) app-wide so the P2P mesh and the LiveKit SFU share a
+  # single flutter_webrtc native plugin.
+  flutter_webrtc: ^1.5.1
   # Pinned to exact versions — keep in sync with the version table in the PR.
   _fe_analyzer_shared: 102.0.0
   analyzer: 13.2.0
