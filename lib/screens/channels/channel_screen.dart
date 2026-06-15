@@ -3690,50 +3690,67 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => GlassBottomSheetFrame(
+      builder: (sheetCtx) => GlassBottomSheetFrame(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(height: 8),
-            _ChanTile(
-              icon: Icons.photo_library_outlined,
-              label: 'Photo from gallery',
-              onTap: () => Navigator.pop(context, 'gallery_image'),
+            const GlassSheetGrabber(),
+            GlassSheetHeader(
+              icon: Icons.add_rounded,
+              title: 'Add to post',
+              subtitle: 'Hold location to share it live.',
+              onClose: () => Navigator.pop(sheetCtx),
             ),
-            if (cameraSupported)
-              _ChanTile(
-                icon: Icons.camera_alt_outlined,
-                label: 'Take photo',
-                onTap: () => Navigator.pop(context, 'camera_image'),
-              ),
-            _ChanTile(
-              icon: Icons.videocam_outlined,
-              label: 'Video from gallery',
-              onTap: () => Navigator.pop(context, 'gallery_video'),
-            ),
-            _ChanTile(
-              icon: Icons.attach_file,
-              label: 'File',
-              onTap: () => Navigator.pop(context, 'file'),
-            ),
-            _ChanTile(
-              icon: Icons.poll_outlined,
-              label: 'Poll',
-              onTap: () => Navigator.pop(context, 'poll'),
-            ),
-            _ChanTile(
-              icon: Icons.mic_none_outlined,
-              label: 'Voice note',
-              onTap: () => Navigator.pop(context, 'voice'),
-            ),
-            _ChanTile(
-              icon: Icons.share_location_outlined,
-              label: 'Share location',
-              onTap: () => Navigator.pop(context, 'location_once'),
-              // Hold for live location — same gesture as the chat sheet.
-              onLongPress: () => Navigator.pop(context, 'location_live'),
+            const SizedBox(height: 4),
+            GlassMenuSection(
+              entries: [
+                GlassMenuEntry(
+                  icon: Icons.photo_library_outlined,
+                  label: 'Photo from gallery',
+                  onTap: () => Navigator.pop(sheetCtx, 'gallery_image'),
+                ),
+                if (cameraSupported)
+                  GlassMenuEntry(
+                    icon: Icons.camera_alt_outlined,
+                    label: 'Take photo',
+                    onTap: () => Navigator.pop(sheetCtx, 'camera_image'),
+                  ),
+                GlassMenuEntry(
+                  icon: Icons.videocam_outlined,
+                  label: 'Video from gallery',
+                  onTap: () => Navigator.pop(sheetCtx, 'gallery_video'),
+                ),
+                GlassMenuEntry(
+                  icon: Icons.attach_file,
+                  label: 'File',
+                  onTap: () => Navigator.pop(sheetCtx, 'file'),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
+            GlassMenuSection(
+              entries: [
+                GlassMenuEntry(
+                  icon: Icons.poll_outlined,
+                  label: 'Poll',
+                  onTap: () => Navigator.pop(sheetCtx, 'poll'),
+                ),
+                GlassMenuEntry(
+                  icon: Icons.mic_none_outlined,
+                  label: 'Voice note',
+                  onTap: () => Navigator.pop(sheetCtx, 'voice'),
+                ),
+                GlassMenuEntry(
+                  icon: Icons.share_location_outlined,
+                  label: 'Share location',
+                  showChevron: true,
+                  onTap: () => Navigator.pop(sheetCtx, 'location_once'),
+                  // Hold for live location — same gesture as the chat sheet.
+                  onLongPress: () => Navigator.pop(sheetCtx, 'location_live'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
           ],
         ),
       ),
@@ -4768,14 +4785,12 @@ class _ChanTile extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
-  final VoidCallback? onLongPress;
   final Color? color;
 
   const _ChanTile({
     required this.icon,
     required this.label,
     required this.onTap,
-    this.onLongPress,
     this.color,
   });
 
@@ -4802,7 +4817,6 @@ class _ChanTile extends StatelessWidget {
         ),
       ),
       onTap: onTap,
-      onLongPress: onLongPress,
     );
   }
 }

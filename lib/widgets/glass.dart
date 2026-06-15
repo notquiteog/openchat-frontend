@@ -1241,3 +1241,132 @@ class GlassActionTile extends StatelessWidget {
     );
   }
 }
+
+/// One row spec for a [GlassMenuSection]. Mirrors the fields the attachment and
+/// message menus need so call sites can describe a menu as plain data.
+class GlassMenuEntry {
+  final IconData icon;
+  final String label;
+  final String? subtitle;
+  final VoidCallback? onTap;
+
+  /// Optional secondary action (e.g. an attachment tile's "send as…" variants).
+  /// When set, [showChevron] usually hints that the row reveals more on hold.
+  final VoidCallback? onLongPress;
+
+  /// Tint for the icon + label. Used for destructive (red) / warning rows.
+  final Color? color;
+
+  /// Trailing disclosure chevron — signals the row opens further options
+  /// (the iOS-26 way to surface what used to be a hidden long-press).
+  final bool showChevron;
+
+  const GlassMenuEntry({
+    required this.icon,
+    required this.label,
+    this.subtitle,
+    this.onTap,
+    this.onLongPress,
+    this.color,
+    this.showChevron = false,
+  });
+}
+
+/// An iOS-26 "grouped" menu card: one rounded translucent surface holding a
+/// column of [GlassListTile] rows with hairline separators between them — the
+/// look iOS 26 uses for context menus and grouped rows. Built to sit inside an
+/// already-blurred glass surface (e.g. a [GlassBottomSheetFrame]), so it adds a
+/// translucent fill rather than a second backdrop-blur layer. Compose several
+/// sections with small gaps to separate destructive actions, iOS-style.
+class GlassMenuSection extends StatelessWidget {
+  final List<GlassMenuEntry> entries;
+  final EdgeInsetsGeometry margin;
+
+  const GlassMenuSection({
+    super.key,
+    required this.entries,
+    this.margin = const EdgeInsets.fromLTRB(10, 2, 10, 2),
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: margin,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(22),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: scheme.onSurface.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: scheme.onSurface.withValues(alpha: 0.06),
+              width: 0.5,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < entries.length; i++)
+                _tile(context, entries[i], i == entries.length - 1),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _tile(BuildContext context, GlassMenuEntry e, bool isLast) {
+    final scheme = Theme.of(context).colorScheme;
+    final tint = e.color ?? scheme.primary;
+    final labelColor = e.color ?? scheme.onSurface;
+    return GlassListTile(
+      isLast: isLast,
+      dividerIndent: 60,
+      leadingIconColor: tint,
+      leading: Container(
+        width: 32,
+        height: 32,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: tint.withValues(alpha: 0.13),
+          border: Border.all(color: tint.withValues(alpha: 0.10), width: 0.5),
+        ),
+        child: Icon(e.icon, size: 18, color: tint),
+      ),
+      title: Text(
+        e.label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: labelColor,
+          fontWeight: FontWeight.w600,
+          fontSize: 15,
+          letterSpacing: 0,
+        ),
+      ),
+      subtitle: e.subtitle == null
+          ? null
+          : Text(
+              e.subtitle!,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: scheme.onSurface.withValues(alpha: 0.52),
+                fontSize: 12.5,
+                height: 1.25,
+                letterSpacing: 0,
+              ),
+            ),
+      trailing: e.showChevron
+          ? Icon(
+              Icons.chevron_right_rounded,
+              size: 20,
+              color: scheme.onSurface.withValues(alpha: 0.30),
+            )
+          : null,
+      onTap: e.onTap,
+      onLongPress: e.onLongPress,
+    );
+  }
+}

@@ -46,11 +46,22 @@ Future<T?> showMessageActionSheet<T>({
       ],
     );
   }
+  // iOS-26 grouped menu: the leading actions sit in one card and the trailing
+  // "caution" cluster (stop sharing / report / delete — the first row flagged
+  // `dividerBefore` and everything after it) drops into a separate card below.
+  final firstDivider = actions.indexWhere((a) => a.dividerBefore);
+  final groups = firstDivider > 0
+      ? <List<MessageActionSheetItem<T>>>[
+          actions.sublist(0, firstDivider),
+          actions.sublist(firstDivider),
+        ]
+      : <List<MessageActionSheetItem<T>>>[actions];
+
   return showModalBottomSheet<T>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (_) => GlassBottomSheetFrame(
+    builder: (sheetCtx) => GlassBottomSheetFrame(
       child: SafeArea(
         top: false,
         child: Column(
@@ -58,10 +69,23 @@ Future<T?> showMessageActionSheet<T>({
           children: [
             const GlassSheetGrabber(),
             _MessageActionHeader(message: message),
-            for (final action in actions) ...[
-              _MessageActionTile<T>(action: action),
+            const SizedBox(height: 4),
+            for (final group in groups) ...[
+              GlassMenuSection(
+                entries: [
+                  for (final action in group)
+                    GlassMenuEntry(
+                      icon: action.icon,
+                      label: action.label,
+                      subtitle: action.subtitle,
+                      color: action.color,
+                      onTap: () => Navigator.pop(sheetCtx, action.value),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
             ],
-            const SizedBox(height: 10),
+            const SizedBox(height: 2),
           ],
         ),
       ),
@@ -119,20 +143,3 @@ class _MessageActionHeader extends StatelessWidget {
   }
 }
 
-class _MessageActionTile<T> extends StatelessWidget {
-  final MessageActionSheetItem<T> action;
-
-  const _MessageActionTile({required this.action});
-
-  @override
-  Widget build(BuildContext context) {
-    return GlassActionTile(
-      icon: action.icon,
-      label: action.label,
-      subtitle: action.subtitle,
-      color: action.color,
-      dividerBefore: action.dividerBefore,
-      onTap: () => Navigator.pop(context, action.value),
-    );
-  }
-}

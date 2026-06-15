@@ -1014,64 +1014,80 @@ class _ChatScreenState extends State<ChatScreen> {
                   'to send.',
               onClose: () => Navigator.pop(sheetCtx),
             ),
-            _AttachTile(
-              icon: Icons.photo_library_outlined,
-              label: 'Photo',
-              // One picker for both: a single selection sends solo, several
-              // send as an album.
-              onTap: () => Navigator.pop(sheetCtx, 'gallery_photos'),
-              onLongPress: () => Navigator.pop(sheetCtx, 'photo_variants'),
-            ),
-            if (cameraSupported)
-              _AttachTile(
-                icon: Icons.camera_alt_outlined,
-                label: 'Take photo',
-                onTap: () => Navigator.pop(sheetCtx, 'camera_image'),
-              ),
-            _AttachTile(
-              icon: Icons.videocam_outlined,
-              label: 'Video',
-              onTap: () => Navigator.pop(sheetCtx, 'gallery_video'),
-              onLongPress: () => Navigator.pop(sheetCtx, 'video_variants'),
-            ),
-            _AttachTile(
-              icon: Icons.attach_file_rounded,
-              label: 'File',
-              onTap: () => Navigator.pop(sheetCtx, 'file'),
-              onLongPress: () => Navigator.pop(sheetCtx, 'file_variants'),
-            ),
-            _AttachTile(
-              icon: Icons.share_location_outlined,
-              label: 'Share location',
-              onTap: () => Navigator.pop(sheetCtx, 'location_once'),
-              onLongPress: () => Navigator.pop(sheetCtx, 'location_variants'),
-            ),
-            _AttachTile(
-              icon: Icons.poll_outlined,
-              label: 'Poll',
-              onTap: () => Navigator.pop(sheetCtx, 'poll'),
-            ),
-            _AttachTile(
-              icon: Icons.event_available_outlined,
-              label: 'Meeting',
-              onTap: () => Navigator.pop(sheetCtx, 'meeting'),
-            ),
-            _AttachTile(
-              icon: Icons.person_add_alt_1_outlined,
-              label: 'Share contact',
-              onTap: () => Navigator.pop(sheetCtx, 'contact'),
-            ),
-            _AttachTile(
-              icon: Icons.mic_none_outlined,
-              label: 'Voice note',
-              onTap: () => Navigator.pop(sheetCtx, 'voice'),
-            ),
-            _AttachTile(
-              icon: Icons.payments_outlined,
-              label: 'Pay or request',
-              onTap: () => Navigator.pop(sheetCtx, 'payment'),
+            const SizedBox(height: 4),
+            // Media & location — chevron rows reveal "send as…" variants on hold.
+            GlassMenuSection(
+              entries: [
+                GlassMenuEntry(
+                  icon: Icons.photo_library_outlined,
+                  label: 'Photo',
+                  showChevron: true,
+                  // One picker for both: a single selection sends solo, several
+                  // send as an album.
+                  onTap: () => Navigator.pop(sheetCtx, 'gallery_photos'),
+                  onLongPress: () => Navigator.pop(sheetCtx, 'photo_variants'),
+                ),
+                if (cameraSupported)
+                  GlassMenuEntry(
+                    icon: Icons.camera_alt_outlined,
+                    label: 'Take photo',
+                    onTap: () => Navigator.pop(sheetCtx, 'camera_image'),
+                  ),
+                GlassMenuEntry(
+                  icon: Icons.videocam_outlined,
+                  label: 'Video',
+                  showChevron: true,
+                  onTap: () => Navigator.pop(sheetCtx, 'gallery_video'),
+                  onLongPress: () => Navigator.pop(sheetCtx, 'video_variants'),
+                ),
+                GlassMenuEntry(
+                  icon: Icons.attach_file_rounded,
+                  label: 'File',
+                  showChevron: true,
+                  onTap: () => Navigator.pop(sheetCtx, 'file'),
+                  onLongPress: () => Navigator.pop(sheetCtx, 'file_variants'),
+                ),
+                GlassMenuEntry(
+                  icon: Icons.share_location_outlined,
+                  label: 'Share location',
+                  showChevron: true,
+                  onTap: () => Navigator.pop(sheetCtx, 'location_once'),
+                  onLongPress: () =>
+                      Navigator.pop(sheetCtx, 'location_variants'),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
+            GlassMenuSection(
+              entries: [
+                GlassMenuEntry(
+                  icon: Icons.poll_outlined,
+                  label: 'Poll',
+                  onTap: () => Navigator.pop(sheetCtx, 'poll'),
+                ),
+                GlassMenuEntry(
+                  icon: Icons.event_available_outlined,
+                  label: 'Meeting',
+                  onTap: () => Navigator.pop(sheetCtx, 'meeting'),
+                ),
+                GlassMenuEntry(
+                  icon: Icons.person_add_alt_1_outlined,
+                  label: 'Share contact',
+                  onTap: () => Navigator.pop(sheetCtx, 'contact'),
+                ),
+                GlassMenuEntry(
+                  icon: Icons.mic_none_outlined,
+                  label: 'Voice note',
+                  onTap: () => Navigator.pop(sheetCtx, 'voice'),
+                ),
+                GlassMenuEntry(
+                  icon: Icons.payments_outlined,
+                  label: 'Pay or request',
+                  onTap: () => Navigator.pop(sheetCtx, 'payment'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
           ],
         ),
       ),
@@ -5690,28 +5706,6 @@ class _MenuTile extends StatelessWidget {
     onTap: onTap,
     color: color,
     dividerBefore: dividerBefore,
-  );
-}
-
-class _AttachTile extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  final VoidCallback? onLongPress;
-
-  const _AttachTile({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    this.onLongPress,
-  });
-
-  @override
-  Widget build(BuildContext context) => GlassActionTile(
-    icon: icon,
-    label: label,
-    onTap: onTap,
-    onLongPress: onLongPress,
   );
 }
 

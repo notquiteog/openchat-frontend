@@ -26,6 +26,12 @@ import '../services/secure_storage_service.dart';
 import '../services/key_cache_service.dart';
 import '../utils/device_label.dart';
 
+/// Client-side cap for user-supplied images that re-encode to public WebP on
+/// the server (avatars, conversation/channel wallpapers, stickers, custom
+/// emoji). Mirrors the backend `maxImageUploadBytes` so oversized files fail
+/// fast with a friendly message instead of a generic 413.
+const int kMaxImageUploadBytes = 50 * 1024 * 1024; // 50 MB
+
 class ApiException implements Exception {
   final int statusCode;
   final String code;
@@ -3162,6 +3168,13 @@ class ApiService {
     required String filename,
     required Map<String, String> fields,
   }) async {
+    if (fileBytes.length > kMaxImageUploadBytes) {
+      throw ApiException(
+        413,
+        'FILE_TOO_LARGE',
+        'Image must be under 50 MB',
+      );
+    }
     Future<http.Response> send() async {
       final token = await _storage.getAccessToken();
       final uri = Uri.parse('${ApiConfig.baseUrl}$path');
