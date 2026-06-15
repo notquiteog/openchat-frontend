@@ -15,6 +15,7 @@ import 'package:local_auth/local_auth.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../config/api_config.dart';
 import '../../models/conversation.dart';
+import '../../models/key_trust_pin.dart';
 import '../../models/message.dart';
 import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
@@ -29,6 +30,7 @@ import '../call/sfu_call_screen.dart';
 import '../../services/mls_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/attachment_service.dart';
+import '../../services/image_edit_service.dart';
 import '../../services/proxy_service.dart';
 import '../../services/secure_storage_service.dart';
 import '../../services/translation_service.dart';
@@ -53,6 +55,8 @@ import '../../widgets/disappearing_messages_picker.dart';
 import '../../widgets/day_separator.dart';
 import '../../widgets/desktop.dart';
 import '../../widgets/glass.dart';
+import '../../widgets/key_change_banner.dart';
+import '../../widgets/key_verification_badge.dart';
 import '../../widgets/location_map_preview.dart';
 import '../../widgets/attachment_variant_sheet.dart';
 import '../../widgets/message_action_sheet.dart';
@@ -141,6 +145,8 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _pendingDraftSilent = false;
   DateTime? _pendingDraftScheduledFor;
   late final SettingsProvider _settings;
+  KeyTrustPin? _peerPin;
+  String? _peerPinUserId;
 
   // Read the live conversation from the provider (members get loaded
   // asynchronously after the screen opens) and fall back to the one passed in.
@@ -164,6 +170,7 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final chat = context.read<ChatProvider>();
+      _schedulePeerPinLoad();
       _restoreLocalDraft();
       final initialMessageId = widget.initialMessageId;
       if (initialMessageId == null) {
@@ -185,6 +192,31 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     _scrollCtrl.addListener(_onScroll);
     _inputCtrl.addListener(_onInputTextChanged);
+  }
+
+  String? _dmPeerId() {
+    if (!conv.isDM) return null;
+    final currentUserId = context.read<AuthProvider>().currentUser?.id;
+    if (currentUserId == null || currentUserId.isEmpty) return null;
+    return conv.members
+        .where((member) => member.userId != currentUserId)
+        .firstOrNull
+        ?.userId;
+  }
+
+  void _schedulePeerPinLoad() {
+    final peerId = _dmPeerId();
+    if (peerId == null || _peerPinUserId == peerId) return;
+    _peerPinUserId = peerId;
+    unawaited(_loadPeerPin(peerId));
+  }
+
+  Future<void> _loadPeerPin(String peerId) async {
+    final pin = await context.read<SecureStorageService>().getKeyTrustPin(
+      peerId,
+    );
+    if (!mounted || _peerPinUserId != peerId) return;
+    setState(() => _peerPin = pin);
   }
 
   void _onInputTextChanged() {
@@ -624,6 +656,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _sendSticker(String stickerID) async {
     final messenger = ScaffoldMessenger.of(context);
+    final settings = context.read<SettingsProvider>();
     final replyTo = _replyingTo?.id;
     setState(() {
       _showStickers = false;
@@ -638,6 +671,7 @@ class _ChatScreenState extends State<ChatScreen> {
         replyTo: replyTo,
       );
       if (sent) {
+        unawaited(settings.recordRecentSticker(stickerID));
         _scrollToBottom();
       } else if (mounted) {
         messenger.showSnackBar(
@@ -654,6 +688,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void _insertCustomEmoji(Map<String, dynamic> emojiData) {
     final id = emojiData['id'] as String? ?? '';
     if (id.isEmpty) return;
+    unawaited(context.read<SettingsProvider>().recordRecentEmoji(id));
     final rawEmoji = (emojiData['emoji'] as String? ?? '🙂').trim();
     final emoji = rawEmoji.isEmpty ? '🙂' : rawEmoji;
     final oldText = _inputCtrl.text;
@@ -1096,6 +1131,10 @@ class _ChatScreenState extends State<ChatScreen> {
       await _sendPhotos();
       return;
     }
+    if (choice == 'edit_image') {
+      await _sendEditedPhoto();
+      return;
+    }
     if (choice == 'payment') {
       await _showPaymentSheet();
       return;
@@ -1252,8 +1291,64 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  /// Maps a long-pressed attachment tile to a concrete send variant via a
-  /// small glass action sheet. Returns null when dismissed.
+  /// Sends a single gallery photo after an optional crop/rotate edit.
+  Future<void> _sendEditedPhoto() async {
+    final attachmentService = AttachmentService(context.read<ApiService>());
+    final chat = context.read<ChatProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    EncryptedAttachmentUpload? pending;
+    try {
+      final picked = await attachmentService.pickEditableImage();
+      if (picked == null || !mounted) return;
+      final edited = await ImageEditService.editImage(picked);
+      if (!mounted) return;
+      _setAttachmentUploadProgress(
+        const AttachmentUploadProgress(stage: AttachmentUploadStage.preparing),
+      );
+      final prepared = await AttachmentService.prepareGalleryPhotoForUpload(
+        edited ?? picked,
+      );
+      pending = await attachmentService.encryptPreparedAttachment(
+        prepared,
+        onProgress: _setAttachmentUploadProgress,
+      );
+    } catch (e) {
+      _clearAttachmentUploadProgress();
+      if (mounted) {
+        messenger.showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+      }
+      return;
+    }
+
+    if (!mounted) {
+      _clearAttachmentUploadProgress();
+      return;
+    }
+
+    try {
+      _setAttachmentUploadProgress(
+        const AttachmentUploadProgress(stage: AttachmentUploadStage.sending),
+      );
+      final sent = await chat.sendPreparedAttachment(
+        convID: conv.id,
+        attachment: pending,
+        onProgress: _setAttachmentUploadProgress,
+      );
+      if (sent) {
+        _scrollToBottom();
+      } else if (mounted) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Attachment could not be sent')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      _clearAttachmentUploadProgress();
+    }
+  }
+
   /// Unified photo send: one multi-select picker; a single selection sends
   /// solo, several send as an album.
   Future<void> _sendPhotos() async {
@@ -2513,6 +2608,10 @@ class _ChatScreenState extends State<ChatScreen> {
               curve: Curves.easeOutCubic,
               child: Column(
                 children: [
+                  KeyChangeBanner(
+                    conversation: conv,
+                    currentUserId: currentUserID,
+                  ),
                   _GroupCallBanner(conversation: conv),
                   Expanded(
                     child: GestureDetector(
@@ -3125,6 +3224,11 @@ class _ChatScreenState extends State<ChatScreen> {
     final dmPartner = !conv.isGroup
         ? conv.members.where((m) => m.userId != currentUserID).firstOrNull?.user
         : null;
+    if (conv.isDM) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _schedulePeerPinLoad();
+      });
+    }
     final avatarUrl = conv.displayAvatar(currentUserID);
     final exitLabel = conversationExitMenuLabel(
       conv,
@@ -3202,6 +3306,10 @@ class _ChatScreenState extends State<ChatScreen> {
                             color: Theme.of(context).colorScheme.primary,
                           ),
                         ),
+                      ],
+                      if (KeyVerificationBadge.shouldShow(_peerPin)) ...[
+                        const SizedBox(width: 6),
+                        KeyVerificationBadge(pin: _peerPin, compact: true),
                       ],
                     ],
                   ),
@@ -3673,7 +3781,7 @@ class _ChatScreenState extends State<ChatScreen> {
           icon: Icons.copy_rounded,
           label: 'Copy text',
         ),
-      if (msg.type == MessageType.text && hasCopyableText) ...[
+      if (isForwardable(msg)) ...[
         const MessageActionSheetItem(
           value: 'forward',
           icon: Icons.forward_rounded,
@@ -4209,22 +4317,57 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _forwardMessage(Message msg, {bool anonymous = false}) async {
-    final text = msg.decryptedContent ?? '';
-    if (text.isEmpty) return;
+    if (!isForwardable(msg)) return;
     final target = await _pickForwardTarget();
     if (target == null || !mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     final chat = context.read<ChatProvider>();
-    final from = msg.sender?.username;
-    // Attributed forward carries "forwarded from @x"; anonymous sends content
-    // only (no chain of custody) — fits the metadata-minimization model.
-    final plaintext = (!anonymous && from != null && from.isNotEmpty)
-        ? jsonEncode({'text': text, 'forwarded_from': '@$from'})
-        : text;
-    final sent = await chat.sendMessage(
-      convID: target.id,
-      plaintext: plaintext,
-    );
+    bool sent;
+    try {
+      if (msg.type == MessageType.poll && msg.poll != null) {
+        final poll = msg.poll!;
+        final options = [...poll.options]
+          ..sort((a, b) => a.index.compareTo(b.index));
+        sent = await chat.sendPoll(
+          convID: target.id,
+          question: poll.question,
+          options: [for (final option in options) option.text],
+          isAnonymous: poll.isAnonymous,
+          allowsMultipleAnswers: poll.allowsMultipleAnswers,
+          quiz: poll.isQuiz,
+          meeting: poll.isMeeting,
+          correctOptionId: poll.correctOptionIds.isNotEmpty
+              ? poll.correctOptionIds.first
+              : null,
+          explanation: poll.explanation,
+        );
+      } else {
+        final payload = buildForwardPayload(
+          msg,
+          anonymous: anonymous,
+          fromUsername: msg.sender?.username,
+          wireTypeOf: messageTypeWireName,
+        );
+        if (payload == null) {
+          messenger.showSnackBar(
+            const SnackBar(content: Text("Can't forward this message")),
+          );
+          return;
+        }
+        sent = await chat.sendMessage(
+          convID: target.id,
+          plaintext: payload.plaintext,
+          messageType: payload.messageType,
+          attachmentId: payload.attachmentId,
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not forward message: $e')),
+      );
+      return;
+    }
     if (!mounted) return;
     messenger.showSnackBar(
       SnackBar(content: Text(sent ? 'Forwarded' : 'Could not forward message')),

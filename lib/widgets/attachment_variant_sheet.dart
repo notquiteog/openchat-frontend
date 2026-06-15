@@ -12,6 +12,7 @@ import 'glass.dart';
       'photo_variants' => (
         'Send photo',
         [
+          ('Crop & edit', 'edit_image'),
           ('View-once photo', 'view_once_image'),
           ('Spoiler photo', 'spoiler_image'),
         ],
@@ -85,6 +86,7 @@ IconData _variantHeaderIcon(String variants) => switch (variants) {
 };
 
 IconData _attachmentVariantIcon(String value) {
+  if (value == 'edit_image') return Icons.crop_rotate_rounded;
   if (value.startsWith('view_once_')) return Icons.timer_outlined;
   if (value.startsWith('spoiler_')) return Icons.visibility_off_outlined;
   return switch (value) {

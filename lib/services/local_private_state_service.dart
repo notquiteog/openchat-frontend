@@ -36,6 +36,8 @@ const privateStatePrivacyOnboardingViewedUserIdsKey =
     'privacy_onboarding_viewed_user_ids';
 const privateStateMessageRemindersKey = 'message_reminders';
 const privateStateViewedOnceMediaKey = 'viewed_once_media_message_ids';
+const privateStateRecentStickersKey = 'recent_stickers';
+const privateStateRecentEmojisKey = 'recent_emojis';
 
 class PrivateNotificationSettings {
   final bool pushEnabled;

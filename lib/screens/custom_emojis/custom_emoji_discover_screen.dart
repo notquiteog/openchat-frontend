@@ -117,6 +117,7 @@ class _CustomEmojiDiscoverScreenState extends State<CustomEmojiDiscoverScreen> {
         final id = pack['id'] as String;
         final cover = pack['cover_url'] as String?;
         final added = _added.contains(id);
+        final installs = (pack['install_count'] as num?)?.toInt() ?? 0;
         return GlassListTile(
           leading: cover != null && cover.isNotEmpty
               ? CircleAvatar(
@@ -124,7 +125,10 @@ class _CustomEmojiDiscoverScreenState extends State<CustomEmojiDiscoverScreen> {
                 )
               : const CircleAvatar(child: Icon(Icons.add_reaction_outlined)),
           title: Text(pack['name'] as String? ?? 'Pack'),
-          subtitle: Text(pack['description'] as String? ?? ''),
+          subtitle: _DiscoverPackSubtitle(
+            description: pack['description'] as String? ?? '',
+            installs: installs,
+          ),
           trailing: added
               ? const Icon(Icons.check_rounded, color: Colors.green)
               : GlassButtonWidget(
@@ -133,6 +137,67 @@ class _CustomEmojiDiscoverScreenState extends State<CustomEmojiDiscoverScreen> {
                 ),
         );
       },
+    );
+  }
+}
+
+class _DiscoverPackSubtitle extends StatelessWidget {
+  final String description;
+  final int installs;
+
+  const _DiscoverPackSubtitle({
+    required this.description,
+    required this.installs,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hasDescription = description.trim().isNotEmpty;
+    if (!hasDescription && installs <= 0) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (hasDescription) Text(description),
+        if (installs > 0) ...[
+          if (hasDescription) const SizedBox(height: 6),
+          _InstallCountBadge(count: installs),
+        ],
+      ],
+    );
+  }
+}
+
+class _InstallCountBadge extends StatelessWidget {
+  final int count;
+
+  const _InstallCountBadge({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return GlassContainer(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      shape: const LiquidRoundedSuperellipse(borderRadius: 999),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.library_add_check_outlined,
+            size: 13,
+            color: scheme.primary,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            count == 1 ? '1 install' : '$count installs',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: scheme.onSurface,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

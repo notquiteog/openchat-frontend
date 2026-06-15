@@ -51,6 +51,27 @@ void main() {
     ],
   };
 
+  Map<String, dynamic> finishedRound({
+    String provider = 'fun',
+    String stake = '0',
+  }) => {
+    'id': 'round-1',
+    'conversation_id': 'conv-1',
+    'created_by': 'creator-1',
+    'game_type': '🎲',
+    'faces': 6,
+    'provider': provider,
+    'stake': stake,
+    'status': 'revealed',
+    'server_seed': 'server-seed',
+    'server_seed_hash': 'hash',
+    'created_at': DateTime.utc(2026, 6, 10).toIso8601String(),
+    'bets': [
+      {'user_id': 'creator-1', 'score': 88, 'status': 'won'},
+      {'user_id': selfId, 'score': 54, 'status': 'lost'},
+    ],
+  };
+
   Message gameMessage() => Message(
     id: 'msg-1',
     conversationId: 'conv-1',
@@ -132,8 +153,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(api.joinCalls, 1);
-    expect(find.text('Ready up'), findsOneWidget,
-        reason: 'the joined player must be able to ready up');
+    expect(
+      find.text('Ready up'),
+      findsOneWidget,
+      reason: 'the joined player must be able to ready up',
+    );
     expect(find.text('Join game'), findsNothing);
   });
 
@@ -149,46 +173,110 @@ void main() {
   });
 
   testWidgets(
-      'fresh-install login (provider built pre-auth) still recognises own seat',
-      (tester) async {
-    // THE bug: ChatProvider is constructed at app boot, BEFORE login, so its
-    // one-shot self-id load found nothing — and nothing reloaded it after
-    // login. Every own-seat check failed: joiners saw "Join game" forever.
-    provider.dispose();
-    FlutterSecureStorage.setMockInitialValues({}); // no session yet
-    storage = SecureStorageService();
-    api = _FakeApi(storage);
-    ws = _FakeWs(storage);
-    provider = ChatProvider(
-      api,
-      storage,
-      ws,
-      SettingsProvider(),
-      MlsService(storage),
-      NetworkService(),
-      searchService: _NoopSearch(storage),
-      cacheService: _NoopCache(storage),
-      outboxService: _NoopOutbox(storage),
-    );
-    await tester.pump(); // flush constructor async (FakeAsync: no bare delays)
+    'fresh-install login (provider built pre-auth) still recognises own seat',
+    (tester) async {
+      // THE bug: ChatProvider is constructed at app boot, BEFORE login, so its
+      // one-shot self-id load found nothing — and nothing reloaded it after
+      // login. Every own-seat check failed: joiners saw "Join game" forever.
+      provider.dispose();
+      FlutterSecureStorage.setMockInitialValues({}); // no session yet
+      storage = SecureStorageService();
+      api = _FakeApi(storage);
+      ws = _FakeWs(storage);
+      provider = ChatProvider(
+        api,
+        storage,
+        ws,
+        SettingsProvider(),
+        MlsService(storage),
+        NetworkService(),
+        searchService: _NoopSearch(storage),
+        cacheService: _NoopCache(storage),
+        outboxService: _NoopOutbox(storage),
+      );
+      await tester
+          .pump(); // flush constructor async (FakeAsync: no bare delays)
 
-    // Login happens, then a standard post-login entry point runs. Use the
-    // WS-connect trigger (hermetic — the fake socket never dials) rather than
-    // loadConversations, whose real ApiService tail can attempt network in
-    // the test sandbox. NOTE: inside testWidgets everything runs under
-    // FakeAsync — a bare `await Future.delayed(...)` creates a fake timer
-    // that never fires and hangs the test for its full 10-minute timeout;
-    // microtask flushing must go through tester.pump().
-    FlutterSecureStorage.setMockInitialValues({'user_id': selfId});
-    await provider.connectWebSocket();
-    await tester.pump(); // let the unawaited identity hydration settle
+      // Login happens, then a standard post-login entry point runs. Use the
+      // WS-connect trigger (hermetic — the fake socket never dials) rather than
+      // loadConversations, whose real ApiService tail can attempt network in
+      // the test sandbox. NOTE: inside testWidgets everything runs under
+      // FakeAsync — a bare `await Future.delayed(...)` creates a fake timer
+      // that never fires and hangs the test for its full 10-minute timeout;
+      // microtask flushing must go through tester.pump().
+      FlutterSecureStorage.setMockInitialValues({'user_id': selfId});
+      await provider.connectWebSocket();
+      await tester.pump(); // let the unawaited identity hydration settle
 
-    ingestViaWs(lobbyRound(selfSeated: true));
+      ingestViaWs(lobbyRound(selfSeated: true));
+      await pumpBubble(tester);
+
+      expect(
+        find.text('Ready up'),
+        findsOneWidget,
+        reason: 'self identity must re-hydrate after login',
+      );
+      expect(find.text('Join game'), findsNothing);
+    },
+  );
+
+  testWidgets('finished skill game shows a rematch button', (tester) async {
+    ingestViaWs(finishedRound());
     await pumpBubble(tester);
 
-    expect(find.text('Ready up'), findsOneWidget,
-        reason: 'self identity must re-hydrate after login');
-    expect(find.text('Join game'), findsNothing);
+    expect(find.text('Rematch'), findsOneWidget);
+  });
+
+  testWidgets('tapping fun rematch opens launcher without creating a round', (
+    tester,
+  ) async {
+    ingestViaWs(finishedRound());
+    await pumpBubble(tester);
+
+    await tester.tap(find.text('Rematch'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Send game invite'), findsOneWidget);
+    expect(find.text('Ante per player'), findsNothing);
+    expect(api.createCalls, 0);
+  });
+
+  testWidgets('real-money rematch pre-fills ante but waits for confirm', (
+    tester,
+  ) async {
+    api.billingStatus = {
+      'games_real_money': true,
+      'providers': ['btc', 'xmr'],
+    };
+    ingestViaWs(finishedRound(provider: 'btc', stake: '0.00025'));
+    await pumpBubble(tester);
+
+    await tester.tap(find.text('Rematch'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Send real-money invite'), findsOneWidget);
+    expect(find.text('Ante per player'), findsOneWidget);
+    final anteField = tester.widget<TextField>(find.byType(TextField).last);
+    expect(anteField.controller?.text, '0.00025');
+    expect(api.createCalls, 0);
+  });
+
+  testWidgets('real-money rematch degrades to fun when billing gate is off', (
+    tester,
+  ) async {
+    api.billingStatus = {
+      'games_real_money': false,
+      'providers': ['btc'],
+    };
+    ingestViaWs(finishedRound(provider: 'btc', stake: '0.00025'));
+    await pumpBubble(tester);
+
+    await tester.tap(find.text('Rematch'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Send game invite'), findsOneWidget);
+    expect(find.text('Ante per player'), findsNothing);
+    expect(api.createCalls, 0);
   });
 }
 
@@ -199,6 +287,11 @@ class _FakeApi extends ApiService {
 
   Map<String, dynamic>? joinResponse;
   int joinCalls = 0;
+  int createCalls = 0;
+  Map<String, dynamic> billingStatus = {
+    'games_real_money': false,
+    'providers': ['btc'],
+  };
 
   @override
   Future<List<Conversation>> listConversations() async => const [];
@@ -220,6 +313,31 @@ class _FakeApi extends ApiService {
     bool isChannel = false,
   }) async {
     return Map<String, dynamic>.from(joinResponse ?? {});
+  }
+
+  @override
+  Future<Map<String, dynamic>> getBillingStatus() async =>
+      Map<String, dynamic>.from(billingStatus);
+
+  @override
+  Future<Map<String, dynamic>> createGameRound(
+    String convID, {
+    String gameType = '🎲',
+    String provider = 'fun',
+    double? stake,
+    int maxPlayers = 8,
+    bool isChannel = false,
+  }) async {
+    createCalls++;
+    return {
+      'id': 'created-round',
+      'conversation_id': convID,
+      'game_type': gameType,
+      'provider': provider,
+      'stake': stake?.toString() ?? '0',
+      'status': 'lobby',
+      'bets': const [],
+    };
   }
 }
 
@@ -255,8 +373,7 @@ class _NoopCache extends MessageCacheService {
     String encryptedPayload,
     String plaintext,
     String? senderId,
-  ) =>
-      Future.value();
+  ) => Future.value();
 }
 
 class _NoopOutbox extends OfflineOutboxService {

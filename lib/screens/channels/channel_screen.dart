@@ -3497,11 +3497,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
 
   Future<void> _sendSticker(String stickerID) async {
     await _post(plaintextOverride: stickerID, messageType: 'sticker');
+    unawaited(_settings.recordRecentSticker(stickerID));
   }
 
   void _insertCustomEmoji(Map<String, dynamic> emojiData) {
     final id = emojiData['id'] as String? ?? '';
     if (id.isEmpty) return;
+    unawaited(_settings.recordRecentEmoji(id));
     final rawEmoji = (emojiData['emoji'] as String? ?? '🙂').trim();
     final emoji = rawEmoji.isEmpty ? '🙂' : rawEmoji;
     final oldText = _inputCtrl.text;

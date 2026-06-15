@@ -35,6 +35,7 @@ import '../utils/mention_utils.dart';
 import '../utils/skill_game.dart';
 import 'custom_emoji_image.dart';
 import 'die_3d.dart';
+import 'game_launcher.dart';
 import 'game_play_sheet.dart';
 import 'glass.dart';
 import 'location_map_preview.dart';
@@ -889,6 +890,14 @@ class _GameBubbleState extends State<_GameBubble> {
 
   String _amount(Object? v) => v is num ? v.toString() : (v?.toString() ?? '0');
 
+  double? _stakeAsDouble(Object? value) {
+    final parsed = value is num
+        ? value.toDouble()
+        : double.tryParse(value?.toString() ?? '');
+    if (parsed == null || parsed <= 0) return null;
+    return parsed;
+  }
+
   Future<void> _run(Future<void> Function() action) async {
     setState(() => _busy = true);
     try {
@@ -1485,6 +1494,30 @@ class _GameBubbleState extends State<_GameBubble> {
           color: scheme.onSurface.withValues(alpha: 0.55),
         ),
       ),
+      if (selfId != null) ...[
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.tonalIcon(
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('Rematch'),
+            onPressed: _busy
+                ? null
+                : () => unawaited(
+                    _run(
+                      () => showGameLauncher(
+                        context,
+                        convID: widget.conversationId,
+                        isChannel: widget.isChannel,
+                        initialGameType: round['game_type'] as String?,
+                        initialProvider: round['provider'] as String?,
+                        initialStake: _stakeAsDouble(round['stake']),
+                      ),
+                    ),
+                  ),
+          ),
+        ),
+      ],
     ];
   }
 

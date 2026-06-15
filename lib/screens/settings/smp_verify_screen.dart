@@ -11,7 +11,9 @@ import '../../widgets/glass.dart';
 /// Millionaire Protocol: both sides answer a shared question; matching answers
 /// upgrade the contact to verified without ever revealing the answer.
 class SmpVerifyScreen extends StatefulWidget {
-  const SmpVerifyScreen({super.key});
+  final Conversation? initialConversation;
+
+  const SmpVerifyScreen({super.key, this.initialConversation});
 
   @override
   State<SmpVerifyScreen> createState() => _SmpVerifyScreenState();
@@ -24,6 +26,12 @@ class _SmpVerifyScreenState extends State<SmpVerifyScreen> {
   final _respondCtrl = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    _selected = widget.initialConversation;
+  }
+
+  @override
   void dispose() {
     _questionCtrl.dispose();
     _answerCtrl.dispose();
@@ -34,8 +42,7 @@ class _SmpVerifyScreenState extends State<SmpVerifyScreen> {
   String _peerFingerprint(Conversation conv, String myId) =>
       conv.otherUser(myId)?.keyFingerprint ?? '';
 
-  String _peerName(Conversation conv, String myId) =>
-      conv.displayName(myId);
+  String _peerName(Conversation conv, String myId) => conv.displayName(myId);
 
   @override
   Widget build(BuildContext context) {
@@ -43,12 +50,22 @@ class _SmpVerifyScreenState extends State<SmpVerifyScreen> {
     final smp = context.watch<SmpProvider>();
     final myId = context.read<AuthProvider>().currentUser?.id ?? '';
     final dms = chat.conversations.where((c) => c.isDM).toList();
+    Conversation? selected = _selected;
+    if (selected != null) {
+      final selectedId = selected.id;
+      for (final c in dms) {
+        if (c.id == selectedId) {
+          selected = c;
+          break;
+        }
+      }
+      if (!dms.any((c) => c.id == selectedId)) dms.insert(0, selected!);
+    }
 
     // Incoming challenges awaiting an answer from this user.
     final incoming = [
       for (final c in dms)
-        if (smp.sessionFor(c.id)?.status == SmpStatus.awaitingAnswer)
-          c,
+        if (smp.sessionFor(c.id)?.status == SmpStatus.awaitingAnswer) c,
     ];
 
     return Scaffold(
@@ -79,9 +96,9 @@ class _SmpVerifyScreenState extends State<SmpVerifyScreen> {
             const SizedBox(height: 16),
             Text(
               'Incoming requests',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w800,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 8),
             for (final c in incoming)
@@ -103,9 +120,9 @@ class _SmpVerifyScreenState extends State<SmpVerifyScreen> {
           const SizedBox(height: 16),
           Text(
             'Start a verification',
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w800,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 8),
           GlassCard(
@@ -114,7 +131,7 @@ class _SmpVerifyScreenState extends State<SmpVerifyScreen> {
               children: [
                 DropdownButton<Conversation>(
                   isExpanded: true,
-                  value: _selected,
+                  value: selected,
                   hint: const Text('Choose a contact'),
                   items: [
                     for (final c in dms)

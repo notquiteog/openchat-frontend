@@ -207,6 +207,8 @@ class SettingsProvider extends ChangeNotifier {
 
   /// How many recent reaction keys to retain.
   static const int _maxRecentReactions = 40;
+  static const int maxRecentStickers = 24;
+  static const int maxRecentEmojis = 24;
 
   /// OpenChat brand blue — the historical default seed.
   static const int defaultSeed = 0xFF3D5AFE;
@@ -251,6 +253,8 @@ class SettingsProvider extends ChangeNotifier {
   final Set<String> _hiddenConversationIds = {};
   final List<ChatFolder> _chatFolders = [];
   final List<BroadcastList> _broadcastLists = [];
+  final List<String> _recentStickerIds = [];
+  final List<String> _recentEmojiIds = [];
   final Map<String, ContactBundle> _privateContacts = {};
   final Map<String, String> _unreadMentionMessageIds = {};
   final Set<String> _privacyOnboardingViewedUserIds = {};
@@ -300,6 +304,29 @@ class SettingsProvider extends ChangeNotifier {
     await _prefs?.setStringList(_kRecentReactions, _recentReactions);
   }
 
+  Future<void> recordRecentSticker(String stickerId) =>
+      _recordRecentId(stickerId, _recentStickerIds, maxRecentStickers);
+
+  Future<void> recordRecentEmoji(String emojiId) =>
+      _recordRecentId(emojiId, _recentEmojiIds, maxRecentEmojis);
+
+  Future<void> _recordRecentId(
+    String rawId,
+    List<String> target,
+    int maxItems,
+  ) async {
+    final id = rawId.trim();
+    if (id.isEmpty) return;
+    target
+      ..removeWhere((value) => value == id)
+      ..insert(0, id);
+    if (target.length > maxItems) {
+      target.removeRange(maxItems, target.length);
+    }
+    notifyListeners();
+    await _persistPrivateLocalState();
+  }
+
   Map<String, MessageDraft> get messageDrafts =>
       Map.unmodifiable(_messageDrafts);
   Map<String, List<ChannelPinnedMessage>> get pinnedChannelMessages =>
@@ -318,6 +345,8 @@ class SettingsProvider extends ChangeNotifier {
       Set.unmodifiable(_hiddenConversationIds);
   List<ChatFolder> get chatFolders => List.unmodifiable(_chatFolders);
   List<BroadcastList> get broadcastLists => List.unmodifiable(_broadcastLists);
+  List<String> get recentStickerIds => List.unmodifiable(_recentStickerIds);
+  List<String> get recentEmojiIds => List.unmodifiable(_recentEmojiIds);
   Map<String, ContactBundle> get privateContacts =>
       Map.unmodifiable(_privateContacts);
   Map<String, String> get unreadMentionMessageIds =>
@@ -491,6 +520,20 @@ class SettingsProvider extends ChangeNotifier {
       ..addAll(
         decodePrivateContacts(privateState[privateStatePrivateContactsKey]),
       );
+    _recentStickerIds
+      ..clear()
+      ..addAll(
+        _orderedStringList(
+          privateState[privateStateRecentStickersKey],
+        ).take(maxRecentStickers),
+      );
+    _recentEmojiIds
+      ..clear()
+      ..addAll(
+        _orderedStringList(
+          privateState[privateStateRecentEmojisKey],
+        ).take(maxRecentEmojis),
+      );
     await _prefs!.remove(_kConversationNotificationPreferences);
     await _prefs!.remove(_kMutedConversations);
     await _prefs!.remove(_kNotificationCurrentUser);
@@ -561,6 +604,8 @@ class SettingsProvider extends ChangeNotifier {
     _conversationNotificationPreferences.clear();
     _chatFolders.clear();
     _broadcastLists.clear();
+    _recentStickerIds.clear();
+    _recentEmojiIds.clear();
     _privateContacts.clear();
     _unreadMentionMessageIds.clear();
     _privacyOnboardingViewedUserIds.clear();
@@ -1052,6 +1097,8 @@ class SettingsProvider extends ChangeNotifier {
       privateStateBroadcastListsKey: encodePrivateBroadcastLists(
         _broadcastLists,
       ),
+      privateStateRecentStickersKey: List<String>.from(_recentStickerIds),
+      privateStateRecentEmojisKey: List<String>.from(_recentEmojiIds),
       privateStateMessageDraftsKey: _encodePrivateDrafts(_messageDrafts),
       privateStatePinnedChannelMessagesKey: _encodePrivatePinnedChannelMessages(
         _pinnedChannelMessages,
@@ -1368,6 +1415,18 @@ class SettingsProvider extends ChangeNotifier {
         .toSet()
         .toList()
       ..sort();
+  }
+
+  static List<String> _orderedStringList(Object? raw) {
+    if (raw is! List) return const [];
+    final seen = <String>{};
+    final out = <String>[];
+    for (final value in raw) {
+      final id = value.toString().trim();
+      if (id.isEmpty || !seen.add(id)) continue;
+      out.add(id);
+    }
+    return out;
   }
 
   static List<String> _sortedStringList(Iterable<String> values) {

@@ -285,6 +285,18 @@ class AttachmentService {
     return pending.withPreview(imageFile.path);
   }
 
+  Future<File?> pickEditableImage() async {
+    if (_isDesktop) {
+      final picked = await fs.openFile(acceptedTypeGroups: [_imageTypeGroup]);
+      return picked == null ? null : File(picked.path);
+    }
+    final XFile? picked = await _imagePicker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 85,
+    );
+    return picked == null ? null : File(picked.path);
+  }
+
   Future<EncryptedAttachmentUpload?> pickImageForOutbox({
     bool fromCamera = false,
     AttachmentUploadProgressCallback? onProgress,

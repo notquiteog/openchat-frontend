@@ -7,10 +7,11 @@ import 'package:openchat/widgets/attachment_variant_sheet.dart';
 // tiles produced, so the send plumbing (viewOnce/hasSpoiler flags derived from
 // the choice prefix) stays untouched.
 void main() {
-  test('photo long-press offers view-once and spoiler', () {
+  test('photo long-press offers crop, view-once, and spoiler', () {
     final (title, actions) = attachmentVariantActions('photo_variants');
     expect(title, 'Send photo');
     expect(actions, [
+      ('Crop & edit', 'edit_image'),
       ('View-once photo', 'view_once_image'),
       ('Spoiler photo', 'spoiler_image'),
     ]);
@@ -39,6 +40,7 @@ void main() {
     ]) {
       final (_, actions) = attachmentVariantActions(variants);
       for (final (_, choice) in actions) {
+        if (choice == 'edit_image') continue;
         expect(
           choice.startsWith('view_once_') || choice.startsWith('spoiler_'),
           isTrue,

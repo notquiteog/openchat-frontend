@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:timeago/timeago.dart' as timeago;
 
 import '../../crypto/pgp_service.dart';
@@ -33,6 +34,23 @@ import 'identity_qr_scanner_screen.dart';
 import 'smp_verify_screen.dart';
 import 'pgp_keys_screen.dart';
 import 'social_recovery_screen.dart';
+
+String formatKtAlarmEvidenceForExport(Map<String, dynamic> alarm) {
+  Object? evidence = alarm['evidence'];
+  if (evidence is String) {
+    try {
+      evidence = jsonDecode(evidence);
+    } catch (_) {
+      // Keep the raw string if older evidence was not JSON.
+    }
+  }
+  return const JsonEncoder.withIndent('  ').convert({
+    'openchat_kt_alarm': 1,
+    'reason': alarm['reason'],
+    'at': alarm['at'],
+    'evidence': evidence,
+  });
+}
 
 class TrustCenterScreen extends StatefulWidget {
   const TrustCenterScreen({super.key});
@@ -189,6 +207,59 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
           onPressed: () => Navigator.pop(context),
         ),
       ],
+    );
+  }
+
+  Future<void> _exportKtAlarmEvidence() async {
+    final alarm = _ktLogAlarm;
+    if (alarm == null) return;
+    final evidence = formatKtAlarmEvidenceForExport(alarm);
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const GlassSheetGrabber(),
+            GlassSheetHeader(
+              icon: Icons.gpp_bad_rounded,
+              title: 'Export evidence',
+              subtitle: 'Copy or share the preserved log-integrity proof.',
+              onClose: () => Navigator.pop(sheetCtx),
+            ),
+            const SizedBox(height: 4),
+            GlassMenuSection(
+              entries: [
+                GlassMenuEntry(
+                  icon: Icons.copy_rounded,
+                  label: 'Copy evidence',
+                  onTap: () async {
+                    Navigator.pop(sheetCtx);
+                    await Clipboard.setData(ClipboardData(text: evidence));
+                    if (mounted) showAppToast(context, 'Evidence copied');
+                  },
+                ),
+                GlassMenuEntry(
+                  icon: Icons.ios_share_rounded,
+                  label: 'Share evidence',
+                  onTap: () async {
+                    Navigator.pop(sheetCtx);
+                    await SharePlus.instance.share(
+                      ShareParams(
+                        text: evidence,
+                        subject: 'OpenChat key-transparency violation evidence',
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
     );
   }
 
@@ -739,6 +810,11 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                     '${_ktLogAlarm!['reason']} — the server may have tampered '
                     'with key history. Evidence is preserved on this device. '
                     'Re-verify your contacts before trusting new keys.',
+                  ),
+                  trailing: TextButton.icon(
+                    icon: const Icon(Icons.ios_share_rounded),
+                    label: const Text('Export evidence'),
+                    onPressed: _exportKtAlarmEvidence,
                   ),
                 ),
               ),

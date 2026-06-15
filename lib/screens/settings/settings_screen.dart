@@ -23,6 +23,7 @@ import '../../services/background_ws_service.dart';
 import '../../services/encrypted_backup_service.dart';
 import '../../services/local_private_state_service.dart';
 import '../../services/notification_service.dart';
+import '../../services/passphrase_strength.dart';
 import '../../services/push_notification_service.dart';
 import '../../services/secure_storage_service.dart';
 import '../../utils/account_security_duration.dart';
@@ -1567,7 +1568,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// Stores the encrypted recovery bundle on the server as an opaque blob —
   /// zero-knowledge: only ciphertext leaves the device.
   Future<void> _uploadBackupToServer() async {
-    final passphrase = await _promptBackupPassphrase(confirm: true);
+    final passphrase = await _promptBackupPassphrase(
+      confirm: true,
+      requireStrong: true,
+    );
     if (passphrase == null || !mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     try {
@@ -1690,10 +1694,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<String?> _promptBackupPassphrase({required bool confirm}) async {
+  Future<String?> _promptBackupPassphrase({
+    required bool confirm,
+    bool requireStrong = false,
+  }) async {
     final passCtrl = TextEditingController();
     final confirmCtrl = TextEditingController();
     String? errorText;
+    var obscureText = true;
     try {
       return await showDialog<String>(
         context: context,
@@ -1706,19 +1714,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
               children: [
                 TextField(
                   controller: passCtrl,
-                  obscureText: true,
+                  obscureText: obscureText,
+                  onChanged: (_) => setDlg(() => errorText = null),
                   decoration: InputDecoration(
                     labelText: 'Backup passphrase',
                     errorText: errorText,
+                    suffixIcon: IconButton(
+                      tooltip: obscureText
+                          ? 'Show passphrase'
+                          : 'Hide passphrase',
+                      icon: Icon(
+                        obscureText
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                      ),
+                      onPressed: () => setDlg(() => obscureText = !obscureText),
+                    ),
                   ),
                 ),
                 if (confirm) ...[
                   const SizedBox(height: 10),
                   TextField(
                     controller: confirmCtrl,
-                    obscureText: true,
+                    obscureText: obscureText,
+                    onChanged: (_) => setDlg(() => errorText = null),
                     decoration: const InputDecoration(
                       labelText: 'Confirm passphrase',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _PassphraseStrengthMeter(passphrase: passCtrl.text),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      icon: const Icon(Icons.auto_awesome_rounded),
+                      label: const Text('Generate strong passphrase'),
+                      onPressed: () {
+                        final generated = PassphraseStrength.generate();
+                        setDlg(() {
+                          passCtrl.text = generated;
+                          confirmCtrl.text = generated;
+                          obscureText = false;
+                          errorText = null;
+                        });
+                      },
                     ),
                   ),
                 ],
@@ -1741,6 +1781,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   if (confirm && passphrase != confirmCtrl.text.trim()) {
                     setDlg(() {
                       errorText = 'Passphrases do not match';
+                    });
+                    return;
+                  }
+                  if (requireStrong &&
+                      !PassphraseStrength.isStrongEnoughForServer(passphrase)) {
+                    setDlg(() {
+                      errorText = 'Choose a stronger passphrase';
                     });
                     return;
                   }
@@ -3281,6 +3328,93 @@ class _GradientTrackShape extends RoundedRectSliderTrackShape {
         ).createShader(trackRect),
     );
   }
+}
+
+class _PassphraseStrengthMeter extends StatelessWidget {
+  final String passphrase;
+
+  const _PassphraseStrengthMeter({required this.passphrase});
+
+  @override
+  Widget build(BuildContext context) {
+    final level = PassphraseStrength.level(passphrase);
+    final fraction = PassphraseStrength.fraction(passphrase);
+    final color = _strengthColor(context, level);
+    final scheme = Theme.of(context).colorScheme;
+    return GlassContainer(
+      padding: const EdgeInsets.all(10),
+      shape: const LiquidRoundedSuperellipse(borderRadius: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(_strengthIcon(level), size: 16, color: color),
+              const SizedBox(width: 6),
+              Text(
+                PassphraseStrength.label(passphrase),
+                style: TextStyle(fontWeight: FontWeight.w700, color: color),
+              ),
+              const Spacer(),
+              Text(
+                '${PassphraseStrength.estimateBits(passphrase).round()} bits',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: scheme.onSurface.withValues(alpha: 0.58),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          LayoutBuilder(
+            builder: (context, constraints) => Stack(
+              children: [
+                Container(
+                  height: 7,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(99),
+                    color: scheme.onSurface.withValues(alpha: 0.10),
+                  ),
+                ),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 260),
+                  curve: Curves.easeOutCubic,
+                  width: constraints.maxWidth * fraction,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(99),
+                    gradient: LinearGradient(
+                      colors: [color.withValues(alpha: 0.72), color],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _strengthColor(BuildContext context, PassphraseStrengthLevel level) {
+    final scheme = Theme.of(context).colorScheme;
+    return switch (level) {
+      PassphraseStrengthLevel.tooShort => scheme.outline,
+      PassphraseStrengthLevel.weak => scheme.error,
+      PassphraseStrengthLevel.fair => Colors.orange,
+      PassphraseStrengthLevel.good => Colors.teal,
+      PassphraseStrengthLevel.strong => Colors.green,
+    };
+  }
+
+  IconData _strengthIcon(PassphraseStrengthLevel level) => switch (level) {
+    PassphraseStrengthLevel.tooShort => Icons.horizontal_rule_rounded,
+    PassphraseStrengthLevel.weak => Icons.warning_amber_rounded,
+    PassphraseStrengthLevel.fair => Icons.shield_outlined,
+    PassphraseStrengthLevel.good => Icons.verified_user_outlined,
+    PassphraseStrengthLevel.strong => Icons.verified_user_rounded,
+  };
 }
 
 /// A 1dp hairline separator inside glass cards.

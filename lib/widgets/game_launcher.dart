@@ -17,11 +17,18 @@ Future<void> showGameLauncher(
   BuildContext context, {
   required String convID,
   required bool isChannel,
+  String? initialGameType,
+  String? initialProvider,
+  double? initialStake,
 }) async {
   final chat = context.read<ChatProvider>();
   final api = context.read<ApiService>();
   final anteCtrl = TextEditingController();
-  String selected = '🎲';
+  final isRematch =
+      initialGameType != null ||
+      initialProvider != null ||
+      initialStake != null;
+  String selected = initialGameType == '🎯' ? '🎯' : '🎲';
   bool realMoney = false;
   String provider = 'btc';
   bool realMoneyAllowed = false;
@@ -39,6 +46,17 @@ Future<void> showGameLauncher(
     if (cryptoProviders.isNotEmpty) provider = cryptoProviders.first;
     realMoneyAllowed = realMoneyAllowed && cryptoProviders.isNotEmpty;
   } catch (_) {}
+  final normalizedProvider = initialProvider?.toLowerCase();
+  if (realMoneyAllowed &&
+      normalizedProvider != null &&
+      normalizedProvider != 'fun' &&
+      cryptoProviders.contains(normalizedProvider) &&
+      initialStake != null &&
+      initialStake > 0) {
+    provider = normalizedProvider;
+    realMoney = true;
+    anteCtrl.text = _formatInitialStake(initialStake);
+  }
   if (!context.mounted) {
     anteCtrl.dispose();
     return;
@@ -78,11 +96,12 @@ Future<void> showGameLauncher(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const GlassSheetGrabber(),
-            const GlassSheetHeader(
+            GlassSheetHeader(
               icon: Icons.sports_esports_outlined,
-              title: 'New game',
-              subtitle:
-                  'Skill games — stop the marker dead-center, best total wins.',
+              title: isRematch ? 'Rematch' : 'New game',
+              subtitle: isRematch
+                  ? 'Start a fresh lobby with the previous game settings.'
+                  : 'Skill games — stop the marker dead-center, best total wins.',
             ),
             Row(
               children: [
@@ -166,6 +185,11 @@ Future<void> showGameLauncher(
   anteCtrl.dispose();
 }
 
+String _formatInitialStake(double stake) {
+  if (stake == stake.roundToDouble()) return stake.toStringAsFixed(0);
+  return stake.toString();
+}
+
 class _GameTile extends StatelessWidget {
   const _GameTile({
     required this.emoji,
@@ -205,10 +229,7 @@ class _GameTile extends StatelessWidget {
           children: [
             Text(emoji, style: const TextStyle(fontSize: 34)),
             const SizedBox(height: 6),
-            Text(
-              name,
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
+            Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
             Text(
               detail,
               style: TextStyle(

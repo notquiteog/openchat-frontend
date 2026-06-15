@@ -12,6 +12,7 @@ import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/encrypted_backup_service.dart';
 import '../../services/local_private_state_service.dart';
+import '../../services/passphrase_strength.dart';
 import '../../services/secure_storage_service.dart';
 import '../../utils/identity_qr.dart';
 import '../../widgets/glass.dart';
@@ -72,7 +73,10 @@ class _DevicePairingScreenState extends State<DevicePairingScreen> {
   }
 
   Future<void> _createPairingBundle() async {
-    final passphrase = await _promptPassphrase(confirm: true);
+    final passphrase = await _promptPassphrase(
+      confirm: true,
+      requireStrong: true,
+    );
     if (passphrase == null || !mounted) return;
     setState(() {
       _busy = true;
@@ -86,7 +90,7 @@ class _DevicePairingScreenState extends State<DevicePairingScreen> {
       final backup = await EncryptedBackupService(
         storage: storage,
         privateState: LocalPrivateStateService(storage: storage),
-      ).exportBackup(passphrase: passphrase);
+      ).exportBackup(passphrase: passphrase, requireStrong: true);
       final expiresAt = await api.createDevicePairingBundle(
         tokenHash: tokenHash,
         encryptedPayload: backup,
@@ -152,10 +156,14 @@ class _DevicePairingScreenState extends State<DevicePairingScreen> {
     }
   }
 
-  Future<String?> _promptPassphrase({required bool confirm}) async {
+  Future<String?> _promptPassphrase({
+    required bool confirm,
+    bool requireStrong = false,
+  }) async {
     final first = TextEditingController();
     final second = TextEditingController();
     String? error;
+    var obscureText = true;
     try {
       return showDialog<String>(
         context: context,
@@ -167,15 +175,49 @@ class _DevicePairingScreenState extends State<DevicePairingScreen> {
               children: [
                 TextField(
                   controller: first,
-                  obscureText: true,
-                  decoration: const InputDecoration(labelText: 'Passphrase'),
+                  obscureText: obscureText,
+                  onChanged: (_) => setDlg(() => error = null),
+                  decoration: InputDecoration(
+                    labelText: 'Passphrase',
+                    suffixIcon: IconButton(
+                      tooltip: obscureText
+                          ? 'Show passphrase'
+                          : 'Hide passphrase',
+                      icon: Icon(
+                        obscureText
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                      ),
+                      onPressed: () => setDlg(() => obscureText = !obscureText),
+                    ),
+                  ),
                 ),
                 if (confirm) ...[
                   const SizedBox(height: 8),
                   TextField(
                     controller: second,
-                    obscureText: true,
+                    obscureText: obscureText,
+                    onChanged: (_) => setDlg(() => error = null),
                     decoration: const InputDecoration(labelText: 'Confirm'),
+                  ),
+                  const SizedBox(height: 12),
+                  _PassphraseStrengthMeter(passphrase: first.text),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      icon: const Icon(Icons.auto_awesome_rounded),
+                      label: const Text('Generate strong passphrase'),
+                      onPressed: () {
+                        final generated = PassphraseStrength.generate();
+                        setDlg(() {
+                          first.text = generated;
+                          second.text = generated;
+                          obscureText = false;
+                          error = null;
+                        });
+                      },
+                    ),
                   ),
                 ],
                 if (error != null) ...[
@@ -194,13 +236,18 @@ class _DevicePairingScreenState extends State<DevicePairingScreen> {
               ),
               FilledButton(
                 onPressed: () {
-                  final value = first.text;
-                  if (value.trim().length < 12) {
+                  final value = first.text.trim();
+                  if (value.length < 12) {
                     setDlg(() => error = 'Use at least 12 characters');
                     return;
                   }
-                  if (confirm && value != second.text) {
+                  if (confirm && value != second.text.trim()) {
                     setDlg(() => error = 'Passphrases do not match');
+                    return;
+                  }
+                  if (requireStrong &&
+                      !PassphraseStrength.isStrongEnoughForServer(value)) {
+                    setDlg(() => error = 'Choose a stronger passphrase');
                     return;
                   }
                   Navigator.pop(ctx, value);
@@ -334,4 +381,91 @@ class _DevicePairingScreenState extends State<DevicePairingScreen> {
       ),
     );
   }
+}
+
+class _PassphraseStrengthMeter extends StatelessWidget {
+  final String passphrase;
+
+  const _PassphraseStrengthMeter({required this.passphrase});
+
+  @override
+  Widget build(BuildContext context) {
+    final level = PassphraseStrength.level(passphrase);
+    final fraction = PassphraseStrength.fraction(passphrase);
+    final color = _strengthColor(context, level);
+    final scheme = Theme.of(context).colorScheme;
+    return GlassContainer(
+      padding: const EdgeInsets.all(10),
+      shape: const LiquidRoundedSuperellipse(borderRadius: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(_strengthIcon(level), size: 16, color: color),
+              const SizedBox(width: 6),
+              Text(
+                PassphraseStrength.label(passphrase),
+                style: TextStyle(fontWeight: FontWeight.w700, color: color),
+              ),
+              const Spacer(),
+              Text(
+                '${PassphraseStrength.estimateBits(passphrase).round()} bits',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: scheme.onSurface.withValues(alpha: 0.58),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          LayoutBuilder(
+            builder: (context, constraints) => Stack(
+              children: [
+                Container(
+                  height: 7,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(99),
+                    color: scheme.onSurface.withValues(alpha: 0.10),
+                  ),
+                ),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 260),
+                  curve: Curves.easeOutCubic,
+                  width: constraints.maxWidth * fraction,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(99),
+                    gradient: LinearGradient(
+                      colors: [color.withValues(alpha: 0.72), color],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _strengthColor(BuildContext context, PassphraseStrengthLevel level) {
+    final scheme = Theme.of(context).colorScheme;
+    return switch (level) {
+      PassphraseStrengthLevel.tooShort => scheme.outline,
+      PassphraseStrengthLevel.weak => scheme.error,
+      PassphraseStrengthLevel.fair => Colors.orange,
+      PassphraseStrengthLevel.good => Colors.teal,
+      PassphraseStrengthLevel.strong => Colors.green,
+    };
+  }
+
+  IconData _strengthIcon(PassphraseStrengthLevel level) => switch (level) {
+    PassphraseStrengthLevel.tooShort => Icons.horizontal_rule_rounded,
+    PassphraseStrengthLevel.weak => Icons.warning_amber_rounded,
+    PassphraseStrengthLevel.fair => Icons.shield_outlined,
+    PassphraseStrengthLevel.good => Icons.verified_user_outlined,
+    PassphraseStrengthLevel.strong => Icons.verified_user_rounded,
+  };
 }

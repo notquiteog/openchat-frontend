@@ -6,6 +6,7 @@ import 'package:cryptography/cryptography.dart';
 
 import 'api_service.dart';
 import 'local_private_state_service.dart';
+import 'passphrase_strength.dart';
 import 'secure_storage_service.dart';
 
 class EncryptedBackupService {
@@ -54,10 +55,19 @@ class EncryptedBackupService {
     }
   }
 
-  Future<String> exportBackup({required String passphrase}) async {
+  Future<String> exportBackup({
+    required String passphrase,
+    bool requireStrong = false,
+  }) async {
     final normalized = passphrase.trim();
     if (normalized.length < 12) {
       throw ArgumentError('Backup passphrase must be at least 12 characters');
+    }
+    if (requireStrong &&
+        !PassphraseStrength.isStrongEnoughForServer(normalized)) {
+      throw ArgumentError(
+        'Backup passphrase is too weak for server upload; choose a longer/more varied passphrase',
+      );
     }
     final payload = await buildRecoveryBundlePayload();
     final salt = _randomBytes(16);
@@ -122,7 +132,10 @@ class EncryptedBackupService {
     required ApiService api,
     required String passphrase,
   }) async {
-    final encoded = await exportBackup(passphrase: passphrase);
+    final encoded = await exportBackup(
+      passphrase: passphrase,
+      requireStrong: true,
+    );
     final bytes = utf8.encode(encoded);
     final digest = crypto.sha256.convert(bytes).toString();
     final grant = await api.requestBackupUpload(

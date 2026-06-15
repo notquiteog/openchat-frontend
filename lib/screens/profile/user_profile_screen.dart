@@ -6,13 +6,16 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../config/api_config.dart';
 import '../../models/conversation.dart';
+import '../../models/key_trust_pin.dart';
 import '../../models/user.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
 import '../../services/api_service.dart';
+import '../../services/secure_storage_service.dart';
 import '../../services/websocket_service.dart';
 import '../../utils/identity_qr.dart';
 import '../../widgets/glass.dart';
+import '../../widgets/key_verification_badge.dart';
 import '../settings/identity_qr_scanner_screen.dart';
 
 /// Public profile screen — shown when tapping a user's name/avatar anywhere in the app.
@@ -29,6 +32,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   bool _loading = false;
   Future<List<Conversation>>? _sharedConversationsFuture;
   StreamSubscription<WsEvent>? _wsSub;
+  KeyTrustPin? _keyTrustPin;
+  String? _keyTrustPinUserId;
 
   @override
   void initState() {
@@ -46,17 +51,46 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       _fetchFreshUser();
       _wsSub = context.read<WebSocketService>().events.listen(_onWsEvent);
     }
+    unawaited(_loadKeyTrustPin());
   }
 
   void _fetchFreshUser() async {
     try {
-      final fresh = await context.read<ApiService>().getUserByUsername(_user.username);
-      if (mounted) setState(() => _user = fresh);
+      final fresh = await context.read<ApiService>().getUserByUsername(
+        _user.username,
+      );
+      if (mounted) {
+        setState(() => _user = fresh);
+        unawaited(_loadKeyTrustPin());
+      }
     } catch (_) {}
   }
 
+  Future<void> _loadKeyTrustPin() async {
+    if (_isOwnProfile) {
+      if (_keyTrustPin != null && mounted) {
+        setState(() {
+          _keyTrustPin = null;
+          _keyTrustPinUserId = null;
+        });
+      }
+      return;
+    }
+    final userId = _user.id;
+    if (_keyTrustPinUserId == userId) return;
+    _keyTrustPinUserId = userId;
+    final pin = await context.read<SecureStorageService>().getKeyTrustPin(
+      userId,
+    );
+    if (!mounted || _keyTrustPinUserId != userId) return;
+    setState(() => _keyTrustPin = pin);
+  }
+
   void _onWsEvent(WsEvent event) {
-    if (event.type != WsEventType.userOnline && event.type != WsEventType.userOffline) return;
+    if (event.type != WsEventType.userOnline &&
+        event.type != WsEventType.userOffline) {
+      return;
+    }
     final userId = event.data['user_id'] as String?;
     if (userId != _user.id || !mounted) return;
     setState(() {
@@ -64,7 +98,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         _user = _user.copyWith(lastSeen: DateTime.now());
       } else {
         // Push lastSeen into the past so isOnline immediately returns false
-        _user = _user.copyWith(lastSeen: DateTime.now().subtract(const Duration(minutes: 10)));
+        _user = _user.copyWith(
+          lastSeen: DateTime.now().subtract(const Duration(minutes: 10)),
+        );
       }
     });
   }
@@ -527,7 +563,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                   GlassButtonWidget.icon(
                     onPressed: submitting ? null : submit,
                     icon: submitting
-                        ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
+                        ? const GlassProgressIndicator.circular(
+                            size: 16,
+                            strokeWidth: 2,
+                          )
                         : const Icon(Icons.payments_outlined),
                     label: Text(
                       payMode
@@ -1051,6 +1090,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                                       ),
                                     ),
                                   ),
+                                  if (KeyVerificationBadge.shouldShow(
+                                    _keyTrustPin,
+                                  )) ...[
+                                    const SizedBox(height: 6),
+                                    KeyVerificationBadge(pin: _keyTrustPin),
+                                  ],
                                 ],
                               ),
                             ),
@@ -1100,7 +1145,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                           return const Padding(
                             padding: EdgeInsets.all(20),
                             child: Center(
-                              child: GlassProgressIndicator.circular(size: 20, strokeWidth: 2),
+                              child: GlassProgressIndicator.circular(
+                                size: 20,
+                                strokeWidth: 2,
+                              ),
                             ),
                           );
                         }

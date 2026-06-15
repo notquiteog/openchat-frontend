@@ -151,6 +151,24 @@ void main() {
     );
   });
 
+  test(
+    'server upload rejects weak passphrases before storing a blob',
+    () async {
+      final source = _FakeBackupStorage(secrets: {'private_key': 'SECRET'});
+      final api = _FakeBackupApi();
+
+      expect(
+        () => EncryptedBackupService(
+          storage: source,
+          privateState: _FakePrivateState(source),
+        ).uploadToServer(api: api, passphrase: 'password1234'),
+        throwsArgumentError,
+      );
+      expect(api.blobs, isEmpty);
+      expect(api.confirmedKey, isNull);
+    },
+  );
+
   test('restore rejects a corrupted blob (checksum mismatch)', () async {
     final source = _FakeBackupStorage(secrets: {'k': 'v'});
     final api = _FakeBackupApi();

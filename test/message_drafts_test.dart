@@ -327,4 +327,88 @@ void main() {
     expect(pinned.messageCreatedAt.toUtc(), DateTime.utc(2026, 1, 3, 12));
     expect(pinned.pinnedAt.toUtc(), DateTime.utc(2026, 1, 4, 12));
   });
+
+  test(
+    'recent stickers and emoji keep MRU order, cap, and reload privately',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final provider = SettingsProvider();
+      await provider.load();
+
+      await provider.recordRecentSticker('sticker-z');
+      await provider.recordRecentSticker('sticker-a');
+      await provider.recordRecentSticker('sticker-m');
+      await provider.recordRecentSticker('sticker-a');
+
+      expect(provider.recentStickerIds, [
+        'sticker-a',
+        'sticker-m',
+        'sticker-z',
+      ]);
+
+      for (var i = 0; i < 30; i++) {
+        await provider.recordRecentSticker('sticker-$i');
+        await provider.recordRecentEmoji('emoji-$i');
+      }
+
+      expect(
+        provider.recentStickerIds,
+        hasLength(SettingsProvider.maxRecentStickers),
+      );
+      expect(provider.recentStickerIds.take(3), [
+        'sticker-29',
+        'sticker-28',
+        'sticker-27',
+      ]);
+      expect(provider.recentStickerIds.last, 'sticker-6');
+      expect(provider.recentStickerIds, isNot(contains('sticker-a')));
+
+      expect(
+        provider.recentEmojiIds,
+        hasLength(SettingsProvider.maxRecentEmojis),
+      );
+      expect(provider.recentEmojiIds.take(3), [
+        'emoji-29',
+        'emoji-28',
+        'emoji-27',
+      ]);
+      expect(provider.recentEmojiIds.last, 'emoji-6');
+
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getStringList(privateStateRecentStickersKey), isNull);
+      expect(prefs.getStringList(privateStateRecentEmojisKey), isNull);
+      final encrypted = prefs.getString(localPrivateStatePreferenceKey);
+      expect(encrypted, isNotNull);
+      expect(encrypted, isNot(contains('sticker-29')));
+      expect(encrypted, isNot(contains('emoji-29')));
+
+      final reloaded = SettingsProvider();
+      await reloaded.load();
+      expect(reloaded.recentStickerIds, provider.recentStickerIds);
+      expect(reloaded.recentEmojiIds, provider.recentEmojiIds);
+    },
+  );
+
+  test(
+    'reset clears recent sticker and emoji mirrors after local state wipe',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final provider = SettingsProvider();
+      await provider.load();
+
+      await provider.recordRecentSticker('sticker-1');
+      await provider.recordRecentEmoji('emoji-1');
+
+      provider.resetPrivateLocalState();
+      expect(provider.recentStickerIds, isEmpty);
+      expect(provider.recentEmojiIds, isEmpty);
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(localPrivateStatePreferenceKey);
+      final reloaded = SettingsProvider();
+      await reloaded.load();
+      expect(reloaded.recentStickerIds, isEmpty);
+      expect(reloaded.recentEmojiIds, isEmpty);
+    },
+  );
 }

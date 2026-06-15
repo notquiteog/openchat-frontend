@@ -244,6 +244,35 @@ void main() {
     },
   );
 
+  test('edited gallery image is prepared as WebP attachment input', () async {
+    final dir = await Directory.systemTemp.createTemp('chat-edited-image-test');
+    addTearDown(() async {
+      await dir.delete(recursive: true);
+    });
+
+    final fixture = File('${dir.path}/cropped-photo.png');
+    final raw = img.Image(width: 6, height: 3);
+    raw.setPixelRgba(0, 0, 30, 180, 210, 255);
+    await fixture.writeAsBytes(img.encodePng(raw));
+
+    final prepared = await AttachmentService.prepareGalleryPhotoForUpload(
+      fixture,
+      webpEncoder: (_, _) async => Uint8List.fromList([
+        ...'RIFF'.codeUnits,
+        1,
+        0,
+        0,
+        0,
+        ...'WEBP'.codeUnits,
+        0,
+      ]),
+    );
+
+    expect(prepared.fileName, 'cropped-photo.webp');
+    expect(prepared.mimeType, 'image/webp');
+    expect(prepared.messageType, MessageType.image);
+  });
+
   test('file upload path preserves original name and mime type', () async {
     final dir = await Directory.systemTemp.createTemp('chat-file-test');
     addTearDown(() async {
