@@ -9,10 +9,13 @@ import '../../config/api_config.dart';
 import '../../crypto/pgp_service.dart';
 import '../../models/story.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/attachment_service.dart';
 import '../../services/secure_storage_service.dart';
+import '../../widgets/custom_emoji_image.dart';
 import '../../widgets/glass.dart';
+import '../../widgets/reaction_emoji_picker.dart';
 
 enum _StoryLoadState { idle, loading, done, error }
 
@@ -76,8 +79,10 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
       // addressed to the audience — decrypt it before touching the media.
       if (_story.needsMetaDecryption) {
         final privateKey =
-            await context.read<SecureStorageService>().getPrivateKeyIfUnlocked() ??
-                '';
+            await context
+                .read<SecureStorageService>()
+                .getPrivateKeyIfUnlocked() ??
+            '';
         if (privateKey.isEmpty) {
           throw StateError('PGP key locked');
         }
@@ -86,8 +91,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
           privateKeyArmored: privateKey,
         );
         final meta = jsonDecode(raw);
-        if (meta is! Map<String, dynamic> ||
-            meta['openchat_story_meta'] != 1) {
+        if (meta is! Map<String, dynamic> || meta['openchat_story_meta'] != 1) {
           throw StateError('bad story meta');
         }
         _stories[_index] = _story.withDecryptedMeta(meta);
@@ -149,15 +153,30 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
     return 'mp4';
   }
 
-  Future<void> _react(String emoji) async {
+  /// Toggle a reaction (unicode or `custom:<id>`): tapping your current
+  /// reaction clears it, otherwise it replaces it. Records recents.
+  Future<void> _react(String key) async {
+    final api = context.read<ApiService>();
+    final settings = context.read<SettingsProvider>();
+    final current = _story.viewerReaction;
     try {
-      final updated = await context.read<ApiService>().reactToStory(
-        _story.id,
-        emoji,
-      );
+      final Story updated;
+      if (current == key) {
+        updated = await api.deleteStoryReaction(_story.id);
+      } else {
+        settings.pushRecentReaction(key);
+        updated = await api.reactToStory(_story.id, key);
+      }
       if (!mounted) return;
       setState(() => _stories[_index] = updated);
     } catch (_) {}
+  }
+
+  /// Opens the full reaction picker (any system emoji or custom-emoji pack).
+  Future<void> _openReactionPicker() async {
+    final key = await showReactionEmojiPicker(context);
+    if (key == null || !mounted) return;
+    await _react(key);
   }
 
   void _next() {
@@ -186,6 +205,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
       );
     }
     final currentUserId = context.read<AuthProvider>().currentUser?.id ?? '';
+    final recentKeys = context.watch<SettingsProvider>().quickReactions();
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
@@ -203,23 +223,19 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                 currentUserId: currentUserId,
                 index: _index,
                 total: _stories.length,
-              ),
-            ),
-            Positioned(
-              top: 4,
-              right: 4,
-              child: IconButton(
-                tooltip: 'Close',
-                color: Colors.white,
-                icon: const Icon(Icons.close),
-                onPressed: () => Navigator.pop(context),
+                onClose: () => Navigator.pop(context),
               ),
             ),
             Positioned(
               left: 12,
               right: 12,
               bottom: 12,
-              child: _StoryFooter(story: _story, onReact: _react),
+              child: _StoryFooter(
+                story: _story,
+                recentKeys: recentKeys,
+                onReact: _react,
+                onMore: _openReactionPicker,
+              ),
             ),
           ],
         ),
@@ -289,12 +305,14 @@ class _StoryHeader extends StatelessWidget {
   final String currentUserId;
   final int index;
   final int total;
+  final VoidCallback onClose;
 
   const _StoryHeader({
     required this.story,
     required this.currentUserId,
     required this.index,
     required this.total,
+    required this.onClose,
   });
 
   @override
@@ -307,14 +325,17 @@ class _StoryHeader extends StatelessWidget {
           children: List.generate(total, (i) {
             return Expanded(
               child: Container(
-                height: 2,
+                height: 2.5,
                 margin: EdgeInsets.only(right: i == total - 1 ? 0 : 4),
-                color: i <= index ? Colors.white : Colors.white30,
+                decoration: BoxDecoration(
+                  color: i <= index ? Colors.white : Colors.white30,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
             );
           }),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 12),
         Row(
           children: [
             CircleAvatar(
@@ -336,18 +357,21 @@ class _StoryHeader extends StatelessWidget {
                 style: const TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.w600,
+                  shadows: [Shadow(blurRadius: 4, color: Colors.black54)],
                 ),
               ),
             ),
-            if (story.viewCount > 0)
+            // Views counter (author sees how many viewed). Sits left of the
+            // close button so the two never overlap.
+            if (story.viewCount > 0) ...[
               GlassContainer(
-                shape: LiquidRoundedSuperellipse(borderRadius: 999),
+                shape: const LiquidRoundedSuperellipse(borderRadius: 999),
                 allowElevation: true,
                 glowIntensity: 0.06,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 10,
-                    vertical: 4,
+                    vertical: 5,
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -355,7 +379,7 @@ class _StoryHeader extends StatelessWidget {
                       const Icon(
                         Icons.visibility_outlined,
                         color: Colors.white,
-                        size: 13,
+                        size: 14,
                       ),
                       const SizedBox(width: 4),
                       Text(
@@ -370,6 +394,19 @@ class _StoryHeader extends StatelessWidget {
                   ),
                 ),
               ),
+              const SizedBox(width: 8),
+            ],
+            GlassCircleIconButton(
+              tooltip: 'Close',
+              size: 38,
+              glowIntensity: 0.04,
+              onPressed: onClose,
+              icon: const Icon(
+                Icons.close_rounded,
+                size: 20,
+                color: Colors.white,
+              ),
+            ),
           ],
         ),
       ],
@@ -379,25 +416,42 @@ class _StoryHeader extends StatelessWidget {
 
 class _StoryFooter extends StatelessWidget {
   final Story story;
-  final ValueChanged<String> onReact;
 
-  const _StoryFooter({required this.story, required this.onReact});
+  /// Recent reaction keys (unicode or `custom:<id>`) for the quick bar.
+  final List<String> recentKeys;
+  final ValueChanged<String> onReact;
+  final VoidCallback onMore;
+
+  const _StoryFooter({
+    required this.story,
+    required this.recentKeys,
+    required this.onReact,
+    required this.onMore,
+  });
 
   @override
   Widget build(BuildContext context) {
+    // If the viewer reacted with something outside the recent set, surface it
+    // first so the selection stays visible.
+    final current = story.viewerReaction;
+    final keys = <String>[
+      if (current != null && !recentKeys.contains(current)) current,
+      ...recentKeys,
+    ];
     return Column(
       mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        if (story.caption.isNotEmpty)
+        if (story.caption.isNotEmpty) ...[
           GlassContainer(
-            shape: LiquidRoundedSuperellipse(borderRadius: 999),
+            shape: const LiquidRoundedSuperellipse(borderRadius: 22),
             allowElevation: true,
             glowIntensity: 0.06,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               child: Text(
                 story.caption,
+                textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 15,
@@ -406,34 +460,86 @@ class _StoryFooter extends StatelessWidget {
               ),
             ),
           ),
-        const SizedBox(height: 10),
+          const SizedBox(height: 12),
+        ],
         GlassContainer(
-          shape: LiquidRoundedSuperellipse(borderRadius: 999),
+          shape: const LiquidRoundedSuperellipse(borderRadius: 999),
           allowElevation: true,
           glowIntensity: 0.06,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: ['❤️', '🔥', '😂', '👍', '😮', '😢'].map((emoji) {
-                final selected = story.viewerReaction == emoji;
-                return GestureDetector(
-                  onTap: () => onReact(emoji),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 120),
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: selected ? Colors.white30 : Colors.transparent,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Text(emoji, style: const TextStyle(fontSize: 26)),
-                  ),
-                );
-              }).toList(),
-            ),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final key in keys)
+                _StoryReactButton(
+                  selected: story.viewerReaction == key,
+                  onTap: () => onReact(key),
+                  child: ReactionGlyph(key, size: 26),
+                ),
+              Container(
+                width: 1,
+                height: 26,
+                margin: const EdgeInsets.symmetric(horizontal: 3),
+                color: Colors.white24,
+              ),
+              _StoryReactButton(
+                selected: false,
+                onTap: onMore,
+                child: const Icon(
+                  Icons.add_rounded,
+                  size: 24,
+                  color: Colors.white,
+                ),
+              ),
+            ],
           ),
         ),
       ],
+    );
+  }
+}
+
+class _StoryReactButton extends StatefulWidget {
+  final bool selected;
+  final VoidCallback onTap;
+  final Widget child;
+
+  const _StoryReactButton({
+    required this.selected,
+    required this.onTap,
+    required this.child,
+  });
+
+  @override
+  State<_StoryReactButton> createState() => _StoryReactButtonState();
+}
+
+class _StoryReactButtonState extends State<_StoryReactButton> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: widget.onTap,
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) => setState(() => _pressed = false),
+      onTapCancel: () => setState(() => _pressed = false),
+      child: AnimatedScale(
+        scale: _pressed ? 1.22 : 1.0,
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOutBack,
+        child: Container(
+          width: 38,
+          height: 38,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: widget.selected ? Colors.white24 : Colors.transparent,
+          ),
+          child: widget.child,
+        ),
+      ),
     );
   }
 }

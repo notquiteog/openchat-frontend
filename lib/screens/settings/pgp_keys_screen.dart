@@ -5,6 +5,7 @@ import '../../crypto/pgp_service.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/key_provider.dart';
 import '../../services/api_service.dart';
+import '../../services/mls_service.dart';
 import '../../services/secure_storage_service.dart';
 import '../../utils/identity_qr.dart';
 import '../../widgets/glass.dart';
@@ -347,6 +348,7 @@ class PgpKeysScreen extends StatelessWidget {
 
   Future<void> _showRotateKey(BuildContext context, KeyProvider keys) async {
     final api = context.read<ApiService>();
+    final mls = context.read<MlsService>();
     final passCtrl = TextEditingController();
     KeyType selectedKeyType = KeyType.defaultType;
 
@@ -420,6 +422,7 @@ class PgpKeysScreen extends StatelessWidget {
     if (confirmed == true && context.mounted) {
       final ok = await keys.rotateKey(
         api: api,
+        mls: mls,
         passphrase: passCtrl.text,
         keyType: selectedKeyType,
       );

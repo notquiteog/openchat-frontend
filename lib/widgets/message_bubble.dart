@@ -1985,22 +1985,68 @@ class _BotInlineButtonState extends State<_BotInlineButton> {
     final data = widget.button.callbackData?.trim();
     if (data == null || data.isEmpty) return;
     setState(() => _busy = true);
+    final chat = context.read<ChatProvider>();
     try {
-      await context.read<ApiService>().sendBotCallback(
+      final callbackId = await context.read<ApiService>().sendBotCallback(
         convID: widget.message.conversationId,
         msgID: widget.message.id,
         data: data,
       );
-      if (mounted) {
-        ScaffoldMessenger.maybeOf(
-          context,
-        )?.showSnackBar(const SnackBar(content: Text('Sent to bot')));
+
+      Map<String, dynamic>? answer;
+      if (callbackId != null && callbackId.isNotEmpty) {
+        // Many bots never call answerCallbackQuery, and an answer that does
+        // come arrives asynchronously over the WS. Wait briefly for the one
+        // matching our callback id, then fall back to a plain confirmation.
+        // The subscription is managed explicitly so a timeout leaves no
+        // dangling listener on the long-lived broadcast stream.
+        final completer = Completer<Map<String, dynamic>?>();
+        final sub = chat.callbackAnswers.listen((a) {
+          if (a['callback_query_id'] == callbackId && !completer.isCompleted) {
+            completer.complete(a);
+          }
+        });
+        try {
+          answer = await completer.future.timeout(const Duration(seconds: 4));
+        } on TimeoutException {
+          answer = null;
+        } finally {
+          await sub.cancel();
+        }
+      }
+
+      if (!mounted) return;
+      final text = (answer?['text'] as String?)?.trim() ?? '';
+      final answerUrl = (answer?['url'] as String?)?.trim() ?? '';
+      if (answerUrl.isNotEmpty) {
+        await _openMessageLink(context, answerUrl, widget.strictPrivacyMode);
+      } else if (answer != null &&
+          answer['show_alert'] == true &&
+          text.isNotEmpty) {
+        // Modal the user must dismiss.
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => GlassAlertDialog(
+            content: Text(text),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      } else if (text.isNotEmpty) {
+        // Transient toast with the bot's reply.
+        showAppToast(context, text);
+      } else {
+        // No answer (timeout / never answered) or an empty answer that just
+        // dismisses the spinner: confirm the tap was delivered.
+        showAppToast(context, 'Sent to bot');
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.maybeOf(
-          context,
-        )?.showSnackBar(SnackBar(content: Text('Bot action failed: $e')));
+        showAppToast(context, 'Bot action failed: $e', isError: true);
       }
     } finally {
       if (mounted) setState(() => _busy = false);

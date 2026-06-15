@@ -237,8 +237,14 @@ class _Providers extends StatelessWidget {
         // SettingsProvider must be registered before ChatProvider so the
         // create callback can read it via ctx.read<SettingsProvider>().
         ChangeNotifierProvider(
-          create: (ctx) =>
-              ChatProvider(api, storage, ws, ctx.read<SettingsProvider>(), mls),
+          create: (ctx) => ChatProvider(
+            api,
+            storage,
+            ws,
+            ctx.read<SettingsProvider>(),
+            mls,
+            ctx.read<NetworkService>(),
+          ),
         ),
         ChangeNotifierProxyProvider<ChatProvider, SmpProvider>(
           create: (ctx) => SmpProvider(

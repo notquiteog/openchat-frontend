@@ -22,6 +22,9 @@ enum WsEventType {
   messageReaction,
   // Anonymous tip aggregates changed for a message (carries the full list).
   messageTipped,
+  // A bot answered an inline-button tap (answerCallbackQuery); delivered only
+  // to the user who tapped, carries {callback_query_id, text, show_alert, url}.
+  callbackAnswer,
   pollUpdated,
   paymentRequestUpdated,
   // User-scoped on-chain deposit confirmation progress (owner only).
@@ -276,7 +279,10 @@ class WebSocketService extends ChangeNotifier {
       final wsUri = Uri.parse(ApiConfig.wsUrl);
       final protocols = ['openchat.v1', 'openchat.jwt.$token'];
       // Route the socket through the proxy when one is configured; otherwise use
-      // the default lazy connection.
+      // the default lazy connection. The `?? WebSocketChannel.connect` direct
+      // fallback fires ONLY when the proxy is off (connectWebSocket returns
+      // null). An active-but-unreachable proxy throws a SocketException into the
+      // catch below, which reconnects through the proxy — it never goes direct.
       channel =
           await ProxyService.instance.connectWebSocket(
             wsUri,
@@ -362,7 +368,9 @@ class WebSocketService extends ChangeNotifier {
         if (cid != null && cid.isNotEmpty && cseq > 0) {
           if (_isDuplicateConvSeq(cid, cseq)) continue;
           if (!_eventStream.isClosed) {
-            _eventStream.add(WsEvent(type: type, data: data, cid: cid, cseq: cseq));
+            _eventStream.add(
+              WsEvent(type: type, data: data, cid: cid, cseq: cseq),
+            );
           }
           continue;
         }
@@ -634,6 +642,7 @@ class WebSocketService extends ChangeNotifier {
     'message_edited' => WsEventType.messageEdited,
     'message_reaction' => WsEventType.messageReaction,
     'message_tipped' => WsEventType.messageTipped,
+    'callback_answer' => WsEventType.callbackAnswer,
     'poll_updated' => WsEventType.pollUpdated,
     'payment_request_updated' => WsEventType.paymentRequestUpdated,
     'deposit_progress' => WsEventType.depositProgress,

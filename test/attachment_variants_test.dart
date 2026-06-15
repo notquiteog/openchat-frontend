@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:openchat/screens/chat/chat_screen.dart';
+import 'package:openchat/widgets/attachment_variant_sheet.dart';
 
 // The attachment sheet was consolidated: Photo/Video/File/Location are single
 // tiles; view-once, spoiler, and live-location moved to long-press variants.

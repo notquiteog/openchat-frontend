@@ -19,6 +19,7 @@ import '../services/key_cache_service.dart';
 import '../services/message_search_service.dart';
 import '../services/message_cache_service.dart';
 import '../services/mls_service.dart';
+import '../services/network_service.dart';
 import '../services/notification_service.dart';
 import '../services/mesh/mesh_outbox_drain.dart';
 import '../services/offline_outbox_service.dart';
@@ -127,6 +128,7 @@ class ChatProvider extends ChangeNotifier {
   final WebSocketService _ws;
   final SettingsProvider _settings;
   final MlsService _mls;
+  final NetworkService _network;
   final MessageSearchService _search;
   final MessageCacheService _cache;
   final OfflineOutboxService _outbox;
@@ -149,6 +151,11 @@ class ChatProvider extends ChangeNotifier {
   Future<void>? _outboxLoadInFlight;
   bool _drainingOutbox = false;
   bool _outboxLoaded = false;
+  // Offline-outbox recovery: remember the last connectivity class so a
+  // none->online transition can kick a drain, and keep a single jittered
+  // one-shot retry timer alive while anything is still queued.
+  late NetworkClass _lastNetworkClass;
+  Timer? _outboxRetryTimer;
 
   List<Conversation> get conversations =>
       _conversations.values.where(_visibleInCurrentVault).toList()
@@ -237,6 +244,14 @@ class ChatProvider extends ChangeNotifier {
   Stream<Map<String, dynamic>> get depositProgress =>
       _depositProgressController.stream;
 
+  /// A bot's answer to an inline-button tap (answerCallbackQuery). Payload keys:
+  /// callback_query_id, text, show_alert, url. The tapped button listens for the
+  /// entry whose callback_query_id matches the id its send returned.
+  final StreamController<Map<String, dynamic>> _callbackAnswerController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get callbackAnswers =>
+      _callbackAnswerController.stream;
+
   /// Pending join requests, delivered only to members who can approve them.
   /// Payload keys: conversation_id, user_id (the requester). The join-request
   /// review UI listens to live-refresh its list while open.
@@ -315,7 +330,8 @@ class ChatProvider extends ChangeNotifier {
     this._storage,
     this._ws,
     this._settings,
-    this._mls, {
+    this._mls,
+    this._network, {
     MessageSearchService? searchService,
     MessageCacheService? cacheService,
     OfflineOutboxService? outboxService,
@@ -324,6 +340,8 @@ class ChatProvider extends ChangeNotifier {
        _outbox = outboxService ?? OfflineOutboxService(_storage) {
     _wsSub = _ws.events.listen(_handleWsEvent);
     _ws.addListener(_onWsConnectionChanged);
+    _lastNetworkClass = _network.current;
+    _network.addListener(_onNetworkChanged);
     // Vault mode changes what `conversations` returns (decoy sessions filter
     // hidden chats) — rebuild listeners when it flips.
     vaultModeListenable.addListener(_onVaultModeChanged);
@@ -718,9 +736,10 @@ class ChatProvider extends ChangeNotifier {
     final convID = dmConversationIdForFingerprint(fingerprint);
     if (convID == null) return const [];
     await _ensureOutboxLoaded();
-    return meshDeliverableItems(_outboxItems, convID)
-        .map(meshEnvelopeForItem)
-        .toList();
+    return meshDeliverableItems(
+      _outboxItems,
+      convID,
+    ).map(meshEnvelopeForItem).toList();
   }
 
   /// Ingests an envelope received over BLE from a peer whose key proof
@@ -741,9 +760,7 @@ class ChatProvider extends ChangeNotifier {
     }
     final existing = _messages[convID] ?? const <Message>[];
     final meshId = 'mesh-$nonce';
-    if (existing.any(
-      (m) => m.id == meshId || m.encryptedPayload == payload,
-    )) {
+    if (existing.any((m) => m.id == meshId || m.encryptedPayload == payload)) {
       return true; // duplicate retransmit — already have it
     }
     final msg = Message(
@@ -756,7 +773,7 @@ class ChatProvider extends ChangeNotifier {
       isEncrypted: true,
       createdAt:
           DateTime.tryParse(envelope['created_at']?.toString() ?? '') ??
-              DateTime.now(),
+          DateTime.now(),
     );
     await _handleIncomingMessage(msg);
     return true;
@@ -1233,7 +1250,50 @@ class ChatProvider extends ChangeNotifier {
       }
     } finally {
       _drainingOutbox = false;
+      _reconcileOutboxRetryTimer();
     }
+  }
+
+  // Connectivity regained (none -> wifi/mobile): flush the outbox immediately
+  // rather than waiting for the next WS transition, a new send, or a retry tick.
+  void _onNetworkChanged() {
+    final now = _network.current;
+    final regained =
+        _lastNetworkClass == NetworkClass.none && now != NetworkClass.none;
+    _lastNetworkClass = now;
+    if (regained && !_drainingOutbox) {
+      unawaited(drainOutbox());
+    }
+  }
+
+  // drainOutbox() bails on the first retryable failure, leaving items 'queued'
+  // with nothing to re-trigger delivery until a WS transition or a new enqueue
+  // — so a transient error while otherwise online could strand a message
+  // indefinitely. While anything is still queued, keep one jittered (~45–75s)
+  // one-shot retry alive; stop once the queue drains. Jitter avoids a
+  // synchronized retry stampede across clients.
+  void _reconcileOutboxRetryTimer() {
+    if (_disposed) return;
+    final hasQueued = _outboxItems.any(
+      (i) => i.status == OfflineOutboxStatus.queued,
+    );
+    if (hasQueued) {
+      _scheduleOutboxRetry();
+    } else {
+      _outboxRetryTimer?.cancel();
+      _outboxRetryTimer = null;
+    }
+  }
+
+  void _scheduleOutboxRetry() {
+    if (_outboxRetryTimer != null) return; // one pending retry at a time
+    final seconds = 45 + _sendJitterRandom.nextInt(31); // ~45–75s
+    _outboxRetryTimer = Timer(Duration(seconds: seconds), () {
+      _outboxRetryTimer = null;
+      if (!_disposed && !_drainingOutbox) {
+        unawaited(drainOutbox());
+      }
+    });
   }
 
   Future<void> _deliverQueuedMessage(OfflineOutboxItem item) async {
@@ -1881,8 +1941,9 @@ class ChatProvider extends ChangeNotifier {
       allowsRevoting: !quiz,
       isClosed: false,
       totalVoterCount: 0,
-      correctOptionIds:
-          quiz && correctOptionId != null ? [correctOptionId] : const [],
+      correctOptionIds: quiz && correctOptionId != null
+          ? [correctOptionId]
+          : const [],
       explanation: quiz ? explanation : null,
       options: [
         for (var i = 0; i < cleanOptions.length; i++)
@@ -2084,8 +2145,7 @@ class ChatProvider extends ChangeNotifier {
   }) async {
     final list = _messages[convID];
     final pollMessage = list?.where((m) => m.poll?.id == pollID).firstOrNull;
-    final anonymous =
-        isAnonymous ?? pollMessage?.poll?.isAnonymous ?? false;
+    final anonymous = isAnonymous ?? pollMessage?.poll?.isAnonymous ?? false;
 
     final Poll updatedPoll;
     if (anonymous) {
@@ -3854,6 +3914,13 @@ class ChatProvider extends ChangeNotifier {
           _depositProgressController.add(event.data);
         }
 
+      case WsEventType.callbackAnswer:
+        // A bot's reply to an inline-button tap; consumed by the button that
+        // is awaiting an answer for this callback_query_id.
+        if (!_callbackAnswerController.isClosed) {
+          _callbackAnswerController.add(event.data);
+        }
+
       case WsEventType.conversationUpdated:
         // Name / description / avatar (and for channels, handle) changed. Pull
         // the fresh conversation + members so it updates without a manual
@@ -4118,7 +4185,8 @@ class ChatProvider extends ChangeNotifier {
       }
     }
     _pollSnapshots[poll.id] =
-        poll.voterOptionIds.isEmpty && (prev?.voterOptionIds.isNotEmpty ?? false)
+        poll.voterOptionIds.isEmpty &&
+            (prev?.voterOptionIds.isNotEmpty ?? false)
         ? poll.copyWith(voterOptionIds: prev!.voterOptionIds)
         : poll;
     final messageUpdated = _updateMessageInMemory(
@@ -4658,10 +4726,9 @@ class ChatProvider extends ChangeNotifier {
       final gossip = decoded['kt_sth'];
       if (gossip is! Map) return;
       unawaited(
-        KtAuditService(storage: _storage).ingestGossipedHead(
-          _api,
-          Map<String, dynamic>.from(gossip),
-        ),
+        KtAuditService(
+          storage: _storage,
+        ).ingestGossipedHead(_api, Map<String, dynamic>.from(gossip)),
       );
     } catch (_) {}
   }
@@ -4744,8 +4811,10 @@ class ChatProvider extends ChangeNotifier {
         _hydrateMessageSender(msg);
         _indexMessage(msg);
       } else {
-        debugPrint('ChatProvider: decrypt FAILED (MLS returned empty — sender '
-            'ratchet/epoch mismatch?) msg=${msg.id} conv=${msg.conversationId}');
+        debugPrint(
+          'ChatProvider: decrypt FAILED (MLS returned empty — sender '
+          'ratchet/epoch mismatch?) msg=${msg.id} conv=${msg.conversationId}',
+        );
         msg.markDecryptionFailed();
       }
       return;
@@ -4787,8 +4856,10 @@ class ChatProvider extends ChangeNotifier {
       // calls).  Don't permanently mark failed — the next loadMessages call
       // will retry with a fresh PgpService invocation.
     } catch (e) {
-      debugPrint('ChatProvider: decrypt FAILED (PGP threw) msg=${msg.id} '
-          'conv=${msg.conversationId} sealed=${msg.sealedSender}: $e');
+      debugPrint(
+        'ChatProvider: decrypt FAILED (PGP threw) msg=${msg.id} '
+        'conv=${msg.conversationId} sealed=${msg.sealedSender}: $e',
+      );
       msg.markDecryptionFailed();
     }
   }
@@ -4909,7 +4980,11 @@ class ChatProvider extends ChangeNotifier {
     String roundID, {
     bool isChannel = false,
   }) async {
-    final round = await _api.getGameRound(convID, roundID, isChannel: isChannel);
+    final round = await _api.getGameRound(
+      convID,
+      roundID,
+      isChannel: isChannel,
+    );
     _ingestGameRound(round);
     return round;
   }
@@ -4989,11 +5064,14 @@ class ChatProvider extends ChangeNotifier {
     _typingExpiry.clear();
     vaultModeListenable.removeListener(_onVaultModeChanged);
     _depositProgressController.close();
+    _callbackAnswerController.close();
     _joinRequestController.close();
     _recoveryEventsController.close();
     _smpController.close();
     NotificationService.setLiveLocationHandlers(onCancel: null);
     unawaited(_stopAllLiveLocationShares());
+    _outboxRetryTimer?.cancel();
+    _network.removeListener(_onNetworkChanged);
     _ws.removeListener(_onWsConnectionChanged);
     _ws.disconnect();
     super.dispose();

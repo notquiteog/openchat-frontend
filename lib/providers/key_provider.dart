@@ -9,6 +9,7 @@ import '../models/key_transparency_event.dart';
 import '../models/key_trust_pin.dart';
 import '../services/api_service.dart';
 import '../services/key_cache_service.dart';
+import '../services/mls_service.dart';
 import '../services/secure_storage_service.dart';
 
 class KeyProvider extends ChangeNotifier {
@@ -125,6 +126,7 @@ class KeyProvider extends ChangeNotifier {
   /// have not yet expired (24 h) may still encrypt to the old key temporarily.
   Future<bool> rotateKey({
     required ApiService api,
+    required MlsService mls,
     String passphrase = '',
     KeyType keyType = KeyType.defaultType,
   }) async {
@@ -201,6 +203,13 @@ class KeyProvider extends ChangeNotifier {
       );
       _publicKey = newPair.publicKeyArmored;
       _fingerprint = newPair.fingerprint;
+      // Re-sign the MLS device key with the NEW private key (now in storage) so
+      // the MLS-to-PGP binding the server validates stays valid; a stale signer
+      // would otherwise hard-block new MLS conversations/commits. Guarded so an
+      // MLS hiccup can never flip an already-persisted rotation to a failure.
+      try {
+        await mls.resignDeviceKeyForCurrentUser();
+      } catch (_) {}
       notifyListeners();
       return true;
     } catch (_) {

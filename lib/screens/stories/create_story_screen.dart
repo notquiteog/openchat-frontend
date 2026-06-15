@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:video_player/video_player.dart';
 import '../../crypto/pgp_service.dart';
 import '../../models/message.dart';
 import '../../models/user.dart';
@@ -28,6 +30,7 @@ class CreateStoryScreen extends StatefulWidget {
 class _CreateStoryScreenState extends State<CreateStoryScreen> {
   final _captionCtrl = TextEditingController();
   PendingAttachment? _pending;
+  VideoPlayerController? _videoPreview;
   String _privacy = 'contacts';
   int _durationSeconds = 24 * 60 * 60;
   bool _posting = false;
@@ -36,7 +39,31 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
   @override
   void dispose() {
     _captionCtrl.dispose();
+    _videoPreview?.dispose();
     super.dispose();
+  }
+
+  /// Builds a muted, looping preview controller for a picked video so the
+  /// composer shows the real footage instead of a placeholder icon.
+  Future<void> _setPreviewFor(PendingAttachment pending) async {
+    await _videoPreview?.dispose();
+    _videoPreview = null;
+    final path = pending.previewPath;
+    if (pending.messageType != MessageType.video || path == null) return;
+    final controller = VideoPlayerController.file(File(path));
+    try {
+      await controller.initialize();
+      await controller.setLooping(true);
+      await controller.setVolume(0);
+      await controller.play();
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+      setState(() => _videoPreview = controller);
+    } catch (_) {
+      await controller.dispose();
+    }
   }
 
   Future<void> _pickImage() async {
@@ -61,6 +88,7 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
       if (!mounted) return;
       if (pending != null) {
         setState(() => _pending = pending);
+        await _setPreviewFor(pending);
       }
     } catch (e) {
       if (mounted) setState(() => _error = 'Could not prepare story media.');
@@ -298,145 +326,280 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
     if (mounted) setState(() {});
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final pending = _pending;
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: const GlassAppBar(title: Text('New story')),
-      body: ListView(
-          padding: EdgeInsets.fromLTRB(16, MediaQuery.paddingOf(context).top + kToolbarHeight + 16, 16, MediaQuery.paddingOf(context).bottom + 16),
-          children: [
-            AspectRatio(
-              aspectRatio: 9 / 16,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: theme.dividerColor),
-                ),
-                child: pending == null
-                    ? _PickPanel(
-                        busy: _posting,
-                        onPickImage: _pickImage,
-                        onPickVideo: _pickVideo,
-                      )
-                    : _SelectedMediaPanel(
-                        pending: pending,
-                        onReplaceImage: _posting ? null : _pickImage,
-                        onReplaceVideo: _posting ? null : _pickVideo,
-                      ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _captionCtrl,
-              maxLines: 3,
-              minLines: 1,
-              decoration: const InputDecoration(
-                labelText: 'Caption',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 16),
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(
-                  value: 'contacts',
-                  icon: Icon(Icons.group_outlined),
-                  label: Text('Contacts'),
-                ),
-                ButtonSegment(
-                  value: 'close_friends',
-                  icon: Icon(Icons.star_outline_rounded),
-                  label: Text('Close'),
-                ),
-                ButtonSegment(
-                  value: 'public',
-                  icon: Icon(Icons.public),
-                  label: Text('Public'),
-                ),
-              ],
-              selected: {_privacy},
-              onSelectionChanged: _posting
-                  ? null
-                  : (value) {
-                      final v = value.first;
-                      setState(() => _privacy = v);
-                      if (v == 'close_friends') _pickCloseFriends();
-                    },
-            ),
-            if (_privacy == 'close_friends')
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Row(
-                  children: [
-                    Text(
-                      '${context.watch<SettingsProvider>().closeFriendIds.length} close friends',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    const Spacer(),
-                    TextButton(
-                      onPressed: _pickCloseFriends,
-                      child: const Text('Edit'),
-                    ),
-                  ],
-                ),
-              ),
-            const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'Visible for',
-                style: Theme.of(context).textTheme.labelMedium,
-              ),
-            ),
-            const SizedBox(height: 6),
-            GlassSegmentedControl(
-              segments: const ['6h', '12h', '24h', '48h'],
-              selectedIndex: switch (_durationSeconds) {
-                const (6 * 60 * 60) => 0,
-                const (12 * 60 * 60) => 1,
-                const (48 * 60 * 60) => 3,
-                _ => 2,
-              },
-              onSegmentSelected: (index) {
-                if (_posting || pending == null) return;
-                setState(() {
-                  _durationSeconds = const [
-                    6 * 60 * 60,
-                    12 * 60 * 60,
-                    24 * 60 * 60,
-                    48 * 60 * 60,
-                  ][index];
-                });
-              },
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 12),
-              Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
-            ],
-            const SizedBox(height: 20),
-            GlassButtonWidget.icon(
-              onPressed: pending == null || _posting ? null : _publish,
-              icon: _posting
-                  ? const GlassProgressIndicator.circular(size: 18, strokeWidth: 2)
-                  : const Icon(Icons.send_outlined),
-              label: Text(_posting ? 'Publishing' : 'Publish story'),
-            ),
-          ],
+  int get _privacyIndex => switch (_privacy) {
+    'close_friends' => 1,
+    'public' => 2,
+    _ => 0,
+  };
+
+  void _onPrivacy(int index) {
+    if (_posting) return;
+    final v = const ['contacts', 'close_friends', 'public'][index];
+    setState(() => _privacy = v);
+    if (v == 'close_friends') _pickCloseFriends();
+  }
+
+  Future<void> _showReplaceSheet() async {
+    await showGlassActionSheet<void>(
+      context: context,
+      title: 'Change media',
+      actions: [
+        GlassActionSheetAction(
+          label: 'Photo',
+          icon: const Icon(Icons.image_outlined),
+          onPressed: _pickImage,
         ),
+        GlassActionSheetAction(
+          label: 'Video',
+          icon: const Icon(Icons.videocam_outlined),
+          onPressed: _pickVideo,
+        ),
+      ],
     );
   }
+
+  @override
+  Widget build(BuildContext context) {
+    final pending = _pending;
+    final hasMedia = pending != null;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      resizeToAvoidBottomInset: false,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          Positioned.fill(child: _buildBackground(pending)),
+          // Legibility scrim behind the top bar and bottom controls.
+          const Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Color(0x99000000),
+                      Color(0x00000000),
+                      Color(0x33000000),
+                      Color(0xD9000000),
+                    ],
+                    stops: [0.0, 0.2, 0.45, 1.0],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 6, 12, 0),
+              child: Row(
+                children: [
+                  GlassCircleIconButton(
+                    tooltip: 'Close',
+                    size: 40,
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      color: Colors.white,
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  const Text(
+                    'New story',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      shadows: [Shadow(blurRadius: 4, color: Colors.black54)],
+                    ),
+                  ),
+                  const Spacer(),
+                  if (hasMedia)
+                    GlassButtonWidget.icon(
+                      onPressed: _posting ? null : _showReplaceSheet,
+                      icon: const Icon(Icons.swap_horiz_rounded, size: 18),
+                      label: const Text('Change'),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          SafeArea(
+            top: false,
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: _buildControls(pending),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBackground(PendingAttachment? pending) {
+    if (pending == null) {
+      return _EmptyPicker(
+        busy: _posting,
+        onPickImage: _pickImage,
+        onPickVideo: _pickVideo,
+      );
+    }
+    if (pending.messageType == MessageType.video) {
+      final c = _videoPreview;
+      if (c != null && c.value.isInitialized) {
+        return FittedBox(
+          fit: BoxFit.cover,
+          clipBehavior: Clip.hardEdge,
+          child: SizedBox(
+            width: c.value.size.width,
+            height: c.value.size.height,
+            child: VideoPlayer(c),
+          ),
+        );
+      }
+      return const ColoredBox(
+        color: Color(0xFF101012),
+        child: Center(
+          child: Icon(
+            Icons.movie_creation_outlined,
+            color: Colors.white54,
+            size: 64,
+          ),
+        ),
+      );
+    }
+    final path = pending.previewPath;
+    if (path != null) {
+      return Image.file(
+        File(path),
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => const ColoredBox(color: Color(0xFF101012)),
+      );
+    }
+    return const ColoredBox(color: Color(0xFF101012));
+  }
+
+  Widget _buildControls(PendingAttachment? pending) {
+    final closeFriends = context
+        .watch<SettingsProvider>()
+        .closeFriendIds
+        .length;
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.62,
+      ),
+      child: SingleChildScrollView(
+        reverse: true,
+        padding: EdgeInsets.fromLTRB(
+          12,
+          0,
+          12,
+          12 + MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: GlassContainer(
+          shape: const LiquidRoundedSuperellipse(borderRadius: 28),
+          allowElevation: true,
+          glowIntensity: 0.06,
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _CaptionField(controller: _captionCtrl),
+              const SizedBox(height: 14),
+              _label('Who can see this'),
+              const SizedBox(height: 8),
+              GlassSegmentedControl(
+                segments: const ['Contacts', 'Close', 'Public'],
+                selectedIndex: _privacyIndex,
+                onSegmentSelected: _onPrivacy,
+              ),
+              if (_privacy == 'close_friends')
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '$closeFriends close ${closeFriends == 1 ? 'friend' : 'friends'}',
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                      ),
+                      GlassButtonWidget(
+                        onPressed: _pickCloseFriends,
+                        child: const Text('Edit'),
+                      ),
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 14),
+              _label('Disappears after'),
+              const SizedBox(height: 8),
+              GlassSegmentedControl(
+                segments: const ['6h', '12h', '24h', '48h'],
+                selectedIndex: switch (_durationSeconds) {
+                  const (6 * 60 * 60) => 0,
+                  const (12 * 60 * 60) => 1,
+                  const (48 * 60 * 60) => 3,
+                  _ => 2,
+                },
+                onSegmentSelected: (index) {
+                  if (_posting) return;
+                  setState(() {
+                    _durationSeconds = const [
+                      6 * 60 * 60,
+                      12 * 60 * 60,
+                      24 * 60 * 60,
+                      48 * 60 * 60,
+                    ][index];
+                  });
+                },
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(_error!, style: const TextStyle(color: Color(0xFFFF6B6B))),
+              ],
+              const SizedBox(height: 16),
+              GlassButtonWidget.icon(
+                onPressed: pending == null || _posting ? null : _publish,
+                icon: _posting
+                    ? const GlassProgressIndicator.circular(
+                        size: 18,
+                        strokeWidth: 2,
+                      )
+                    : const Icon(Icons.send_rounded),
+                label: Text(_posting ? 'Publishing…' : 'Share story'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _label(String text) => Padding(
+    padding: const EdgeInsets.only(left: 4),
+    child: Text(
+      text,
+      style: const TextStyle(
+        color: Colors.white70,
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0.3,
+      ),
+    ),
+  );
 }
 
-class _PickPanel extends StatelessWidget {
+/// Empty state: a glass card prompting the user to add a photo or video.
+class _EmptyPicker extends StatelessWidget {
   final bool busy;
   final VoidCallback onPickImage;
   final VoidCallback onPickVideo;
 
-  const _PickPanel({
+  const _EmptyPicker({
     required this.busy,
     required this.onPickImage,
     required this.onPickVideo,
@@ -444,75 +607,89 @@ class _PickPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Wrap(
-        spacing: 12,
-        runSpacing: 12,
-        alignment: WrapAlignment.center,
-        children: [
-          GlassButtonWidget.icon(
-            onPressed: busy ? null : onPickImage,
-            icon: const Icon(Icons.image_outlined),
-            label: const Text('Photo'),
-          ),
-          GlassButtonWidget.icon(
-            onPressed: busy ? null : onPickVideo,
-            icon: const Icon(Icons.videocam_outlined),
-            label: const Text('Video'),
-          ),
-        ],
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFF1A1B22), Color(0xFF0B0B0E)],
+        ),
+      ),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.auto_awesome_motion_outlined,
+              color: Colors.white38,
+              size: 56,
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              'Share a moment',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Pick a photo or video for your story',
+              style: TextStyle(color: Colors.white60, fontSize: 13),
+            ),
+            const SizedBox(height: 20),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              alignment: WrapAlignment.center,
+              children: [
+                GlassButtonWidget.icon(
+                  onPressed: busy ? null : onPickImage,
+                  icon: const Icon(Icons.image_outlined),
+                  label: const Text('Photo'),
+                ),
+                GlassButtonWidget.icon(
+                  onPressed: busy ? null : onPickVideo,
+                  icon: const Icon(Icons.videocam_outlined),
+                  label: const Text('Video'),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _SelectedMediaPanel extends StatelessWidget {
-  final PendingAttachment pending;
-  final VoidCallback? onReplaceImage;
-  final VoidCallback? onReplaceVideo;
+/// Caption input styled for the dark glass composer.
+class _CaptionField extends StatelessWidget {
+  final TextEditingController controller;
 
-  const _SelectedMediaPanel({
-    required this.pending,
-    this.onReplaceImage,
-    this.onReplaceVideo,
-  });
+  const _CaptionField({required this.controller});
 
   @override
   Widget build(BuildContext context) {
-    final isVideo = pending.messageType == MessageType.video;
-    return Padding(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(isVideo ? Icons.movie_outlined : Icons.image_outlined, size: 72),
-          const SizedBox(height: 16),
-          Text(
-            pending.fileName,
-            textAlign: TextAlign.center,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 6),
-          Text(pending.mimeType, style: Theme.of(context).textTheme.bodySmall),
-          const SizedBox(height: 20),
-          Wrap(
-            spacing: 8,
-            children: [
-              GlassButtonWidget.icon(
-                onPressed: onReplaceImage,
-                icon: const Icon(Icons.image_outlined),
-                label: const Text('Replace photo'),
-              ),
-              GlassButtonWidget.icon(
-                onPressed: onReplaceVideo,
-                icon: const Icon(Icons.videocam_outlined),
-                label: const Text('Replace video'),
-              ),
-            ],
-          ),
-        ],
+    return TextField(
+      controller: controller,
+      maxLines: 3,
+      minLines: 1,
+      style: const TextStyle(color: Colors.white),
+      cursorColor: Colors.white,
+      decoration: InputDecoration(
+        hintText: 'Add a caption…',
+        hintStyle: const TextStyle(color: Colors.white54),
+        filled: true,
+        fillColor: Colors.white.withValues(alpha: 0.08),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 12,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide.none,
+        ),
       ),
     );
   }

@@ -31,6 +31,7 @@ class _ProxySettingsScreenState extends State<ProxySettingsScreen> {
   late final TextEditingController _hostCtrl;
   late final TextEditingController _portCtrl;
   bool _blockCalls = true;
+  bool _failClosed = true;
   String? _testResult;
   bool _testing = false;
 
@@ -42,6 +43,7 @@ class _ProxySettingsScreenState extends State<ProxySettingsScreen> {
     _hostCtrl = TextEditingController(text: cfg.host);
     _portCtrl = TextEditingController(text: cfg.port > 0 ? '${cfg.port}' : '');
     _blockCalls = cfg.blockCallsWhenActive;
+    _failClosed = cfg.failClosed;
   }
 
   @override
@@ -54,8 +56,11 @@ class _ProxySettingsScreenState extends State<ProxySettingsScreen> {
   ProxyConfig _currentConfig() => ProxyConfig(
     mode: _mode,
     host: _hostCtrl.text.trim().isEmpty ? '127.0.0.1' : _hostCtrl.text.trim(),
-    port: int.tryParse(_portCtrl.text.trim()) ?? (_mode == ProxyMode.tor ? 9050 : 1080),
+    port:
+        int.tryParse(_portCtrl.text.trim()) ??
+        (_mode == ProxyMode.tor ? 9050 : 1080),
     blockCallsWhenActive: _blockCalls,
+    failClosed: _failClosed,
   );
 
   Future<void> _save() async {
@@ -68,10 +73,12 @@ class _ProxySettingsScreenState extends State<ProxySettingsScreen> {
     setState(() {
       _mode = _modes[index];
       _testResult = null;
-      // Tor: pre-fill the conventional local SOCKS endpoint.
+      // Tor: pre-fill the conventional local SOCKS endpoint and keep the
+      // fail-closed kill switch on so a misconfigured daemon never leaks.
       if (_mode == ProxyMode.tor) {
         if (_hostCtrl.text.trim().isEmpty) _hostCtrl.text = '127.0.0.1';
         if (_portCtrl.text.trim().isEmpty) _portCtrl.text = '9050';
+        _failClosed = true;
       }
     });
     unawaited(_save());
@@ -97,7 +104,12 @@ class _ProxySettingsScreenState extends State<ProxySettingsScreen> {
           : 'Reached proxy, server returned ${resp.statusCode}';
       client.close(force: true);
     } catch (e) {
-      result = 'Failed: $e';
+      // A deny-all (fail-closed) client surfaces a SocketException whose
+      // message carries this marker; show the spec copy rather than the raw
+      // exception so the user understands traffic was deliberately blocked.
+      result = e.toString().contains('traffic blocked')
+          ? 'Proxy unreachable - traffic blocked'
+          : 'Failed: $e';
     }
     if (mounted) {
       setState(() {
@@ -128,9 +140,9 @@ class _ProxySettingsScreenState extends State<ProxySettingsScreen> {
               children: [
                 Text(
                   'Routing mode',
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 10),
                 GlassSegmentedControl(
@@ -248,6 +260,29 @@ class _ProxySettingsScreenState extends State<ProxySettingsScreen> {
                 ),
               ),
             ),
+            if (_mode == ProxyMode.socks5 || _mode == ProxyMode.tor) ...[
+              const SizedBox(height: 14),
+              GlassCard(
+                padding: EdgeInsets.zero,
+                child: GlassListTile(
+                  leading: const Icon(Icons.shield_outlined),
+                  title: const Text(
+                    'Block traffic if proxy is unreachable (fail-closed)',
+                  ),
+                  subtitle: const Text(
+                    'Recommended — prevents your real IP from leaking if the '
+                    'proxy is misconfigured or down',
+                  ),
+                  trailing: GlassSwitch(
+                    value: _failClosed,
+                    onChanged: (v) {
+                      setState(() => _failClosed = v);
+                      unawaited(_save());
+                    },
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 14),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),

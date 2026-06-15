@@ -52,7 +52,11 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
   String? _currentSessionId;
   Map<String, KeyTrustPin> _keyPins = const {};
   List<KeyTransparencyEvent> _keyEvents = const [];
-  MlsSignerStorage? _mlsSigner;
+  // True only when the stored MLS signer signature actually verifies against the
+  // CURRENT PGP public key. Non-emptiness is not enough: after a key rotation a
+  // signature made by the old key is non-empty but stale, and the server
+  // rejects it — so the row must reflect real verification, not mere presence.
+  bool _mlsSignerVerified = false;
   Map<String, dynamic>? _ktLogAlarm;
   String? _error;
 
@@ -88,6 +92,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
       final ktLogAlarm = await storage.getKtLogAlarm();
       var keyEvents = <KeyTransparencyEvent>[];
       MlsSignerStorage? mlsSigner;
+      var mlsSignerVerified = false;
       if (user != null) {
         try {
           keyEvents = await api.getKeyTransparencyEvents(user.id);
@@ -95,6 +100,24 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
           keyEvents = const [];
         }
         mlsSigner = await storage.getMlsSigner(user.id);
+        // Verify the stored signer signature against the current PGP key so a
+        // signature left over from a previous key (which the server rejects)
+        // shows as 'Prepare', not a false-green 'Signed'.
+        final currentPublicKey = await storage.getPublicKey();
+        if (mlsSigner != null &&
+            mlsSigner.signature.trim().isNotEmpty &&
+            mlsSigner.publicKey.trim().isNotEmpty &&
+            currentPublicKey != null &&
+            currentPublicKey.isNotEmpty) {
+          mlsSignerVerified = await PgpService.verify(
+            data: PgpService.deviceKeySignatureData(
+              userId: user.id,
+              deviceKey: mlsSigner.publicKey,
+            ),
+            signatureArmor: mlsSigner.signature,
+            signerPublicKeyArmored: currentPublicKey,
+          );
+        }
       }
       if (!mounted) return;
       setState(() {
@@ -108,7 +131,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
         _currentSessionId = currentSessionId;
         _keyPins = keyPins;
         _keyEvents = keyEvents;
-        _mlsSigner = mlsSigner;
+        _mlsSignerVerified = mlsSignerVerified;
         _ktLogAlarm = ktLogAlarm;
         _loading = false;
       });
@@ -226,7 +249,12 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
   Future<void> _prepareMlsIdentity() async {
     final messenger = ScaffoldMessenger.of(context);
     try {
-      await context.read<MlsService>().ensureIdentityForCurrentUser();
+      final mls = context.read<MlsService>();
+      // ensureIdentityForCurrentUser only signs a MISSING/empty signature; a
+      // stale non-empty one (left by a prior key) also needs re-signing, which
+      // is exactly what the explicit resign covers.
+      await mls.ensureIdentityForCurrentUser();
+      await mls.resignDeviceKeyForCurrentUser();
       await _load();
       messenger.showSnackBar(
         const SnackBar(content: Text('MLS device key prepared')),
@@ -592,9 +620,10 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
         .where((pin) => pin.warning != null && pin.warning!.trim().isNotEmpty)
         .toList();
     final latestKeyEvent = _keyEvents.isEmpty ? null : _keyEvents.last;
-    final mlsSignerSigned =
-        (_mlsSigner?.publicKey.trim().isNotEmpty ?? false) &&
-        (_mlsSigner?.signature.trim().isNotEmpty ?? false);
+    // Green only when the stored signature truly verifies against the current
+    // PGP key (computed in _load); a stale post-rotation signature is non-empty
+    // but fails verification, so it correctly shows 'Prepare'.
+    final mlsSignerSigned = _mlsSignerVerified;
     final summary = evaluateTrustCenter(
       hasLocalKey: keys.hasKey,
       accountKeyExpired: user?.isKeyExpired ?? false,
@@ -773,7 +802,8 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                   _TrustRow(
                     icon: Icons.vpn_key_outlined,
                     title: 'Verify a contact (shared secret)',
-                    subtitle: 'Socialist Millionaire Protocol — in-band, no key swap',
+                    subtitle:
+                        'Socialist Millionaire Protocol — in-band, no key swap',
                     onTap: () => Navigator.push(
                       context,
                       MaterialPageRoute<void>(
@@ -900,11 +930,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                       valueListenable: vaultModeListenable,
                       builder: (context, vaultMode, _) => Column(
                         children: [
-                          for (
-                            var index = 0;
-                            index < _sessions.length;
-                            index++
-                          )
+                          for (var index = 0; index < _sessions.length; index++)
                             _TrustRow(
                               icon: Icons.devices_outlined,
                               title: sessionDeviceDisplayLabel(
@@ -1300,7 +1326,8 @@ class _TrustRow extends StatelessWidget {
               ),
             )
           : null,
-      trailing: trailing ??
+      trailing:
+          trailing ??
           Icon(
             CupertinoIcons.chevron_forward,
             size: 14,
@@ -1855,7 +1882,11 @@ class _SocialRecoverySectionState extends State<SocialRecoverySection> {
     final selfId = chat.selfId ?? await storage.getUserID() ?? '';
     if (selfId.isEmpty) {
       if (mounted) {
-        showAppToast(context, 'Could not determine your user id', isError: true);
+        showAppToast(
+          context,
+          'Could not determine your user id',
+          isError: true,
+        );
       }
       return;
     }

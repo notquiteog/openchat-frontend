@@ -14,6 +14,7 @@ import 'package:openchat/services/app_lock_state.dart';
 import 'package:openchat/services/message_cache_service.dart';
 import 'package:openchat/services/message_search_service.dart';
 import 'package:openchat/services/mls_service.dart';
+import 'package:openchat/services/network_service.dart';
 import 'package:openchat/services/offline_outbox_service.dart';
 import 'package:openchat/services/secure_storage_service.dart';
 import 'package:openchat/services/social_recovery_service.dart';
@@ -62,6 +63,7 @@ void main() {
       ws,
       SettingsProvider(),
       MlsService(storage),
+      NetworkService(),
       searchService: _NoopSearch(storage),
       cacheService: _NoopCache(storage),
       outboxService: _NoopOutbox(storage),

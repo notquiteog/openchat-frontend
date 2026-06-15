@@ -42,6 +42,7 @@ import '../../widgets/disappearing_messages_picker.dart';
 import '../../widgets/day_separator.dart';
 import '../../widgets/desktop.dart';
 import '../../widgets/glass.dart';
+import '../../widgets/attachment_variant_sheet.dart';
 import '../../widgets/message_action_sheet.dart';
 import '../../widgets/reaction_emoji_picker.dart';
 import '../../widgets/reaction_menu.dart';
@@ -2465,6 +2466,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     required EncryptedAttachmentUpload attachment,
     String caption = '',
     bool silent = false,
+    bool viewOnce = false,
+    bool hasSpoiler = false,
   }) async {
     final storage = context.read<SecureStorageService>();
     final auth = context.read<AuthProvider>();
@@ -2486,6 +2489,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       attachment.toPayloadJson(
         attachmentId: pendingAttachmentID,
         caption: caption,
+        viewOnce: viewOnce,
+        hasSpoiler: hasSpoiler,
       ),
     );
     await _upsertOutboxItem(
@@ -3681,7 +3686,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.iOS;
 
-    final choice = await showModalBottomSheet<String>(
+    var choice = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -3702,7 +3707,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                 GlassMenuEntry(
                   icon: Icons.photo_library_outlined,
                   label: 'Photo from gallery',
+                  showChevron: true,
                   onTap: () => Navigator.pop(sheetCtx, 'gallery_image'),
+                  onLongPress: () => Navigator.pop(sheetCtx, 'photo_variants'),
                 ),
                 if (cameraSupported)
                   GlassMenuEntry(
@@ -3713,12 +3720,16 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                 GlassMenuEntry(
                   icon: Icons.videocam_outlined,
                   label: 'Video from gallery',
+                  showChevron: true,
                   onTap: () => Navigator.pop(sheetCtx, 'gallery_video'),
+                  onLongPress: () => Navigator.pop(sheetCtx, 'video_variants'),
                 ),
                 GlassMenuEntry(
                   icon: Icons.attach_file,
                   label: 'File',
+                  showChevron: true,
                   onTap: () => Navigator.pop(sheetCtx, 'file'),
+                  onLongPress: () => Navigator.pop(sheetCtx, 'file_variants'),
                 ),
               ],
             ),
@@ -3740,8 +3751,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   label: 'Share location',
                   showChevron: true,
                   onTap: () => Navigator.pop(sheetCtx, 'location_once'),
-                  // Hold for live location — same gesture as the chat sheet.
-                  onLongPress: () => Navigator.pop(sheetCtx, 'location_live'),
+                  // Hold for the one-time / live menu — same as the chat sheet.
+                  onLongPress: () =>
+                      Navigator.pop(sheetCtx, 'location_variants'),
                 ),
               ],
             ),
@@ -3751,6 +3763,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       ),
     );
     if (choice == null || !mounted) return;
+    // Held tiles resolve to a concrete choice via the shared variant sheet
+    // (view-once / spoiler / one-time vs live), matching the DM composer.
+    if (choice.endsWith('_variants')) {
+      choice = await showAttachmentVariantSheet(context, choice);
+      if (choice == null || !mounted) return;
+    }
 
     // Non-attachment actions handled separately.
     if (choice == 'poll') {
@@ -3767,21 +3785,27 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     }
 
     final attachmentService = AttachmentService(context.read<ApiService>());
+    final viewOnce = choice.startsWith('view_once_');
+    final hasSpoiler = choice.startsWith('spoiler_');
     EncryptedAttachmentUpload? pending;
     VoiceNoteRecording? voiceNote;
     try {
       pending = switch (choice) {
-        'gallery_image' => await attachmentService.pickImageForOutbox(
+        'gallery_image' ||
+        'view_once_image' ||
+        'spoiler_image' => await attachmentService.pickImageForOutbox(
           onProgress: _setAttachmentUploadProgress,
         ),
         'camera_image' => await attachmentService.pickImageForOutbox(
           fromCamera: true,
           onProgress: _setAttachmentUploadProgress,
         ),
-        'gallery_video' => await attachmentService.pickVideoForOutbox(
+        'gallery_video' ||
+        'view_once_video' ||
+        'spoiler_video' => await attachmentService.pickVideoForOutbox(
           onProgress: _setAttachmentUploadProgress,
         ),
-        'file' => await attachmentService.pickFileForOutbox(
+        'file' || 'view_once_file' => await attachmentService.pickFileForOutbox(
           onProgress: _setAttachmentUploadProgress,
         ),
         'voice' => await (() async {
@@ -3814,7 +3838,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       return;
     }
 
-    await _postPreparedAttachment(pending, attachmentService);
+    await _postPreparedAttachment(
+      pending,
+      attachmentService,
+      viewOnce: viewOnce,
+      hasSpoiler: hasSpoiler,
+    );
   }
 
   /// Uploads an encrypted attachment and posts it to the channel, falling
@@ -3822,8 +3851,10 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   /// picker and desktop drag-and-drop.
   Future<void> _postPreparedAttachment(
     EncryptedAttachmentUpload pending,
-    AttachmentService attachmentService,
-  ) async {
+    AttachmentService attachmentService, {
+    bool viewOnce = false,
+    bool hasSpoiler = false,
+  }) async {
     try {
       _setAttachmentUploadProgress(
         const AttachmentUploadProgress(stage: AttachmentUploadStage.sending),
@@ -3832,6 +3863,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         await _queueChannelAttachmentUpload(
           attachment: pending,
           silent: _sendSilent,
+          viewOnce: viewOnce,
+          hasSpoiler: hasSpoiler,
         );
         return;
       }
@@ -3840,7 +3873,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         onProgress: _setAttachmentUploadProgress,
       );
       await _post(
-        plaintextOverride: jsonEncode(uploaded.toPayloadJson()),
+        plaintextOverride: jsonEncode(
+          uploaded.toPayloadJson(viewOnce: viewOnce, hasSpoiler: hasSpoiler),
+        ),
         messageType: uploaded.messageType.name,
         attachmentId: uploaded.attachmentId,
       );
@@ -3849,6 +3884,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         await _queueChannelAttachmentUpload(
           attachment: pending,
           silent: _sendSilent,
+          viewOnce: viewOnce,
+          hasSpoiler: hasSpoiler,
         );
         return;
       }

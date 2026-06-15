@@ -46,11 +46,19 @@ class ProxyConfig {
   /// proxy (it would leak the real IP).
   final bool blockCallsWhenActive;
 
+  /// When true, an active proxy that cannot be applied (e.g. a SOCKS/Tor host
+  /// that is not a literal IP) refuses every connection instead of silently
+  /// falling back to a direct route that would leak the real IP. The UI seeds
+  /// this true and keeps it on for Tor; it defaults on for stored configs that
+  /// predate the field.
+  final bool failClosed;
+
   const ProxyConfig({
     this.mode = ProxyMode.off,
     this.host = '127.0.0.1',
     this.port = 9050,
     this.blockCallsWhenActive = true,
+    this.failClosed = true,
   });
 
   bool get isActive => mode != ProxyMode.off;
@@ -67,11 +75,13 @@ class ProxyConfig {
     String? host,
     int? port,
     bool? blockCallsWhenActive,
+    bool? failClosed,
   }) => ProxyConfig(
     mode: mode ?? this.mode,
     host: host ?? this.host,
     port: port ?? this.port,
     blockCallsWhenActive: blockCallsWhenActive ?? this.blockCallsWhenActive,
+    failClosed: failClosed ?? this.failClosed,
   );
 
   Map<String, dynamic> toJson() => {
@@ -79,6 +89,7 @@ class ProxyConfig {
     'host': host,
     'port': port,
     'block_calls': blockCallsWhenActive,
+    'fail_closed': failClosed,
   };
 
   factory ProxyConfig.fromJson(Map<String, dynamic> json) => ProxyConfig(
@@ -86,6 +97,9 @@ class ProxyConfig {
     host: json['host'] as String? ?? '127.0.0.1',
     port: json['port'] as int? ?? 9050,
     blockCallsWhenActive: json['block_calls'] as bool? ?? true,
+    // Default on so configs stored before this field existed fail closed
+    // rather than fail open.
+    failClosed: json['fail_closed'] as bool? ?? true,
   );
 }
 
@@ -114,9 +128,7 @@ class ProxyService {
     final raw = await storage.getProxyConfig();
     if (raw != null && raw.isNotEmpty) {
       try {
-        _config = ProxyConfig.fromJson(
-          jsonDecode(raw) as Map<String, dynamic>,
-        );
+        _config = ProxyConfig.fromJson(jsonDecode(raw) as Map<String, dynamic>);
       } catch (_) {
         _config = const ProxyConfig(mode: ProxyMode.off);
       }
@@ -148,8 +160,12 @@ class ProxyService {
     return client;
   }
 
-  /// Opens a WebSocket through the active proxy. Returns null when no proxy is
-  /// active, so the caller falls back to the default [WebSocketChannel.connect].
+  /// Opens a WebSocket through the active proxy. Returns null ONLY when no proxy
+  /// is active, so the caller's `?? WebSocketChannel.connect` fallback opens a
+  /// direct socket exclusively in the off case. When the proxy is active but
+  /// misconfigured, [newHttpClient] returns a deny-all client and this throws —
+  /// the throw must propagate (never caught into a null) so the caller never
+  /// silently reconnects direct.
   Future<WebSocketChannel?> connectWebSocket(
     Uri url, {
     Iterable<String>? protocols,
@@ -165,24 +181,51 @@ class ProxyService {
   }
 
   /// Applies [config] to an existing [HttpClient].
+  ///
+  /// Fail-closed invariant: when a proxy is active but cannot be applied, this
+  /// installs a deny-all [connectionFactory] (it never returns a plain direct
+  /// client). It must never *throw* — `_ProxyHttpOverrides.createHttpClient`
+  /// runs for ALL app traffic, so a throw here would crash unrelated requests
+  /// at client construction. Only actual connection attempts may fail.
   static void configureClient(HttpClient client, ProxyConfig config) {
     switch (config.mode) {
       case ProxyMode.off:
         return;
       case ProxyMode.http:
+        // An HTTP PROXY directive fails closed on its own: if the proxy is
+        // unreachable the request errors, it does not fall back to direct.
         client.findProxy = (uri) =>
             'PROXY ${config.effectiveHost}:${config.effectivePort}';
       case ProxyMode.socks5:
       case ProxyMode.tor:
         final addr = InternetAddress.tryParse(config.effectiveHost);
         if (addr == null) {
-          // Proxy host must be a literal IP (Tor/local proxies always are).
+          // Active proxy whose host is not a literal IP: it cannot be applied.
+          // Refuse every connection instead of silently going direct — a
+          // direct fallback would leak the real IP, which is the entire thing
+          // the proxy exists to prevent. This is enforced regardless of
+          // [ProxyConfig.failClosed]; there is no toggle that re-opens the leak.
+          _installDenyAll(client);
           return;
         }
         SocksTCPClient.assignToHttpClient(client, [
           ProxySettings(addr, config.effectivePort),
         ]);
     }
+  }
+
+  /// Wires [client] to refuse every connection. Uses the same
+  /// `connectionFactory` hook the SOCKS client uses, so it must be the only
+  /// factory set on the client (do not also call `assignToHttpClient`). The
+  /// failure surfaces at connect time as a [SocketException] whose message
+  /// contains "traffic blocked" so the settings UI can recognise it.
+  static void _installDenyAll(HttpClient client) {
+    client.connectionFactory = (Uri uri, String? proxyHost, int? proxyPort) =>
+        Future<ConnectionTask<Socket>>.error(
+          const SocketException(
+            'Proxy unreachable - traffic blocked (fail-closed)',
+          ),
+        );
   }
 }
 
@@ -193,6 +236,9 @@ class _ProxyHttpOverrides extends HttpOverrides {
   @override
   HttpClient createHttpClient(SecurityContext? context) {
     final client = super.createHttpClient(context);
+    // configureClient installs a deny-all connectionFactory (never throws) when
+    // the proxy can't be applied, so construction here stays exception-free for
+    // ALL app traffic and only real connection attempts fail closed.
     ProxyService.configureClient(client, config);
     return client;
   }

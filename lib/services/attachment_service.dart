@@ -24,6 +24,10 @@ class PendingAttachment {
   final String fileKey;
   final String fileNonce;
 
+  /// Local file path of the just-picked media, kept only for in-app preview
+  /// (e.g. the story composer). Transient — never uploaded or serialized.
+  final String? previewPath;
+
   const PendingAttachment({
     required this.attachmentId,
     required this.fileName,
@@ -33,7 +37,21 @@ class PendingAttachment {
     this.durationMs,
     required this.fileKey,
     required this.fileNonce,
+    this.previewPath,
   });
+
+  /// Returns a copy carrying a local [previewPath] for preview rendering.
+  PendingAttachment withPreview(String? path) => PendingAttachment(
+    attachmentId: attachmentId,
+    fileName: fileName,
+    fileSize: fileSize,
+    mimeType: mimeType,
+    messageType: messageType,
+    durationMs: durationMs,
+    fileKey: fileKey,
+    fileNonce: fileNonce,
+    previewPath: path,
+  );
 
   /// Encode as the JSON that goes into the PGP-encrypted message payload.
   Map<String, dynamic> toPayloadJson({
@@ -263,7 +281,8 @@ class AttachmentService {
       const AttachmentUploadProgress(stage: AttachmentUploadStage.preparing),
     );
     final prepared = await prepareGalleryPhotoForUpload(imageFile);
-    return _processPrepared(prepared, onProgress: onProgress);
+    final pending = await _processPrepared(prepared, onProgress: onProgress);
+    return pending.withPreview(imageFile.path);
   }
 
   Future<EncryptedAttachmentUpload?> pickImageForOutbox({
@@ -334,7 +353,8 @@ class AttachmentService {
       const AttachmentUploadProgress(stage: AttachmentUploadStage.preparing),
     );
     final prepared = await prepareFileForUpload(videoFile);
-    return _processPrepared(prepared, onProgress: onProgress);
+    final pending = await _processPrepared(prepared, onProgress: onProgress);
+    return pending.withPreview(videoFile.path);
   }
 
   Future<EncryptedAttachmentUpload?> pickVideoForOutbox({
@@ -738,7 +758,16 @@ class AttachmentService {
   // bytes, zeros up to a padmé-style bucket (block = 2^(bitlen-3), ≥4KB) for a
   // bounded ~12.5% max overhead. Pre-padding attachments lack the magic and
   // pass through untouched.
-  static const _padMagic = <int>[0x4F, 0x43, 0x50, 0x41, 0x44, 0x31, 0x00, 0x00];
+  static const _padMagic = <int>[
+    0x4F,
+    0x43,
+    0x50,
+    0x41,
+    0x44,
+    0x31,
+    0x00,
+    0x00,
+  ];
   static const _padHeaderLength = 16; // magic + uint64 length
   static const _padMinBlock = 4096;
 

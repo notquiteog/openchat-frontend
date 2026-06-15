@@ -18,6 +18,8 @@ import '../../utils/local_conversation_preferences.dart';
 import '../../utils/smart_inbox_filter.dart';
 import '../../widgets/chat_search_results_view.dart';
 import '../../widgets/desktop.dart';
+import '../../widgets/message_action_sheet.dart';
+import '../../widgets/reaction_menu.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/conversation_notification_controls_sheet.dart';
 import '../../widgets/stories_strip.dart';
@@ -354,9 +356,10 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                             conversations[index],
                             initialMessageId: messageId,
                           ),
-                          onLongPress: () => _showConversationActions(
+                          onLongPress: (position) => _showConversationActions(
                             context,
                             conversations[index],
+                            anchor: position,
                           ),
                           onSecondaryTapUp: (position) =>
                               _showConversationActions(
@@ -530,33 +533,33 @@ class ConversationsScreenState extends State<ConversationsScreen> {
     );
     final scheme = Theme.of(context).colorScheme;
 
-    // One action list feeds both surfaces: the long-press bottom sheet on
-    // touch and the cursor-anchored context menu on desktop.
-    final actions = <GlassContextMenuItem<String>>[
-      GlassContextMenuItem(
+    // One iOS-26 morphing action menu for both touch (long-press) and desktop
+    // (right-click), anchored at the press/cursor point.
+    final actions = <MessageActionSheetItem<String>>[
+      MessageActionSheetItem(
         value: 'pin',
         icon: isPinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
         label: isPinned ? 'Unpin Chat' : 'Pin Chat',
       ),
-      GlassContextMenuItem(
+      MessageActionSheetItem(
         value: 'notifications',
         icon: _notificationPreferenceIcon(notificationPreference),
         label: 'Notifications: $notificationLabel',
       ),
-      GlassContextMenuItem(
+      MessageActionSheetItem(
         value: 'archive',
         icon: isArchived ? Icons.unarchive_outlined : Icons.archive_outlined,
         label: isArchived ? 'Unarchive Chat' : 'Archive Chat',
       ),
       if (inRealVault)
-        GlassContextMenuItem(
+        MessageActionSheetItem(
           value: 'hide',
           icon: isHidden
               ? Icons.visibility_outlined
               : Icons.visibility_off_outlined,
           label: isHidden ? 'Unhide Chat' : 'Hide Chat',
         ),
-      GlassContextMenuItem(
+      MessageActionSheetItem(
         value: 'delete',
         icon: Icons.delete_outline_rounded,
         label: _deleteActionLabel(context, conv),
@@ -565,38 +568,12 @@ class ConversationsScreenState extends State<ConversationsScreen> {
       ),
     ];
 
-    final String? selected;
-    if (anchor != null) {
-      selected = await showGlassContextMenu<String>(
-        context: context,
-        anchor: anchor,
-        items: actions,
-      );
-    } else {
-      selected = await GlassModalSheet.show<String>(
-        context: context,
-        initialState: SheetState.half,
-        halfSize: inRealVault ? 0.48 : 0.42,
-        enableInteractionGlow: true,
-        builder: (ctx) => SafeArea(
-          top: false,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 8),
-              for (final action in actions)
-                _SheetTile(
-                  icon: action.icon,
-                  label: action.label,
-                  color: action.color,
-                  onTap: () => Navigator.pop(ctx, action.value),
-                ),
-              const SizedBox(height: 12),
-            ],
-          ),
-        ),
-      );
-    }
+    final media = MediaQuery.sizeOf(context);
+    final selected = await showMessageContextMenu<String>(
+      context: context,
+      anchor: anchor ?? Offset(media.width / 2, media.height / 2),
+      actions: actions,
+    );
     if (selected == 'pin') {
       await settings.toggleConversationPinned(conv.id);
     } else if (selected == 'notifications' && context.mounted) {
@@ -2035,7 +2012,10 @@ class _ConversationTile extends StatefulWidget {
   final String currentUserID;
   final VoidCallback onTap;
   final ValueChanged<String>? onUnreadMentionTap;
-  final VoidCallback? onLongPress;
+
+  /// Long-press carries the global press position so the actions menu can morph
+  /// out of the touch point.
+  final ValueChanged<Offset>? onLongPress;
 
   /// Desktop right-click: receives the global cursor position so the handler
   /// can anchor a context menu at it.
@@ -2073,7 +2053,7 @@ class _ConversationTileState extends State<_ConversationTile> {
   String get currentUserID => widget.currentUserID;
   VoidCallback get onTap => widget.onTap;
   ValueChanged<String>? get onUnreadMentionTap => widget.onUnreadMentionTap;
-  VoidCallback? get onLongPress => widget.onLongPress;
+  ValueChanged<Offset>? get onLongPress => widget.onLongPress;
   bool get showDivider => widget.showDivider;
 
   @override
@@ -2113,6 +2093,9 @@ class _ConversationTileState extends State<_ConversationTile> {
             onSecondaryTapUp: widget.onSecondaryTapUp == null
                 ? null
                 : (details) => widget.onSecondaryTapUp!(details.globalPosition),
+            onLongPressStart: onLongPress == null
+                ? null
+                : (details) => onLongPress!(details.globalPosition),
             child: Container(
               margin: const EdgeInsets.symmetric(horizontal: 6),
               decoration: BoxDecoration(
@@ -2123,7 +2106,6 @@ class _ConversationTileState extends State<_ConversationTile> {
                 color: Colors.transparent,
                 child: InkWell(
                   onTap: onTap,
-                  onLongPress: onLongPress,
                   borderRadius: BorderRadius.circular(14),
                   splashColor: scheme.primary.withValues(alpha: 0.06),
                   highlightColor: scheme.primary.withValues(alpha: 0.03),
@@ -2463,19 +2445,17 @@ class _ChatSearchDelegate extends SearchDelegate<ChatSearchSelection?> {
 class _SheetTile extends StatelessWidget {
   final IconData icon;
   final String label;
-  final Color? color;
   final VoidCallback onTap;
 
   const _SheetTile({
     required this.icon,
     required this.label,
-    this.color,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) =>
-      GlassActionTile(icon: icon, label: label, color: color, onTap: onTap);
+      GlassActionTile(icon: icon, label: label, onTap: onTap);
 }
 
 /// Right pane of the desktop split view before a chat is chosen.

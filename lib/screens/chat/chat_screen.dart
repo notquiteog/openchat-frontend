@@ -54,6 +54,7 @@ import '../../widgets/day_separator.dart';
 import '../../widgets/desktop.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/location_map_preview.dart';
+import '../../widgets/attachment_variant_sheet.dart';
 import '../../widgets/message_action_sheet.dart';
 import '../../widgets/reaction_emoji_picker.dart';
 import '../../widgets/reaction_menu.dart';
@@ -63,29 +64,6 @@ import '../../widgets/scheduled_messages_sheet.dart';
 import '../../widgets/sticker_picker.dart';
 import '../../widgets/voice_note_recorder.dart';
 import '../profile/user_profile_screen.dart';
-
-/// (label, choice) pairs offered when an attachment tile is long-pressed.
-/// The choice strings feed the same dispatch as the directly-tapped tiles.
-/// Top-level so the mapping is unit-testable without pumping the chat screen.
-(String, List<(String, String)>) attachmentVariantActions(String variants) =>
-    switch (variants) {
-      'photo_variants' => (
-        'Send photo',
-        [
-          ('View-once photo', 'view_once_image'),
-          ('Spoiler photo', 'spoiler_image'),
-        ],
-      ),
-      'video_variants' => (
-        'Send video',
-        [
-          ('View-once video', 'view_once_video'),
-          ('Spoiler video', 'spoiler_video'),
-        ],
-      ),
-      'file_variants' => ('Send file', [('View-once file', 'view_once_file')]),
-      _ => ('', <(String, String)>[]),
-    };
 
 class ChatScreen extends StatefulWidget {
   final Conversation conversation;
@@ -1099,7 +1077,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // Long-pressed tiles resolve to a concrete choice via a small variant
     // sheet (view-once / spoiler / live) before the normal dispatch below.
     if (choice.endsWith('_variants')) {
-      choice = await _resolveAttachmentVariant(choice);
+      choice = await showAttachmentVariantSheet(context, choice);
       if (choice == null || !mounted) return;
     }
     if (choice == 'poll') {
@@ -1276,35 +1254,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Maps a long-pressed attachment tile to a concrete send variant via a
   /// small glass action sheet. Returns null when dismissed.
-  Future<String?> _resolveAttachmentVariant(String variants) async {
-    if (variants == 'location_variants') {
-      // Only one variant — no sheet needed.
-      return 'location_live';
-    }
-    final (title, actions) = attachmentVariantActions(variants);
-    if (actions.isEmpty) return null;
-    String? picked;
-    await showGlassActionSheet<void>(
-      context: context,
-      title: title,
-      actions: [
-        for (final (label, value) in actions)
-          GlassActionSheetAction(
-            label: label,
-            icon: Icon(_attachmentVariantIcon(value)),
-            onPressed: () => picked = value,
-          ),
-      ],
-    );
-    return picked;
-  }
-
-  IconData _attachmentVariantIcon(String value) {
-    if (value.startsWith('view_once_')) return Icons.timer_outlined;
-    if (value.startsWith('spoiler_')) return Icons.visibility_off_outlined;
-    return Icons.attach_file_rounded;
-  }
-
   /// Unified photo send: one multi-select picker; a single selection sends
   /// solo, several send as an album.
   Future<void> _sendPhotos() async {

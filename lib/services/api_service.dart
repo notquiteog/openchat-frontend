@@ -1684,14 +1684,21 @@ class ApiService {
     return ((resp['data'] as List?) ?? const []).cast<Map<String, dynamic>>();
   }
 
-  Future<void> sendBotCallback({
+  /// Forwards an inline-button tap to the bot. Returns the server-minted
+  /// callback_query_id so the caller can correlate the bot's later
+  /// answerCallbackQuery (delivered as a WS callbackAnswer), or null if the
+  /// response omits it.
+  Future<String?> sendBotCallback({
     required String convID,
     required String msgID,
     required String data,
   }) async {
-    await _post('/api/v1/conversations/$convID/messages/$msgID/callback', {
-      'data': data,
-    });
+    final resp = await _post(
+      '/api/v1/conversations/$convID/messages/$msgID/callback',
+      {'data': data},
+    );
+    return (resp['data'] as Map<String, dynamic>?)?['callback_query_id']
+        as String?;
   }
 
   Future<Conversation> getSavedMessages() async {

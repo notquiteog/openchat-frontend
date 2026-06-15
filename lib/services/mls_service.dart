@@ -405,6 +405,33 @@ class MlsService {
     );
   }
 
+  /// Re-sign the existing MLS device public key with the CURRENT PGP private
+  /// key. Call this right after a PGP key rotation: the server validates the
+  /// stored signer signature against the account's current public key on MLS
+  /// setup and every state-bearing commit, so a signature made by the old key
+  /// hard-blocks new MLS conversations until it is refreshed. The signed
+  /// payload (userId + base64url(deviceKey)) is invariant across rotation, so
+  /// re-signing the same stored key is a valid binding.
+  ///
+  /// No-ops when no signer exists yet (the first MLS use will create + sign one
+  /// with the current key) and when the private key is unavailable (so a locked
+  /// key never clobbers a good signature with an empty one).
+  Future<void> resignDeviceKeyForCurrentUser() async {
+    final userID = await _storage.getUserID() ?? '';
+    if (userID.isEmpty) return;
+    final stored = await _storage.getMlsSigner(userID);
+    if (stored == null) return;
+    final publicKey = Uint8List.fromList(base64Decode(stored.publicKey));
+    final signature = await _signMlsPublicKey(userID, publicKey);
+    if (signature.isEmpty) return;
+    await _storage.saveMlsSigner(
+      userID: userID,
+      signerBytes: stored.signerBytes,
+      publicKey: stored.publicKey,
+      signature: signature,
+    );
+  }
+
   Future<bool> _isGroupActive(MlsEngine engine, List<int> groupId) async {
     try {
       return await engine.groupIsActive(groupIdBytes: groupId);
