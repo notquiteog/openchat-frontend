@@ -50,7 +50,6 @@ import '../../widgets/color_choices.dart';
 import '../../widgets/custom_emoji_picker.dart';
 import '../../widgets/custom_emoji_text_controller.dart';
 import '../../widgets/disappearing_messages_picker.dart';
-import '../../widgets/game_launcher.dart';
 import '../../widgets/day_separator.dart';
 import '../../widgets/desktop.dart';
 import '../../widgets/glass.dart';
@@ -1053,11 +1052,6 @@ class _ChatScreenState extends State<ChatScreen> {
               onTap: () => Navigator.pop(sheetCtx, 'poll'),
             ),
             _AttachTile(
-              icon: Icons.casino_outlined,
-              label: 'Dice / random',
-              onTap: () => Navigator.pop(sheetCtx, 'dice'),
-            ),
-            _AttachTile(
               icon: Icons.event_available_outlined,
               label: 'Meeting',
               onTap: () => Navigator.pop(sheetCtx, 'meeting'),
@@ -1092,10 +1086,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     if (choice == 'poll') {
       await _showCreatePollDialog();
-      return;
-    }
-    if (choice == 'dice') {
-      await _showGameLauncher();
       return;
     }
     if (choice == 'meeting') {
@@ -1337,12 +1327,6 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     }
   }
-
-  // Delegates to the shared launcher (lib/widgets/game_launcher.dart) so chats
-  // and channels offer one provably-fair game-creation flow. conv.isChannel
-  // routes the round to the right API surface.
-  Future<void> _showGameLauncher() =>
-      showGameLauncher(context, convID: conv.id, isChannel: conv.isChannel);
 
   Future<void> _shareContact() async {
     final me = context.read<AuthProvider>().currentUser;

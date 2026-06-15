@@ -39,7 +39,6 @@ import '../../widgets/color_choices.dart';
 import '../../widgets/custom_emoji_picker.dart';
 import '../../widgets/custom_emoji_text_controller.dart';
 import '../../widgets/disappearing_messages_picker.dart';
-import '../../widgets/game_launcher.dart';
 import '../../widgets/day_separator.dart';
 import '../../widgets/desktop.dart';
 import '../../widgets/glass.dart';
@@ -3723,11 +3722,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               onTap: () => Navigator.pop(context, 'poll'),
             ),
             _ChanTile(
-              icon: Icons.casino_outlined,
-              label: 'Game',
-              onTap: () => Navigator.pop(context, 'game'),
-            ),
-            _ChanTile(
               icon: Icons.mic_none_outlined,
               label: 'Voice note',
               onTap: () => Navigator.pop(context, 'voice'),
@@ -3749,10 +3743,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     // Non-attachment actions handled separately.
     if (choice == 'poll') {
       await _showCreatePollDialog();
-      return;
-    }
-    if (choice == 'game') {
-      await showGameLauncher(context, convID: channel.id, isChannel: true);
       return;
     }
     if (choice == 'location_once') {

@@ -726,22 +726,35 @@ class CallService {
         unawaited(_handleCallE2EEKeyRequest(event.data));
 
       case WsEventType.callCancel:
-        // This user answered or declined on ANOTHER device — stop ringing
-        // here silently (it was handled, so it is not a missed call).
+        // A call_cancel means "this call was handled on one of your devices".
+        // The server distinguishes two cases by `reason`:
+        //   - 'lost_race' — sent point-to-point to the LOSING connection only:
+        //     this device also answered but a DIFFERENT session of ours won
+        //     first-answer-wins. Tear our half-built call down silently.
+        //   - 'handled' (or absent, from older servers) — fanned out to ALL of
+        //     our devices, INCLUDING the one that just answered, so the others
+        //     stop ringing. It must only dismiss a still-ringing pending offer;
+        //     it must NEVER tear down a call THIS device answered, or the
+        //     winning device would kill its own call the moment it picks up.
         final cancelId = event.data['call_id']?.toString() ?? '';
+        final cancelReason = event.data['reason']?.toString() ?? '';
         final acceptedHere = _session;
-        // First-answer-wins: this device ALSO accepted, but another device
-        // won the race and the server cancelled us. Tear the connecting
-        // session down silently — signaling call_hangup here would carry the
-        // ACTIVE call id and destroy the caller's live call with the winner.
-        if (acceptedHere != null &&
+        // First-answer-wins loser: this device ALSO accepted, but another
+        // session of ours won and the server cancelled THIS connection
+        // specifically. Tear the connecting session down silently — signaling
+        // call_hangup here would carry the ACTIVE call id and destroy the
+        // caller's live call with the winner. Gated on the explicit
+        // 'lost_race' reason so the winner's own stop-ringing broadcast (which
+        // also reaches this device) can never trigger a self-teardown.
+        if (cancelReason == 'lost_race' &&
+            acceptedHere != null &&
             acceptedHere.isIncoming &&
             !acceptedHere.wasConnected &&
             cancelId.isNotEmpty &&
             cancelId == acceptedHere.callId) {
           debugPrint(
-            'CallService: call ${acceptedHere.callId} answered on another '
-            'device -> silent teardown',
+            'CallService: call ${acceptedHere.callId} lost first-answer race '
+            '-> silent teardown',
           );
           _cancelledCallController.add(acceptedHere);
           _cleanup(emitEndedEvent: false);

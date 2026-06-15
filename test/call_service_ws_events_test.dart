@@ -426,10 +426,11 @@ void main() {
     });
 
     test(
-      'cancel after this device also accepted tears down silently',
+      'a lost_race cancel after this device also accepted tears down silently',
       () async {
         // Two devices answered; the other one won first-answer-wins and the
-        // server cancelled us while we were still connecting.
+        // server cancelled THIS connection specifically (reason=lost_race)
+        // while we were still connecting.
         service.debugSession = _session(
           callId: 'c-won-elsewhere',
           isIncoming: true,
@@ -442,7 +443,7 @@ void main() {
         service.debugHandleWsEvent(
           WsEvent(
             type: WsEventType.callCancel,
-            data: {'call_id': 'c-won-elsewhere'},
+            data: {'call_id': 'c-won-elsewhere', 'reason': 'lost_race'},
           ),
         );
         await Future<void>.delayed(Duration.zero);
@@ -451,6 +452,49 @@ void main() {
         expect(cancelled.map((c) => c.callId), ['c-won-elsewhere']);
         // Critically: no call_hangup signal — it would carry the ACTIVE call
         // id and tear down the caller's live call with the winning device.
+        expect(ws.hangups, isEmpty);
+        await sub.cancel();
+      },
+    );
+
+    test(
+      'a handled stop-ringing cancel never tears down a call WE answered',
+      () async {
+        // Regression: the winning device receives its OWN stop-ringing
+        // broadcast (reason=handled, fanned out to all of the user's devices)
+        // a few ms after sending its answer, while still connecting. It must
+        // keep the call it just answered — not mistake the broadcast for a
+        // lost-race teardown and kill itself (which left the caller stuck on
+        // "connecting" forever).
+        service.debugSession = _session(
+          callId: 'c-we-won',
+          isIncoming: true,
+          state: CallState.connecting,
+        );
+
+        final cancelled = <CallSession>[];
+        final sub = service.cancelledCalls.listen(cancelled.add);
+
+        // The benign stop-ringing broadcast...
+        service.debugHandleWsEvent(
+          WsEvent(
+            type: WsEventType.callCancel,
+            data: {'call_id': 'c-we-won', 'reason': 'handled'},
+          ),
+        );
+        // ...and a legacy bare cancel from an older server (no reason) must be
+        // treated just as conservatively.
+        service.debugHandleWsEvent(
+          WsEvent(
+            type: WsEventType.callCancel,
+            data: {'call_id': 'c-we-won'},
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        expect(service.currentSession?.callId, 'c-we-won');
+        expect(service.currentSession?.state, CallState.connecting);
+        expect(cancelled, isEmpty);
         expect(ws.hangups, isEmpty);
         await sub.cancel();
       },
