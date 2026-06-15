@@ -160,6 +160,18 @@ class EncryptedBackupService {
     );
   }
 
+  /// The local timestamp of the most recent server backup, or null when none
+  /// exists. Prefers `updated_at` (last confirmed upload) over `created_at` so
+  /// re-uploads reset the age. Centralizes the null/404 handling that
+  /// [ApiService.getLatestBackup] already does.
+  Future<DateTime?> latestBackupTimestamp({required ApiService api}) async {
+    final meta = await api.getLatestBackup();
+    if (meta == null) return null;
+    final raw = (meta['updated_at'] ?? meta['created_at']) as String?;
+    if (raw == null || raw.isEmpty) return null;
+    return DateTime.tryParse(raw)?.toLocal();
+  }
+
   Future<SecretKey> _deriveKey(
     String passphrase,
     List<int> salt,

@@ -78,7 +78,7 @@ class OpenChatApp extends StatelessWidget {
         seed: seed,
         reduceTransparency: reduceTransparency,
       ),
-      themeMode: ThemeMode.system,
+      themeMode: settings.themeMode,
       home: const _AppRoot(),
       // Float call + live-location bars above every route so they persist while
       // navigating. The live connection banner stays topmost.

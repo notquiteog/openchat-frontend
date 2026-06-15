@@ -15,8 +15,10 @@ class _FakeBackupStorage extends SecureStorageService {
   Map<String, String> secrets;
   Map<String, Object?> privateState;
 
-  _FakeBackupStorage({Map<String, String>? secrets, this.privateState = const {}})
-    : secrets = secrets ?? {};
+  _FakeBackupStorage({
+    Map<String, String>? secrets,
+    this.privateState = const {},
+  }) : secrets = secrets ?? {};
 
   @override
   Future<Map<String, String>> exportRecoverySecrets() async => secrets;
@@ -94,41 +96,48 @@ class _FakeBackupApi extends ApiService {
 void main() {
   const passphrase = 'a-very-long-test-passphrase';
 
-  test('upload stores only ciphertext and restore recovers the secrets',
-      () async {
-    final source = _FakeBackupStorage(
-      secrets: {'private_key': 'SECRET-PGP-KEY-MATERIAL'},
-      privateState: {'chat_folders': ['work']},
-    );
-    final api = _FakeBackupApi();
+  test(
+    'upload stores only ciphertext and restore recovers the secrets',
+    () async {
+      final source = _FakeBackupStorage(
+        secrets: {'private_key': 'SECRET-PGP-KEY-MATERIAL'},
+        privateState: {
+          'chat_folders': ['work'],
+        },
+      );
+      final api = _FakeBackupApi();
 
-    await EncryptedBackupService(
-      storage: source,
-      privateState: _FakePrivateState(source),
-    ).uploadToServer(api: api, passphrase: passphrase);
+      await EncryptedBackupService(
+        storage: source,
+        privateState: _FakePrivateState(source),
+      ).uploadToServer(api: api, passphrase: passphrase);
 
-    expect(api.confirmedKey, isNotNull);
-    expect(api.blobs, hasLength(1));
-    final stored = utf8.decode(api.blobs.values.single);
-    // Zero-knowledge: the secret never appears in what the server holds.
-    expect(stored.contains('SECRET-PGP-KEY-MATERIAL'), isFalse);
-    expect(jsonDecode(stored), containsPair('openchat_encrypted_recovery', 1));
-    // The recorded checksum matches the stored bytes.
-    expect(
-      crypto.sha256.convert(api.blobs.values.single).toString(),
-      api.latestSha,
-    );
+      expect(api.confirmedKey, isNotNull);
+      expect(api.blobs, hasLength(1));
+      final stored = utf8.decode(api.blobs.values.single);
+      // Zero-knowledge: the secret never appears in what the server holds.
+      expect(stored.contains('SECRET-PGP-KEY-MATERIAL'), isFalse);
+      expect(
+        jsonDecode(stored),
+        containsPair('openchat_encrypted_recovery', 1),
+      );
+      // The recorded checksum matches the stored bytes.
+      expect(
+        crypto.sha256.convert(api.blobs.values.single).toString(),
+        api.latestSha,
+      );
 
-    // Fresh device restores from the server blob.
-    final fresh = _FakeBackupStorage();
-    await EncryptedBackupService(
-      storage: fresh,
-      privateState: _FakePrivateState(fresh),
-    ).restoreFromServer(api: api, passphrase: passphrase);
+      // Fresh device restores from the server blob.
+      final fresh = _FakeBackupStorage();
+      await EncryptedBackupService(
+        storage: fresh,
+        privateState: _FakePrivateState(fresh),
+      ).restoreFromServer(api: api, passphrase: passphrase);
 
-    expect(fresh.secrets['private_key'], 'SECRET-PGP-KEY-MATERIAL');
-    expect(fresh.privateState['chat_folders'], ['work']);
-  });
+      expect(fresh.secrets['private_key'], 'SECRET-PGP-KEY-MATERIAL');
+      expect(fresh.privateState['chat_folders'], ['work']);
+    },
+  );
 
   test('restore fails cleanly when no server backup exists', () async {
     final fresh = _FakeBackupStorage();
@@ -165,4 +174,51 @@ void main() {
       throwsStateError,
     );
   });
+
+  group('latestBackupTimestamp (#18)', () {
+    EncryptedBackupService service(_FakeBackupStorage storage) =>
+        EncryptedBackupService(
+          storage: storage,
+          privateState: _FakePrivateState(storage),
+        );
+
+    test('returns null when no backup is stored', () async {
+      final api = _MetaOnlyApi()..meta = null;
+      expect(
+        await service(_FakeBackupStorage()).latestBackupTimestamp(api: api),
+        isNull,
+      );
+    });
+
+    test('prefers updated_at over created_at', () async {
+      final api = _MetaOnlyApi()
+        ..meta = {
+          'created_at': '2026-01-01T00:00:00Z',
+          'updated_at': '2026-06-10T08:00:00Z',
+        };
+      final at = await service(
+        _FakeBackupStorage(),
+      ).latestBackupTimestamp(api: api);
+      expect(at!.toUtc(), DateTime.parse('2026-06-10T08:00:00Z').toUtc());
+    });
+
+    test('falls back to created_at when updated_at is absent', () async {
+      final api = _MetaOnlyApi()..meta = {'created_at': '2026-03-03T03:03:03Z'};
+      final at = await service(
+        _FakeBackupStorage(),
+      ).latestBackupTimestamp(api: api);
+      expect(at!.toUtc(), DateTime.parse('2026-03-03T03:03:03Z').toUtc());
+    });
+  });
+}
+
+/// Returns only the metadata map for latestBackupTimestamp, without the
+/// blob-derived shape of [_FakeBackupApi].
+class _MetaOnlyApi extends ApiService {
+  _MetaOnlyApi() : super(SecureStorageService());
+
+  Map<String, dynamic>? meta;
+
+  @override
+  Future<Map<String, dynamic>?> getLatestBackup() async => meta;
 }

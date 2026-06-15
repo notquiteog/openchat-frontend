@@ -18,11 +18,13 @@ import '../../providers/key_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/app_lock_state.dart';
+import '../../services/encrypted_backup_service.dart';
 import '../../services/mls_service.dart';
 import '../../services/secure_storage_service.dart';
 import '../../services/security_service.dart';
 import '../../services/social_recovery_service.dart';
 import '../../utils/account_security_duration.dart';
+import '../../utils/backup_staleness.dart';
 import '../../utils/device_label.dart';
 import '../../utils/identity_qr.dart';
 import '../../utils/trust_center_summary.dart';
@@ -58,6 +60,11 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
   // rejects it — so the row must reflect real verification, not mere presence.
   bool _mlsSignerVerified = false;
   Map<String, dynamic>? _ktLogAlarm;
+  // Server-backup freshness, fetched best-effort during _load. _backupLoaded is
+  // true only once we have a definitive answer (incl. "none"); a fetch failure
+  // leaves it false so a transient error never nags the trust summary.
+  DateTime? _lastBackupAt;
+  bool _backupLoaded = false;
   String? _error;
 
   @override
@@ -90,6 +97,18 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
       final screenSecurity = await storage.getScreenSecurity();
       final currentSessionId = await storage.getSessionId();
       final ktLogAlarm = await storage.getKtLogAlarm();
+      // Best-effort (mirrors the keyEvents block below): a backup-metadata
+      // failure must never break the whole Trust Center load.
+      DateTime? lastBackupAt;
+      var backupLoaded = false;
+      try {
+        lastBackupAt = await EncryptedBackupService().latestBackupTimestamp(
+          api: api,
+        );
+        backupLoaded = true;
+      } catch (_) {
+        backupLoaded = false;
+      }
       var keyEvents = <KeyTransparencyEvent>[];
       MlsSignerStorage? mlsSigner;
       var mlsSignerVerified = false;
@@ -132,6 +151,8 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
         _keyPins = keyPins;
         _keyEvents = keyEvents;
         _mlsSignerVerified = mlsSignerVerified;
+        _lastBackupAt = lastBackupAt;
+        _backupLoaded = backupLoaded;
         _ktLogAlarm = ktLogAlarm;
         _loading = false;
       });
@@ -624,6 +645,36 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
     // PGP key (computed in _load); a stale post-rotation signature is non-empty
     // but fails verification, so it correctly shows 'Prepare'.
     final mlsSignerSigned = _mlsSignerVerified;
+    final backupStatus = evaluateBackupFreshness(
+      lastBackupAt: _lastBackupAt,
+      now: DateTime.now(),
+    );
+    // Only nag about a missing backup once we definitively know there is none;
+    // a not-yet-loaded or failed fetch counts as "has backup" so it stays quiet.
+    final hasServerBackup =
+        !_backupLoaded || backupStatus.freshness != BackupFreshness.none;
+    final (
+      Color backupColor,
+      String backupPillLabel,
+      IconData backupIcon,
+    ) = switch (backupStatus.freshness) {
+      BackupFreshness.fresh => (
+        Colors.green,
+        'Fresh',
+        Icons.cloud_done_outlined,
+      ),
+      BackupFreshness.aging => (
+        Colors.orange,
+        'Aging',
+        Icons.cloud_done_outlined,
+      ),
+      BackupFreshness.stale => (
+        scheme.error,
+        'Stale',
+        Icons.cloud_off_outlined,
+      ),
+      BackupFreshness.none => (Colors.orange, 'None', Icons.cloud_off_outlined),
+    };
     final summary = evaluateTrustCenter(
       hasLocalKey: keys.hasKey,
       accountKeyExpired: user?.isKeyExpired ?? false,
@@ -637,6 +688,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
       pushNotificationsEnabled: settings.pushNotificationsEnabled,
       unencryptedConversations: unencrypted.length,
       keyTransparencyWarnings: keyWarnings.length,
+      hasServerBackup: hasServerBackup,
     );
     final timelineItems = _trustTimelineItems(
       keyEvents: _keyEvents,
@@ -901,6 +953,46 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                         ),
                       ),
                   ],
+                  const SizedBox(height: 14),
+                  const GlassDivider(),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: backupColor.withValues(alpha: 0.12),
+                        ),
+                        child: Icon(backupIcon, size: 18, color: backupColor),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Server backup',
+                              style: TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              _backupLoaded
+                                  ? backupStatusLabel(backupStatus)
+                                  : 'Checking backup status',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: scheme.onSurface.withValues(alpha: 0.6),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      _StatusPill(label: backupPillLabel, color: backupColor),
+                    ],
+                  ),
                 ],
               ),
             ),

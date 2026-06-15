@@ -29,6 +29,7 @@ TrustCenterSummary evaluateTrustCenter({
   required bool pushNotificationsEnabled,
   required int unencryptedConversations,
   required int keyTransparencyWarnings,
+  bool hasServerBackup = true,
 }) {
   var attention = 0;
   var review = 0;
@@ -44,6 +45,9 @@ TrustCenterSummary evaluateTrustCenter({
   if (biometricAvailable && !biometricKeyExportEnabled) review++;
   if (allowGroupAdd) review++;
   if (pushNotificationsEnabled && notificationSensitiveContent) review++;
+  // A missing server backup is a hardening gap, not a cryptographic emergency —
+  // keep it in the non-nagging 'review' tier, never 'attention'.
+  if (!hasServerBackup) review++;
 
   if (attention > 0) {
     return TrustCenterSummary(

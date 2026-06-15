@@ -26,6 +26,7 @@ import '../../services/notification_service.dart';
 import '../../services/push_notification_service.dart';
 import '../../services/secure_storage_service.dart';
 import '../../utils/account_security_duration.dart';
+import '../../utils/backup_staleness.dart';
 import '../../utils/device_label.dart';
 import '../../widgets/glass.dart';
 import '../bots/bot_management_screen.dart';
@@ -59,6 +60,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _duressPinConfigured = false;
   String _duressAction = 'decoy';
   int _deadmanDays = 0;
+  DateTime? _lastBackupAt;
   late final Future<PackageInfo> _packageInfoFuture;
 
   @override
@@ -66,6 +68,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _packageInfoFuture = PackageInfo.fromPlatform();
     _loadSecurityPrefs();
+    _loadBackupMeta();
+  }
+
+  Future<void> _loadBackupMeta() async {
+    try {
+      final at = await EncryptedBackupService(
+        storage: context.read<SecureStorageService>(),
+      ).latestBackupTimestamp(api: context.read<ApiService>());
+      if (mounted) setState(() => _lastBackupAt = at);
+    } catch (_) {
+      // Best-effort: a metadata failure just leaves the generic subtitle.
+    }
   }
 
   Future<void> _loadSecurityPrefs() async {
@@ -686,11 +700,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             .toLowerCase()
                             .replaceFirst(RegExp(r'^@+'), '');
                         if (username.isEmpty) {
-                          showAppToast(
-                            ctx,
-                            'Username required',
-                            isError: true,
-                          );
+                          showAppToast(ctx, 'Username required', isError: true);
                           return;
                         }
                         if (!RegExp(r'^[a-z0-9_]{3,32}$').hasMatch(username)) {
@@ -1571,6 +1581,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         api: context.read<ApiService>(),
         passphrase: passphrase,
       );
+      // Optimistic: reflect the just-now upload without a metadata round-trip.
+      if (mounted) setState(() => _lastBackupAt = DateTime.now());
       messenger.showSnackBar(
         const SnackBar(content: Text('Encrypted backup stored on server')),
       );
@@ -1632,6 +1644,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (confirmed != true || !mounted) return;
     try {
       await context.read<ApiService>().deleteServerBackup();
+      if (mounted) setState(() => _lastBackupAt = null);
       messenger.showSnackBar(
         const SnackBar(content: Text('Server backup deleted')),
       );
@@ -2122,9 +2135,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       subtitle: 'Exchange queued messages over Bluetooth',
                       onTap: () => Navigator.push(
                         context,
-                        MaterialPageRoute(
-                          builder: (_) => const NearbyScreen(),
-                        ),
+                        MaterialPageRoute(builder: (_) => const NearbyScreen()),
                       ),
                     ),
                   ],
@@ -2162,9 +2173,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _GlassTile(
                   icon: Icons.cloud_upload_outlined,
                   title: 'Store encrypted backup on server',
-                  subtitle:
-                      'Zero-knowledge: only the passphrase-encrypted blob '
-                      'leaves this device',
+                  subtitle: _lastBackupAt != null
+                      ? backupStatusLabel(
+                          evaluateBackupFreshness(
+                            lastBackupAt: _lastBackupAt,
+                            now: DateTime.now(),
+                          ),
+                        )
+                      : 'Zero-knowledge: only the passphrase-encrypted blob '
+                            'leaves this device',
                   onTap: _uploadBackupToServer,
                 ),
                 _GlassDivider(),
@@ -2185,8 +2202,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _GlassTile(
                   icon: Icons.diversity_3_outlined,
                   title: 'Recover with guardians',
-                  subtitle:
-                      'Rebuild your keys from shares your guardians hold',
+                  subtitle: 'Rebuild your keys from shares your guardians hold',
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(
@@ -2406,8 +2422,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 // Hidden on iOS: the OS kills persistent background sockets,
                 // so BackgroundWsService.start() always refuses there and the
                 // toggle could never turn on — push is the iOS channel.
-                if (kIsWeb ||
-                    defaultTargetPlatform != TargetPlatform.iOS) ...[
+                if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) ...[
                   _GlassSwitchTile(
                     icon: Icons.wifi_tethering,
                     title: 'Background WebSocket',
@@ -2501,6 +2516,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             padding: EdgeInsets.zero,
             child: Column(
               children: [
+                _ThemeModeTile(settings: settings),
+                _GlassDivider(),
                 _GlassTile(
                   icon: Icons.palette_outlined,
                   title: 'Accent color',
@@ -2804,6 +2821,55 @@ class _SettingsScreenState extends State<SettingsScreen> {
 }
 
 /// Message text-size control with a live preview bubble (Batch 5.1).
+class _ThemeModeTile extends StatelessWidget {
+  final SettingsProvider settings;
+  const _ThemeModeTile({required this.settings});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // Exhaustive switch (no default) so a future ThemeMode value is a compile
+    // error rather than an out-of-range segment index.
+    final selectedIndex = switch (settings.themeMode) {
+      ThemeMode.light => 0,
+      ThemeMode.dark => 1,
+      ThemeMode.system => 2,
+    };
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.brightness_6_outlined,
+                color: scheme.primary,
+                size: 22,
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'Theme',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          GlassSegmentedControl(
+            segments: const ['Light', 'Dark', 'System'],
+            selectedIndex: selectedIndex,
+            onSegmentSelected: (i) => settings.setThemeMode(
+              const [ThemeMode.light, ThemeMode.dark, ThemeMode.system][i],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _MessageFontSizeTile extends StatelessWidget {
   final SettingsProvider settings;
   const _MessageFontSizeTile({required this.settings});

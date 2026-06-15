@@ -181,6 +181,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kAutoDlMaxMb = 'auto_download_max_mb';
   static const _kReduceTransparency = 'reduce_transparency';
   static const _kSmartInboxFilter = 'smart_inbox_filter';
+  static const _kThemeMode = 'theme_mode';
   static const _kDesktopSidebarWidth = 'desktop_sidebar_width';
   static const _kPinnedConversations = 'pinned_conversations';
   static const _kArchivedConversations = 'archived_conversations';
@@ -224,6 +225,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _loaded = false;
 
   int _seedColor = defaultSeed;
+  ThemeMode _themeMode = ThemeMode.system;
   bool _channelsOwnTab = false;
   bool _botsOwnTab = false;
   bool _pushEnabled = false;
@@ -257,6 +259,10 @@ class SettingsProvider extends ChangeNotifier {
 
   int get seedColorValue => _seedColor;
   Color get seedColor => Color(_seedColor);
+
+  /// Light / Dark / System theme preference (device-local, persists across
+  /// logout like [seedColor]).
+  ThemeMode get themeMode => _themeMode;
   bool get channelsOwnTab => _channelsOwnTab;
   bool get botsOwnTab => _botsOwnTab;
   SmartInboxFilter get smartInboxFilter => _smartInboxFilter;
@@ -389,6 +395,11 @@ class SettingsProvider extends ChangeNotifier {
     _prefs = await SharedPreferences.getInstance();
     final privateState = await _privateState.readState();
     _seedColor = _prefs!.getInt(_kSeed) ?? defaultSeed;
+    // Unknown/missing → system, so existing installs keep today's behavior.
+    _themeMode = ThemeMode.values.firstWhere(
+      (m) => m.name == _prefs!.getString(_kThemeMode),
+      orElse: () => ThemeMode.system,
+    );
     _channelsOwnTab = _prefs!.getBool(_kChannelsTab) ?? false;
     _botsOwnTab = _prefs!.getBool(_kBotsTab) ?? false;
     final notificationSettings = decodePrivateNotificationSettings(
@@ -556,6 +567,12 @@ class SettingsProvider extends ChangeNotifier {
   }
 
   Future<void> resetSeedColor() => setSeedColor(const Color(defaultSeed));
+
+  Future<void> setThemeMode(ThemeMode mode) async {
+    _themeMode = mode;
+    notifyListeners();
+    await _prefs?.setString(_kThemeMode, mode.name);
+  }
 
   Future<void> setMessageFontScale(double value) async {
     _messageFontScale = value.clamp(minMessageFontScale, maxMessageFontScale);
