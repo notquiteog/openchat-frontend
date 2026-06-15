@@ -239,6 +239,42 @@ void main() {
       },
     );
 
+    test('background websocket reconnect delay grows, jitters, and caps', () {
+      expect(
+        BackgroundWsService.backgroundReconnectDelay(0, 0),
+        const Duration(seconds: 1),
+      );
+      expect(
+        BackgroundWsService.backgroundReconnectDelay(1, 0),
+        const Duration(seconds: 2),
+      );
+      expect(
+        BackgroundWsService.backgroundReconnectDelay(2, 0),
+        const Duration(seconds: 4),
+      );
+      expect(
+        BackgroundWsService.backgroundReconnectDelay(3, 0),
+        const Duration(seconds: 8),
+      );
+      expect(
+        BackgroundWsService.backgroundReconnectDelay(10, 0),
+        const Duration(seconds: 8),
+      );
+
+      expect(
+        BackgroundWsService.backgroundReconnectDelay(3, 500),
+        const Duration(milliseconds: 8500),
+      );
+      expect(
+        BackgroundWsService.backgroundReconnectDelay(3, 2000),
+        const Duration(milliseconds: 8999),
+      );
+      expect(
+        BackgroundWsService.backgroundReconnectDelay(3, -20),
+        const Duration(seconds: 8),
+      );
+    });
+
     test('maps new_message into a message notification intent', () {
       final intent = BackgroundWsService.notificationIntentFromRawLine(
         '{"type":"new_message","data":{"conversation_id":"conv-1","sender_username":"alice"}}',
@@ -576,24 +612,26 @@ void main() {
       expect(opened, ['conv-2']);
     });
 
-    test('queues cold-start taps until the app shell wires the handler',
-        () async {
-      // Launch-details tap arrives before initState wiring — must not be lost.
-      NotificationService.debugHandleNotificationResponse(
-        const NotificationResponse(
-          id: 98,
-          payload: '{"type":"message","conversation_id":"conv-3"}',
-          notificationResponseType:
-              NotificationResponseType.selectedNotification,
-        ),
-      );
+    test(
+      'queues cold-start taps until the app shell wires the handler',
+      () async {
+        // Launch-details tap arrives before initState wiring — must not be lost.
+        NotificationService.debugHandleNotificationResponse(
+          const NotificationResponse(
+            id: 98,
+            payload: '{"type":"message","conversation_id":"conv-3"}',
+            notificationResponseType:
+                NotificationResponseType.selectedNotification,
+          ),
+        );
 
-      final opened = <String>[];
-      NotificationService.setMessageOpenedHandler(opened.add);
-      await Future<void>.delayed(Duration.zero);
+        final opened = <String>[];
+        NotificationService.setMessageOpenedHandler(opened.add);
+        await Future<void>.delayed(Duration.zero);
 
-      expect(opened, ['conv-3']);
-    });
+        expect(opened, ['conv-3']);
+      },
+    );
 
     test('ignores taps without a routable payload', () {
       final opened = <String>[];

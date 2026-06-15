@@ -389,49 +389,53 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
               ),
             ),
           ),
-          SafeArea(
-            bottom: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 6, 12, 0),
-              child: Row(
-                children: [
-                  GlassCircleIconButton(
-                    tooltip: 'Close',
-                    size: 40,
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(
-                      Icons.close_rounded,
-                      color: Colors.white,
-                      size: 22,
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 6, 12, 0),
+                child: Row(
+                  children: [
+                    GlassCircleIconButton(
+                      tooltip: 'Close',
+                      size: 40,
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: Colors.white,
+                        size: 22,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
-                  const Text(
-                    'New story',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      shadows: [Shadow(blurRadius: 4, color: Colors.black54)],
+                    const SizedBox(width: 10),
+                    const Text(
+                      'New story',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        shadows: [Shadow(blurRadius: 4, color: Colors.black54)],
+                      ),
                     ),
-                  ),
-                  const Spacer(),
-                  if (hasMedia)
-                    GlassButtonWidget.icon(
-                      onPressed: _posting ? null : _showReplaceSheet,
-                      icon: const Icon(Icons.swap_horiz_rounded, size: 18),
-                      label: const Text('Change'),
-                    ),
-                ],
+                    const Spacer(),
+                    if (hasMedia)
+                      GlassButtonWidget.icon(
+                        onPressed: _posting ? null : _showReplaceSheet,
+                        icon: const Icon(Icons.swap_horiz_rounded, size: 18),
+                        label: const Text('Change'),
+                      ),
+                  ],
+                ),
               ),
             ),
           ),
-          SafeArea(
-            top: false,
-            child: Align(
-              alignment: Alignment.bottomCenter,
-              child: _buildControls(pending),
-            ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: SafeArea(top: false, child: _buildControls(pending)),
           ),
         ],
       ),
@@ -615,48 +619,55 @@ class _EmptyPicker extends StatelessWidget {
           colors: [Color(0xFF1A1B22), Color(0xFF0B0B0E)],
         ),
       ),
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.auto_awesome_motion_outlined,
-              color: Colors.white38,
-              size: 56,
-            ),
-            const SizedBox(height: 14),
-            const Text(
-              'Share a moment',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Pick a photo or video for your story',
-              style: TextStyle(color: Colors.white60, fontSize: 13),
-            ),
-            const SizedBox(height: 20),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              alignment: WrapAlignment.center,
+      child: SafeArea(
+        minimum: const EdgeInsets.fromLTRB(24, 76, 24, 300),
+        child: Center(
+          child: SingleChildScrollView(
+            physics: const ClampingScrollPhysics(),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                GlassButtonWidget.icon(
-                  onPressed: busy ? null : onPickImage,
-                  icon: const Icon(Icons.image_outlined),
-                  label: const Text('Photo'),
+                const Icon(
+                  Icons.auto_awesome_motion_outlined,
+                  color: Colors.white38,
+                  size: 56,
                 ),
-                GlassButtonWidget.icon(
-                  onPressed: busy ? null : onPickVideo,
-                  icon: const Icon(Icons.videocam_outlined),
-                  label: const Text('Video'),
+                const SizedBox(height: 14),
+                const Text(
+                  'Share a moment',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Pick a photo or video for your story',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white60, fontSize: 13),
+                ),
+                const SizedBox(height: 20),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  alignment: WrapAlignment.center,
+                  children: [
+                    GlassButtonWidget.icon(
+                      onPressed: busy ? null : onPickImage,
+                      icon: const Icon(Icons.image_outlined),
+                      label: const Text('Photo'),
+                    ),
+                    GlassButtonWidget.icon(
+                      onPressed: busy ? null : onPickVideo,
+                      icon: const Icon(Icons.videocam_outlined),
+                      label: const Text('Video'),
+                    ),
+                  ],
                 ),
               ],
             ),
-          ],
+          ),
         ),
       ),
     );

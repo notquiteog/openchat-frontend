@@ -46,9 +46,11 @@ class _VoiceNoteRecorderSheetState extends State<VoiceNoteRecorderSheet> {
   Timer? _ticker;
   StreamSubscription<Amplitude>? _amplitudeSub;
   DateTime? _startedAt;
+  Duration _elapsedBeforePause = Duration.zero;
   Duration _elapsed = Duration.zero;
   File? _file;
   bool _recording = false;
+  bool _paused = false;
   bool _busy = false;
   String? _error;
 
@@ -96,16 +98,15 @@ class _VoiceNoteRecorderSheetState extends State<VoiceNoteRecorderSheet> {
         ),
         path: path,
       );
+      _elapsedBeforePause = Duration.zero;
+      _elapsed = Duration.zero;
+      _paused = false;
       _startedAt = DateTime.now();
-      _ticker = Timer.periodic(const Duration(milliseconds: 250), (_) {
-        final startedAt = _startedAt;
-        if (startedAt == null || !mounted) return;
-        setState(() => _elapsed = DateTime.now().difference(startedAt));
-      });
+      _startTicker();
       _amplitudeSub = _recorder
           .onAmplitudeChanged(const Duration(milliseconds: 120))
           .listen((amp) {
-            if (!mounted || !_recording) return;
+            if (!mounted || !_recording || _paused) return;
             final normalized = ((amp.current + 55) / 55).clamp(0.06, 1.0);
             _allLevels.add(normalized.toDouble());
             setState(() {
@@ -132,12 +133,80 @@ class _VoiceNoteRecorderSheetState extends State<VoiceNoteRecorderSheet> {
     }
   }
 
+  Duration _currentElapsed() {
+    final startedAt = _startedAt;
+    if (startedAt == null || _paused) return _elapsedBeforePause;
+    return _elapsedBeforePause + DateTime.now().difference(startedAt);
+  }
+
+  void _startTicker() {
+    _ticker?.cancel();
+    _ticker = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      if (!mounted || _paused) return;
+      setState(() => _elapsed = _currentElapsed());
+    });
+  }
+
+  Future<void> _pause() async {
+    if (!_recording || _paused || _busy) return;
+    setState(() => _busy = true);
+    try {
+      await _recorder.pause();
+      final elapsed = _currentElapsed();
+      _ticker?.cancel();
+      _ticker = null;
+      if (mounted) {
+        setState(() {
+          _elapsedBeforePause = elapsed;
+          _elapsed = elapsed;
+          _startedAt = null;
+          _paused = true;
+          _busy = false;
+          _error = null;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = 'Could not pause recording';
+        });
+      }
+    }
+  }
+
+  Future<void> _resume() async {
+    if (!_recording || !_paused || _busy) return;
+    setState(() => _busy = true);
+    try {
+      await _recorder.resume();
+      if (!mounted) return;
+      setState(() {
+        _startedAt = DateTime.now();
+        _paused = false;
+        _busy = false;
+        _error = null;
+        _elapsed = _elapsedBeforePause;
+      });
+      _startTicker();
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = 'Could not resume recording';
+        });
+      }
+    }
+  }
+
   Future<void> _stop() async {
     if (!_recording || _busy) return;
     setState(() => _busy = true);
     try {
+      _elapsed = _currentElapsed();
       final path = await _recorder.stop();
       _ticker?.cancel();
+      _ticker = null;
       await _amplitudeSub?.cancel();
       final file = path == null ? null : File(path);
       if (file == null || !await file.exists() || await file.length() == 0) {
@@ -147,6 +216,8 @@ class _VoiceNoteRecorderSheetState extends State<VoiceNoteRecorderSheet> {
         setState(() {
           _file = file;
           _recording = false;
+          _paused = false;
+          _startedAt = null;
           _busy = false;
         });
       }
@@ -218,6 +289,7 @@ class _VoiceNoteRecorderSheetState extends State<VoiceNoteRecorderSheet> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final canSend = _file != null && !_busy;
+    final recordingActive = _recording && !_paused;
     return GlassBottomSheetFrame(
       glowIntensity: 0.07,
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
@@ -239,19 +311,19 @@ class _VoiceNoteRecorderSheetState extends State<VoiceNoteRecorderSheet> {
             child: Stack(
               alignment: Alignment.center,
               children: [
-                if (_recording)
+                if (_recording && !_paused)
                   _PulseRing(color: scheme.primary.withValues(alpha: 0.26)),
                 Container(
                   width: 74,
                   height: 74,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: _recording
+                    color: recordingActive
                         ? scheme.error.withValues(alpha: 0.92)
-                        : scheme.primary,
+                        : scheme.primary.withValues(alpha: _paused ? 0.72 : 1),
                     boxShadow: [
                       BoxShadow(
-                        color: (_recording ? scheme.error : scheme.primary)
+                        color: (recordingActive ? scheme.error : scheme.primary)
                             .withValues(alpha: 0.28),
                         blurRadius: 28,
                         offset: const Offset(0, 12),
@@ -259,7 +331,11 @@ class _VoiceNoteRecorderSheetState extends State<VoiceNoteRecorderSheet> {
                     ],
                   ),
                   child: Icon(
-                    _recording ? Icons.mic : Icons.graphic_eq,
+                    _paused
+                        ? Icons.pause_rounded
+                        : _recording
+                        ? Icons.mic
+                        : Icons.graphic_eq,
                     color: Colors.white,
                     size: 34,
                   ),
@@ -293,26 +369,41 @@ class _VoiceNoteRecorderSheetState extends State<VoiceNoteRecorderSheet> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              IconButton.filledTonal(
+              GlassCircleIconButton(
                 tooltip: 'Cancel',
+                size: 46,
                 onPressed: _busy ? null : _cancel,
-                icon: const Icon(Icons.close),
+                icon: const Icon(Icons.close_rounded),
               ),
-              IconButton.filled(
+              if (_recording && _file == null)
+                GlassCircleIconButton(
+                  tooltip: _paused ? 'Resume' : 'Pause',
+                  size: 46,
+                  onPressed: _busy ? null : (_paused ? _resume : _pause),
+                  icon: Icon(
+                    _paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+                  ),
+                ),
+              GlassCircleIconButton(
                 tooltip: _recording ? 'Stop' : 'Record',
+                size: 54,
                 onPressed: _busy
                     ? null
                     : _recording
                     ? _stop
                     : _start,
                 icon: _busy
-                    ? const GlassProgressIndicator.circular(size: 20, strokeWidth: 2)
-                    : Icon(_recording ? Icons.stop : Icons.mic),
+                    ? const GlassProgressIndicator.circular(
+                        size: 20,
+                        strokeWidth: 2,
+                      )
+                    : Icon(_recording ? Icons.stop_rounded : Icons.mic_rounded),
               ),
-              IconButton.filled(
+              GlassCircleIconButton(
                 tooltip: 'Send',
+                size: 46,
                 onPressed: canSend ? _send : null,
-                icon: const Icon(Icons.send),
+                icon: const Icon(Icons.send_rounded),
               ),
             ],
           ),

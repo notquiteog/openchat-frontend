@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
@@ -54,6 +55,13 @@ class BackgroundWsService {
   );
 
   static final _service = FlutterBackgroundService();
+
+  static Duration backgroundReconnectDelay(int attempt, int jitterMillis) {
+    final safeAttempt = attempt < 0 ? 0 : attempt;
+    final safeJitter = jitterMillis.clamp(0, 999);
+    final seconds = math.min(15, 1 << math.min(safeAttempt, 3));
+    return Duration(seconds: seconds, milliseconds: safeJitter);
+  }
 
   /// Last lifecycle state pushed by the app shell; replayed into the isolate
   /// right after start so it doesn't boot believing the app is backgrounded
@@ -235,6 +243,8 @@ class BackgroundWsService {
     // connect() awaits a storage read, so guard against overlapping attempts
     // (setToken and the reconnect timer can both fire it).
     bool connecting = false;
+    int reconnectAttempt = 0;
+    final reconnectJitter = math.Random();
     // While the app is foregrounded the MAIN isolate posts notifications (with
     // focus + active-conversation suppression); this isolate stays silent.
     // start() replays the real lifecycle state right after boot; false is the
@@ -251,7 +261,12 @@ class BackgroundWsService {
 
     reconnect = () {
       reconnectTimer?.cancel();
-      reconnectTimer = Timer(const Duration(seconds: 8), connect);
+      final delay = backgroundReconnectDelay(
+        reconnectAttempt,
+        reconnectJitter.nextInt(1000),
+      );
+      reconnectAttempt += 1;
+      reconnectTimer = Timer(delay, connect);
     };
 
     connect = () async {
@@ -276,6 +291,7 @@ class BackgroundWsService {
         );
         channel!.stream.listen(
           (raw) {
+            reconnectAttempt = 0;
             if (appForeground) return;
             _handleRaw(
               raw,
@@ -312,6 +328,7 @@ class BackgroundWsService {
     service.on('setToken').listen((data) {
       token = data?['token'] as String?;
       reconnectTimer?.cancel();
+      reconnectAttempt = 0;
       channel?.sink.close();
       channel = null;
       if (!stopped && token != null) connect();
@@ -340,7 +357,9 @@ class BackgroundWsService {
       settings: const InitializationSettings(
         // Transparent logo foreground for the (alpha-masked) status-bar icon;
         // the full-color app icon is shown via largeIcon per notification.
-        android: AndroidInitializationSettings('@drawable/ic_launcher_foreground'),
+        android: AndroidInitializationSettings(
+          '@drawable/ic_launcher_foreground',
+        ),
         iOS: DarwinInitializationSettings(),
       ),
     );

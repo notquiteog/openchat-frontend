@@ -3698,7 +3698,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             GlassSheetHeader(
               icon: Icons.add_rounded,
               title: 'Add to post',
-              subtitle: 'Hold location to share it live.',
+              subtitle:
+                  'Hold photo, video, file, or location for more ways to post.',
               onClose: () => Navigator.pop(sheetCtx),
             ),
             const SizedBox(height: 4),
@@ -3706,9 +3707,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
               entries: [
                 GlassMenuEntry(
                   icon: Icons.photo_library_outlined,
-                  label: 'Photo from gallery',
+                  label: 'Photo',
                   showChevron: true,
-                  onTap: () => Navigator.pop(sheetCtx, 'gallery_image'),
+                  onTap: () => Navigator.pop(sheetCtx, 'gallery_photos'),
                   onLongPress: () => Navigator.pop(sheetCtx, 'photo_variants'),
                 ),
                 if (cameraSupported)
@@ -3719,7 +3720,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   ),
                 GlassMenuEntry(
                   icon: Icons.videocam_outlined,
-                  label: 'Video from gallery',
+                  label: 'Video',
                   showChevron: true,
                   onTap: () => Navigator.pop(sheetCtx, 'gallery_video'),
                   onLongPress: () => Navigator.pop(sheetCtx, 'video_variants'),
@@ -3740,6 +3741,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   icon: Icons.poll_outlined,
                   label: 'Poll',
                   onTap: () => Navigator.pop(sheetCtx, 'poll'),
+                ),
+                GlassMenuEntry(
+                  icon: Icons.event_available_outlined,
+                  label: 'Meeting',
+                  onTap: () => Navigator.pop(sheetCtx, 'meeting'),
                 ),
                 GlassMenuEntry(
                   icon: Icons.mic_none_outlined,
@@ -3773,6 +3779,14 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     // Non-attachment actions handled separately.
     if (choice == 'poll') {
       await _showCreatePollDialog();
+      return;
+    }
+    if (choice == 'meeting') {
+      await _showCreateMeetingDialog();
+      return;
+    }
+    if (choice == 'gallery_photos') {
+      await _sendPhotos();
       return;
     }
     if (choice == 'location_once') {
@@ -3846,10 +3860,42 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     );
   }
 
+  /// Unified photo post: one multi-select picker; a single selection posts
+  /// solo, several consecutive selections render as an album in the feed.
+  Future<void> _sendPhotos() async {
+    final attachmentService = AttachmentService(context.read<ApiService>());
+    List<EncryptedAttachmentUpload> items;
+    try {
+      items = await attachmentService.pickImagesForAlbum(
+        onProgress: _setAttachmentUploadProgress,
+      );
+    } catch (e) {
+      _clearAttachmentUploadProgress();
+      if (!mounted) return;
+      showAppToast(context, 'Upload failed: $e', isError: true);
+      return;
+    }
+    if (items.isEmpty || !mounted) {
+      _clearAttachmentUploadProgress();
+      return;
+    }
+
+    var posted = 0;
+    for (final item in items) {
+      if (!mounted) break;
+      final ok = await _postPreparedAttachment(item, attachmentService);
+      if (ok) posted++;
+    }
+    if (!mounted) return;
+    if (posted == 0) {
+      showAppToast(context, 'Could not post photos', isError: true);
+    }
+  }
+
   /// Uploads an encrypted attachment and posts it to the channel, falling
   /// back to the offline outbox when disconnected. Shared by the attachment
   /// picker and desktop drag-and-drop.
-  Future<void> _postPreparedAttachment(
+  Future<bool> _postPreparedAttachment(
     EncryptedAttachmentUpload pending,
     AttachmentService attachmentService, {
     bool viewOnce = false,
@@ -3866,7 +3912,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           viewOnce: viewOnce,
           hasSpoiler: hasSpoiler,
         );
-        return;
+        return true;
       }
       final uploaded = await attachmentService.uploadEncryptedAttachment(
         pending,
@@ -3879,6 +3925,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         messageType: uploaded.messageType.name,
         attachmentId: uploaded.attachmentId,
       );
+      return true;
     } catch (e) {
       if (_scheduledFor == null && _shouldRetryOutboxError(e)) {
         await _queueChannelAttachmentUpload(
@@ -3887,10 +3934,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           viewOnce: viewOnce,
           hasSpoiler: hasSpoiler,
         );
-        return;
+        return true;
       }
-      if (!mounted) return;
+      if (!mounted) return false;
       showAppToast(context, 'Upload failed: $e', isError: true);
+      return false;
     } finally {
       _clearAttachmentUploadProgress();
     }
@@ -3925,6 +3973,137 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       if (!mounted) return;
       await _postPreparedAttachment(pending, attachmentService);
       if (!mounted) return;
+    }
+  }
+
+  static String _formatMeetingSlot(DateTime d) {
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    final local = d.toLocal();
+    final hh = local.hour.toString().padLeft(2, '0');
+    final mm = local.minute.toString().padLeft(2, '0');
+    return '${months[local.month - 1]} ${local.day} · $hh:$mm';
+  }
+
+  Future<void> _showCreateMeetingDialog() async {
+    final titleCtrl = TextEditingController();
+    final slots = <DateTime>[];
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogCtx) => StatefulBuilder(
+          builder: (dialogCtx, setDialog) {
+            Future<void> addSlot() async {
+              final date = await showDatePicker(
+                context: dialogCtx,
+                firstDate: DateTime.now(),
+                lastDate: DateTime.now().add(const Duration(days: 365)),
+                initialDate: DateTime.now(),
+              );
+              if (date == null || !dialogCtx.mounted) return;
+              final time = await showTimePicker(
+                context: dialogCtx,
+                initialTime: TimeOfDay.now(),
+              );
+              if (time == null) return;
+              setDialog(
+                () => slots.add(
+                  DateTime(
+                    date.year,
+                    date.month,
+                    date.day,
+                    time.hour,
+                    time.minute,
+                  ),
+                ),
+              );
+            }
+
+            Future<void> submit() async {
+              final title = titleCtrl.text.trim();
+              if (title.isEmpty || slots.length < 2) {
+                showAppToast(
+                  context,
+                  'Title and at least 2 time slots required',
+                  isError: true,
+                );
+                return;
+              }
+              Navigator.pop(dialogCtx);
+              slots.sort();
+              try {
+                await context.read<ChatProvider>().sendPoll(
+                  convID: channel.id,
+                  question: '📅 $title',
+                  options: slots
+                      .map((d) => d.toUtc().toIso8601String())
+                      .toList(),
+                  meeting: true,
+                  isAnonymous: false,
+                  silent: _sendSilent,
+                );
+              } catch (e) {
+                if (!mounted) return;
+                showAppToast(context, e.toString(), isError: true);
+              }
+            }
+
+            return GlassAlertDialog(
+              title: const Text('New meeting'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: titleCtrl,
+                      decoration: const InputDecoration(labelText: 'Title'),
+                    ),
+                    const SizedBox(height: 8),
+                    for (var i = 0; i < slots.length; i++)
+                      ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.schedule),
+                        title: Text(_formatMeetingSlot(slots[i])),
+                        trailing: IconButton(
+                          tooltip: 'Remove time slot',
+                          icon: const Icon(Icons.close),
+                          onPressed: () => setDialog(() => slots.removeAt(i)),
+                        ),
+                      ),
+                    TextButton.icon(
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add time slot'),
+                      onPressed: addSlot,
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogCtx),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(onPressed: submit, child: const Text('Post')),
+              ],
+            );
+          },
+        ),
+      );
+    } finally {
+      titleCtrl.dispose();
     }
   }
 

@@ -176,6 +176,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kStrictPrivacyMode = 'strict_privacy_mode';
   static const _kLinkPreviewsEnabled = 'link_previews_enabled';
   static const _kMessageFontScale = 'message_font_scale';
+  static const _kVoicePlaybackSpeed = 'voice_playback_speed';
   static const _kAutoDlWifi = 'auto_download_wifi';
   static const _kAutoDlMobile = 'auto_download_mobile';
   static const _kAutoDlMaxMb = 'auto_download_max_mb';
@@ -234,6 +235,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _strictPrivacyMode = false;
   bool _linkPreviewsEnabled = true;
   double _messageFontScale = 1.0;
+  double _voicePlaybackSpeed = 1.0;
   bool _autoDownloadWifi = true;
   bool _autoDownloadMobile = true;
   int _autoDownloadMaxMb = 0; // 0 = no size cap
@@ -360,6 +362,11 @@ class SettingsProvider extends ChangeNotifier {
   static const double minMessageFontScale = 0.8;
   static const double maxMessageFontScale = 1.5;
 
+  /// Global voice/audio playback rate for inline message players.
+  double get voicePlaybackSpeed => _voicePlaybackSpeed;
+  static const double minVoicePlaybackSpeed = 1.0;
+  static const double maxVoicePlaybackSpeed = 2.0;
+
   // Auto-download policy (Batch 5.3). Defaults preserve the prior behaviour
   // (download everywhere, no cap); users opt into restrictions.
   bool get autoDownloadWifi => _autoDownloadWifi;
@@ -419,6 +426,8 @@ class SettingsProvider extends ChangeNotifier {
       minMessageFontScale,
       maxMessageFontScale,
     );
+    _voicePlaybackSpeed = (_prefs!.getDouble(_kVoicePlaybackSpeed) ?? 1.0)
+        .clamp(minVoicePlaybackSpeed, maxVoicePlaybackSpeed);
     _autoDownloadWifi = _prefs!.getBool(_kAutoDlWifi) ?? true;
     _autoDownloadMobile = _prefs!.getBool(_kAutoDlMobile) ?? true;
     _autoDownloadMaxMb = _prefs!.getInt(_kAutoDlMaxMb) ?? 0;
@@ -578,6 +587,15 @@ class SettingsProvider extends ChangeNotifier {
     _messageFontScale = value.clamp(minMessageFontScale, maxMessageFontScale);
     notifyListeners();
     await _prefs?.setDouble(_kMessageFontScale, _messageFontScale);
+  }
+
+  Future<void> setVoicePlaybackSpeed(double value) async {
+    _voicePlaybackSpeed = value.clamp(
+      minVoicePlaybackSpeed,
+      maxVoicePlaybackSpeed,
+    );
+    notifyListeners();
+    await _prefs?.setDouble(_kVoicePlaybackSpeed, _voicePlaybackSpeed);
   }
 
   Future<void> setAutoDownloadWifi(bool value) async {

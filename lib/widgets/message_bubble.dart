@@ -5062,6 +5062,10 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
   bool _transcriptVisible = false;
   bool _transcribing = false;
   String? _transcribeStatus;
+  double _speed = 1.0;
+  bool _speedSeeded = false;
+
+  static const List<double> _speedSteps = [1.0, 1.5, 2.0];
 
   @override
   void initState() {
@@ -5071,6 +5075,18 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
     _levels = (waveform != null && waveform.isNotEmpty)
         ? _resampleVoiceLevels(waveform, 28)
         : _voiceLevels(widget.message.id);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_speedSeeded) return;
+    try {
+      _speed = context.read<SettingsProvider>().voicePlaybackSpeed;
+    } on ProviderNotFoundException {
+      _speed = 1.0;
+    }
+    _speedSeeded = true;
   }
 
   @override
@@ -5145,6 +5161,7 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
       final file = await _writeTempAudio(bytes);
       final player = _ensurePlayer();
       final loadedDuration = await player.setFilePath(file.path);
+      await player.setSpeed(_speed);
       if (!mounted) return;
       setState(() {
         _duration = loadedDuration ?? _duration;
@@ -5161,6 +5178,7 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
 
     final player = AudioPlayer();
     _player = player;
+    unawaited(player.setSpeed(_speed));
     _subscriptions
       ..add(
         player.positionStream.listen((position) {
@@ -5187,6 +5205,26 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
         }),
       );
     return player;
+  }
+
+  Future<void> _cycleSpeed() async {
+    final currentIndex = _speedSteps.indexWhere(
+      (step) => (step - _speed).abs() < 0.01,
+    );
+    final nextIndex = currentIndex < 0
+        ? 0
+        : (currentIndex + 1) % _speedSteps.length;
+    final next = _speedSteps[nextIndex];
+    SettingsProvider? settings;
+    try {
+      settings = context.read<SettingsProvider>();
+    } on ProviderNotFoundException {
+      settings = null;
+    }
+    if (mounted) setState(() => _speed = next);
+    final player = _player;
+    if (player != null) unawaited(player.setSpeed(next));
+    await settings?.setVoicePlaybackSpeed(next);
   }
 
   Future<File> _writeTempAudio(Uint8List bytes) async {
@@ -5362,17 +5400,27 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
                   const SizedBox(height: 5),
                   Row(
                     children: [
-                      Text(
-                        error
-                            ? 'Tap to retry'
-                            : (_transcribeStatus ?? _timeLabel),
-                        style: TextStyle(
-                          color: widget.textColor.withValues(alpha: 0.76),
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
+                      Flexible(
+                        child: Text(
+                          error
+                              ? 'Tap to retry'
+                              : (_transcribeStatus ?? _timeLabel),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: widget.textColor.withValues(alpha: 0.76),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
                       const Spacer(),
+                      _VoiceSpeedChip(
+                        speed: _speed,
+                        textColor: widget.textColor,
+                        onTap: _cycleSpeed,
+                      ),
+                      const SizedBox(width: 6),
                       GestureDetector(
                         onTap: _onTranscribePressed,
                         child: _transcribing
@@ -5385,7 +5433,7 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
                                 color: widget.textColor.withValues(alpha: 0.76),
                               ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       _Timestamp(
                         message: widget.message,
                         textColor: widget.textColor,
@@ -5413,6 +5461,50 @@ class _VoiceBubbleState extends State<_VoiceBubble> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _VoiceSpeedChip extends StatelessWidget {
+  final double speed;
+  final Color textColor;
+  final VoidCallback onTap;
+
+  const _VoiceSpeedChip({
+    required this.speed,
+    required this.textColor,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Playback speed',
+      child: Semantics(
+        button: true,
+        label: 'Playback speed ${_formatSpeedLabel(speed)}',
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(
+              color: textColor.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: textColor.withValues(alpha: 0.10)),
+            ),
+            child: Text(
+              _formatSpeedLabel(speed),
+              style: TextStyle(
+                color: textColor.withValues(alpha: 0.9),
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0,
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -5537,6 +5629,13 @@ String _formatVoiceDuration(Duration duration) {
   final minutes = (total ~/ 60).toString().padLeft(2, '0');
   final seconds = (total % 60).toString().padLeft(2, '0');
   return '$minutes:$seconds';
+}
+
+String _formatSpeedLabel(double speed) {
+  if (speed == speed.roundToDouble()) {
+    return '${speed.round()}x';
+  }
+  return '${speed.toStringAsFixed(1)}x';
 }
 
 String _audioExtension(MessageContent content) {
