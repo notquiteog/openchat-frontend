@@ -204,6 +204,54 @@ const Map<String, String> messageNotificationSounds = {
 String messageNotificationSoundLabel(String? id) =>
     messageNotificationSounds[id ?? 'default'] ?? 'Default';
 
+class ConversationPrivacyPreference {
+  final bool? shareTyping;
+  final bool? shareReadReceipts;
+
+  const ConversationPrivacyPreference({
+    this.shareTyping,
+    this.shareReadReceipts,
+  });
+
+  bool get isDefault => shareTyping == null && shareReadReceipts == null;
+
+  ConversationPrivacyPreference copyWith({
+    bool? shareTyping,
+    bool clearShareTyping = false,
+    bool? shareReadReceipts,
+    bool clearShareReadReceipts = false,
+  }) {
+    return ConversationPrivacyPreference(
+      shareTyping: clearShareTyping ? null : shareTyping ?? this.shareTyping,
+      shareReadReceipts: clearShareReadReceipts
+          ? null
+          : shareReadReceipts ?? this.shareReadReceipts,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'share_typing': ?shareTyping,
+    'share_read_receipts': ?shareReadReceipts,
+  };
+
+  factory ConversationPrivacyPreference.fromJson(Map<String, dynamic> json) {
+    return ConversationPrivacyPreference(
+      shareTyping: json['share_typing'] as bool?,
+      shareReadReceipts: json['share_read_receipts'] as bool?,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConversationPrivacyPreference &&
+          other.shareTyping == shareTyping &&
+          other.shareReadReceipts == shareReadReceipts;
+
+  @override
+  int get hashCode => Object.hash(shareTyping, shareReadReceipts);
+}
+
 List<String> normalizeNotificationKeywords(Iterable<String> raw) {
   final seen = <String>{};
   final out = <String>[];
@@ -254,6 +302,49 @@ String encodeConversationNotificationPreferences(
   }
   return jsonEncode(normalized);
 }
+
+Map<String, ConversationPrivacyPreference> decodeConversationPrivacyPreferences(
+  Object? raw,
+) {
+  if (raw == null) return const {};
+  Object? decoded = raw;
+  if (raw is String) {
+    if (raw.isEmpty) return const {};
+    try {
+      decoded = jsonDecode(raw);
+    } catch (_) {
+      return const {};
+    }
+  }
+  if (decoded is! Map) return const {};
+  final out = <String, ConversationPrivacyPreference>{};
+  for (final entry in decoded.entries) {
+    final conversationId = entry.key.toString();
+    if (conversationId.isEmpty || entry.value is! Map) continue;
+    final pref = ConversationPrivacyPreference.fromJson(
+      Map<String, dynamic>.from(entry.value as Map),
+    );
+    if (!pref.isDefault) out[conversationId] = pref;
+  }
+  return out;
+}
+
+Map<String, dynamic> encodeConversationPrivacyPreferences(
+  Map<String, ConversationPrivacyPreference> preferences,
+) {
+  final normalized = <String, dynamic>{};
+  for (final entry in preferences.entries) {
+    if (entry.key.isEmpty || entry.value.isDefault) continue;
+    normalized[entry.key] = entry.value.toJson();
+  }
+  return normalized;
+}
+
+bool resolveShareTyping({bool? perChat, required bool globalStrict}) =>
+    perChat ?? !globalStrict;
+
+bool resolveShareReadReceipts({bool? perChat, required bool globalStrict}) =>
+    perChat ?? !globalStrict;
 
 Set<String> activeMutedConversationIds(
   Map<String, ConversationNotificationPreference> preferences, {

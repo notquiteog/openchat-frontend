@@ -110,26 +110,41 @@ class CallHistoryService {
         final data = await _decrypt(row['data'] as String);
         if (data == null) continue;
         final convId = row['conversation_id'] as String? ?? '';
-        out.add(CallHistoryEntry(
-          id: row['id'] as String,
-          conversationId: convId.isEmpty ? null : convId,
-          peerUserId: _nullable(data['peer_user_id']),
-          peerUsername: _nullable(data['peer_username']),
-          isVideo: data['is_video'] == true,
-          direction: _direction(data['direction']),
-          outcome: _outcome(data['outcome']),
-          sfu: data['sfu'] == true,
-          startedAt: DateTime.fromMillisecondsSinceEpoch(
-            row['started_at_ms'] as int,
-            isUtc: true,
-          ).toLocal(),
-          durationSecs: (data['duration_secs'] as num?)?.toInt() ?? 0,
-        ));
+        out.add(
+          CallHistoryEntry(
+            id: row['id'] as String,
+            conversationId: convId.isEmpty ? null : convId,
+            peerUserId: _nullable(data['peer_user_id']),
+            peerUsername: _nullable(data['peer_username']),
+            isVideo: data['is_video'] == true,
+            direction: _direction(data['direction']),
+            outcome: _outcome(data['outcome']),
+            sfu: data['sfu'] == true,
+            startedAt: DateTime.fromMillisecondsSinceEpoch(
+              row['started_at_ms'] as int,
+              isUtc: true,
+            ).toLocal(),
+            durationSecs: (data['duration_secs'] as num?)?.toInt() ?? 0,
+          ),
+        );
       }
       return out;
     } catch (_) {
       return const [];
     }
+  }
+
+  Future<void> delete(String id) async {
+    if (kIsWeb || id.isEmpty) return;
+    try {
+      final db = await _open();
+      final stmt = db.prepare('DELETE FROM call_history WHERE id = ?');
+      try {
+        stmt.execute([id]);
+      } finally {
+        stmt.close();
+      }
+    } catch (_) {}
   }
 
   /// Logout wipe — the log is device-global (rows aren't user-scoped), so the
@@ -157,10 +172,10 @@ class CallHistoryService {
       v == 'incoming' ? CallDirection.incoming : CallDirection.outgoing;
 
   static CallOutcomeKind _outcome(Object? v) => switch (v) {
-        'answered' => CallOutcomeKind.answered,
-        'declined' => CallOutcomeKind.declined,
-        _ => CallOutcomeKind.missed,
-      };
+    'answered' => CallOutcomeKind.answered,
+    'declined' => CallOutcomeKind.declined,
+    _ => CallOutcomeKind.missed,
+  };
 
   Future<sqlite.Database> _open() async {
     final existing = _db;
@@ -206,7 +221,10 @@ class CallHistoryService {
 
   Future<String> _encrypt(Map<String, Object?> json) async {
     final key = await _secret();
-    final box = await _aes.encrypt(utf8.encode(jsonEncode(json)), secretKey: key);
+    final box = await _aes.encrypt(
+      utf8.encode(jsonEncode(json)),
+      secretKey: key,
+    );
     return base64Encode(box.concatenation());
   }
 
@@ -221,7 +239,9 @@ class CallHistoryService {
       final bytes = await _aes.decrypt(box, secretKey: key);
       final decoded = jsonDecode(utf8.decode(bytes));
       if (decoded is Map<String, dynamic>) return decoded;
-      if (decoded is Map) return decoded.map((k, v) => MapEntry(k.toString(), v));
+      if (decoded is Map) {
+        return decoded.map((k, v) => MapEntry(k.toString(), v));
+      }
     } catch (_) {}
     return null;
   }

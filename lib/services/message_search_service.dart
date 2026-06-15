@@ -150,6 +150,9 @@ class MessageSearchService {
   Future<List<MessageSearchResult>> search(
     String query, {
     String? conversationId,
+    String? senderId,
+    DateTime? from,
+    DateTime? to,
     Set<MessageSearchCategory>? categories,
     int limit = 40,
   }) async {
@@ -170,11 +173,23 @@ class MessageSearchService {
       where.add('m.conversation_id = ?');
       args.add(conversationId);
     }
+    if (senderId != null && senderId.trim().isNotEmpty) {
+      where.add('m.sender_id = ?');
+      args.add(senderId.trim());
+    }
     if (categories != null && categories.isNotEmpty) {
       where.add(
         'm.category IN (${List.filled(categories.length, '?').join(',')})',
       );
       args.addAll(categories.map((category) => category.name));
+    }
+    if (from != null) {
+      where.add('m.created_at_ms >= ?');
+      args.add(from.toUtc().millisecondsSinceEpoch);
+    }
+    if (to != null) {
+      where.add('m.created_at_ms < ?');
+      args.add(_exclusiveEndOfLocalDayMs(to));
     }
     args
       ..add(hashes.length)
@@ -214,6 +229,15 @@ class MessageSearchService {
       );
     }
     return results;
+  }
+
+  int _exclusiveEndOfLocalDayMs(DateTime day) {
+    final local = day.toLocal();
+    return DateTime(
+      local.year,
+      local.month,
+      local.day + 1,
+    ).toUtc().millisecondsSinceEpoch;
   }
 
   Future<void> deleteMessage(String messageId) async {

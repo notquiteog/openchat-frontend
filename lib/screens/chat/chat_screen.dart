@@ -4243,45 +4243,137 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _reportMessage(Message msg) async {
+    // The anonymous, provable CSAM report (to system admins) is only possible
+    // when this message's AMF franking verified as valid on receipt.
+    final csamBlob = context.read<ChatProvider>().frankingReportFor(msg.id);
+    final canCsam = csamBlob != null;
+    // Group/channel admins exist for groups and channels, not DMs/self.
+    final hasGroupAdmins = conv.isGroup || conv.isChannel;
+
+    if (!canCsam && !hasGroupAdmins) {
+      showAppToast(
+        context,
+        'This message can’t be reported.',
+        isError: true,
+      );
+      return;
+    }
+
+    // DM with a verifiable message → straight to the CSAM (system-admins) path.
+    var toSystem = canCsam && !hasGroupAdmins;
+    var toGroup = false;
     final reasonCtrl = TextEditingController();
-    final reason = await showDialog<String>(
+
+    final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => GlassAlertDialog(
-        title: const Text('Report message'),
-        content: TextField(
-          controller: reasonCtrl,
-          autofocus: true,
-          maxLength: 500,
-          maxLines: 3,
-          decoration: const InputDecoration(labelText: 'Reason'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, reasonCtrl.text.trim()),
-            child: const Text('Report'),
-          ),
-        ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final canSubmit = hasGroupAdmins
+              ? ((toSystem && canCsam) || toGroup)
+              : canCsam;
+          return GlassAlertDialog(
+            title: const Text('Report message'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (hasGroupAdmins) ...[
+                  const Text('Send this report to:'),
+                  const SizedBox(height: 8),
+                  _ReportDestinationTile(
+                    icon: Icons.verified_user_outlined,
+                    title: 'System admins (CSAM)',
+                    subtitle: canCsam
+                        ? 'Anonymous, provable report to platform moderators. '
+                              'Use ONLY for child sexual abuse material.'
+                        : 'Unavailable — this message has no verifiable '
+                              'franking proof.',
+                    value: toSystem,
+                    enabled: canCsam,
+                    onChanged: (v) => setLocal(() => toSystem = v),
+                  ),
+                  _ReportDestinationTile(
+                    icon: Icons.groups_outlined,
+                    title: conv.isChannel
+                        ? 'Channel admins'
+                        : 'Group admins',
+                    subtitle: 'A general report to this chat’s admins. Your '
+                        'identity is visible to them.',
+                    value: toGroup,
+                    enabled: true,
+                    onChanged: (v) => setLocal(() => toGroup = v),
+                  ),
+                  if (toGroup) ...[
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: reasonCtrl,
+                      maxLength: 500,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        labelText: 'Reason (for chat admins)',
+                      ),
+                    ),
+                  ],
+                ] else
+                  const Text(
+                    'Report this message as child sexual abuse material to the '
+                    'platform’s system admins. Your identity is not revealed to '
+                    'the sender.',
+                  ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: canSubmit ? () => Navigator.pop(ctx, true) : null,
+                child: const Text('Report'),
+              ),
+            ],
+          );
+        },
       ),
     );
+    final reason = reasonCtrl.text.trim();
     reasonCtrl.dispose();
-    if (reason == null || !mounted) return;
-    try {
-      await context.read<ApiService>().createModerationReport(
-        conv.id,
-        channel: conv.isChannel,
-        messageID: msg.id,
-        reportedUserID: msg.senderId,
-        reason: reason,
-      );
-      if (!mounted) return;
+    if (confirmed != true || !mounted) return;
+    if (!hasGroupAdmins) {
+      toSystem = canCsam;
+      toGroup = false;
+    }
+
+    final api = context.read<ApiService>();
+    var anyOk = false;
+    var anyErr = false;
+    if (toSystem && csamBlob != null) {
+      try {
+        await api.reportCsam(csamBlob);
+        anyOk = true;
+      } catch (_) {
+        anyErr = true;
+      }
+    }
+    if (toGroup) {
+      try {
+        await api.createModerationReport(
+          conv.id,
+          channel: conv.isChannel,
+          messageID: msg.id,
+          reportedUserID: msg.senderId,
+          reason: reason,
+        );
+        anyOk = true;
+      } catch (_) {
+        anyErr = true;
+      }
+    }
+    if (!mounted) return;
+    if (anyErr) {
+      showAppToast(context, 'Failed to send report', isError: true);
+    } else if (anyOk) {
       showAppToast(context, 'Report sent');
-    } catch (e) {
-      if (!mounted) return;
-      showAppToast(context, 'Failed to report: $e', isError: true);
     }
   }
 
@@ -5876,5 +5968,40 @@ class _GroupCallBanner extends StatelessWidget {
         showAppToast(context, 'Could not join call: $e', isError: true);
       }
     }());
+  }
+}
+
+/// A liquid-glass checkbox row for the report-destination chooser.
+class _ReportDestinationTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool value;
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+
+  const _ReportDestinationTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Opacity(
+      opacity: enabled ? 1.0 : 0.5,
+      child: GlassListTile(
+        leading: Icon(icon),
+        title: Text(title),
+        subtitle: Text(subtitle),
+        trailing: IgnorePointer(
+          ignoring: !enabled,
+          child: GlassSwitch(value: value, onChanged: onChanged),
+        ),
+      ),
+    );
   }
 }

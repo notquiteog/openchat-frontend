@@ -13,6 +13,7 @@ import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/attachment_service.dart';
 import '../../services/secure_storage_service.dart';
+import '../../utils/story_background.dart';
 import '../../widgets/glass.dart';
 
 class _StoryEncryptException implements Exception {
@@ -32,8 +33,10 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
   PendingAttachment? _pending;
   VideoPlayerController? _videoPreview;
   String _privacy = 'contacts';
+  String _textBackground = defaultStoryBackground;
   int _durationSeconds = 24 * 60 * 60;
   bool _posting = false;
+  bool _textMode = false;
   String? _error;
 
   @override
@@ -87,7 +90,10 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
       );
       if (!mounted) return;
       if (pending != null) {
-        setState(() => _pending = pending);
+        setState(() {
+          _pending = pending;
+          _textMode = false;
+        });
         await _setPreviewFor(pending);
       }
     } catch (e) {
@@ -97,15 +103,36 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
     }
   }
 
+  Future<void> _startTextStory() async {
+    await _videoPreview?.dispose();
+    _videoPreview = null;
+    setState(() {
+      _pending = null;
+      _textMode = true;
+      _error = null;
+    });
+  }
+
   Future<void> _publish() async {
     final pending = _pending;
-    if (pending == null || _posting) return;
+    final isTextStory = _textMode;
+    if ((!isTextStory && pending == null) || _posting) return;
     setState(() {
       _posting = true;
       _error = null;
     });
     try {
-      final mediaType = pending.messageType == MessageType.video
+      final caption = _captionCtrl.text.trim();
+      if (isTextStory && caption.isEmpty) {
+        setState(() {
+          _posting = false;
+          _error = 'Write something for your text story.';
+        });
+        return;
+      }
+      final mediaType = isTextStory
+          ? 'text'
+          : pending!.messageType == MessageType.video
           ? 'video'
           : pending.messageType == MessageType.file
           ? 'file'
@@ -126,20 +153,21 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
       final allowUserIds = _privacy == 'close_friends'
           ? closeFriends
           : const <String>[];
-      final caption = _captionCtrl.text.trim();
+      final background = isTextStory ? _textBackground : null;
 
       if (privacy == 'public') {
         // Public stories have no fixed audience to encrypt to — the legacy
         // plaintext-metadata path is inherent to "anyone can view".
         await api.createStory(
-          attachmentId: pending.attachmentId,
-          fileName: pending.fileName,
-          fileSize: pending.fileSize,
-          mimeType: pending.mimeType,
-          fileKey: pending.fileKey,
-          fileNonce: pending.fileNonce,
+          attachmentId: pending?.attachmentId,
+          fileName: pending?.fileName,
+          fileSize: pending?.fileSize ?? 0,
+          mimeType: pending?.mimeType,
+          fileKey: pending?.fileKey,
+          fileNonce: pending?.fileNonce,
           mediaType: mediaType,
           caption: caption,
+          background: background,
           privacy: privacy,
           expiresInSeconds: _durationSeconds,
         );
@@ -149,16 +177,17 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
         // server must not be able to decrypt story media (the attachment
         // pipeline's documented invariant).
         final encryptedMeta = await _encryptStoryMeta(
-          fileKey: pending.fileKey,
-          fileNonce: pending.fileNonce,
-          fileName: pending.fileName,
-          mimeType: pending.mimeType,
+          fileKey: pending?.fileKey,
+          fileNonce: pending?.fileNonce,
+          fileName: pending?.fileName,
+          mimeType: pending?.mimeType,
           caption: caption,
+          background: background,
           audienceUserIds: privacy == 'selected' ? allowUserIds : null,
         );
         await api.createStory(
-          attachmentId: pending.attachmentId,
-          fileSize: pending.fileSize,
+          attachmentId: pending?.attachmentId,
+          fileSize: pending?.fileSize ?? 0,
           mediaType: mediaType,
           encryptedPayload: encryptedMeta,
           privacy: privacy,
@@ -179,11 +208,12 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
   /// Encrypts the story metadata to the audience's PGP keys (plus our own so
   /// we can re-view it). [audienceUserIds] null = all DM contacts.
   Future<String> _encryptStoryMeta({
-    required String fileKey,
-    required String fileNonce,
-    required String fileName,
-    required String mimeType,
+    String? fileKey,
+    String? fileNonce,
+    String? fileName,
+    String? mimeType,
     required String caption,
+    String? background,
     List<String>? audienceUserIds,
   }) async {
     final api = context.read<ApiService>();
@@ -244,11 +274,13 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
     return PgpService.encrypt(
       plaintext: jsonEncode({
         'openchat_story_meta': 1,
-        'file_key': fileKey,
-        'file_nonce': fileNonce,
-        'file_name': fileName,
-        'mime_type': mimeType,
+        if (fileKey != null && fileKey.isNotEmpty) 'file_key': fileKey,
+        if (fileNonce != null && fileNonce.isNotEmpty) 'file_nonce': fileNonce,
+        if (fileName != null && fileName.isNotEmpty) 'file_name': fileName,
+        if (mimeType != null && mimeType.isNotEmpty) 'mime_type': mimeType,
         'caption': caption,
+        if (background != null && background.isNotEmpty)
+          'background': background,
       }),
       recipients: recipients,
       signingPrivateKeyArmored: privateKey,
@@ -354,6 +386,11 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
           icon: const Icon(Icons.videocam_outlined),
           onPressed: _pickVideo,
         ),
+        GlassActionSheetAction(
+          label: 'Text',
+          icon: const Icon(Icons.text_fields_rounded),
+          onPressed: _startTextStory,
+        ),
       ],
     );
   }
@@ -362,6 +399,7 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
   Widget build(BuildContext context) {
     final pending = _pending;
     final hasMedia = pending != null;
+    final hasContent = hasMedia || _textMode;
     return Scaffold(
       backgroundColor: Colors.black,
       resizeToAvoidBottomInset: false,
@@ -420,7 +458,7 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
                       ),
                     ),
                     const Spacer(),
-                    if (hasMedia)
+                    if (hasContent)
                       GlassButtonWidget.icon(
                         onPressed: _posting ? null : _showReplaceSheet,
                         icon: const Icon(Icons.swap_horiz_rounded, size: 18),
@@ -431,23 +469,31 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
               ),
             ),
           ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: SafeArea(top: false, child: _buildControls(pending)),
-          ),
+          if (hasContent)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: SafeArea(top: false, child: _buildControls(pending)),
+            ),
         ],
       ),
     );
   }
 
   Widget _buildBackground(PendingAttachment? pending) {
+    if (_textMode) {
+      return _TextStoryPreview(
+        controller: _captionCtrl,
+        background: _textBackground,
+      );
+    }
     if (pending == null) {
       return _EmptyPicker(
         busy: _posting,
         onPickImage: _pickImage,
         onPickVideo: _pickVideo,
+        onText: _startTextStory,
       );
     }
     if (pending.messageType == MessageType.video) {
@@ -495,7 +541,6 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
         maxHeight: MediaQuery.sizeOf(context).height * 0.62,
       ),
       child: SingleChildScrollView(
-        reverse: true,
         padding: EdgeInsets.fromLTRB(
           12,
           0,
@@ -512,6 +557,15 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _CaptionField(controller: _captionCtrl),
+              if (_textMode) ...[
+                const SizedBox(height: 14),
+                _label('Background'),
+                const SizedBox(height: 8),
+                _BackgroundSwatches(
+                  selected: _textBackground,
+                  onChanged: (value) => setState(() => _textBackground = value),
+                ),
+              ],
               const SizedBox(height: 14),
               _label('Who can see this'),
               const SizedBox(height: 8),
@@ -567,7 +621,9 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
               ],
               const SizedBox(height: 16),
               GlassButtonWidget.icon(
-                onPressed: pending == null || _posting ? null : _publish,
+                onPressed: ((!_textMode && pending == null) || _posting)
+                    ? null
+                    : _publish,
                 icon: _posting
                     ? const GlassProgressIndicator.circular(
                         size: 18,
@@ -597,16 +653,109 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
   );
 }
 
-/// Empty state: a glass card prompting the user to add a photo or video.
+class _TextStoryPreview extends StatelessWidget {
+  final TextEditingController controller;
+  final String background;
+
+  const _TextStoryPreview({required this.controller, required this.background});
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: storyBackgroundDecoration(background),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(28, 96, 28, 260),
+          child: AnimatedBuilder(
+            animation: controller,
+            builder: (context, _) {
+              final text = controller.text.trim();
+              return Text(
+                text.isEmpty ? 'Type your story' : text,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white.withValues(
+                    alpha: text.isEmpty ? 0.50 : 1,
+                  ),
+                  fontSize: 34,
+                  fontWeight: FontWeight.w800,
+                  height: 1.12,
+                  shadows: const [
+                    Shadow(
+                      blurRadius: 18,
+                      color: Colors.black38,
+                      offset: Offset(0, 2),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BackgroundSwatches extends StatelessWidget {
+  final String selected;
+  final ValueChanged<String> onChanged;
+
+  const _BackgroundSwatches({required this.selected, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (final option in storyBackgroundOptions)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: GestureDetector(
+                onTap: () => onChanged(option),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOutCubic,
+                  width: 42,
+                  height: 42,
+                  decoration: storyBackgroundDecoration(option).copyWith(
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: selected == option ? Colors.white : Colors.white38,
+                      width: selected == option ? 2 : 1,
+                    ),
+                    boxShadow: selected == option
+                        ? [
+                            BoxShadow(
+                              color: Colors.white.withValues(alpha: 0.24),
+                              blurRadius: 14,
+                              spreadRadius: -2,
+                            ),
+                          ]
+                        : null,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Empty state: a glass card prompting the user to add a photo, video, or text.
 class _EmptyPicker extends StatelessWidget {
   final bool busy;
   final VoidCallback onPickImage;
   final VoidCallback onPickVideo;
+  final VoidCallback onText;
 
   const _EmptyPicker({
     required this.busy,
     required this.onPickImage,
     required this.onPickVideo,
+    required this.onText,
   });
 
   @override
@@ -620,7 +769,7 @@ class _EmptyPicker extends StatelessWidget {
         ),
       ),
       child: SafeArea(
-        minimum: const EdgeInsets.fromLTRB(24, 76, 24, 300),
+        minimum: const EdgeInsets.fromLTRB(24, 76, 24, 120),
         child: Center(
           child: SingleChildScrollView(
             physics: const ClampingScrollPhysics(),
@@ -643,7 +792,7 @@ class _EmptyPicker extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 const Text(
-                  'Pick a photo or video for your story',
+                  'Pick a photo, video, or text for your story',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.white60, fontSize: 13),
                 ),
@@ -662,6 +811,11 @@ class _EmptyPicker extends StatelessWidget {
                       onPressed: busy ? null : onPickVideo,
                       icon: const Icon(Icons.videocam_outlined),
                       label: const Text('Video'),
+                    ),
+                    GlassButtonWidget.icon(
+                      onPressed: busy ? null : onText,
+                      icon: const Icon(Icons.text_fields_rounded),
+                      label: const Text('Text'),
                     ),
                   ],
                 ),

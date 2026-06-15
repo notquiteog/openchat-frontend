@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 
 import 'glass.dart';
 
@@ -10,6 +11,391 @@ bool isDesktopShell(BuildContext context) =>
 /// Chat content (message list, composer) stops stretching past this on wide
 /// panes so a maximized window reads as a conversation column, not a wall.
 const double kChatContentMaxWidth = 1040.0;
+
+// ── Keyboard shortcuts ──────────────────────────────────────────────────────
+
+enum DesktopShortcutAction {
+  search,
+  newChat,
+  nextConversation,
+  previousConversation,
+  jumpToConversation,
+  markSelectedRead,
+  archiveSelected,
+  openSettings,
+  close,
+  showCheatSheet,
+}
+
+enum DesktopShortcutSection { general, navigation, conversation }
+
+class DesktopShortcutSpec {
+  final DesktopShortcutAction action;
+  final DesktopShortcutSection section;
+  final LogicalKeyboardKey key;
+  final String keyLabel;
+  final String description;
+  final bool platformModifier;
+  final bool control;
+  final bool meta;
+  final bool alt;
+  final bool shift;
+  final int? index;
+  final bool ignoreWhenEditing;
+
+  const DesktopShortcutSpec({
+    required this.action,
+    required this.section,
+    required this.key,
+    required this.keyLabel,
+    required this.description,
+    this.platformModifier = false,
+    this.control = false,
+    this.meta = false,
+    this.alt = false,
+    this.shift = false,
+    this.index,
+    this.ignoreWhenEditing = false,
+  });
+
+  Iterable<SingleActivator> get activators sync* {
+    if (platformModifier) {
+      yield SingleActivator(key, control: true, alt: alt, shift: shift);
+      yield SingleActivator(key, meta: true, alt: alt, shift: shift);
+      return;
+    }
+    yield SingleActivator(
+      key,
+      control: control,
+      meta: meta,
+      alt: alt,
+      shift: shift,
+    );
+  }
+
+  String labelFor(BuildContext context) {
+    if (ignoreWhenEditing) return keyLabel;
+    final parts = <String>[];
+    if (platformModifier) {
+      parts.add(modKeyLabel(context));
+    } else {
+      if (control) parts.add('Ctrl');
+      if (meta) parts.add('Cmd');
+    }
+    if (alt) parts.add('Alt');
+    if (shift) parts.add('Shift');
+    parts.add(keyLabel);
+    return parts.join(' ');
+  }
+}
+
+const desktopShortcutSpecs = <DesktopShortcutSpec>[
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.search,
+    section: DesktopShortcutSection.general,
+    key: LogicalKeyboardKey.keyK,
+    keyLabel: 'K',
+    description: 'Search',
+    platformModifier: true,
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.newChat,
+    section: DesktopShortcutSection.general,
+    key: LogicalKeyboardKey.keyN,
+    keyLabel: 'N',
+    description: 'New chat',
+    platformModifier: true,
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.openSettings,
+    section: DesktopShortcutSection.general,
+    key: LogicalKeyboardKey.comma,
+    keyLabel: ',',
+    description: 'Open settings',
+    platformModifier: true,
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.showCheatSheet,
+    section: DesktopShortcutSection.general,
+    key: LogicalKeyboardKey.slash,
+    keyLabel: '/',
+    description: 'Show keyboard shortcuts',
+    platformModifier: true,
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.showCheatSheet,
+    section: DesktopShortcutSection.general,
+    key: LogicalKeyboardKey.slash,
+    keyLabel: '?',
+    description: 'Show keyboard shortcuts',
+    shift: true,
+    ignoreWhenEditing: true,
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.close,
+    section: DesktopShortcutSection.general,
+    key: LogicalKeyboardKey.escape,
+    keyLabel: 'Esc',
+    description: 'Close search or pane',
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.previousConversation,
+    section: DesktopShortcutSection.navigation,
+    key: LogicalKeyboardKey.arrowUp,
+    keyLabel: 'Up',
+    description: 'Previous conversation',
+    alt: true,
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.nextConversation,
+    section: DesktopShortcutSection.navigation,
+    key: LogicalKeyboardKey.arrowDown,
+    keyLabel: 'Down',
+    description: 'Next conversation',
+    alt: true,
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.jumpToConversation,
+    section: DesktopShortcutSection.navigation,
+    key: LogicalKeyboardKey.digit1,
+    keyLabel: '1',
+    description: 'Open conversation 1',
+    platformModifier: true,
+    index: 1,
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.jumpToConversation,
+    section: DesktopShortcutSection.navigation,
+    key: LogicalKeyboardKey.digit2,
+    keyLabel: '2',
+    description: 'Open conversation 2',
+    platformModifier: true,
+    index: 2,
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.jumpToConversation,
+    section: DesktopShortcutSection.navigation,
+    key: LogicalKeyboardKey.digit3,
+    keyLabel: '3',
+    description: 'Open conversation 3',
+    platformModifier: true,
+    index: 3,
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.jumpToConversation,
+    section: DesktopShortcutSection.navigation,
+    key: LogicalKeyboardKey.digit4,
+    keyLabel: '4',
+    description: 'Open conversation 4',
+    platformModifier: true,
+    index: 4,
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.jumpToConversation,
+    section: DesktopShortcutSection.navigation,
+    key: LogicalKeyboardKey.digit5,
+    keyLabel: '5',
+    description: 'Open conversation 5',
+    platformModifier: true,
+    index: 5,
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.jumpToConversation,
+    section: DesktopShortcutSection.navigation,
+    key: LogicalKeyboardKey.digit6,
+    keyLabel: '6',
+    description: 'Open conversation 6',
+    platformModifier: true,
+    index: 6,
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.jumpToConversation,
+    section: DesktopShortcutSection.navigation,
+    key: LogicalKeyboardKey.digit7,
+    keyLabel: '7',
+    description: 'Open conversation 7',
+    platformModifier: true,
+    index: 7,
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.jumpToConversation,
+    section: DesktopShortcutSection.navigation,
+    key: LogicalKeyboardKey.digit8,
+    keyLabel: '8',
+    description: 'Open conversation 8',
+    platformModifier: true,
+    index: 8,
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.jumpToConversation,
+    section: DesktopShortcutSection.navigation,
+    key: LogicalKeyboardKey.digit9,
+    keyLabel: '9',
+    description: 'Open conversation 9',
+    platformModifier: true,
+    index: 9,
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.markSelectedRead,
+    section: DesktopShortcutSection.conversation,
+    key: LogicalKeyboardKey.keyM,
+    keyLabel: 'M',
+    description: 'Mark selected read',
+    platformModifier: true,
+    shift: true,
+  ),
+  DesktopShortcutSpec(
+    action: DesktopShortcutAction.archiveSelected,
+    section: DesktopShortcutSection.conversation,
+    key: LogicalKeyboardKey.keyA,
+    keyLabel: 'A',
+    description: 'Archive selected conversation',
+    platformModifier: true,
+    shift: true,
+  ),
+];
+
+String modKeyLabel(BuildContext context) =>
+    Theme.of(context).platform == TargetPlatform.macOS ? '⌘' : 'Ctrl';
+
+bool desktopShortcutTextInputFocused() {
+  final focusContext = FocusManager.instance.primaryFocus?.context;
+  if (focusContext == null) return false;
+  return focusContext.widget is EditableText ||
+      focusContext.findAncestorWidgetOfExactType<EditableText>() != null;
+}
+
+String desktopShortcutSectionLabel(DesktopShortcutSection section) {
+  return switch (section) {
+    DesktopShortcutSection.general => 'General',
+    DesktopShortcutSection.navigation => 'Navigation',
+    DesktopShortcutSection.conversation => 'Conversation',
+  };
+}
+
+class DesktopShortcutsSheet extends StatelessWidget {
+  final List<DesktopShortcutSpec> shortcuts;
+
+  const DesktopShortcutsSheet({
+    super.key,
+    this.shortcuts = desktopShortcutSpecs,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final contentMaxHeight = (MediaQuery.sizeOf(context).height * 0.46)
+        .clamp(220.0, 420.0)
+        .toDouble();
+    final sections = DesktopShortcutSection.values.where(
+      (section) => shortcuts.any((shortcut) => shortcut.section == section),
+    );
+
+    return GlassAlertDialog(
+      icon: const Icon(Icons.keyboard_alt_outlined),
+      title: const Text('Keyboard shortcuts'),
+      content: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: 520, maxHeight: contentMaxHeight),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final section in sections) ...[
+                Text(
+                  desktopShortcutSectionLabel(section),
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: scheme.onSurface.withValues(alpha: 0.64),
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                for (final shortcut in shortcuts.where(
+                  (shortcut) => shortcut.section == section,
+                ))
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: ShortcutHintRow(
+                      keys: shortcut.labelFor(context),
+                      label: shortcut.description,
+                      wide: true,
+                    ),
+                  ),
+                const SizedBox(height: 8),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Done'),
+        ),
+      ],
+    );
+  }
+}
+
+/// A compact `Cmd K  Search`-style keyboard hint row.
+class ShortcutHintRow extends StatelessWidget {
+  final String keys;
+  final String label;
+  final bool wide;
+
+  const ShortcutHintRow({
+    super.key,
+    required this.keys,
+    required this.label,
+    this.wide = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textColor = scheme.onSurface.withValues(alpha: 0.68);
+    final row = Row(
+      mainAxisSize: wide ? MainAxisSize.max : MainAxisSize.min,
+      children: [
+        GlassContainer(
+          shape: const LiquidRoundedSuperellipse(borderRadius: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+          child: Text(
+            keys,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0,
+              color: textColor,
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Flexible(
+          fit: wide ? FlexFit.tight : FlexFit.loose,
+          child: Text(
+            label,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12.5,
+              color: scheme.onSurface.withValues(alpha: 0.56),
+              fontWeight: FontWeight.w500,
+              letterSpacing: 0,
+            ),
+          ),
+        ),
+      ],
+    );
+
+    if (!wide) return row;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+      child: row,
+    );
+  }
+}
 
 // ── Context menu ─────────────────────────────────────────────────────────────
 

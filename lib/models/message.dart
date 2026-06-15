@@ -715,6 +715,13 @@ class Message {
   final String? mediaGroupId;
   final bool silent;
   final String? controlToken;
+  // AMF (Hecate) server-visible envelope: the hiding commitment + platform
+  // stamp. Base64 com/σ3 and the unix-seconds t2. Null for non-franked/legacy
+  // messages. The payload-side franking (x1/x2/r/σ1/σ2/pk_e) rides the
+  // encrypted payload, not these fields.
+  final String? frankCom;
+  final int? frankT2;
+  final String? frankSig3;
   final List<MessageReactionSummary> reactions;
   // Anonymous per-provider tip aggregates. NOT part of message fetch payloads —
   // hydrated lazily from the tips endpoint or message_tipped WS events, so an
@@ -751,6 +758,9 @@ class Message {
     this.mediaGroupId,
     this.silent = false,
     this.controlToken,
+    this.frankCom,
+    this.frankT2,
+    this.frankSig3,
     this.reactions = const [],
     this.tips = const [],
     this.poll,
@@ -778,6 +788,9 @@ class Message {
     mediaGroupId: json['media_group_id'] as String?,
     silent: json['silent'] as bool? ?? false,
     controlToken: json['control_token'] as String?,
+    frankCom: json['frank_com'] as String?,
+    frankT2: (json['frank_t2'] as num?)?.toInt(),
+    frankSig3: json['frank_sig3'] as String?,
     reactions: (json['reactions'] as List? ?? [])
         .map((e) => MessageReactionSummary.fromJson(e as Map<String, dynamic>))
         .toList(),
@@ -1072,6 +1085,9 @@ class Message {
       mediaGroupId: mediaGroupId,
       silent: silent,
       controlToken: controlToken ?? this.controlToken,
+      frankCom: frankCom,
+      frankT2: frankT2,
+      frankSig3: frankSig3,
       reactions: reactions ?? this.reactions,
       tips: tips ?? this.tips,
       poll: poll ?? this.poll,

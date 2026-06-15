@@ -4,6 +4,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openchat/crypto/kt_log_verify.dart';
+import 'package:openchat/models/key_transparency_event.dart';
 import 'package:openchat/services/api_service.dart';
 import 'package:openchat/services/kt_audit_service.dart';
 import 'package:openchat/services/secure_storage_service.dart';
@@ -22,6 +23,11 @@ void main() {
       '6408dc8f562b392d389c510f86c463d140c6eca63fe72e1ebf2ee05699ccb81a';
   const cons3to5 = [
     'b36d1ac35833a6fab64633c87b67ea7fb0997027ea470f09111f02528444663a',
+    '542e57cfd7300043ceb5dd13db7191fc5cd48d0c529e751e5ba1682a03ae766a',
+    'c06cbda202971c9caff6e9f159f59bd49b3bf5981e4354349a4adfaf28a68702',
+    '11e67ce9329c3435092edd81b7848f7769c94f0db0a5a8b7024b55c89b0b8e5a',
+  ];
+  const inclusionLeaf2Of5 = [
     '542e57cfd7300043ceb5dd13db7191fc5cd48d0c529e751e5ba1682a03ae766a',
     'c06cbda202971c9caff6e9f159f59bd49b3bf5981e4354349a4adfaf28a68702',
     '11e67ce9329c3435092edd81b7848f7769c94f0db0a5a8b7024b55c89b0b8e5a',
@@ -67,42 +73,46 @@ void main() {
     expect(await audit.currentAlarm(), isNull);
   });
 
-  test('append-only growth with a valid Go-generated proof advances the head',
-      () async {
-    api.sth = await signedHead(3, root3);
-    await audit.syncSth(api, force: true);
+  test(
+    'append-only growth with a valid Go-generated proof advances the head',
+    () async {
+      api.sth = await signedHead(3, root3);
+      await audit.syncSth(api, force: true);
 
-    api.sth = await signedHead(5, root5);
-    api.consistency = {'proof': cons3to5};
-    await audit.syncSth(api, force: true);
+      api.sth = await signedHead(5, root5);
+      api.consistency = {'proof': cons3to5};
+      await audit.syncSth(api, force: true);
 
-    final cached = await storage.getKtSthCache();
-    expect(cached!['tree_size'], 5);
-    expect(cached['root_hash'], root5);
-    expect(await audit.currentAlarm(), isNull);
-  });
+      final cached = await storage.getKtSthCache();
+      expect(cached!['tree_size'], 5);
+      expect(cached['root_hash'], root5);
+      expect(await audit.currentAlarm(), isNull);
+    },
+  );
 
-  test('a conflicting same-size gossiped head raises the equivocation alarm',
-      () async {
-    api.sth = await signedHead(5, root5);
-    await audit.syncSth(api, force: true);
+  test(
+    'a conflicting same-size gossiped head raises the equivocation alarm',
+    () async {
+      api.sth = await signedHead(5, root5);
+      await audit.syncSth(api, force: true);
 
-    // The server signed a DIFFERENT root at the same size for someone else;
-    // their client gossips it to us inside a message.
-    final conflicting = await signedHead(5, root3);
-    await audit.ingestGossipedHead(api, {
-      'size': 5,
-      'root': conflicting['root_hash'],
-      'sig': conflicting['signature'],
-    });
+      // The server signed a DIFFERENT root at the same size for someone else;
+      // their client gossips it to us inside a message.
+      final conflicting = await signedHead(5, root3);
+      await audit.ingestGossipedHead(api, {
+        'size': 5,
+        'root': conflicting['root_hash'],
+        'sig': conflicting['signature'],
+      });
 
-    final alarm = await audit.currentAlarm();
-    expect(alarm, isNotNull, reason: 'two valid heads, one size = proof');
-    expect(alarm!['reason'], contains('equivocation'));
-    final evidence = jsonDecode(alarm['evidence'] as String) as Map;
-    expect(evidence['root_a'], root5);
-    expect(evidence['root_b'], root3);
-  });
+      final alarm = await audit.currentAlarm();
+      expect(alarm, isNotNull, reason: 'two valid heads, one size = proof');
+      expect(alarm!['reason'], contains('equivocation'));
+      final evidence = jsonDecode(alarm['evidence'] as String) as Map;
+      expect(evidence['root_a'], root5);
+      expect(evidence['root_b'], root3);
+    },
+  );
 
   test('a forged gossiped head is ignored, never alarms', () async {
     api.sth = await signedHead(5, root5);
@@ -118,34 +128,43 @@ void main() {
     expect((await storage.getKtSthCache())!['root_hash'], root5);
   });
 
-  test('the server presenting a SHRUNK log raises the rollback alarm',
-      () async {
-    api.sth = await signedHead(5, root5);
-    await audit.syncSth(api, force: true);
+  test(
+    'the server presenting a SHRUNK log raises the rollback alarm',
+    () async {
+      api.sth = await signedHead(5, root5);
+      await audit.syncSth(api, force: true);
 
-    api.sth = await signedHead(3, root3);
-    await audit.syncSth(api, force: true);
+      api.sth = await signedHead(3, root3);
+      await audit.syncSth(api, force: true);
 
-    final alarm = await audit.currentAlarm();
-    expect(alarm, isNotNull);
-    expect(alarm!['reason'], contains('rolled back'));
-  });
+      final alarm = await audit.currentAlarm();
+      expect(alarm, isNotNull);
+      expect(alarm!['reason'], contains('rolled back'));
+    },
+  );
 
-  test('growth WITHOUT a valid consistency proof raises the rewrite alarm',
-      () async {
-    api.sth = await signedHead(3, root3);
-    await audit.syncSth(api, force: true);
+  test(
+    'growth WITHOUT a valid consistency proof raises the rewrite alarm',
+    () async {
+      api.sth = await signedHead(3, root3);
+      await audit.syncSth(api, force: true);
 
-    api.sth = await signedHead(5, root5);
-    api.consistency = {
-      'proof': [cons3to5[1], cons3to5[0], cons3to5[2], cons3to5[3]], // shuffled
-    };
-    await audit.syncSth(api, force: true);
+      api.sth = await signedHead(5, root5);
+      api.consistency = {
+        'proof': [
+          cons3to5[1],
+          cons3to5[0],
+          cons3to5[2],
+          cons3to5[3],
+        ], // shuffled
+      };
+      await audit.syncSth(api, force: true);
 
-    final alarm = await audit.currentAlarm();
-    expect(alarm, isNotNull);
-    expect(alarm!['reason'], contains('rewritten'));
-  });
+      final alarm = await audit.currentAlarm();
+      expect(alarm, isNotNull);
+      expect(alarm!['reason'], contains('rewritten'));
+    },
+  );
 
   test('a swapped log key raises the key-change alarm', () async {
     api.sth = await signedHead(5, root5);
@@ -168,16 +187,121 @@ void main() {
     expect(alarm, isNotNull);
     expect(alarm!['reason'], contains('key changed'));
   });
+
+  test('own event with a valid inclusion proof verifies', () async {
+    final head = await signedHead(5, root5);
+    api.sth = head;
+    await audit.syncSth(api, force: true);
+    api.inclusionHandler = (_) async => {
+      'leaf_index': 2,
+      'tree_size': 5,
+      'root_hash': root5,
+      'signature': head['signature'],
+      'proof': inclusionLeaf2Of5,
+    };
+
+    final status = await audit.auditOwnInclusion(api, [_event('EV2')]);
+
+    expect(status, KtInclusionStatus.verified);
+    expect(await audit.currentAlarm(), isNull);
+  });
+
+  test('409 NOT_YET_SIGNED is pending and never alarms', () async {
+    api.sth = await signedHead(5, root5);
+    await audit.syncSth(api, force: true);
+    api.inclusionHandler = (_) async =>
+        throw ApiException(409, 'NOT_YET_SIGNED', 'retry after the next head');
+
+    final status = await audit.auditOwnInclusion(api, [_event('EV6')]);
+
+    expect(status, KtInclusionStatus.pending);
+    expect(await audit.currentAlarm(), isNull);
+  });
+
+  test('404 NOT_FOUND raises the not-in-log alarm', () async {
+    api.sth = await signedHead(5, root5);
+    await audit.syncSth(api, force: true);
+    api.inclusionHandler = (_) async =>
+        throw ApiException(404, 'NOT_FOUND', 'event hash is not in the log');
+
+    final status = await audit.auditOwnInclusion(api, [_event('EV2')]);
+
+    expect(status, KtInclusionStatus.alarm);
+    final alarm = await audit.currentAlarm();
+    expect(alarm, isNotNull);
+    expect(alarm!['reason'], contains('not in signed log'));
+  });
+
+  test(
+    'proof against an unsigned fabricated root is pending, not alarm',
+    () async {
+      api.sth = await signedHead(5, root5);
+      await audit.syncSth(api, force: true);
+      api.inclusionHandler = (_) async => {
+        'leaf_index': 2,
+        'tree_size': 5,
+        'root_hash': root3,
+        'signature': base64Encode(List<int>.filled(64, 9)),
+        'proof': inclusionLeaf2Of5,
+      };
+
+      final status = await audit.auditOwnInclusion(api, [_event('EV2')]);
+
+      expect(status, KtInclusionStatus.pending);
+      expect(await audit.currentAlarm(), isNull);
+    },
+  );
+
+  test('valid head with a mismatched inclusion proof raises alarm', () async {
+    final head = await signedHead(5, root5);
+    api.sth = head;
+    await audit.syncSth(api, force: true);
+    api.inclusionHandler = (_) async => {
+      'leaf_index': 3,
+      'tree_size': 5,
+      'root_hash': root5,
+      'signature': head['signature'],
+      'proof': inclusionLeaf2Of5,
+    };
+
+    final status = await audit.auditOwnInclusion(api, [_event('EV2')]);
+
+    expect(status, KtInclusionStatus.alarm);
+    final alarm = await audit.currentAlarm();
+    expect(alarm, isNotNull);
+    expect(alarm!['reason'], contains('not in signed log'));
+  });
 }
+
+KeyTransparencyEvent _event(String hash) => KeyTransparencyEvent(
+  id: 'event-$hash',
+  userId: 'user-1',
+  sequence: 1,
+  eventType: 'register',
+  newKeyFingerprint: 'FP',
+  newPublicKey: 'PGP',
+  eventHash: hash,
+  createdAt: DateTime.utc(2026, 1, 1),
+);
 
 class _FakeApi extends ApiService {
   _FakeApi(super.storage);
 
   Map<String, dynamic> sth = const {};
   Map<String, dynamic> consistency = const {'proof': <String>[]};
+  Future<Map<String, dynamic>> Function(String eventHash)? inclusionHandler;
 
   @override
   Future<Map<String, dynamic>> getKtSth() async => sth;
+
+  @override
+  Future<Map<String, dynamic>> getKtInclusionProof(String eventHash) async {
+    final handler = inclusionHandler;
+    if (handler == null) {
+      throw ApiException(404, 'NOT_FOUND', 'event hash is not in the log');
+    }
+    return handler(eventHash);
+  }
 
   @override
   Future<Map<String, dynamic>> getKtConsistencyProof(int from, int to) async =>

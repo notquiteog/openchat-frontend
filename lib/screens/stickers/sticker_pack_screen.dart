@@ -2,9 +2,11 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../config/api_config.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
+import '../../utils/pack_links.dart';
 import '../../widgets/glass.dart';
 import 'sticker_discover_screen.dart';
 import 'sticker_editor_screen.dart';
@@ -150,20 +152,18 @@ class _StickerPackScreenState extends State<StickerPackScreen> {
                   Icon(
                     Icons.emoji_emotions_outlined,
                     size: 72,
-                    color: Theme.of(context)
-                        .colorScheme
-                        .onSurface
-                        .withValues(alpha: 0.35),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.35),
                   ),
                   const SizedBox(height: 16),
                   Text(
                     'No sticker packs yet',
                     style: TextStyle(
                       fontSize: 16,
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withValues(alpha: 0.55),
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.onSurface.withValues(alpha: 0.55),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -221,8 +221,9 @@ class _StickerPackScreenState extends State<StickerPackScreen> {
                                     height: 48,
                                     child: coverUrl != null
                                         ? CachedNetworkImage(
-                                            imageUrl:
-                                                ApiConfig.resolveMedia(coverUrl),
+                                            imageUrl: ApiConfig.resolveMedia(
+                                              coverUrl,
+                                            ),
                                             fit: BoxFit.cover,
                                             errorWidget: (_, _, _) => Icon(
                                               Icons.emoji_emotions,
@@ -230,8 +231,11 @@ class _StickerPackScreenState extends State<StickerPackScreen> {
                                               color: scheme.primary,
                                             ),
                                           )
-                                        : Icon(Icons.emoji_emotions,
-                                            size: 36, color: scheme.primary),
+                                        : Icon(
+                                            Icons.emoji_emotions,
+                                            size: 36,
+                                            color: scheme.primary,
+                                          ),
                                   ),
                                 ),
                                 const SizedBox(width: 14),
@@ -244,7 +248,8 @@ class _StickerPackScreenState extends State<StickerPackScreen> {
                                       Text(
                                         pack['name'] as String? ?? 'Pack',
                                         style: const TextStyle(
-                                            fontWeight: FontWeight.w600),
+                                          fontWeight: FontWeight.w600,
+                                        ),
                                       ),
                                       Text(
                                         isOwner
@@ -252,17 +257,21 @@ class _StickerPackScreenState extends State<StickerPackScreen> {
                                             : '$count stickers · Added',
                                         style: TextStyle(
                                           fontSize: 13,
-                                          color: scheme.onSurface
-                                              .withValues(alpha: 0.55),
+                                          color: scheme.onSurface.withValues(
+                                            alpha: 0.55,
+                                          ),
                                         ),
                                       ),
                                     ],
                                   ),
                                 ),
-                                Icon(Icons.chevron_right,
-                                    size: 18,
-                                    color: scheme.onSurface
-                                        .withValues(alpha: 0.35)),
+                                Icon(
+                                  Icons.chevron_right,
+                                  size: 18,
+                                  color: scheme.onSurface.withValues(
+                                    alpha: 0.35,
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -295,6 +304,16 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
   void initState() {
     super.initState();
     _pack = widget.initialPack;
+  }
+
+  Future<void> _sharePack() async {
+    final packId = _pack['id']?.toString() ?? '';
+    if (packId.isEmpty) return;
+    final name = _pack['name']?.toString() ?? 'Sticker pack';
+    final link = packDeepLink(kind: PackKind.sticker, packId: packId);
+    await SharePlus.instance.share(
+      ShareParams(text: link, subject: '$name sticker pack'),
+    );
   }
 
   Future<void> _reload() async {
@@ -557,15 +576,19 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
         actions: isOwner
             ? [
                 IconButton(
+                  icon: const Icon(Icons.ios_share_rounded),
+                  tooltip: 'Share pack',
+                  onPressed: _sharePack,
+                ),
+                IconButton(
                   icon: const Icon(Icons.auto_fix_high_rounded),
                   tooltip: 'Create from photo',
                   onPressed: () async {
                     final added = await Navigator.push<bool>(
                       context,
                       MaterialPageRoute<bool>(
-                        builder: (_) => StickerEditorScreen(
-                          packId: _pack['id'] as String,
-                        ),
+                        builder: (_) =>
+                            StickerEditorScreen(packId: _pack['id'] as String),
                       ),
                     );
                     if (added == true) await _reload();
@@ -583,6 +606,11 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                 ),
               ]
             : [
+                IconButton(
+                  icon: const Icon(Icons.ios_share_rounded),
+                  tooltip: 'Share pack',
+                  onPressed: _sharePack,
+                ),
                 IconButton(
                   icon: const Icon(Icons.bookmark_remove_outlined),
                   tooltip: 'Remove from library',

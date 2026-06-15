@@ -175,6 +175,51 @@ void main() {
     },
   );
 
+  test(
+    'CallHistoryService.delete removes one row without dropping the key',
+    () async {
+      final storage = SecureStorageService();
+      final callHistory = CallHistoryService(
+        storage,
+        databasePath: ':memory:',
+        keyLoader: testKey,
+      );
+      await callHistory.record(
+        CallHistoryEntry(
+          id: 'call-delete',
+          conversationId: 'conv-delete',
+          peerUserId: 'peer-delete',
+          peerUsername: 'delete-me',
+          isVideo: false,
+          direction: CallDirection.incoming,
+          outcome: CallOutcomeKind.missed,
+          startedAt: DateTime.utc(2026, 6, 1),
+        ),
+      );
+      await callHistory.record(
+        CallHistoryEntry(
+          id: 'call-keep',
+          conversationId: 'conv-keep',
+          peerUserId: 'peer-keep',
+          peerUsername: 'keep-me',
+          isVideo: true,
+          direction: CallDirection.outgoing,
+          outcome: CallOutcomeKind.answered,
+          startedAt: DateTime.utc(2026, 6, 2),
+          durationSecs: 91,
+        ),
+      );
+
+      await callHistory.delete('call-delete');
+
+      final entries = await callHistory.list();
+      expect(entries, hasLength(1));
+      expect(entries.single.id, 'call-keep');
+      expect(entries.single.peerUsername, 'keep-me');
+      expect(entries.single.durationSecs, 91);
+    },
+  );
+
   test('ChatProvider.clearState wipes the decrypted-message cache', () async {
     final storage = SecureStorageService();
     final cache = _WipeRecordingCache(storage);

@@ -3,8 +3,13 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import '../crypto/kt_log_verify.dart';
+import '../models/key_transparency_event.dart';
 import 'api_service.dart';
 import 'secure_storage_service.dart';
+
+enum KtInclusionStatus { unknown, verified, pending, alarm }
+
+enum _KtInclusionOutcome { verified, pending, notIncluded }
 
 /// Audits the server's key-transparency Merkle log from this client's view:
 /// pins the log key on first contact, verifies every new signed tree head is
@@ -18,7 +23,7 @@ class KtAuditService {
   final SecureStorageService _storage;
 
   KtAuditService({SecureStorageService? storage})
-      : _storage = storage ?? SecureStorageService();
+    : _storage = storage ?? SecureStorageService();
 
   static DateTime _lastSync = DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -65,6 +70,160 @@ class KtAuditService {
       publicKey: '', // gossip never carries a key — only the pinned one counts
       source: 'gossip',
     );
+  }
+
+  /// Verifies that this account's per-user key events are also present in a
+  /// signed, append-only global KT log head. Best-effort: transient/network or
+  /// unverifiable-head failures become `pending`; only a signed/reconciled root
+  /// with a missing or invalid inclusion proof raises the sticky alarm.
+  Future<KtInclusionStatus> auditOwnInclusion(
+    ApiService api,
+    List<KeyTransparencyEvent> ownEvents,
+  ) async {
+    if (ownEvents.isEmpty) return KtInclusionStatus.unknown;
+    final cached = await _storage.getKtSthCache();
+    if (cached == null) return KtInclusionStatus.pending;
+    final pinnedKey = cached['public_key']?.toString() ?? '';
+    final cachedSize = (cached['tree_size'] as num?)?.toInt() ?? 0;
+    final cachedRoot = cached['root_hash']?.toString() ?? '';
+    if (pinnedKey.isEmpty || cachedSize <= 0 || cachedRoot.isEmpty) {
+      return KtInclusionStatus.pending;
+    }
+
+    var sawPending = false;
+    for (final event in ownEvents) {
+      final outcome = await _auditOwnEventInclusion(
+        api,
+        event,
+        pinnedKey: pinnedKey,
+        cachedSize: cachedSize,
+        cachedRoot: cachedRoot,
+      );
+      switch (outcome) {
+        case _KtInclusionOutcome.verified:
+          break;
+        case _KtInclusionOutcome.pending:
+          sawPending = true;
+        case _KtInclusionOutcome.notIncluded:
+          return KtInclusionStatus.alarm;
+      }
+    }
+    return sawPending ? KtInclusionStatus.pending : KtInclusionStatus.verified;
+  }
+
+  Future<_KtInclusionOutcome> _auditOwnEventInclusion(
+    ApiService api,
+    KeyTransparencyEvent event, {
+    required String pinnedKey,
+    required int cachedSize,
+    required String cachedRoot,
+  }) async {
+    Map<String, dynamic> proof;
+    try {
+      proof = await api.getKtInclusionProof(event.eventHash);
+    } on ApiException catch (error) {
+      if (error.statusCode == 409 && error.code == 'NOT_YET_SIGNED') {
+        return _KtInclusionOutcome.pending;
+      }
+      if (error.statusCode == 404 && error.code == 'NOT_FOUND') {
+        await _raiseAlarm('own event not in signed log', {
+          'event_hash': event.eventHash,
+          'sequence': event.sequence,
+          'cached_size': cachedSize,
+          'cached_root': cachedRoot,
+          'server_code': error.code,
+        });
+        return _KtInclusionOutcome.notIncluded;
+      }
+      return _KtInclusionOutcome.pending;
+    } catch (_) {
+      return _KtInclusionOutcome.pending;
+    }
+
+    try {
+      final proofSize = (proof['tree_size'] as num?)?.toInt() ?? 0;
+      final proofRoot = proof['root_hash']?.toString() ?? '';
+      final proofSig = proof['signature']?.toString() ?? '';
+      final leafIndex = (proof['leaf_index'] as num?)?.toInt() ?? -1;
+      if (proofSize <= 0 ||
+          proofRoot.isEmpty ||
+          proofSig.isEmpty ||
+          leafIndex < 0) {
+        return _KtInclusionOutcome.pending;
+      }
+
+      final signed = await KtLogVerify.verifySthSignature(
+        publicKeyB64: pinnedKey,
+        treeSize: proofSize,
+        rootHashHex: proofRoot,
+        signatureB64: proofSig,
+      );
+      if (!signed) return _KtInclusionOutcome.pending;
+
+      final reconciled = await _proofHeadReconcilesWithCachedHead(
+        api,
+        proofSize: proofSize,
+        proofRoot: proofRoot,
+        cachedSize: cachedSize,
+        cachedRoot: cachedRoot,
+      );
+      if (!reconciled) return _KtInclusionOutcome.pending;
+
+      final included = KtLogVerify.verifyInclusion(
+        leaf: KtLogVerify.leafHash(utf8.encode(event.eventHash)),
+        index: leafIndex,
+        treeSize: proofSize,
+        proof: ((proof['proof'] as List?) ?? const [])
+            .map((p) => KtLogVerify.hexToBytes(p.toString()))
+            .toList(),
+        root: KtLogVerify.hexToBytes(proofRoot),
+      );
+      if (included) return _KtInclusionOutcome.verified;
+
+      await _raiseAlarm('own event not in signed log', {
+        'event_hash': event.eventHash,
+        'sequence': event.sequence,
+        'leaf_index': leafIndex,
+        'proof_size': proofSize,
+        'proof_root': proofRoot,
+        'pinned_size': cachedSize,
+        'pinned_root': cachedRoot,
+      });
+      return _KtInclusionOutcome.notIncluded;
+    } catch (_) {
+      return _KtInclusionOutcome.pending;
+    }
+  }
+
+  Future<bool> _proofHeadReconcilesWithCachedHead(
+    ApiService api, {
+    required int proofSize,
+    required String proofRoot,
+    required int cachedSize,
+    required String cachedRoot,
+  }) async {
+    if (proofSize == cachedSize) return proofRoot == cachedRoot;
+    final from = proofSize < cachedSize ? proofSize : cachedSize;
+    final to = proofSize < cachedSize ? cachedSize : proofSize;
+    if (from <= 0 || to <= 0 || from > to) return false;
+    try {
+      final consistency = await api.getKtConsistencyProof(from, to);
+      return KtLogVerify.verifyConsistency(
+        m: from,
+        n: to,
+        oldRoot: KtLogVerify.hexToBytes(
+          proofSize < cachedSize ? proofRoot : cachedRoot,
+        ),
+        newRoot: KtLogVerify.hexToBytes(
+          proofSize < cachedSize ? cachedRoot : proofRoot,
+        ),
+        proof: ((consistency['proof'] as List?) ?? const [])
+            .map((p) => KtLogVerify.hexToBytes(p.toString()))
+            .toList(),
+      );
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> _ingestVerifiedHead(

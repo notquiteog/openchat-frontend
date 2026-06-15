@@ -12,8 +12,11 @@ import '../models/message.dart';
 import '../models/message_reminder.dart';
 import '../services/local_private_state_service.dart';
 import '../services/notification_service.dart';
+import '../utils/global_notification_pause.dart';
 import '../utils/local_conversation_preferences.dart';
 import '../utils/smart_inbox_filter.dart';
+
+enum CallDataSaverMode { off, on, auto }
 
 /// Per-chat visual customization.
 class ChatStyle {
@@ -172,6 +175,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kPinnedChannelMessagesPrefix = 'pinned_channel_messages_';
   static const _kPushEnabled = 'push_notifications_enabled';
   static const _kWsBgEnabled = 'ws_background_enabled';
+  static const _kLaunchAtLogin = 'launch_at_login';
   static const _kNotifSensitive = 'notification_sensitive_content';
   static const _kStrictPrivacyMode = 'strict_privacy_mode';
   static const _kLinkPreviewsEnabled = 'link_previews_enabled';
@@ -180,6 +184,8 @@ class SettingsProvider extends ChangeNotifier {
   static const _kAutoDlWifi = 'auto_download_wifi';
   static const _kAutoDlMobile = 'auto_download_mobile';
   static const _kAutoDlMaxMb = 'auto_download_max_mb';
+  static const _kCallDataSaver = 'call_data_saver_mode';
+  static const _kCallVoiceOnlyMobile = 'call_voice_only_mobile';
   static const _kReduceTransparency = 'reduce_transparency';
   static const _kSmartInboxFilter = 'smart_inbox_filter';
   static const _kThemeMode = 'theme_mode';
@@ -233,7 +239,12 @@ class SettingsProvider extends ChangeNotifier {
   bool _botsOwnTab = false;
   bool _pushEnabled = false;
   bool _wsBgEnabled = false;
+  bool _launchAtLogin = false;
   bool _notifSensitive = false;
+  DateTime? _notificationsPausedUntil;
+  int? _globalQuietHoursStartMinute;
+  int? _globalQuietHoursEndMinute;
+  bool _pauseAllowsCalls = true;
   bool _strictPrivacyMode = false;
   bool _linkPreviewsEnabled = true;
   double _messageFontScale = 1.0;
@@ -241,6 +252,8 @@ class SettingsProvider extends ChangeNotifier {
   bool _autoDownloadWifi = true;
   bool _autoDownloadMobile = true;
   int _autoDownloadMaxMb = 0; // 0 = no size cap
+  CallDataSaverMode _callDataSaverMode = CallDataSaverMode.off;
+  bool _callVoiceOnlyOnMobile = false;
   bool _reduceTransparency = false;
   List<String> _recentReactions = const [];
   SmartInboxFilter _smartInboxFilter = SmartInboxFilter.all;
@@ -262,6 +275,8 @@ class SettingsProvider extends ChangeNotifier {
   final Set<String> _viewedOnceMediaMessageIds = {};
   final Map<String, ConversationNotificationPreference>
   _conversationNotificationPreferences = {};
+  final Map<String, ConversationPrivacyPreference>
+  _conversationPrivacyPreferences = {};
 
   int get seedColorValue => _seedColor;
   Color get seedColor => Color(_seedColor);
@@ -359,6 +374,9 @@ class SettingsProvider extends ChangeNotifier {
   get conversationNotificationPreferences => Map.unmodifiable(
     _effectiveConversationNotificationPreferences(DateTime.now()),
   );
+  Map<String, ConversationPrivacyPreference>
+  get conversationPrivacyPreferences =>
+      Map.unmodifiable(_conversationPrivacyPreferences);
   Set<String> get mutedConversationIds => Set.unmodifiable(
     activeMutedConversationIds(_conversationNotificationPreferences),
   );
@@ -373,11 +391,58 @@ class SettingsProvider extends ChangeNotifier {
   /// Background WebSocket connection. Off by default (opt-in, battery warning shown on enable).
   bool get wsBackgroundEnabled => _wsBgEnabled;
 
+  /// Desktop OS autostart. Device-level and intentionally survives logout.
+  bool get launchAtLogin => _launchAtLogin;
+
   /// Show sender name + message preview in notifications. Off = generic "New message" text.
   ///
   /// This is the single notification-content control. Strict privacy handles
   /// live metadata surfaces instead of silently rewriting this preference.
   bool get notificationSensitiveContent => _notifSensitive;
+
+  /// Timed pause expiry, or the internal indefinite sentinel date.
+  DateTime? get notificationsPausedUntil => _notificationsPausedUntil;
+
+  int? get globalQuietHoursStartMinute => _globalQuietHoursStartMinute;
+  int? get globalQuietHoursEndMinute => _globalQuietHoursEndMinute;
+  bool get pauseAllowsCalls => _pauseAllowsCalls;
+
+  bool get hasManualNotificationPause => notificationPauseUntilIsActiveAt(
+    DateTime.now(),
+    _notificationsPausedUntilMs,
+  );
+
+  bool get isNotificationsPaused => isGloballyPausedAt(
+    DateTime.now(),
+    pausedUntilMs: _notificationsPausedUntilMs,
+    quietStartMinute: _globalQuietHoursStartMinute,
+    quietEndMinute: _globalQuietHoursEndMinute,
+  );
+
+  String get pauseStatusLabel {
+    final now = DateTime.now();
+    if (notificationPauseIsIndefiniteDate(_notificationsPausedUntil)) {
+      return 'Paused until you resume';
+    }
+    final pausedUntil = _notificationsPausedUntil;
+    if (pausedUntil != null && pausedUntil.isAfter(now)) {
+      return 'Paused until ${_formatDateTimeShort(pausedUntil)}';
+    }
+    if (globalQuietHoursAreActiveAt(
+      now,
+      quietStartMinute: _globalQuietHoursStartMinute,
+      quietEndMinute: _globalQuietHoursEndMinute,
+    )) {
+      return 'Quiet hours active';
+    }
+    if (_globalQuietHoursStartMinute != null &&
+        _globalQuietHoursEndMinute != null) {
+      return 'Quiet hours ${formatNotificationMinute(_globalQuietHoursStartMinute!)}-${formatNotificationMinute(_globalQuietHoursEndMinute!)}';
+    }
+    return 'Off';
+  }
+
+  int? get notificationPauseUntilMs => _notificationsPausedUntilMs;
 
   /// Local strict privacy mode disables presence-style metadata and link fetches.
   bool get strictPrivacyMode => _strictPrivacyMode;
@@ -401,6 +466,8 @@ class SettingsProvider extends ChangeNotifier {
   bool get autoDownloadWifi => _autoDownloadWifi;
   bool get autoDownloadMobile => _autoDownloadMobile;
   int get autoDownloadMaxMb => _autoDownloadMaxMb;
+  CallDataSaverMode get callDataSaverMode => _callDataSaverMode;
+  bool get callVoiceOnlyOnMobile => _callVoiceOnlyOnMobile;
 
   /// Whether media of [sizeBytes] may auto-download on the current [net].
   bool allowAutoDownload(NetworkClass net, {int? sizeBytes}) {
@@ -415,6 +482,15 @@ class SettingsProvider extends ChangeNotifier {
     }
     return true;
   }
+
+  bool dataSaverActive(NetworkClass net) => switch (_callDataSaverMode) {
+    CallDataSaverMode.off => false,
+    CallDataSaverMode.on => true,
+    CallDataSaverMode.auto => net == NetworkClass.mobile,
+  };
+
+  bool voiceOnlyForNetwork(NetworkClass net) =>
+      _callVoiceOnlyOnMobile && net == NetworkClass.mobile;
 
   Future<void> load() {
     _loadFuture ??= _load();
@@ -438,6 +514,7 @@ class SettingsProvider extends ChangeNotifier {
     );
     _channelsOwnTab = _prefs!.getBool(_kChannelsTab) ?? false;
     _botsOwnTab = _prefs!.getBool(_kBotsTab) ?? false;
+    _launchAtLogin = _prefs!.getBool(_kLaunchAtLogin) ?? false;
     final notificationSettings = decodePrivateNotificationSettings(
       privateState[privateStateNotificationSettingsKey],
     );
@@ -449,6 +526,15 @@ class SettingsProvider extends ChangeNotifier {
       await _persistPrivateLocalState();
     }
     _notifSensitive = notificationSettings.sensitiveContent;
+    _notificationsPausedUntil = _activePauseDateOrNull(
+      notificationSettings.notificationsPausedUntilMs,
+      DateTime.now(),
+    );
+    _globalQuietHoursStartMinute =
+        notificationSettings.globalQuietHoursStartMinute;
+    _globalQuietHoursEndMinute = notificationSettings.globalQuietHoursEndMinute;
+    _pauseAllowsCalls = notificationSettings.pauseAllowsCalls;
+    _syncGlobalNotificationPauseToService();
     _strictPrivacyMode = _prefs!.getBool(_kStrictPrivacyMode) ?? false;
     _linkPreviewsEnabled = _prefs!.getBool(_kLinkPreviewsEnabled) ?? true;
     _messageFontScale = (_prefs!.getDouble(_kMessageFontScale) ?? 1.0).clamp(
@@ -460,6 +546,11 @@ class SettingsProvider extends ChangeNotifier {
     _autoDownloadWifi = _prefs!.getBool(_kAutoDlWifi) ?? true;
     _autoDownloadMobile = _prefs!.getBool(_kAutoDlMobile) ?? true;
     _autoDownloadMaxMb = _prefs!.getInt(_kAutoDlMaxMb) ?? 0;
+    _callDataSaverMode = CallDataSaverMode.values.firstWhere(
+      (mode) => mode.name == _prefs!.getString(_kCallDataSaver),
+      orElse: () => CallDataSaverMode.off,
+    );
+    _callVoiceOnlyOnMobile = _prefs!.getBool(_kCallVoiceOnlyMobile) ?? false;
     _reduceTransparency = _prefs!.getBool(_kReduceTransparency) ?? false;
     _recentReactions = _prefs!.getStringList(_kRecentReactions) ?? const [];
     _smartInboxFilter = smartInboxFilterFromName(
@@ -499,6 +590,13 @@ class SettingsProvider extends ChangeNotifier {
       ..addAll(
         decodePrivateConversationNotificationPreferences(
           privateState[privateStateConversationNotificationPreferencesKey],
+        ),
+      );
+    _conversationPrivacyPreferences
+      ..clear()
+      ..addAll(
+        decodeConversationPrivacyPreferences(
+          privateState[privateStateConversationPrivacyPreferencesKey],
         ),
       );
     _dropExpiredConversationNotificationPreferences(DateTime.now());
@@ -595,6 +693,11 @@ class SettingsProvider extends ChangeNotifier {
     _pushEnabled = notificationDefaults.pushEnabled;
     _wsBgEnabled = notificationDefaults.wsBackgroundEnabled;
     _notifSensitive = notificationDefaults.sensitiveContent;
+    _notificationsPausedUntil = null;
+    _globalQuietHoursStartMinute = null;
+    _globalQuietHoursEndMinute = null;
+    _pauseAllowsCalls = notificationDefaults.pauseAllowsCalls;
+    _syncGlobalNotificationPauseToService();
     _messageDrafts.clear();
     _pinnedChannelMessages.clear();
     _pinnedConversationIds.clear();
@@ -602,6 +705,7 @@ class SettingsProvider extends ChangeNotifier {
     _archivedConversationIds.clear();
     _hiddenConversationIds.clear();
     _conversationNotificationPreferences.clear();
+    _conversationPrivacyPreferences.clear();
     _chatFolders.clear();
     _broadcastLists.clear();
     _recentStickerIds.clear();
@@ -659,6 +763,18 @@ class SettingsProvider extends ChangeNotifier {
     _autoDownloadMaxMb = value < 0 ? 0 : value;
     notifyListeners();
     await _prefs?.setInt(_kAutoDlMaxMb, _autoDownloadMaxMb);
+  }
+
+  Future<void> setCallDataSaverMode(CallDataSaverMode mode) async {
+    _callDataSaverMode = mode;
+    notifyListeners();
+    await _prefs?.setString(_kCallDataSaver, mode.name);
+  }
+
+  Future<void> setCallVoiceOnlyOnMobile(bool value) async {
+    _callVoiceOnlyOnMobile = value;
+    notifyListeners();
+    await _prefs?.setBool(_kCallVoiceOnlyMobile, value);
   }
 
   Future<void> setChannelsOwnTab(bool value) async {
@@ -1056,6 +1172,60 @@ class SettingsProvider extends ChangeNotifier {
     );
   }
 
+  ConversationPrivacyPreference privacyPreferenceForConversation(
+    String convID,
+  ) {
+    return _conversationPrivacyPreferences[convID] ??
+        const ConversationPrivacyPreference();
+  }
+
+  bool shareTypingForConversation(String convID) => resolveShareTyping(
+    perChat: privacyPreferenceForConversation(convID).shareTyping,
+    globalStrict: _strictPrivacyMode,
+  );
+
+  bool shareReadReceiptsForConversation(String convID) =>
+      resolveShareReadReceipts(
+        perChat: privacyPreferenceForConversation(convID).shareReadReceipts,
+        globalStrict: _strictPrivacyMode,
+      );
+
+  Future<void> setConversationPrivacyPreference(
+    String convID,
+    ConversationPrivacyPreference preference,
+  ) async {
+    if (convID.trim().isEmpty) return;
+    final current = privacyPreferenceForConversation(convID);
+    if (current == preference) return;
+    if (preference.isDefault) {
+      _conversationPrivacyPreferences.remove(convID);
+    } else {
+      _conversationPrivacyPreferences[convID] = preference;
+    }
+    notifyListeners();
+    await _persistPrivateLocalState();
+  }
+
+  Future<void> setConversationShareTyping(String convID, bool? value) {
+    final preference = privacyPreferenceForConversation(convID);
+    return setConversationPrivacyPreference(
+      convID,
+      value == null
+          ? preference.copyWith(clearShareTyping: true)
+          : preference.copyWith(shareTyping: value),
+    );
+  }
+
+  Future<void> setConversationShareReadReceipts(String convID, bool? value) {
+    final preference = privacyPreferenceForConversation(convID);
+    return setConversationPrivacyPreference(
+      convID,
+      value == null
+          ? preference.copyWith(clearShareReadReceipts: true)
+          : preference.copyWith(shareReadReceipts: value),
+    );
+  }
+
   Map<String, ConversationNotificationPreference>
   _effectiveConversationNotificationPreferences(DateTime now) {
     final effective = <String, ConversationNotificationPreference>{};
@@ -1088,11 +1258,17 @@ class SettingsProvider extends ChangeNotifier {
         pushEnabled: _pushEnabled,
         wsBackgroundEnabled: _wsBgEnabled,
         sensitiveContent: _notifSensitive,
+        notificationsPausedUntilMs: _notificationsPausedUntilMs,
+        globalQuietHoursStartMinute: _globalQuietHoursStartMinute,
+        globalQuietHoursEndMinute: _globalQuietHoursEndMinute,
+        pauseAllowsCalls: _pauseAllowsCalls,
       ),
       privateStateConversationNotificationPreferencesKey:
           encodePrivateConversationNotificationPreferences(
             _conversationNotificationPreferences,
           ),
+      privateStateConversationPrivacyPreferencesKey:
+          encodeConversationPrivacyPreferences(_conversationPrivacyPreferences),
       privateStateChatFoldersKey: encodePrivateChatFolders(_chatFolders),
       privateStateBroadcastListsKey: encodePrivateBroadcastLists(
         _broadcastLists,
@@ -1155,6 +1331,45 @@ class SettingsProvider extends ChangeNotifier {
       if (position != 0) return position;
       return a.name.toLowerCase().compareTo(b.name.toLowerCase());
     });
+  }
+
+  int? get _notificationsPausedUntilMs {
+    final pausedUntil = _notificationsPausedUntil;
+    if (pausedUntil == null) return null;
+    return notificationPauseMsFromDate(pausedUntil);
+  }
+
+  DateTime? _activePauseDateOrNull(int? pausedUntilMs, DateTime now) {
+    if (pausedUntilMs == null) return null;
+    if (notificationPauseIsIndefiniteMs(pausedUntilMs)) {
+      return notificationPauseDateFromMs(pausedUntilMs);
+    }
+    final date = notificationPauseDateFromMs(pausedUntilMs);
+    if (date == null || !date.isAfter(now)) return null;
+    return date;
+  }
+
+  void _syncGlobalNotificationPauseToService() {
+    NotificationService.setGlobalNotificationPause(
+      pausedUntil: _notificationsPausedUntil,
+      quietStart: _globalQuietHoursStartMinute,
+      quietEnd: _globalQuietHoursEndMinute,
+      allowsCalls: _pauseAllowsCalls,
+    );
+  }
+
+  String _formatDateTimeShort(DateTime value) {
+    final local = value.toLocal();
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '${local.month}/${local.day} $hour:$minute';
+  }
+
+  static String formatNotificationMinute(int minuteOfDay) {
+    final minute = minuteOfDay.clamp(0, 1439).toInt();
+    final hour = (minute ~/ 60).toString().padLeft(2, '0');
+    final minutePart = (minute % 60).toString().padLeft(2, '0');
+    return '$hour:$minutePart';
   }
 
   String _formatMuteUntil(DateTime mutedUntil) {
@@ -1299,11 +1514,82 @@ class SettingsProvider extends ChangeNotifier {
     await _prefs?.remove(_kPushEnabled);
   }
 
+  Future<void> setLaunchAtLogin(bool value) async {
+    _launchAtLogin = value;
+    notifyListeners();
+    await _prefs?.setBool(_kLaunchAtLogin, value);
+  }
+
   Future<void> setNotificationSensitiveContent(bool value) async {
     _notifSensitive = value;
     notifyListeners();
     await _persistPrivateLocalState();
     await _prefs?.remove(_kNotifSensitive);
+  }
+
+  Future<void> pauseNotificationsFor(Duration duration) {
+    if (duration <= Duration.zero) return resumeNotifications();
+    return pauseNotificationsUntil(DateTime.now().add(duration));
+  }
+
+  Future<void> pauseNotificationsUntil(DateTime until) async {
+    final normalized = until.toLocal();
+    if (!normalized.isAfter(DateTime.now())) {
+      await resumeNotifications();
+      return;
+    }
+    _notificationsPausedUntil = normalized;
+    _syncGlobalNotificationPauseToService();
+    notifyListeners();
+    await _persistPrivateLocalState();
+  }
+
+  Future<void> pauseNotificationsIndefinitely() async {
+    _notificationsPausedUntil = notificationPauseDateFromMs(
+      notificationPauseIndefiniteUntilMs,
+    );
+    _syncGlobalNotificationPauseToService();
+    notifyListeners();
+    await _persistPrivateLocalState();
+  }
+
+  Future<void> resumeNotifications() async {
+    if (_notificationsPausedUntil == null) return;
+    _notificationsPausedUntil = null;
+    _syncGlobalNotificationPauseToService();
+    notifyListeners();
+    await _persistPrivateLocalState();
+  }
+
+  Future<void> setGlobalQuietHours({
+    required int startMinute,
+    required int endMinute,
+  }) async {
+    _globalQuietHoursStartMinute = startMinute.clamp(0, 1439).toInt();
+    _globalQuietHoursEndMinute = endMinute.clamp(0, 1439).toInt();
+    _syncGlobalNotificationPauseToService();
+    notifyListeners();
+    await _persistPrivateLocalState();
+  }
+
+  Future<void> clearGlobalQuietHours() async {
+    if (_globalQuietHoursStartMinute == null &&
+        _globalQuietHoursEndMinute == null) {
+      return;
+    }
+    _globalQuietHoursStartMinute = null;
+    _globalQuietHoursEndMinute = null;
+    _syncGlobalNotificationPauseToService();
+    notifyListeners();
+    await _persistPrivateLocalState();
+  }
+
+  Future<void> setPauseAllowsCalls(bool value) async {
+    if (_pauseAllowsCalls == value) return;
+    _pauseAllowsCalls = value;
+    _syncGlobalNotificationPauseToService();
+    notifyListeners();
+    await _persistPrivateLocalState();
   }
 
   Future<void> setStrictPrivacyMode(bool value) async {

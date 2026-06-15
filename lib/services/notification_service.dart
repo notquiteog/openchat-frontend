@@ -6,6 +6,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest_all.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 import 'package:window_manager/window_manager.dart';
+import '../utils/global_notification_pause.dart';
 import '../utils/local_conversation_preferences.dart';
 
 @pragma('vm:entry-point')
@@ -66,6 +67,12 @@ class NotificationService {
       importance: Importance.high,
     ),
     AndroidNotificationChannel(
+      'security_alerts',
+      'Security alerts',
+      description: 'Security warnings for local protection features',
+      importance: Importance.high,
+    ),
+    AndroidNotificationChannel(
       'openchat_background',
       'OpenChat background service',
       description: 'Keeps OpenChat connected for background notifications',
@@ -83,6 +90,10 @@ class NotificationService {
   static Set<String> _mutedConversationIds = const {};
   static Map<String, ConversationNotificationPreference>
   _conversationNotificationPreferences = const {};
+  static DateTime? _notificationsPausedUntil;
+  static int? _globalQuietHoursStartMinute;
+  static int? _globalQuietHoursEndMinute;
+  static bool _pauseAllowsCalls = true;
   static const int _activeCallNotificationId = 2;
   static const String _activeCallEndActionId = 'openchat_call_end';
   static const String _activeCallMuteActionId = 'openchat_call_mute';
@@ -98,6 +109,7 @@ class NotificationService {
       'openchat_live_location_cancel';
   static const String _liveLocationCategory = 'openchat_live_location';
   static const String _messageReminderCategory = 'openchat_message_reminder';
+  static const String _securityAlertCategory = 'openchat_security_alert';
   static VoidCallback? _activeCallEndHandler;
   static VoidCallback? _activeCallToggleMuteHandler;
   static VoidCallback? _incomingCallAnswerHandler;
@@ -238,6 +250,7 @@ class NotificationService {
       await _plugin.cancel(id: conversationId.hashCode);
     } catch (_) {}
   }
+
   static void setConversationNotificationPreferences(
     Map<String, ConversationNotificationPreference> preferences,
   ) {
@@ -251,10 +264,35 @@ class NotificationService {
   static Map<String, ConversationNotificationPreference>
   get conversationNotificationPreferences =>
       _conversationNotificationPreferences;
+  static int? get globalNotificationPauseUntilMs =>
+      notificationPauseMsFromDate(_notificationsPausedUntil);
+  static int? get globalQuietHoursStartMinute => _globalQuietHoursStartMinute;
+  static int? get globalQuietHoursEndMinute => _globalQuietHoursEndMinute;
+  static bool get pauseAllowsCalls => _pauseAllowsCalls;
+
+  static void setGlobalNotificationPause({
+    DateTime? pausedUntil,
+    int? quietStart,
+    int? quietEnd,
+    bool allowsCalls = true,
+  }) {
+    _notificationsPausedUntil = pausedUntil;
+    _globalQuietHoursStartMinute = quietStart;
+    _globalQuietHoursEndMinute = quietEnd;
+    _pauseAllowsCalls = allowsCalls;
+  }
 
   @visibleForTesting
   static bool debugIsConversationMuted(String conversationId) =>
       _mutedConversationIds.contains(conversationId);
+
+  @visibleForTesting
+  static bool debugIsGloballyPaused(DateTime now) => isGloballyPausedAt(
+    now,
+    pausedUntilMs: notificationPauseMsFromDate(_notificationsPausedUntil),
+    quietStartMinute: _globalQuietHoursStartMinute,
+    quietEndMinute: _globalQuietHoursEndMinute,
+  );
 
   static void setAppFocused(bool focused) => _appFocused = focused;
 
@@ -629,7 +667,8 @@ class NotificationService {
         AndroidNotificationChannel(
           'messages_$id',
           'Messages (${messageNotificationSounds[id]})',
-          description: 'New messages with the ${messageNotificationSounds[id]} sound',
+          description:
+              'New messages with the ${messageNotificationSounds[id]} sound',
           importance: Importance.high,
           sound: RawResourceAndroidNotificationSound(id),
         ),
@@ -714,6 +753,7 @@ class NotificationService {
     String? notificationText,
   }) async {
     if (!_supported) return false;
+    if (debugIsGloballyPaused(DateTime.now())) return false;
     if (!shouldNotifyForConversation(
       conversationId: conversationId,
       preferences: _conversationNotificationPreferences,
@@ -779,6 +819,7 @@ class NotificationService {
     String? conversationId,
   }) async {
     if (!_supported) return;
+    if (debugIsGloballyPaused(DateTime.now()) && !_pauseAllowsCalls) return;
     // Per-chat mute / muted-until / quiet hours apply to calls too.
     // (Mentions-only does not — it's a message-volume control.)
     if (conversationId != null && conversationId.isNotEmpty) {
@@ -926,6 +967,9 @@ class NotificationService {
   static int _messageReminderNotificationId(String reminderId) =>
       _stableNotificationId('message_reminder', <String>[reminderId]);
 
+  static int _deadmanWarningNotificationId() =>
+      _stableNotificationId('deadman_warning', const <String>[]);
+
   static Future<void> _ensureTimeZonesInitialized() async {
     if (_timeZonesInitialized) return;
     tzdata.initializeTimeZones();
@@ -962,6 +1006,10 @@ class NotificationService {
   @visibleForTesting
   static int debugMessageReminderNotificationId(String reminderId) =>
       _messageReminderNotificationId(reminderId);
+
+  @visibleForTesting
+  static int get debugDeadmanWarningNotificationId =>
+      _deadmanWarningNotificationId();
 
   /// Notification ids that currently have a live-location notification posted.
   /// Re-showing an already-posted notification re-alerts on a backgrounded iOS
@@ -1157,6 +1205,37 @@ class NotificationService {
     await _plugin.cancel(id: _messageReminderNotificationId(reminderId));
   }
 
+  static Future<void> scheduleDeadmanWarning({required DateTime fireAt}) async {
+    if (!_supported) return;
+    if (!fireAt.isAfter(DateTime.now())) {
+      await cancelDeadmanWarning();
+      return;
+    }
+    await cancelDeadmanWarning();
+    final granted = await requestPermission();
+    if (!granted || !_available) return;
+    await _ensureTimeZonesInitialized();
+    try {
+      await _plugin.zonedSchedule(
+        id: _deadmanWarningNotificationId(),
+        title: 'OpenChat will auto-wipe soon',
+        body: 'Open OpenChat and unlock to keep your local data.',
+        scheduledDate: tz.TZDateTime.from(fireAt.toUtc(), tz.UTC),
+        notificationDetails: _deadmanWarningDetails,
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      );
+    } catch (e) {
+      debugPrint('Could not schedule dead-man warning notification: $e');
+    }
+  }
+
+  static Future<void> cancelDeadmanWarning() async {
+    if (!_supported) return;
+    await init();
+    if (!_available) return;
+    await _plugin.cancel(id: _deadmanWarningNotificationId());
+  }
+
   static String _messageReminderPayload({
     required String reminderId,
     String? conversationId,
@@ -1195,4 +1274,32 @@ class NotificationService {
         linux: LinuxNotificationDetails(),
         windows: WindowsNotificationDetails(),
       );
+
+  static const NotificationDetails _deadmanWarningDetails = NotificationDetails(
+    android: AndroidNotificationDetails(
+      'security_alerts',
+      'Security alerts',
+      channelDescription: 'Security warnings for local protection features',
+      importance: Importance.high,
+      priority: Priority.high,
+      category: AndroidNotificationCategory.alarm,
+      onlyAlertOnce: true,
+    ),
+    iOS: DarwinNotificationDetails(
+      categoryIdentifier: _securityAlertCategory,
+      presentBanner: true,
+      presentList: true,
+      presentSound: true,
+      interruptionLevel: InterruptionLevel.timeSensitive,
+    ),
+    macOS: DarwinNotificationDetails(
+      categoryIdentifier: _securityAlertCategory,
+      presentBanner: true,
+      presentList: true,
+      presentSound: true,
+      interruptionLevel: InterruptionLevel.timeSensitive,
+    ),
+    linux: LinuxNotificationDetails(),
+    windows: WindowsNotificationDetails(),
+  );
 }

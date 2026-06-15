@@ -42,7 +42,7 @@ Future<void> handleChatSearchSelection(
   BuildContext context,
   ChatSearchSelection selection, {
   void Function(Conversation conversation, String? initialMessageId)?
-      openConversation,
+  openConversation,
 }) async {
   final chat = context.read<ChatProvider>();
   switch (selection) {
@@ -60,16 +60,14 @@ Future<void> handleChatSearchSelection(
         }
       } catch (error) {
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(openDmErrorMessage(error))),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(openDmErrorMessage(error))));
       }
     case ChannelSearchSelection(:final channel):
       Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (_) => ChannelFeedScreen(channel: channel),
-        ),
+        MaterialPageRoute(builder: (_) => ChannelFeedScreen(channel: channel)),
       );
     case MessageSearchSelection(:final result):
       var conv = chat.conversations
@@ -125,6 +123,8 @@ class ChatSearchResultsView extends StatefulWidget {
 
 class _ChatSearchResultsViewState extends State<ChatSearchResultsView> {
   MessageSearchCategory? _messageCategory;
+  DateTimeRange? _dateRange;
+  String? _fromUser;
 
   @override
   Widget build(BuildContext context) {
@@ -140,8 +140,12 @@ class _ChatSearchResultsViewState extends State<ChatSearchResultsView> {
     final currentUserId = context.read<AuthProvider>().currentUser?.id ?? '';
 
     return FutureBuilder<_SearchResults>(
-      // Re-runs when the query or category changes (new future identity).
-      key: ValueKey('$term/${_messageCategory?.name}'),
+      // Re-runs when the query or any local-message filter changes.
+      key: ValueKey(
+        '$term/${_messageCategory?.name}/${_fromUser ?? ''}/'
+        '${_dateRange?.start.millisecondsSinceEpoch ?? ''}-'
+        '${_dateRange?.end.millisecondsSinceEpoch ?? ''}',
+      ),
       future: _search(api, chat, term),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
@@ -202,8 +206,14 @@ class _ChatSearchResultsViewState extends State<ChatSearchResultsView> {
               ),
             _MessageSearchFilters(
               selected: _messageCategory,
+              fromUser: _fromUser,
+              dateRange: _dateRange,
               onSelected: (category) =>
                   setState(() => _messageCategory = category),
+              onEditFromUser: _editFromUser,
+              onClearFromUser: () => setState(() => _fromUser = null),
+              onPickDateRange: _pickDateRange,
+              onClearDateRange: () => setState(() => _dateRange = null),
             ),
             if (results.messages.isNotEmpty) ...[
               _SearchSectionHeader(
@@ -270,11 +280,23 @@ class _ChatSearchResultsViewState extends State<ChatSearchResultsView> {
     final categories = _messageCategory == null
         ? null
         : <MessageSearchCategory>{_messageCategory!};
+    final fromUser = _normalizedFromUser(_fromUser);
+    // Global search cannot resolve a sender id without a conversation member
+    // list, so `from:@handle` becomes another encrypted-index token. The
+    // senderId filter remains available in MessageSearchService for future
+    // per-conversation search surfaces with known member ids.
+    final messageTerm = fromUser == null ? term : '$term $fromUser';
     final results = await Future.wait([
       api.searchUsers(term).catchError((_) => <User>[]),
       api.searchChannels(term).catchError((_) => <Conversation>[]),
       chat
-          .searchMessages(term, categories: categories, limit: 30)
+          .searchMessages(
+            messageTerm,
+            from: _dateRange?.start,
+            to: _dateRange?.end,
+            categories: categories,
+            limit: 30,
+          )
           .catchError((_) => <MessageSearchResult>[]),
     ]);
     return _SearchResults(
@@ -295,6 +317,61 @@ class _ChatSearchResultsViewState extends State<ChatSearchResultsView> {
     final convName = conv?.displayName(currentUserId) ?? 'Conversation';
     if (message.snippet.isEmpty) return convName;
     return '$convName - ${message.snippet}';
+  }
+
+  String? _normalizedFromUser(String? value) {
+    final normalized = value?.trim().replaceFirst(RegExp(r'^@+'), '');
+    if (normalized == null || normalized.isEmpty) return null;
+    return normalized;
+  }
+
+  Future<void> _editFromUser() async {
+    final controller = TextEditingController(text: _fromUser ?? '');
+    try {
+      final value = await showDialog<String>(
+        context: context,
+        builder: (ctx) => GlassAlertDialog(
+          icon: const Icon(Icons.alternate_email_rounded),
+          title: const Text('From user'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            textInputAction: TextInputAction.done,
+            decoration: const InputDecoration(
+              prefixText: '@',
+              hintText: 'username',
+            ),
+            onSubmitted: (value) => Navigator.pop(ctx, value),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, controller.text),
+              child: const Text('Apply'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || value == null) return;
+      setState(() => _fromUser = _normalizedFromUser(value));
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  Future<void> _pickDateRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2018),
+      lastDate: DateTime(now.year + 1, 12, 31),
+      initialDateRange: _dateRange,
+    );
+    if (!mounted || picked == null) return;
+    setState(() => _dateRange = picked);
   }
 }
 
@@ -333,11 +410,23 @@ class _SearchSectionHeader extends StatelessWidget {
 
 class _MessageSearchFilters extends StatelessWidget {
   final MessageSearchCategory? selected;
+  final String? fromUser;
+  final DateTimeRange? dateRange;
   final ValueChanged<MessageSearchCategory?> onSelected;
+  final VoidCallback onEditFromUser;
+  final VoidCallback onClearFromUser;
+  final VoidCallback onPickDateRange;
+  final VoidCallback onClearDateRange;
 
   const _MessageSearchFilters({
     required this.selected,
+    required this.fromUser,
+    required this.dateRange,
     required this.onSelected,
+    required this.onEditFromUser,
+    required this.onClearFromUser,
+    required this.onPickDateRange,
+    required this.onClearDateRange,
   });
 
   static const _options = <(String, MessageSearchCategory?)>[
@@ -353,25 +442,61 @@ class _MessageSearchFilters extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 44,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-        itemCount: _options.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 6),
-        itemBuilder: (context, i) {
-          final (label, category) = _options[i];
-          return GlassChip(
-            label: label,
-            selected: selected == category,
-            onTap: () => onSelected(category),
-          );
-        },
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: 44,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            itemCount: _options.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 6),
+            itemBuilder: (context, i) {
+              final (label, category) = _options[i];
+              return GlassChip(
+                label: label,
+                selected: selected == category,
+                onTap: () => onSelected(category),
+              );
+            },
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              GlassChip(
+                icon: const Icon(Icons.alternate_email_rounded),
+                label: fromUser == null ? 'From' : 'From: @$fromUser',
+                selected: fromUser != null,
+                onTap: onEditFromUser,
+                onDeleted: fromUser == null ? null : onClearFromUser,
+              ),
+              GlassChip(
+                icon: const Icon(Icons.date_range_outlined),
+                label: dateRange == null ? 'Date' : _dateRangeLabel(dateRange!),
+                selected: dateRange != null,
+                onTap: onPickDateRange,
+                onDeleted: dateRange == null ? null : onClearDateRange,
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
+
+String _dateRangeLabel(DateTimeRange range) {
+  final start = _shortDate(range.start);
+  final end = _shortDate(range.end);
+  return start == end ? start : '$start-$end';
+}
+
+String _shortDate(DateTime value) => '${value.month}/${value.day}';
 
 String _messageCategoryLabel(MessageSearchCategory category) =>
     switch (category) {

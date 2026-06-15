@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 
 import '../models/key_trust_pin.dart';
+import '../models/recent_nearby_peer.dart';
+import '../utils/app_lock_grace.dart';
 
 class SecureStorageStatus {
   final bool available;
@@ -75,10 +77,12 @@ class SecureStorageService {
   static const _keyAppLockPin = 'app_lock_pin_v1';
   static const _keyDuressPin = 'app_lock_duress_pin_v1';
   static const _keyDuressAction = 'app_lock_duress_action_v1';
+  static const _keyAppLockGraceSeconds = 'app_lock_grace_seconds_v1';
   static const _keyDeadmanDays = 'deadman_days_v1';
   static const _keyLastRealUnlockAt = 'last_real_unlock_at_v1';
   static const _keyRecoveryShareHeldPrefix = 'recovery_share_held_v1';
   static const _keyKtSthCache = 'kt_sth_cache_v1';
+  static const _keyAmfKeysCache = 'amf_keys_cache_v1';
   static const _keyKtLogAlarm = 'kt_log_alarm_v1';
   static const _keyForceTurn = 'force_turn_calls';
   static const _keyScreenSecurity = 'screen_security_enabled';
@@ -101,6 +105,9 @@ class SecureStorageService {
   static const _keySealedMessageControlsPrefix = 'sealed_message_controls_v1';
   static const _keyScheduledPlaintextPrefix = 'scheduled_plaintext_v1';
   static const _keySelfStateLogSequence = 'self_state_log_sequence_v1';
+  static const _keyRecentNearbyPeers = 'recent_nearby_peers_v1';
+  static const _keyRecentNearbyHistoryEnabled =
+      'recent_nearby_history_enabled_v1';
   static const _keyStorageProbe = '_openchat_secure_storage_probe';
 
   static const linuxKeyringWarning =
@@ -591,9 +598,7 @@ class SecureStorageService {
     } on PlatformException catch (error) {
       if (isRecoverableReadFailure(error)) {
         final random = Random.secure();
-        return base64Encode(
-          List<int>.generate(32, (_) => random.nextInt(256)),
-        );
+        return base64Encode(List<int>.generate(32, (_) => random.nextInt(256)));
       }
       rethrow;
     }
@@ -655,6 +660,16 @@ class SecureStorageService {
     value: enabled ? 'true' : 'false',
   );
 
+  Future<int> getAppLockGraceSeconds() async {
+    final raw = await _readOrNull(_keyAppLockGraceSeconds);
+    return normalizeAppLockGraceSeconds(int.tryParse(raw ?? ''));
+  }
+
+  Future<void> setAppLockGraceSeconds(int seconds) => _storage.write(
+    key: _keyAppLockGraceSeconds,
+    value: normalizeAppLockGraceSeconds(seconds).toString(),
+  );
+
   // Send jitter: random 200–1500ms delay before each message send, so a
   // traffic observer can't correlate keystroke/submit timing with ciphertext
   // departure. The bubble shows immediately (optimistic UI); only the wire
@@ -664,10 +679,8 @@ class SecureStorageService {
     return v == 'true';
   }
 
-  Future<void> setSendJitterEnabled(bool enabled) => _storage.write(
-    key: _keySendJitter,
-    value: enabled ? 'true' : 'false',
-  );
+  Future<void> setSendJitterEnabled(bool enabled) =>
+      _storage.write(key: _keySendJitter, value: enabled ? 'true' : 'false');
 
   // Force-TURN: route all call media through the relay so peers never see each
   // other's IP (defeats IP discovery; requires TURN to be configured).
@@ -686,11 +699,53 @@ class SecureStorageService {
     return v == 'true';
   }
 
-  Future<void> setScreenSecurity(bool enabled) =>
+  Future<void> setScreenSecurity(bool enabled) => _storage.write(
+    key: _keyScreenSecurity,
+    value: enabled ? 'true' : 'false',
+  );
+
+  // Nearby history: an opt-in, encrypted, device-local list of peers whose
+  // live mesh handshakes were already verified in person.
+  Future<bool> getRecentNearbyEnabled() async {
+    final v = await _readOrNull(_keyRecentNearbyHistoryEnabled);
+    return v == 'true';
+  }
+
+  Future<void> setRecentNearbyEnabled(bool enabled) => _storage.write(
+    key: _keyRecentNearbyHistoryEnabled,
+    value: enabled ? 'true' : 'false',
+  );
+
+  Future<List<RecentNearbyPeer>> getRecentNearbyPeers() async {
+    final raw = await _readOrNull(_keyRecentNearbyPeers);
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const [];
+      final peers =
+          decoded
+              .whereType<Map>()
+              .map(
+                (entry) =>
+                    RecentNearbyPeer.fromJson(Map<String, dynamic>.from(entry)),
+              )
+              .where((peer) => peer.fingerprint.isNotEmpty)
+              .toList()
+            ..sort((a, b) => b.lastSeenAt.compareTo(a.lastSeenAt));
+      return peers;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> saveRecentNearbyPeers(List<RecentNearbyPeer> peers) =>
       _storage.write(
-        key: _keyScreenSecurity,
-        value: enabled ? 'true' : 'false',
+        key: _keyRecentNearbyPeers,
+        value: jsonEncode(peers.map((peer) => peer.toJson()).toList()),
       );
+
+  Future<void> clearRecentNearbyPeers() =>
+      _storage.delete(key: _keyRecentNearbyPeers);
 
   // Proxy / SOCKS5 / Tor routing — stored as a small JSON blob.
   Future<String?> getProxyConfig() => _readOrNull(_keyProxyConfig);
@@ -721,9 +776,7 @@ class SecureStorageService {
   Future<void> setConversationPin(String convID, String pin) async {
     final pins = await _conversationPins();
     final rand = Random.secure();
-    final salt = base64Encode(
-      List<int>.generate(16, (_) => rand.nextInt(256)),
-    );
+    final salt = base64Encode(List<int>.generate(16, (_) => rand.nextInt(256)));
     final hash = sha256.convert(utf8.encode('$salt:$pin')).toString();
     pins[convID] = '$salt:$hash';
     await _storage.write(key: _keyConversationPins, value: jsonEncode(pins));
@@ -795,7 +848,10 @@ class SecureStorageService {
   /// does not reveal whether a duress PIN exists.
   Future<AppLockPinKind> classifyAppLockPin(String pin) async {
     final realMatch = _pinMatchesRecord(pin, await _readOrNull(_keyAppLockPin));
-    final duressMatch = _pinMatchesRecord(pin, await _readOrNull(_keyDuressPin));
+    final duressMatch = _pinMatchesRecord(
+      pin,
+      await _readOrNull(_keyDuressPin),
+    );
     if (realMatch) return AppLockPinKind.real;
     if (duressMatch) return AppLockPinKind.duress;
     return AppLockPinKind.invalid;
@@ -860,6 +916,22 @@ class SecureStorageService {
   Future<void> saveKtSthCache(Map<String, dynamic> head) =>
       _storage.write(key: _keyKtSthCache, value: jsonEncode(head));
 
+  /// The pinned AMF (Hecate) public key bundle, JSON:
+  /// {moderator_public_key, platform_public_key, signature, pinned_at}.
+  /// Trust-on-first-use: pinned from the server's own /.well-known/amf-keys.
+  Future<Map<String, dynamic>?> getAmfKeysCache() async {
+    final raw = await _readOrNull(_keyAmfKeysCache);
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> saveAmfKeysCache(Map<String, dynamic> bundle) =>
+      _storage.write(key: _keyAmfKeysCache, value: jsonEncode(bundle));
+
   /// A detected log-integrity violation (equivocation/rollback), JSON with
   /// reason + evidence. Deliberately sticky: only explicit user action in the
   /// Trust Center should ever clear it.
@@ -891,8 +963,9 @@ class SecureStorageService {
   Future<String?> getHeldRecoveryShare(String ownerUserId) =>
       _readOrNull(_scopedKey(_keyRecoveryShareHeldPrefix, ownerUserId));
 
-  Future<void> deleteHeldRecoveryShare(String ownerUserId) =>
-      _storage.delete(key: _scopedKey(_keyRecoveryShareHeldPrefix, ownerUserId));
+  Future<void> deleteHeldRecoveryShare(String ownerUserId) => _storage.delete(
+    key: _scopedKey(_keyRecoveryShareHeldPrefix, ownerUserId),
+  );
 
   /// owner user id → stored share JSON, for the Trust Center guardian list.
   Future<Map<String, String>> listHeldRecoveryShares() async {
@@ -928,8 +1001,11 @@ class SecureStorageService {
       _keyAppLockPin,
       _keyDuressPin,
       _keyDuressAction,
+      _keyAppLockGraceSeconds,
       _keyDeadmanDays,
       _keyLastRealUnlockAt,
+      _keyRecentNearbyPeers,
+      _keyRecentNearbyHistoryEnabled,
     };
     return {
       for (final entry in all.entries)
@@ -948,8 +1024,11 @@ class SecureStorageService {
       _keyAppLockPin,
       _keyDuressPin,
       _keyDuressAction,
+      _keyAppLockGraceSeconds,
       _keyDeadmanDays,
       _keyLastRealUnlockAt,
+      _keyRecentNearbyPeers,
+      _keyRecentNearbyHistoryEnabled,
     };
     for (final entry in values.entries) {
       if (blocked.contains(entry.key) || entry.value.isEmpty) continue;

@@ -9,12 +9,13 @@ Message _decryptedMessage({
   required String id,
   required MessageType type,
   required String raw,
+  String senderId = 'user-1',
   DateTime? createdAt,
 }) {
   final message = Message(
     id: id,
     conversationId: 'conv-1',
-    senderId: 'user-1',
+    senderId: senderId,
     type: type,
     encryptedPayload: 'ciphertext',
     signature: '',
@@ -78,4 +79,71 @@ void main() {
       );
     },
   );
+
+  test('filters search results by sender id', () async {
+    final service = _service();
+    final alice = _decryptedMessage(
+      id: 'msg-alice',
+      type: MessageType.text,
+      raw: 'Deploy notes',
+      senderId: 'user-alice',
+    );
+    final bob = _decryptedMessage(
+      id: 'msg-bob',
+      type: MessageType.text,
+      raw: 'Deploy notes',
+      senderId: 'user-bob',
+    );
+
+    await service.indexMessage(alice, conversationTitle: 'Planning');
+    await service.indexMessage(bob, conversationTitle: 'Planning');
+
+    final results = await service.search('deploy', senderId: 'user-bob');
+
+    expect(results.map((result) => result.messageId), ['msg-bob']);
+  });
+
+  test('filters search results by inclusive local date range', () async {
+    final service = _service();
+    final january = _decryptedMessage(
+      id: 'msg-jan',
+      type: MessageType.text,
+      raw: 'Budget review',
+      createdAt: DateTime.utc(2026, 1, 1, 12),
+    );
+    final february = _decryptedMessage(
+      id: 'msg-feb',
+      type: MessageType.text,
+      raw: 'Budget review',
+      createdAt: DateTime.utc(2026, 2, 1, 18),
+    );
+    final march = _decryptedMessage(
+      id: 'msg-mar',
+      type: MessageType.text,
+      raw: 'Budget review',
+      createdAt: DateTime.utc(2026, 3, 1, 12),
+    );
+
+    await service.indexMessage(january, conversationTitle: 'Finance');
+    await service.indexMessage(february, conversationTitle: 'Finance');
+    await service.indexMessage(march, conversationTitle: 'Finance');
+
+    final fromFebruary = await service.search(
+      'budget',
+      from: DateTime(2026, 2, 1),
+    );
+    final throughFebruary = await service.search(
+      'budget',
+      to: DateTime(2026, 2, 1),
+    );
+
+    expect(fromFebruary.map((result) => result.messageId), [
+      'msg-mar',
+      'msg-feb',
+    ]);
+    expect(throughFebruary.map((result) => result.messageId), [
+      'msg-feb',
+      'msg-jan',
+    ]);
+  });
 }

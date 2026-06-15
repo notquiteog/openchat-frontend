@@ -20,8 +20,11 @@ import '../models/conversation.dart';
 import '../models/conversation_invite.dart';
 import '../models/moderation_report.dart';
 import '../models/mls.dart';
+import '../models/operator_metrics.dart';
 import '../models/scheduled_message.dart';
 import '../models/story.dart';
+import '../models/story_viewer.dart';
+import '../models/system_admin_audit_event.dart';
 import '../services/secure_storage_service.dart';
 import '../services/key_cache_service.dart';
 import '../utils/device_label.dart';
@@ -1090,6 +1093,7 @@ class ApiService {
     String? topicId,
     bool silent = false,
     String? clientNonce,
+    String? frankCom,
   }) async {
     final resp = await _post('/api/v1/conversations/$convID/sealed-messages', {
       'encrypted_payload': encryptedPayload,
@@ -1099,6 +1103,8 @@ class ApiService {
       'topic_id': ?topicId,
       if (silent) 'silent': true,
       'client_nonce': ?clientNonce,
+      // AMF (Hecate) commitment — the only franking field the server sees.
+      'frank_com': ?frankCom,
     }, authenticated: false);
     final message = Message.fromJson(resp['data'] as Map<String, dynamic>);
     await _saveSealedMessageControlFromMessage(convID, message);
@@ -1164,14 +1170,57 @@ class ApiService {
     );
   }
 
-  Future<String> getEncryptedSealedPostToken(String convID) async {
+  /// Issues a sealed post token plus (when franking is enabled server-side) the
+  /// AMF/Hecate token minted for the caller. The amfToken map carries
+  /// {x1,t1,sig1,pk_e,sk_e} (base64); null when the server omitted it.
+  Future<({String encryptedPostToken, Map<String, dynamic>? amfToken})>
+  getSealedPostTokenBundle(String convID) async {
     final resp = await _get('/api/v1/conversations/$convID/sealed-post-token');
     final data = resp['data'] as Map<String, dynamic>;
-    return data['encrypted_post_token'] as String;
+    return (
+      encryptedPostToken: data['encrypted_post_token'] as String,
+      amfToken: data['amf_token'] as Map<String, dynamic>?,
+    );
   }
+
+  Future<String> getEncryptedSealedPostToken(String convID) async =>
+      (await getSealedPostTokenBundle(convID)).encryptedPostToken;
 
   Future<String> getEncryptedPgpPostToken(String convID) =>
       getEncryptedSealedPostToken(convID);
+
+  /// Submits an anonymous, provable CSAM report (AMF/Hecate) to system admins.
+  /// The blob carries the encrypted sender id (x1) — never the plaintext id —
+  /// and the reporter identity is NOT attached. Authenticated only to rate-limit
+  /// abuse; the server stores the opaque blob without a reporter column.
+  Future<void> reportCsam(Map<String, dynamic> reportBlob) async {
+    await _post('/api/v1/reports/csam', {'report': reportBlob});
+  }
+
+  /// System-admin: list CSAM reports (status filter, newest first).
+  Future<List<Map<String, dynamic>>> listCsamReports({
+    String status = 'open',
+    int limit = 100,
+  }) async {
+    final resp = await _get('/api/v1/admin/csam-reports?status=$status&limit=$limit');
+    return ((resp['data'] as List?) ?? const [])
+        .cast<Map<String, dynamic>>();
+  }
+
+  /// System-admin: Inspect one report — runs Hecate Inspect server-side and
+  /// returns {sender_id, sender_username?, message_type, payload, t2, verified}.
+  /// This is an audited deanonymization.
+  Future<Map<String, dynamic>> inspectCsamReport(String reportID) async {
+    final resp = await _get('/api/v1/admin/csam-reports/$reportID');
+    return resp['data'] as Map<String, dynamic>;
+  }
+
+  /// System-admin: resolve a report (action = 'ban' | 'dismiss').
+  Future<void> resolveCsamReport(String reportID, String action) async {
+    await _post('/api/v1/admin/csam-reports/$reportID/resolve', {
+      'action': action,
+    });
+  }
 
   Future<List<ScheduledMessage>> listScheduledMessages(
     String convID, {
@@ -1953,13 +2002,14 @@ class ApiService {
   /// stories have no fixed audience to encrypt to, so they use the plaintext
   /// fields.
   Future<Story> createStory({
-    required String attachmentId,
-    required int fileSize,
+    String? attachmentId,
+    int fileSize = 0,
     required String mediaType,
     String? fileName,
     String? mimeType,
     String? fileKey,
     String? fileNonce,
+    String? background,
     String? encryptedPayload,
     String caption = '',
     String privacy = 'contacts',
@@ -1971,12 +2021,13 @@ class ApiService {
     List<Map<String, dynamic>> entities = const [],
   }) async {
     final resp = await _post('/api/v1/stories', {
-      'attachment_id': attachmentId,
+      'attachment_id': ?attachmentId,
       'file_name': ?fileName,
       'file_size': fileSize,
       'mime_type': ?mimeType,
       'file_key': ?fileKey,
       'file_nonce': ?fileNonce,
+      'background': ?background,
       'encrypted_payload': ?encryptedPayload,
       'media_type': mediaType,
       'caption': caption,
@@ -1999,6 +2050,13 @@ class ApiService {
   Future<Story> viewStory(String storyId) async {
     final resp = await _post('/api/v1/stories/$storyId/view', {});
     return Story.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<List<StoryViewer>> getStoryViewers(String storyId) async {
+    final resp = await _get('/api/v1/stories/$storyId/viewers');
+    return ((resp['data'] as List?) ?? const [])
+        .map((e) => StoryViewer.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<Story> reactToStory(String storyId, String emoji) async {
@@ -2048,6 +2106,13 @@ class ApiService {
 
   Future<void> confirmBackupUpload(String objectKey) async {
     await _post('/api/v1/backups/confirm', {'object_key': objectKey});
+  }
+
+  /// The published AMF (Hecate) public key bundle: {moderator_public_key,
+  /// platform_public_key, signature, signed_by} (all base64). Unauthenticated.
+  Future<Map<String, dynamic>> getAmfKeys() async {
+    final resp = await _get('/api/v1/.well-known/amf-keys');
+    return resp['data'] as Map<String, dynamic>;
   }
 
   /// Metadata + presigned download URL for the stored backup, or null when
@@ -2196,6 +2261,38 @@ class ApiService {
 
   Future<void> grantPremiumMonth(String userID) async {
     await _post('/api/v1/admin/users/$userID/premium/month', {});
+  }
+
+  Future<OperatorMetrics> getAdminMetrics() async {
+    final resp = await _get('/api/v1/admin/metrics');
+    return OperatorMetrics.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<List<ModerationReport>> listAdminReportsGlobal({
+    String status = 'open',
+    int limit = 100,
+    DateTime? before,
+  }) async {
+    final query = <String, String>{
+      'status': status,
+      'limit': '$limit',
+      if (before != null) 'before': before.toUtc().toIso8601String(),
+    };
+    final resp = await _get(
+      '/api/v1/admin/reports?${Uri(queryParameters: query).query}',
+    );
+    return (resp['data'] as List? ?? const [])
+        .map((e) => ModerationReport.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<SystemAdminAuditEvent>> listSystemAdminAuditEvents({
+    int limit = 100,
+  }) async {
+    final resp = await _get('/api/v1/admin/audit?limit=$limit');
+    return (resp['data'] as List? ?? const [])
+        .map((e) => SystemAdminAuditEvent.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<void> updateProfile({

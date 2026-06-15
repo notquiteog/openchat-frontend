@@ -1,10 +1,11 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../../models/contact_bundle.dart';
+import '../../models/recent_nearby_peer.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/mesh/mesh_platform.dart';
 import '../../services/mesh/mesh_session.dart';
@@ -31,6 +32,8 @@ class NearbyScreen extends StatefulWidget {
 class _NearbyScreenState extends State<NearbyScreen> {
   NearbyMeshService? _mesh;
   Set<String> _knownLinkIds = {};
+  List<RecentNearbyPeer> _recentPeers = const [];
+  bool _recentRefreshInFlight = false;
   int _pulseToken = 0;
 
   @override
@@ -42,6 +45,7 @@ class _NearbyScreenState extends State<NearbyScreen> {
     _knownLinkIds = mesh.peers.map((p) => p.linkId).toSet();
     mesh.addListener(_onMeshChanged);
     mesh.attachScreen();
+    unawaited(_refreshRecentPeers());
   }
 
   void _onMeshChanged() {
@@ -55,8 +59,23 @@ class _NearbyScreenState extends State<NearbyScreen> {
         _pulseToken++;
       }
       _knownLinkIds = ids;
+      if (mesh.historyEnabled) unawaited(_refreshRecentPeers());
     }
     setState(() {});
+  }
+
+  Future<void> _refreshRecentPeers() async {
+    if (_recentRefreshInFlight) return;
+    final mesh = _mesh;
+    if (mesh == null) return;
+    _recentRefreshInFlight = true;
+    try {
+      final peers = await mesh.recentPeers();
+      if (!mounted) return;
+      setState(() => _recentPeers = peers);
+    } finally {
+      _recentRefreshInFlight = false;
+    }
   }
 
   @override
@@ -78,7 +97,9 @@ class _NearbyScreenState extends State<NearbyScreen> {
           'Bluetooth beacon carries a random session tag, not your '
           'identity. After two devices connect, each proves its PGP key '
           'with a signed challenge before a single message moves, and '
-          'messages stay end-to-end encrypted exactly as they are online.',
+          'messages stay end-to-end encrypted exactly as they are online. '
+          'Recently verified people are remembered only if you turn on the '
+          'local history switch, and that list can be cleared here.',
       actions: [
         GlassDialogAction(
           label: 'OK',
@@ -104,11 +125,68 @@ class _NearbyScreenState extends State<NearbyScreen> {
     }
   }
 
+  Future<void> _setHistoryEnabled(bool value) async {
+    final mesh = _mesh;
+    if (mesh == null) return;
+    mesh.historyEnabled = value;
+    if (!value) {
+      setState(() => _recentPeers = const []);
+      return;
+    }
+    await _refreshRecentPeers();
+  }
+
+  Future<void> _clearRecentPeers() async {
+    final mesh = _mesh;
+    if (mesh == null) return;
+    try {
+      await mesh.clearRecentPeers();
+      if (!mounted) return;
+      setState(() => _recentPeers = const []);
+      showAppToast(context, 'Nearby history cleared');
+    } catch (_) {
+      if (mounted) {
+        showAppToast(context, 'Could not clear history', isError: true);
+      }
+    }
+  }
+
+  Future<void> _forgetRecentPeer(RecentNearbyPeer peer) async {
+    final mesh = _mesh;
+    if (mesh == null) return;
+    try {
+      await mesh.forgetRecentPeer(peer.fingerprint);
+      await _refreshRecentPeers();
+    } catch (_) {
+      if (mounted) {
+        showAppToast(context, 'Could not forget peer', isError: true);
+      }
+    }
+  }
+
+  Future<void> _saveRecentPeer(RecentNearbyPeer peer) async {
+    try {
+      await context.read<SettingsProvider>().upsertPrivateContact(
+        peer.toContactBundle(),
+      );
+      if (!mounted) return;
+      showAppToast(context, 'Saved to contacts');
+      setState(() {});
+    } catch (_) {
+      if (mounted) {
+        showAppToast(context, 'Could not save contact', isError: true);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final mesh = _mesh;
     final peers = mesh?.peers ?? const <NearbyPeer>[];
+    final recentPeers = mesh?.historyEnabled == true
+        ? _recentPeers
+        : const <RecentNearbyPeer>[];
     final searching = mesh != null && mesh.isRunning && mesh.error == null;
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -150,6 +228,18 @@ class _NearbyScreenState extends State<NearbyScreen> {
               trailing: GlassSwitch(
                 value: mesh.keepAliveWhileAppOpen,
                 onChanged: (value) => mesh.keepAliveWhileAppOpen = value,
+              ),
+            ),
+            const SizedBox(height: 8),
+            GlassListTile(
+              leading: const Icon(Icons.history_rounded),
+              title: const Text('Remember verified people'),
+              subtitle: const Text(
+                'Keeps a clearable local list after live proof succeeds.',
+              ),
+              trailing: GlassSwitch(
+                value: mesh.historyEnabled,
+                onChanged: (value) => unawaited(_setHistoryEnabled(value)),
               ),
             ),
           ],
@@ -197,28 +287,39 @@ class _NearbyScreenState extends State<NearbyScreen> {
                 onPressed: () => mesh.start(),
               ),
             )
-          else if (peers.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 28),
-              child: Center(
-                child: Text(
-                  'No one in range yet.\nBoth devices need this screen open.',
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+          else ...[
+            if (peers.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 28),
+                child: Center(
+                  child: Text(
+                    'No one in range yet.\nBoth devices need this screen open.',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                    ),
                   ),
                 ),
+              )
+            else
+              for (final peer in peers)
+                _PeerCard(
+                  key: GlobalObjectKey('nearby-peer-${peer.linkId}'),
+                  peer: peer,
+                  onDeliver: () => mesh!.deliverQueuedTo(peer),
+                  onCompareFingerprints: () =>
+                      _showFingerprintSheet(context, mesh!, peer),
+                ),
+            if (recentPeers.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _RecentHistorySection(
+                peers: recentPeers,
+                onClear: _clearRecentPeers,
+                onForget: _forgetRecentPeer,
+                onSave: _saveRecentPeer,
               ),
-            )
-          else
-            for (final peer in peers)
-              _PeerCard(
-                key: GlobalObjectKey('nearby-peer-${peer.linkId}'),
-                peer: peer,
-                onDeliver: () => mesh!.deliverQueuedTo(peer),
-                onCompareFingerprints: () =>
-                    _showFingerprintSheet(context, mesh!, peer),
-              ),
+            ],
+          ],
         ],
       ),
     );
@@ -230,10 +331,7 @@ class _NearbyScreenState extends State<NearbyScreen> {
       runSpacing: 8,
       alignment: WrapAlignment.center,
       children: [
-        GlassChip(
-          label: 'Scanning',
-          icon: const Icon(Icons.radar_rounded),
-        ),
+        GlassChip(label: 'Scanning', icon: const Icon(Icons.radar_rounded)),
         GlassChip(
           label: mesh.isDiscoverable ? 'Discoverable' : 'Not discoverable',
           icon: Icon(
@@ -301,31 +399,15 @@ class _FingerprintCompareSheetState extends State<_FingerprintCompareSheet> {
   Future<void> _saveContact() async {
     final peer = widget.peer;
     await context.read<SettingsProvider>().upsertPrivateContact(
-          ContactBundle(
-            userId: peer.userId,
-            displayName: peer.displayName.isNotEmpty
-                ? peer.displayName
-                : 'Nearby contact',
-            publicKey: peer.publicKeyArmored,
-            keyFingerprint: peer.fingerprint,
-            safetyNumber: peer.fingerprint,
-            mailboxBootstrap: {
-              'type': 'openchat_user',
-              'user_id': peer.userId,
-              'public_key_endpoint':
-                  '/api/v1/users/${peer.userId}/public-key',
-            },
-            addedAt: DateTime.now(),
-          ),
-        );
+      RecentNearbyPeer.fromMeshPeer(
+        peer,
+        transport: recentNearbyTransportBle,
+      ).toContactBundle(),
+    );
     if (mounted) setState(() => _saved = true);
   }
 
-  Widget _fingerprintBlock(
-    ThemeData theme,
-    String label,
-    String fingerprint,
-  ) {
+  Widget _fingerprintBlock(ThemeData theme, String label, String fingerprint) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -413,6 +495,215 @@ class _FingerprintCompareSheetState extends State<_FingerprintCompareSheet> {
   }
 }
 
+// ── Recent peer history ───────────────────────────────────────────────────────
+
+class _RecentHistorySection extends StatelessWidget {
+  const _RecentHistorySection({
+    required this.peers,
+    required this.onClear,
+    required this.onForget,
+    required this.onSave,
+  });
+
+  final List<RecentNearbyPeer> peers;
+  final Future<void> Function() onClear;
+  final Future<void> Function(RecentNearbyPeer peer) onForget;
+  final Future<void> Function(RecentNearbyPeer peer) onSave;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'People you met nearby',
+                style: theme.textTheme.titleSmall,
+              ),
+            ),
+            GlassButtonWidget.icon(
+              onPressed: () => unawaited(onClear()),
+              icon: const Icon(Icons.delete_sweep_rounded, size: 16),
+              label: const Text('Clear history'),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        for (final peer in peers)
+          _RecentPeerCard(
+            peer: peer,
+            onForget: () => unawaited(onForget(peer)),
+            onSave: () => unawaited(onSave(peer)),
+          ),
+      ],
+    );
+  }
+}
+
+class _RecentPeerCard extends StatelessWidget {
+  const _RecentPeerCard({
+    required this.peer,
+    required this.onForget,
+    required this.onSave,
+  });
+
+  final RecentNearbyPeer peer;
+  final VoidCallback onForget;
+  final VoidCallback onSave;
+
+  bool _isSaved(SettingsProvider settings) {
+    return settings.privateContacts.values.any(
+      (contact) =>
+          normalizeRecentNearbyFingerprint(contact.keyFingerprint) ==
+          peer.fingerprint,
+    );
+  }
+
+  String _shortFingerprint(String fp) {
+    if (fp.length < 16) return fp;
+    final tail = fp.substring(fp.length - 16);
+    return tail
+        .replaceAllMapped(RegExp('....'), (m) => '${m.group(0)} ')
+        .trim();
+  }
+
+  String _lastSeenLabel(DateTime lastSeenAt) {
+    final elapsed = DateTime.now().difference(lastSeenAt);
+    if (elapsed.inMinutes < 1) return 'just now';
+    if (elapsed.inHours < 1) {
+      final minutes = elapsed.inMinutes;
+      return '$minutes ${minutes == 1 ? 'min' : 'mins'} ago';
+    }
+    if (elapsed.inDays < 1) {
+      final hours = elapsed.inHours;
+      return '$hours ${hours == 1 ? 'hour' : 'hours'} ago';
+    }
+    final days = elapsed.inDays;
+    if (days < 30) return '$days ${days == 1 ? 'day' : 'days'} ago';
+    final months = days ~/ 30;
+    return '$months ${months == 1 ? 'month' : 'months'} ago';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final settings = context.watch<SettingsProvider>();
+    final saved = _isSaved(settings);
+    final muted = theme.colorScheme.onSurface.withValues(alpha: 0.56);
+    final title = peer.displayName.isNotEmpty
+        ? peer.displayName
+        : 'Nearby contact';
+    final transportLabel = peer.transport == recentNearbyTransportLan
+        ? 'LAN'
+        : 'BLE';
+    final transportIcon = peer.transport == recentNearbyTransportLan
+        ? Icons.lan_rounded
+        : Icons.bluetooth_rounded;
+
+    return Opacity(
+      opacity: 0.78,
+      child: GlassCard(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _PeerAvatar(title: title, accent: theme.colorScheme.outline),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: theme.textTheme.titleSmall,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      GlassChip(
+                        label: transportLabel,
+                        icon: Icon(transportIcon, size: 14),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    'Last live proof ${_lastSeenLabel(peer.lastSeenAt)}',
+                    style: theme.textTheme.bodySmall?.copyWith(color: muted),
+                  ),
+                  if (peer.fingerprint.isNotEmpty) ...[
+                    const SizedBox(height: 5),
+                    Text(
+                      _shortFingerprint(peer.fingerprint),
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 11,
+                        letterSpacing: 0.5,
+                        color: muted,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      if (saved)
+                        GlassChip(
+                          label: 'In contacts',
+                          icon: const Icon(
+                            Icons.check_circle_rounded,
+                            size: 14,
+                          ),
+                        )
+                      else if (peer.canSaveAsContact)
+                        GlassButtonWidget.icon(
+                          onPressed: onSave,
+                          icon: const Icon(Icons.person_add_alt_1_rounded),
+                          label: const Text('Save as contact'),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 9,
+                          ),
+                        )
+                      else
+                        Text(
+                          'No contact id from this app version',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: muted,
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            GlassCircleIconButton(
+              onPressed: onForget,
+              tooltip: 'Forget',
+              size: 36,
+              icon: Icon(
+                Icons.close_rounded,
+                size: 18,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.64),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ── Radar hero ───────────────────────────────────────────────────────────────
 
 /// iOS-26-style sonar: breathing concentric rings and a rotating sweep
@@ -495,8 +786,7 @@ class _RadarHeroState extends State<_RadarHero> with TickerProviderStateMixin {
         child: LayoutBuilder(
           builder: (context, constraints) => GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTapDown: (details) =>
-                _handleTap(details, constraints.biggest),
+            onTapDown: (details) => _handleTap(details, constraints.biggest),
             child: AnimatedBuilder(
               animation: Listenable.merge([_controller, _pulse]),
               builder: (context, child) => CustomPaint(
@@ -586,10 +876,7 @@ class _RadarPainter extends CustomPainter {
     final angle = progress * 2 * math.pi;
     final sweep = Paint()
       ..shader = SweepGradient(
-        colors: [
-          color.withValues(alpha: 0.0),
-          color.withValues(alpha: 0.16),
-        ],
+        colors: [color.withValues(alpha: 0.0), color.withValues(alpha: 0.16)],
         stops: const [0.72, 1.0],
         startAngle: 0,
         endAngle: 2 * math.pi,
@@ -655,25 +942,21 @@ class _PeerCard extends StatelessWidget {
   (IconData, Color?, String) _status(ThemeData theme) {
     return switch (peer.state) {
       MeshSessionState.authenticated when peer.matchedContactName != null => (
-          Icons.verified_user_rounded,
-          Colors.green,
-          'Verified contact',
-        ),
+        Icons.verified_user_rounded,
+        Colors.green,
+        'Verified contact',
+      ),
       MeshSessionState.authenticated => (
-          Icons.help_outline_rounded,
-          Colors.amber,
-          'Key verified, but not a contact — tap to compare fingerprints',
-        ),
+        Icons.help_outline_rounded,
+        Colors.amber,
+        'Key verified, but not a contact — tap to compare fingerprints',
+      ),
       MeshSessionState.failed => (
-          Icons.gpp_bad_rounded,
-          theme.colorScheme.error,
-          'Verification failed: ${peer.session.failure ?? 'unknown'}',
-        ),
-      _ => (
-          Icons.bluetooth_searching_rounded,
-          null,
-          'Verifying identity…',
-        ),
+        Icons.gpp_bad_rounded,
+        theme.colorScheme.error,
+        'Verification failed: ${peer.session.failure ?? 'unknown'}',
+      ),
+      _ => (Icons.bluetooth_searching_rounded, null, 'Verifying identity…'),
     };
   }
 
@@ -690,7 +973,8 @@ class _PeerCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final (icon, iconColor, status) = _status(theme);
-    final title = peer.matchedContactName ??
+    final title =
+        peer.matchedContactName ??
         (peer.advertisedName?.isNotEmpty == true
             ? peer.advertisedName!
             : 'Nearby device');
@@ -791,17 +1075,19 @@ class _PeerCard extends StatelessWidget {
 
   Widget _statsRow(ThemeData theme, Color muted) {
     Widget stat(IconData icon, String label, {Color? color}) => Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 13, color: color ?? muted),
-            const SizedBox(width: 3),
-            Text(
-              label,
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(fontSize: 11.5, color: color ?? muted),
-            ),
-          ],
-        );
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 13, color: color ?? muted),
+        const SizedBox(width: 3),
+        Text(
+          label,
+          style: theme.textTheme.bodySmall?.copyWith(
+            fontSize: 11.5,
+            color: color ?? muted,
+          ),
+        ),
+      ],
+    );
     return Wrap(
       spacing: 12,
       runSpacing: 4,

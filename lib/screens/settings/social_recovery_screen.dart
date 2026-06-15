@@ -129,8 +129,8 @@ class _SocialRecoveryScreenState extends State<SocialRecoveryScreen> {
     try {
       final state = await _api.getRecoveryRequest(ceremony.requestId);
       final threshold = (state['threshold'] as num?)?.toInt() ?? 0;
-      final received = ((state['encrypted_shares'] as List?) ?? const [])
-          .length;
+      final received =
+          ((state['encrypted_shares'] as List?) ?? const []).length;
       if (mounted) {
         setState(() {
           if (threshold > 0) _threshold = threshold;
@@ -253,7 +253,7 @@ class _SocialRecoveryScreenState extends State<SocialRecoveryScreen> {
               child: Text(
                 'Ask each guardian to open Trust Center → You Guard on their '
                 'device and approve your request. They will only see your '
-                'share after verifying the code below with you directly.',
+                'share after verifying the words or code below with you directly.',
                 style: TextStyle(
                   fontSize: 13,
                   height: 1.4,
@@ -267,7 +267,7 @@ class _SocialRecoveryScreenState extends State<SocialRecoveryScreen> {
               child: Column(
                 children: [
                   Text(
-                    'READ THIS CODE TO YOUR GUARDIANS OVER A CALL',
+                    'READ THESE WORDS TO YOUR GUARDIANS OVER A CALL',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 11,
@@ -277,6 +277,27 @@ class _SocialRecoveryScreenState extends State<SocialRecoveryScreen> {
                     ),
                   ),
                   const SizedBox(height: 14),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final word in ceremony.verificationWords)
+                        GlassChip(label: word),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    'Verification code',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1,
+                      color: scheme.onSurface.withValues(alpha: 0.58),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                   Text(
                     ceremony.verificationCode,
                     textAlign: TextAlign.center,
@@ -289,8 +310,8 @@ class _SocialRecoveryScreenState extends State<SocialRecoveryScreen> {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    'A guardian must hear this code from you — never approve '
-                    'from a text message alone.',
+                    'A guardian must hear these words or the code from you — '
+                    'never approve from a text message alone.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 12,
@@ -322,9 +343,7 @@ class _SocialRecoveryScreenState extends State<SocialRecoveryScreen> {
                       value: _threshold > 0
                           ? (_sharesReceived / _threshold).clamp(0.0, 1.0)
                           : 0,
-                      backgroundColor: scheme.onSurface.withValues(
-                        alpha: 0.10,
-                      ),
+                      backgroundColor: scheme.onSurface.withValues(alpha: 0.10),
                     ),
                   ),
                   const SizedBox(height: 8),

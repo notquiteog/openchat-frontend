@@ -13,6 +13,7 @@ class Story {
   final String? mimeType;
   final String? fileKey;
   final String? fileNonce;
+  final String? background;
 
   /// E2E story metadata: a PGP envelope (encrypted to the audience) holding
   /// {file_key, file_nonce, caption, file_name, mime_type, entities}. When
@@ -46,6 +47,7 @@ class Story {
     this.mimeType,
     this.fileKey,
     this.fileNonce,
+    this.background,
     this.encryptedPayload,
     this.mediaType = 'image',
     this.privacy = 'contacts',
@@ -75,6 +77,7 @@ class Story {
     mimeType: json['mime_type'] as String?,
     fileKey: json['file_key'] as String?,
     fileNonce: json['file_nonce'] as String?,
+    background: json['background'] as String?,
     encryptedPayload: json['encrypted_payload'] as String?,
     mediaType: json['media_type'] as String? ?? 'image',
     privacy: json['privacy'] as String? ?? 'contacts',
@@ -117,6 +120,7 @@ class Story {
     mimeType: meta['mime_type'] as String? ?? mimeType,
     fileKey: meta['file_key'] as String? ?? fileKey,
     fileNonce: meta['file_nonce'] as String? ?? fileNonce,
+    background: meta['background'] as String? ?? background,
     encryptedPayload: encryptedPayload,
     mediaType: mediaType,
     privacy: privacy,
@@ -138,6 +142,7 @@ class Story {
       mediaType == 'video' || (mimeType?.startsWith('video/') ?? false);
   bool get isImage =>
       mediaType == 'image' || (mimeType?.startsWith('image/') ?? false);
+  bool get isText => mediaType == 'text';
   bool get isArchived =>
       archivedAt != null || expiresAt.isBefore(DateTime.now());
 

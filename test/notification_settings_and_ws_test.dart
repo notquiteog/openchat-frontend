@@ -10,10 +10,20 @@ import 'package:openchat/services/notification_service.dart';
 import 'package:openchat/services/push_notification_service.dart';
 import 'package:openchat/services/secure_storage_service.dart';
 import 'package:openchat/services/websocket_service.dart';
+import 'package:openchat/utils/global_notification_pause.dart';
 import 'package:openchat/utils/local_conversation_preferences.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  tearDown(() {
+    NotificationService.setGlobalNotificationPause(
+      pausedUntil: null,
+      quietStart: null,
+      quietEnd: null,
+      allowsCalls: true,
+    );
+  });
+
   group('SettingsProvider notification exclusivity', () {
     test(
       'enabling push disables websocket notifications and persists it',
@@ -76,6 +86,32 @@ void main() {
     });
 
     test(
+      'launch at login is device-level and survives private reset',
+      () async {
+        SharedPreferences.setMockInitialValues({});
+
+        final provider = SettingsProvider();
+        await provider.load();
+
+        expect(provider.launchAtLogin, isFalse);
+
+        await provider.setLaunchAtLogin(true);
+
+        expect(provider.launchAtLogin, isTrue);
+        final prefs = await SharedPreferences.getInstance();
+        expect(prefs.getBool('launch_at_login'), isTrue);
+
+        provider.resetPrivateLocalState();
+
+        expect(provider.launchAtLogin, isTrue);
+
+        final reloaded = SettingsProvider();
+        await reloaded.load();
+        expect(reloaded.launchAtLogin, isTrue);
+      },
+    );
+
+    test(
       'strict privacy leaves notification content as a solo toggle',
       () async {
         SharedPreferences.setMockInitialValues({
@@ -100,6 +136,66 @@ void main() {
 
         expect(provider.notificationSensitiveContent, isFalse);
         expect(provider.strictPrivacyMode, isFalse);
+      },
+    );
+
+    test(
+      'global pause settings round-trip through encrypted private state',
+      () async {
+        SharedPreferences.setMockInitialValues({});
+
+        final provider = SettingsProvider();
+        await provider.load();
+
+        await provider.pauseNotificationsFor(const Duration(hours: 1));
+
+        expect(provider.isNotificationsPaused, isTrue);
+        expect(provider.notificationPauseUntilMs, isNotNull);
+
+        final prefs = await SharedPreferences.getInstance();
+        final encrypted = prefs.getString(localPrivateStatePreferenceKey);
+        expect(encrypted, isNotNull);
+        expect(encrypted, isNot(contains('notifications_paused_until_ms')));
+
+        var state = await LocalPrivateStateService().readState();
+        var decoded = decodePrivateNotificationSettings(
+          state[privateStateNotificationSettingsKey],
+        );
+        expect(
+          decoded.notificationsPausedUntilMs,
+          provider.notificationPauseUntilMs,
+        );
+
+        await provider.setGlobalQuietHours(
+          startMinute: 22 * 60,
+          endMinute: 7 * 60,
+        );
+        await provider.setPauseAllowsCalls(false);
+
+        final reloaded = SettingsProvider();
+        await reloaded.load();
+
+        expect(
+          reloaded.notificationPauseUntilMs,
+          provider.notificationPauseUntilMs,
+        );
+        expect(reloaded.globalQuietHoursStartMinute, 22 * 60);
+        expect(reloaded.globalQuietHoursEndMinute, 7 * 60);
+        expect(reloaded.pauseAllowsCalls, isFalse);
+
+        await reloaded.resumeNotifications();
+        state = await LocalPrivateStateService().readState();
+        decoded = decodePrivateNotificationSettings(
+          state[privateStateNotificationSettingsKey],
+        );
+        expect(decoded.notificationsPausedUntilMs, isNull);
+
+        reloaded.resetPrivateLocalState();
+
+        expect(reloaded.notificationPauseUntilMs, isNull);
+        expect(reloaded.globalQuietHoursStartMinute, isNull);
+        expect(reloaded.globalQuietHoursEndMinute, isNull);
+        expect(reloaded.pauseAllowsCalls, isTrue);
       },
     );
   });
@@ -150,6 +246,7 @@ void main() {
             'bg_messages',
             'bg_calls',
             'message_reminders',
+            'security_alerts',
           }),
         );
       },
@@ -190,6 +287,77 @@ void main() {
         isNot(
           NotificationService.debugMessageReminderNotificationId('reminder-2'),
         ),
+      );
+    });
+
+    test('dead-man warning keeps a stable single notification slot', () {
+      expect(
+        NotificationService.debugDeadmanWarningNotificationId,
+        NotificationService.debugDeadmanWarningNotificationId,
+      );
+      expect(
+        NotificationService.debugDeadmanWarningNotificationId,
+        isNot(
+          NotificationService.debugMessageReminderNotificationId('deadman'),
+        ),
+      );
+    });
+
+    test('global pause debug helper covers boundaries and quiet hours', () {
+      final now = DateTime(2026, 1, 2, 12);
+      NotificationService.setGlobalNotificationPause(
+        pausedUntil: now.add(const Duration(minutes: 1)),
+      );
+
+      expect(NotificationService.debugIsGloballyPaused(now), isTrue);
+      expect(
+        NotificationService.debugIsGloballyPaused(
+          now.add(const Duration(minutes: 2)),
+        ),
+        isFalse,
+      );
+
+      NotificationService.setGlobalNotificationPause(
+        pausedUntil: notificationPauseDateFromMs(
+          notificationPauseIndefiniteUntilMs,
+        ),
+      );
+
+      expect(
+        NotificationService.debugIsGloballyPaused(DateTime(2099, 1, 1)),
+        isTrue,
+      );
+
+      NotificationService.setGlobalNotificationPause(
+        quietStart: 22 * 60,
+        quietEnd: 7 * 60,
+      );
+
+      expect(
+        NotificationService.debugIsGloballyPaused(DateTime(2026, 1, 2, 23)),
+        isTrue,
+      );
+      expect(
+        NotificationService.debugIsGloballyPaused(DateTime(2026, 1, 3, 6, 59)),
+        isTrue,
+      );
+      expect(
+        NotificationService.debugIsGloballyPaused(DateTime(2026, 1, 3, 7)),
+        isFalse,
+      );
+
+      NotificationService.setGlobalNotificationPause(
+        quietStart: 9 * 60,
+        quietEnd: 17 * 60,
+      );
+
+      expect(
+        NotificationService.debugIsGloballyPaused(DateTime(2026, 1, 2, 10)),
+        isTrue,
+      );
+      expect(
+        NotificationService.debugIsGloballyPaused(DateTime(2026, 1, 2, 18)),
+        isFalse,
       );
     });
 
@@ -296,6 +464,51 @@ void main() {
       );
 
       expect(intent, isNull);
+    });
+
+    test('global pause suppresses message and join request intents', () {
+      final pausedUntilMs = DateTime.now()
+          .add(const Duration(hours: 1))
+          .millisecondsSinceEpoch;
+
+      final rawMessage = BackgroundWsService.notificationIntentFromRawLine(
+        '{"type":"new_message","data":{"conversation_id":"conv-1","sender_username":"alice"}}',
+        showSensitive: true,
+        notificationsPausedUntilMs: pausedUntilMs,
+      );
+      final eventJoinRequest = BackgroundWsService.notificationIntentFromEvent(
+        type: 'join_request',
+        data: {'conversation_id': 'conv-1', 'user_id': 'u-9'},
+        showSensitive: true,
+        notificationsPausedUntilMs: pausedUntilMs,
+      );
+
+      expect(rawMessage, isNull);
+      expect(eventJoinRequest, isNull);
+    });
+
+    test('global pause lets calls through only when allowed', () {
+      final pausedUntilMs = DateTime.now()
+          .add(const Duration(hours: 1))
+          .millisecondsSinceEpoch;
+
+      final allowed = BackgroundWsService.notificationIntentFromEvent(
+        type: 'incoming_call',
+        data: {'conversation_id': 'conv-1', 'caller_username': 'bob'},
+        showSensitive: true,
+        notificationsPausedUntilMs: pausedUntilMs,
+        pauseAllowsCalls: true,
+      );
+      final blocked = BackgroundWsService.notificationIntentFromRawLine(
+        '{"type":"incoming_call","data":{"conversation_id":"conv-1","caller_username":"bob"}}',
+        showSensitive: true,
+        notificationsPausedUntilMs: pausedUntilMs,
+        pauseAllowsCalls: false,
+      );
+
+      expect(allowed, isNotNull);
+      expect(allowed!.kind, NotificationIntentKind.incomingCall);
+      expect(blocked, isNull);
     });
 
     test('mentions-only websocket intents ignore server mention metadata', () {
@@ -446,6 +659,53 @@ void main() {
 
       expect(intent, isNull);
     });
+
+    test(
+      'global pause suppresses foreground push messages and gated calls',
+      () {
+        final pausedUntilMs = DateTime.now()
+            .add(const Duration(hours: 1))
+            .millisecondsSinceEpoch;
+        const message = RemoteMessage(
+          data: {
+            'type': 'new_message',
+            'conversation_id': 'conv-1',
+            'sender_username': 'alice',
+          },
+        );
+        const call = RemoteMessage(
+          data: {
+            'type': 'incoming_call',
+            'conversation_id': 'conv-1',
+            'caller_username': 'bob',
+          },
+        );
+
+        expect(
+          PushNotificationService.foregroundNotificationIntent(
+            message,
+            notificationsPausedUntilMs: pausedUntilMs,
+          ),
+          isNull,
+        );
+        expect(
+          PushNotificationService.foregroundNotificationIntent(
+            call,
+            notificationsPausedUntilMs: pausedUntilMs,
+            pauseAllowsCalls: false,
+          ),
+          isNull,
+        );
+        expect(
+          PushNotificationService.foregroundNotificationIntent(
+            call,
+            notificationsPausedUntilMs: pausedUntilMs,
+            pauseAllowsCalls: true,
+          ),
+          isNotNull,
+        );
+      },
+    );
 
     test('mentions-only foreground push ignores server mention flags', () {
       const msg = RemoteMessage(

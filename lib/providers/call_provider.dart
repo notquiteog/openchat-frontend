@@ -4,10 +4,13 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../services/call_audio.dart';
 import '../services/call_foreground_service.dart';
 import '../services/call_history_service.dart';
+import '../services/call_quality_policy.dart';
 import '../services/call_media_permissions.dart';
 import '../services/call_service.dart';
+import '../services/network_service.dart';
 import '../services/notification_service.dart';
 import '../services/sfu_call_controller.dart';
+import 'settings_provider.dart';
 
 /// Exposed to the UI; wraps CallService and notifies listeners on state changes.
 class CallProvider extends ChangeNotifier {
@@ -18,6 +21,8 @@ class CallProvider extends ChangeNotifier {
   final CallForegroundController _foreground;
   final CallMediaPermissionGate _mediaPermissionGate;
   final CallHistoryService? _callHistory;
+  final SettingsProvider? _settings;
+  final NetworkService? _network;
   final DateTime Function() _now;
   // The most recent active (outgoing or accepted) session, retained so the
   // call-history record on end can attribute peer + direction (CallEndedEvent
@@ -138,7 +143,8 @@ class CallProvider extends ChangeNotifier {
 
   CallSession? get session => _callService.currentSession;
   RTCVideoRenderer? get localRenderer => _callService.localRenderer;
-  Map<String, RTCVideoRenderer> get remoteRenderers => _callService.remoteRenderers;
+  Map<String, RTCVideoRenderer> get remoteRenderers =>
+      _callService.remoteRenderers;
   bool get isScreenSharing => _callService.isScreenSharing;
   bool get canScreenShare => _callService.canScreenShare;
   bool get isCallMinimized => _isCallMinimized;
@@ -179,13 +185,20 @@ class CallProvider extends ChangeNotifier {
     CallForegroundController? foreground,
     CallMediaPermissionGate? mediaPermissionGate,
     CallHistoryService? callHistory,
+    SettingsProvider? settings,
+    NetworkService? network,
     DateTime Function()? now,
   }) : _audio = audio ?? CallAudio(),
        _foreground = foreground ?? const CallForegroundService(),
        _mediaPermissionGate = mediaPermissionGate ?? ensureCallMediaPermissions,
        // ignore: prefer_initializing_formals
        _callHistory = callHistory,
+       _settings = settings,
+       _network = network,
        _now = now ?? DateTime.now {
+    if (settings != null && network != null) {
+      _callService.setQualityPolicyResolver(_resolvedQualityPolicy);
+    }
     CallForegroundService.init();
     _foregroundActionSub = CallForegroundService.actions.listen(
       _handleForegroundAction,
@@ -254,6 +267,20 @@ class CallProvider extends ChangeNotifier {
     );
   }
 
+  CallQualityPolicy _resolvedQualityPolicy() {
+    final settings = _settings;
+    final network = _network;
+    if (settings == null || network == null) {
+      return const CallQualityPolicy.normal();
+    }
+    final net = network.current;
+    final forceAudioOnly = settings.voiceOnlyForNetwork(net);
+    if (settings.dataSaverActive(net)) {
+      return CallQualityPolicy.dataSaver(forceAudioOnly: forceAudioOnly);
+    }
+    return CallQualityPolicy.normal(forceAudioOnly: forceAudioOnly);
+  }
+
   Future<void> _answerIncomingCallFromNotification() async {
     try {
       await acceptIncomingCall();
@@ -287,9 +314,12 @@ class CallProvider extends ChangeNotifier {
         peerUserId: hs.remoteUserId,
         peerUsername: hs.remoteUsername,
         isVideo: ev.isVideo,
-        direction:
-            hs.isIncoming ? CallDirection.incoming : CallDirection.outgoing,
-        outcome: ev.answered ? CallOutcomeKind.answered : CallOutcomeKind.missed,
+        direction: hs.isIncoming
+            ? CallDirection.incoming
+            : CallDirection.outgoing,
+        outcome: ev.answered
+            ? CallOutcomeKind.answered
+            : CallOutcomeKind.missed,
         startedAt: _now().subtract(Duration(seconds: ev.durationSecs)),
         durationSecs: ev.durationSecs,
       );
@@ -419,12 +449,13 @@ class CallProvider extends ChangeNotifier {
     required bool isVideo,
     List<String> additionalUserIds = const [],
   }) async {
-    await _mediaPermissionGate(isVideo: isVideo);
+    final effectiveVideo = isVideo && !_resolvedQualityPolicy().forceAudioOnly;
+    await _mediaPermissionGate(isVideo: effectiveVideo);
     await _callService.startCall(
       targetUserId: targetUserId,
       targetUsername: targetUsername,
       conversationId: conversationId,
-      isVideo: isVideo,
+      isVideo: effectiveVideo,
       additionalUserIds: additionalUserIds,
     );
     notifyListeners();
@@ -435,7 +466,10 @@ class CallProvider extends ChangeNotifier {
   Future<void> acceptIncomingCall() async {
     final incoming = _incomingCall;
     if (incoming == null) return;
-    await _mediaPermissionGate(isVideo: incoming.isVideo);
+    final effectiveVideo =
+        incoming.isVideo && !_resolvedQualityPolicy().forceAudioOnly;
+    await _mediaPermissionGate(isVideo: effectiveVideo);
+    incoming.isVideo = effectiveVideo;
 
     _incomingCall = null;
     unawaited(NotificationService.cancelIncomingCall());
@@ -594,6 +628,7 @@ class CallProvider extends ChangeNotifier {
   }
 
   bool get isInCall => session != null && session!.state != CallState.ended;
+  bool get isReconnecting => session?.reconnecting ?? false;
 
   void setCallMinimized(bool minimized) {
     if (!isInCall) {
@@ -615,6 +650,7 @@ class CallProvider extends ChangeNotifier {
   String get callStatusText {
     final s = session;
     if (s == null) return '';
+    if (s.reconnecting) return 'Reconnecting…';
     if (s.state == CallState.connected && s.connectedAt != null) {
       final seconds = _now().difference(s.connectedAt!).inSeconds;
       return formatCallDuration(seconds);

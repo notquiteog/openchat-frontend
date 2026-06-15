@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../config/api_config.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
+import '../../utils/pack_links.dart';
 import '../../widgets/glass.dart';
 import 'custom_emoji_discover_screen.dart';
 
@@ -149,20 +151,18 @@ class _CustomEmojiPackScreenState extends State<CustomEmojiPackScreen> {
                   Icon(
                     Icons.add_reaction_outlined,
                     size: 72,
-                    color: Theme.of(context)
-                        .colorScheme
-                        .onSurface
-                        .withValues(alpha: 0.35),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.35),
                   ),
                   const SizedBox(height: 16),
                   Text(
                     'No custom emoji packs yet',
                     style: TextStyle(
                       fontSize: 16,
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withValues(alpha: 0.55),
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.onSurface.withValues(alpha: 0.55),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -175,7 +175,12 @@ class _CustomEmojiPackScreenState extends State<CustomEmojiPackScreen> {
               ),
             )
           : ListView.builder(
-              padding: EdgeInsets.fromLTRB(16, MediaQuery.paddingOf(context).top + kToolbarHeight + 8, 16, MediaQuery.paddingOf(context).bottom + 32),
+              padding: EdgeInsets.fromLTRB(
+                16,
+                MediaQuery.paddingOf(context).top + kToolbarHeight + 8,
+                16,
+                MediaQuery.paddingOf(context).bottom + 32,
+              ),
               itemCount: _packs.length,
               itemBuilder: (context, i) {
                 final pack = _packs[i];
@@ -213,16 +218,20 @@ class _CustomEmojiPackScreenState extends State<CustomEmojiPackScreen> {
                                   height: 48,
                                   child: coverUrl != null
                                       ? CachedNetworkImage(
-                                          imageUrl:
-                                              ApiConfig.resolveMedia(coverUrl),
+                                          imageUrl: ApiConfig.resolveMedia(
+                                            coverUrl,
+                                          ),
                                           fit: BoxFit.contain,
                                           errorWidget: (_, _, _) => Icon(
                                             Icons.add_reaction_outlined,
                                             color: scheme.primary,
                                           ),
                                         )
-                                      : Icon(Icons.add_reaction_outlined,
-                                          size: 36, color: scheme.primary),
+                                      : Icon(
+                                          Icons.add_reaction_outlined,
+                                          size: 36,
+                                          color: scheme.primary,
+                                        ),
                                 ),
                                 const SizedBox(width: 14),
                                 Expanded(
@@ -234,7 +243,8 @@ class _CustomEmojiPackScreenState extends State<CustomEmojiPackScreen> {
                                       Text(
                                         pack['name'] as String? ?? 'Pack',
                                         style: const TextStyle(
-                                            fontWeight: FontWeight.w600),
+                                          fontWeight: FontWeight.w600,
+                                        ),
                                       ),
                                       Text(
                                         isOwner
@@ -242,17 +252,21 @@ class _CustomEmojiPackScreenState extends State<CustomEmojiPackScreen> {
                                             : '$count custom emoji · Added',
                                         style: TextStyle(
                                           fontSize: 13,
-                                          color: scheme.onSurface
-                                              .withValues(alpha: 0.55),
+                                          color: scheme.onSurface.withValues(
+                                            alpha: 0.55,
+                                          ),
                                         ),
                                       ),
                                     ],
                                   ),
                                 ),
-                                Icon(Icons.chevron_right,
-                                    size: 18,
-                                    color: scheme.onSurface
-                                        .withValues(alpha: 0.35)),
+                                Icon(
+                                  Icons.chevron_right,
+                                  size: 18,
+                                  color: scheme.onSurface.withValues(
+                                    alpha: 0.35,
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -285,6 +299,16 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
   void initState() {
     super.initState();
     _pack = widget.initialPack;
+  }
+
+  Future<void> _sharePack() async {
+    final packId = _pack['id']?.toString() ?? '';
+    if (packId.isEmpty) return;
+    final name = _pack['name']?.toString() ?? 'Custom emoji pack';
+    final link = packDeepLink(kind: PackKind.customEmoji, packId: packId);
+    await SharePlus.instance.share(
+      ShareParams(text: link, subject: '$name custom emoji pack'),
+    );
   }
 
   Future<void> _reload() async {
@@ -573,6 +597,11 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
         actions: isOwner
             ? [
                 IconButton(
+                  icon: const Icon(Icons.ios_share_rounded),
+                  tooltip: 'Share pack',
+                  onPressed: _sharePack,
+                ),
+                IconButton(
                   icon: const Icon(Icons.image_outlined),
                   tooltip: 'Set cover image',
                   onPressed: _setCoverImage,
@@ -584,6 +613,11 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                 ),
               ]
             : [
+                IconButton(
+                  icon: const Icon(Icons.ios_share_rounded),
+                  tooltip: 'Share pack',
+                  onPressed: _sharePack,
+                ),
                 IconButton(
                   icon: const Icon(Icons.bookmark_remove_outlined),
                   tooltip: 'Remove from library',

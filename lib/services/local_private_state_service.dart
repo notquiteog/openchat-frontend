@@ -10,11 +10,14 @@ import '../models/broadcast_list.dart';
 import '../models/chat_folder.dart';
 import '../models/contact_bundle.dart';
 import '../utils/local_conversation_preferences.dart';
+import '../utils/global_notification_pause.dart';
 import 'secure_storage_service.dart';
 
 const localPrivateStatePreferenceKey = 'local_private_state_v1';
 const privateStateConversationNotificationPreferencesKey =
     'conversation_notification_preferences';
+const privateStateConversationPrivacyPreferencesKey =
+    'conversation_privacy_preferences';
 const privateStateChatFoldersKey = 'chat_folders';
 const privateStateBroadcastListsKey = 'broadcast_lists';
 // Maps opaque push route tokens -> conversation ids, so the (foreground and
@@ -43,20 +46,36 @@ class PrivateNotificationSettings {
   final bool pushEnabled;
   final bool wsBackgroundEnabled;
   final bool sensitiveContent;
+  final int? notificationsPausedUntilMs;
+  final int? globalQuietHoursStartMinute;
+  final int? globalQuietHoursEndMinute;
+  final bool pauseAllowsCalls;
 
   const PrivateNotificationSettings({
     this.pushEnabled = false,
     this.wsBackgroundEnabled = false,
     this.sensitiveContent = false,
+    this.notificationsPausedUntilMs,
+    this.globalQuietHoursStartMinute,
+    this.globalQuietHoursEndMinute,
+    this.pauseAllowsCalls = true,
   });
 }
 
 PrivateNotificationSettings decodePrivateNotificationSettings(Object? raw) {
   if (raw is! Map) return const PrivateNotificationSettings();
+  final quietStart = raw['global_quiet_start_minute'] as int?;
+  final quietEnd = raw['global_quiet_end_minute'] as int?;
   return PrivateNotificationSettings(
     pushEnabled: raw['push_enabled'] as bool? ?? false,
     wsBackgroundEnabled: raw['ws_background_enabled'] as bool? ?? false,
     sensitiveContent: raw['sensitive_content'] as bool? ?? false,
+    notificationsPausedUntilMs: _notificationPauseUntilMsOrNull(
+      raw['notifications_paused_until_ms'],
+    ),
+    globalQuietHoursStartMinute: quietStart?.clamp(0, 1439).toInt(),
+    globalQuietHoursEndMinute: quietEnd?.clamp(0, 1439).toInt(),
+    pauseAllowsCalls: raw['pause_allows_calls'] as bool? ?? true,
   );
 }
 
@@ -64,11 +83,35 @@ Map<String, dynamic> encodePrivateNotificationSettings({
   required bool pushEnabled,
   required bool wsBackgroundEnabled,
   required bool sensitiveContent,
+  int? notificationsPausedUntilMs,
+  int? globalQuietHoursStartMinute,
+  int? globalQuietHoursEndMinute,
+  bool pauseAllowsCalls = true,
 }) => {
   'push_enabled': pushEnabled,
   'ws_background_enabled': wsBackgroundEnabled,
   'sensitive_content': sensitiveContent,
+  'notifications_paused_until_ms': ?notificationsPausedUntilMs,
+  if (globalQuietHoursStartMinute != null)
+    'global_quiet_start_minute': globalQuietHoursStartMinute
+        .clamp(0, 1439)
+        .toInt(),
+  if (globalQuietHoursEndMinute != null)
+    'global_quiet_end_minute': globalQuietHoursEndMinute.clamp(0, 1439).toInt(),
+  'pause_allows_calls': pauseAllowsCalls,
 };
+
+int? _notificationPauseUntilMsOrNull(Object? raw) {
+  if (raw is! num) return null;
+  final value = raw.toInt();
+  if (notificationPauseIsIndefiniteMs(value)) return value;
+  try {
+    DateTime.fromMillisecondsSinceEpoch(value, isUtc: true);
+    return value;
+  } catch (_) {
+    return null;
+  }
+}
 
 Map<String, ConversationNotificationPreference>
 decodePrivateConversationNotificationPreferences(Object? raw) {

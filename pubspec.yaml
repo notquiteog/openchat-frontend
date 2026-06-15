@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.5.68+130
+version: 0.5.69+130
 publish_to: 'none'
 
 environment:
@@ -96,6 +96,8 @@ dependencies:
   # Local OS notifications. No web implementation — usage is guarded by
   # platform in NotificationService; web falls back to in-app.
   flutter_local_notifications: 22.0.1
+  launch_at_startup:
+    path: vendor/launch_at_startup
   timezone: ^0.11.0
 
   # Open Stripe checkout URLs in the system browser

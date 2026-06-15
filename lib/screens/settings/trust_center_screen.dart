@@ -20,12 +20,15 @@ import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/app_lock_state.dart';
 import '../../services/encrypted_backup_service.dart';
+import '../../services/kt_audit_service.dart';
 import '../../services/mls_service.dart';
 import '../../services/secure_storage_service.dart';
 import '../../services/security_service.dart';
 import '../../services/social_recovery_service.dart';
 import '../../utils/account_security_duration.dart';
+import '../../utils/app_lock_grace.dart';
 import '../../utils/backup_staleness.dart';
+import '../../utils/deadman_status.dart';
 import '../../utils/device_label.dart';
 import '../../utils/identity_qr.dart';
 import '../../utils/trust_center_summary.dart';
@@ -78,11 +81,18 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
   // rejects it — so the row must reflect real verification, not mere presence.
   bool _mlsSignerVerified = false;
   Map<String, dynamic>? _ktLogAlarm;
+  KtInclusionStatus _ktInclusion = KtInclusionStatus.unknown;
   // Server-backup freshness, fetched best-effort during _load. _backupLoaded is
   // true only once we have a definitive answer (incl. "none"); a fetch failure
   // leaves it false so a transient error never nags the trust summary.
   DateTime? _lastBackupAt;
   bool _backupLoaded = false;
+  bool _appPinConfigured = false;
+  bool _duressPinConfigured = false;
+  String _duressAction = 'decoy';
+  int _appLockGraceSeconds = 0;
+  int _deadmanDays = 0;
+  DateTime? _lastRealUnlockAt;
   String? _error;
 
   @override
@@ -114,7 +124,13 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
       final forceTurn = await storage.getForceTurn();
       final screenSecurity = await storage.getScreenSecurity();
       final currentSessionId = await storage.getSessionId();
-      final ktLogAlarm = await storage.getKtLogAlarm();
+      final appPinConfigured = await storage.hasAppLockPin();
+      final duressPinConfigured = await storage.hasDuressPin();
+      final duressAction = await storage.getDuressAction();
+      final appLockGraceSeconds = await storage.getAppLockGraceSeconds();
+      final deadmanDays = await storage.getDeadmanDays();
+      final lastRealUnlockAt = await storage.getLastRealUnlockAt();
+      var ktLogAlarm = await storage.getKtLogAlarm();
       // Best-effort (mirrors the keyEvents block below): a backup-metadata
       // failure must never break the whole Trust Center load.
       DateTime? lastBackupAt;
@@ -128,6 +144,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
         backupLoaded = false;
       }
       var keyEvents = <KeyTransparencyEvent>[];
+      var ktInclusion = KtInclusionStatus.unknown;
       MlsSignerStorage? mlsSigner;
       var mlsSignerVerified = false;
       if (user != null) {
@@ -135,6 +152,14 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
           keyEvents = await api.getKeyTransparencyEvents(user.id);
         } catch (_) {
           keyEvents = const [];
+        }
+        try {
+          ktInclusion = await KtAuditService(
+            storage: storage,
+          ).auditOwnInclusion(api, keyEvents);
+          ktLogAlarm = await storage.getKtLogAlarm();
+        } catch (_) {
+          ktInclusion = KtInclusionStatus.unknown;
         }
         mlsSigner = await storage.getMlsSigner(user.id);
         // Verify the stored signer signature against the current PGP key so a
@@ -168,9 +193,16 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
         _currentSessionId = currentSessionId;
         _keyPins = keyPins;
         _keyEvents = keyEvents;
+        _ktInclusion = ktInclusion;
         _mlsSignerVerified = mlsSignerVerified;
         _lastBackupAt = lastBackupAt;
         _backupLoaded = backupLoaded;
+        _appPinConfigured = appPinConfigured;
+        _duressPinConfigured = duressPinConfigured;
+        _duressAction = duressAction;
+        _appLockGraceSeconds = appLockGraceSeconds;
+        _deadmanDays = deadmanDays;
+        _lastRealUnlockAt = lastRealUnlockAt;
         _ktLogAlarm = ktLogAlarm;
         _loading = false;
       });
@@ -664,6 +696,97 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
     }
   }
 
+  Future<void> _manageAppLockGrace() async {
+    final storage = context.read<SecureStorageService>();
+    var selectedSeconds = normalizeAppLockGraceSeconds(_appLockGraceSeconds);
+    var submitting = false;
+    final initialIndex = appLockGraceOptionsSeconds.indexOf(selectedSeconds);
+    final wheelController = FixedExtentScrollController(
+      initialItem: initialIndex < 0 ? 0 : initialIndex,
+    );
+
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDlg) => GlassAlertDialog(
+            title: const Text('Auto-lock after'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    appLockGraceSummaryLabel(selectedSeconds),
+                    style: Theme.of(ctx).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    height: 216,
+                    child: CupertinoPicker.builder(
+                      scrollController: wheelController,
+                      itemExtent: 44,
+                      useMagnifier: true,
+                      magnification: 1.06,
+                      backgroundColor: Colors.transparent,
+                      childCount: appLockGraceOptionsSeconds.length,
+                      onSelectedItemChanged: (index) {
+                        setDlg(() {
+                          selectedSeconds = appLockGraceOptionsSeconds[index];
+                        });
+                      },
+                      itemBuilder: (ctx, index) {
+                        return Center(
+                          child: Text(
+                            appLockGraceLabel(
+                              appLockGraceOptionsSeconds[index],
+                            ),
+                            style: Theme.of(ctx).textTheme.titleMedium,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: submitting ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: submitting
+                    ? null
+                    : () async {
+                        setDlg(() => submitting = true);
+                        await storage.setAppLockGraceSeconds(selectedSeconds);
+                        if (mounted) {
+                          setState(
+                            () => _appLockGraceSeconds = selectedSeconds,
+                          );
+                        }
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        if (mounted) {
+                          showAppToast(context, 'Auto-lock updated');
+                        }
+                      },
+                child: submitting
+                    ? const GlassProgressIndicator.circular(
+                        size: 16,
+                        strokeWidth: 2,
+                      )
+                    : const Text('Save'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } finally {
+      wheelController.dispose();
+    }
+  }
+
   void _showFingerprintQr(String fingerprint) {
     showDialog<void>(
       context: context,
@@ -699,6 +822,16 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
     final settings = context.watch<SettingsProvider>();
     final conversations = context.watch<ChatProvider>().conversations;
     final scheme = Theme.of(context).colorScheme;
+    final deadmanStatus = computeDeadmanStatus(
+      days: _deadmanDays,
+      lastRealUnlockAt: _lastRealUnlockAt,
+      now: DateTime.now().toUtc(),
+    );
+    final deadmanColor = !deadmanStatus.enabled
+        ? Colors.grey
+        : deadmanStatus.daysRemaining <= 1
+        ? Colors.orange
+        : Colors.green;
 
     final localFp = normalizeIdentityFingerprint(keys.fingerprint ?? '');
     final accountFp = normalizeIdentityFingerprint(user?.keyFingerprint ?? '');
@@ -712,6 +845,38 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
         .where((pin) => pin.warning != null && pin.warning!.trim().isNotEmpty)
         .toList();
     final latestKeyEvent = _keyEvents.isEmpty ? null : _keyEvents.last;
+    final ktInclusion = _ktLogAlarm != null
+        ? KtInclusionStatus.alarm
+        : _ktInclusion;
+    final (
+      String ktPillLabel,
+      Color ktPillColor,
+      Color ktIconColor,
+    ) = latestKeyEvent == null
+        ? ('No log', Colors.orange, Colors.orange)
+        : switch (ktInclusion) {
+            KtInclusionStatus.verified => (
+              'Verified',
+              Colors.green,
+              Colors.green,
+            ),
+            KtInclusionStatus.pending || KtInclusionStatus.unknown => (
+              'Pending',
+              Colors.orange,
+              Colors.orange,
+            ),
+            KtInclusionStatus.alarm => ('Tampered', scheme.error, scheme.error),
+          };
+    final ktSubtitle = latestKeyEvent == null
+        ? 'No account key event seen yet'
+        : switch (ktInclusion) {
+            KtInclusionStatus.verified =>
+              '${_keyEvents.length} event${_keyEvents.length == 1 ? '' : 's'}; latest ${_shortHash(latestKeyEvent.eventHash)} proven in signed log',
+            KtInclusionStatus.pending || KtInclusionStatus.unknown =>
+              '${_keyEvents.length} event${_keyEvents.length == 1 ? '' : 's'}; awaiting next signed head',
+            KtInclusionStatus.alarm =>
+              'An account key event is missing from the signed log',
+          };
     // Green only when the stored signature truly verifies against the current
     // PGP key (computed in _load); a stale post-rotation signature is non-empty
     // but fails verification, so it correctly shows 'Prepare'.
@@ -870,18 +1035,12 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                   const _TrustDivider(),
                   _TrustRow(
                     icon: Icons.account_tree_outlined,
-                    iconColor: latestKeyEvent == null
-                        ? Colors.orange
-                        : Colors.green,
+                    iconColor: ktIconColor,
                     title: 'Key transparency log',
-                    subtitle: latestKeyEvent == null
-                        ? 'No account key event seen yet'
-                        : '${_keyEvents.length} event${_keyEvents.length == 1 ? '' : 's'}; latest ${_shortHash(latestKeyEvent.eventHash)}',
+                    subtitle: ktSubtitle,
                     trailing: _StatusPill(
-                      label: latestKeyEvent == null ? 'No log' : 'Logged',
-                      color: latestKeyEvent == null
-                          ? Colors.orange
-                          : Colors.green,
+                      label: ktPillLabel,
+                      color: ktPillColor,
                     ),
                   ),
                   if (keyWarnings.isNotEmpty) ...[
@@ -1161,6 +1320,79 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                     value: _appLockEnabled,
                     onChanged: _setAppLock,
                   ),
+                  if (_appLockEnabled) ...[
+                    const _TrustDivider(),
+                    _TrustRow(
+                      icon: Icons.timer_outlined,
+                      title: 'Auto-lock after',
+                      subtitle: appLockGraceSummaryLabel(_appLockGraceSeconds),
+                      onTap: _manageAppLockGrace,
+                    ),
+                  ],
+                  ValueListenableBuilder<VaultMode>(
+                    valueListenable: vaultModeListenable,
+                    builder: (context, vaultMode, _) {
+                      if (vaultMode != VaultMode.real) {
+                        return const SizedBox.shrink();
+                      }
+                      return Column(
+                        children: [
+                          const _TrustDivider(),
+                          _TrustRow(
+                            icon: Icons.hourglass_bottom_outlined,
+                            iconColor: deadmanColor,
+                            title: 'Auto-wipe',
+                            subtitle:
+                                'Local data wipes after the silence window. '
+                                'Checked when the app opens; iOS cannot '
+                                'enforce this in the background.',
+                            trailing: _StatusPill(
+                              label: deadmanCountdownLabel(deadmanStatus),
+                              color: deadmanColor,
+                            ),
+                          ),
+                          const _TrustDivider(),
+                          _TrustRow(
+                            icon: Icons.pin_outlined,
+                            iconColor: _appPinConfigured
+                                ? Colors.green
+                                : Colors.orange,
+                            title: 'App lock PIN',
+                            subtitle: _appPinConfigured
+                                ? 'Set for manual unlocks'
+                                : 'Not set',
+                            trailing: _StatusPill(
+                              label: _appPinConfigured ? 'Set' : 'Not set',
+                              color: _appPinConfigured
+                                  ? Colors.green
+                                  : Colors.orange,
+                            ),
+                          ),
+                          if (_appPinConfigured) ...[
+                            const _TrustDivider(),
+                            _TrustRow(
+                              icon: Icons.theater_comedy_outlined,
+                              iconColor: _duressPinConfigured
+                                  ? Colors.green
+                                  : Colors.orange,
+                              title: 'Duress PIN',
+                              subtitle: _duressPinConfigured
+                                  ? _duressAction == 'wipe'
+                                        ? 'Set - wipes this device'
+                                        : 'Set - opens decoy'
+                                  : 'Not set',
+                              trailing: _StatusPill(
+                                label: _duressPinConfigured ? 'Set' : 'Not set',
+                                color: _duressPinConfigured
+                                    ? Colors.green
+                                    : Colors.orange,
+                              ),
+                            ),
+                          ],
+                        ],
+                      );
+                    },
+                  ),
                   const _TrustDivider(),
                   _TrustSwitchRow(
                     icon: Icons.shield_moon_outlined,
@@ -1232,7 +1464,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                     icon: Icons.visibility_outlined,
                     title: 'Strict privacy',
                     subtitle:
-                        'Disable typing, read receipts, link previews, and link opens; when off, typing and read receipts use classic metadata',
+                        'Default for typing, read receipts, link previews, and link opens; chats can override typing and receipts',
                     value: settings.strictPrivacyMode,
                     onChanged: settings.setStrictPrivacyMode,
                   ),
@@ -2141,6 +2373,8 @@ class _SocialRecoverySectionState extends State<SocialRecoverySection> {
       builder: (_) => GuardianApproveSheet(
         requesterName: _recoveryUserLabel(request['user'], ownerUserId),
         ephemeralPubkeyArmored: ephemeralPubkey,
+        recentRequestCount:
+            (request['recent_request_count'] as num?)?.toInt() ?? 1,
         onApprove: () => _service.approveRequest(
           api: api,
           requestId: requestId,
@@ -2316,7 +2550,7 @@ class _SocialRecoverySectionState extends State<SocialRecoverySection> {
           iconColor: Colors.orange,
           title:
               '${_recoveryUserLabel(request['user'], ownerId)} is recovering',
-          subtitle: 'Verify the code with them, then approve',
+          subtitle: 'Verify the words or code with them, then approve',
           trailing: const _StatusPill(label: 'Review', color: Colors.orange),
           onTap: () => _openApproveSheet(request),
         ),
@@ -2546,11 +2780,14 @@ class GuardianApproveSheet extends StatefulWidget {
     required this.requesterName,
     required this.ephemeralPubkeyArmored,
     required this.onApprove,
+    this.recentRequestCount = 1,
     this.codeLoader = SocialRecoveryService.verificationCode,
+    this.wordsLoader = SocialRecoveryService.verificationWords,
   });
 
   final String requesterName;
   final String ephemeralPubkeyArmored;
+  final int recentRequestCount;
 
   /// Performs the actual share submission ([SocialRecoveryService
   /// .approveRequest]). Injected so tests can verify the wiring without the
@@ -2562,19 +2799,27 @@ class GuardianApproveSheet extends StatefulWidget {
   /// is unavailable in widget tests.
   final Future<String> Function(String armored) codeLoader;
 
+  /// Computes the read-aloud verification words from the ephemeral pubkey.
+  /// Defaults to [SocialRecoveryService.verificationWords]; injectable because
+  /// PgpService is unavailable in widget tests.
+  final Future<List<String>> Function(String armored) wordsLoader;
+
   @override
   State<GuardianApproveSheet> createState() => _GuardianApproveSheetState();
 }
 
 class _GuardianApproveSheetState extends State<GuardianApproveSheet> {
   late final Future<String> _codeFuture;
+  late final Future<List<String>> _wordsFuture;
   bool _submitting = false;
+  bool _verified = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
     _codeFuture = widget.codeLoader(widget.ephemeralPubkeyArmored);
+    _wordsFuture = widget.wordsLoader(widget.ephemeralPubkeyArmored);
   }
 
   Future<void> _approve() async {
@@ -2623,6 +2868,47 @@ class _GuardianApproveSheetState extends State<GuardianApproveSheet> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                Text(
+                  'VERIFICATION WORDS',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.2,
+                    color: scheme.primary,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                FutureBuilder<List<String>>(
+                  future: _wordsFuture,
+                  builder: (context, snapshot) {
+                    if (snapshot.hasError) {
+                      return Text(
+                        'Could not compute the words: ${snapshot.error}',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: scheme.error, fontSize: 13),
+                      );
+                    }
+                    if (!snapshot.hasData) {
+                      return const Center(
+                        child: GlassProgressIndicator.circular(
+                          size: 22,
+                          strokeWidth: 2,
+                        ),
+                      );
+                    }
+                    return Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final word in snapshot.data!)
+                          GlassChip(label: word),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 16),
                 Text(
                   'VERIFICATION CODE',
                   textAlign: TextAlign.center,
@@ -2685,13 +2971,77 @@ class _GuardianApproveSheetState extends State<GuardianApproveSheet> {
                       SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          'Only approve if you have verified this code with '
-                          'them over a call or in person. Anyone with their '
-                          'password could be impersonating them.',
+                          'Only approve if you have verified these words or '
+                          'this code with them over a call or in person. '
+                          'Anyone with their password could be impersonating them.',
                           style: TextStyle(fontSize: 13, height: 1.4),
                         ),
                       ),
                     ],
+                  ),
+                ),
+                if (widget.recentRequestCount > 1) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    key: const Key('guardian-recent-requests-warning'),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: scheme.primary.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: scheme.primary.withValues(alpha: 0.20),
+                      ),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.info_outline_rounded,
+                          color: scheme.primary,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'This account has requested recovery '
+                            '${widget.recentRequestCount} times in the last '
+                            '24 hours — be extra sure before approving.',
+                            style: const TextStyle(fontSize: 13, height: 1.4),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                IgnorePointer(
+                  ignoring: _submitting,
+                  child: Opacity(
+                    opacity: _submitting ? 0.55 : 1,
+                    child: GlassListTile(
+                      leading: Icon(
+                        Icons.verified_user_outlined,
+                        color: scheme.primary,
+                      ),
+                      title: Text(
+                        'I verified these words or this code with '
+                        '${widget.requesterName} over a call or in person',
+                      ),
+                      trailing: GlassSwitch(
+                        key: const Key('guardian-verified-switch'),
+                        value: _verified,
+                        onChanged: (value) {
+                          if (_submitting) return;
+                          setState(() => _verified = value);
+                        },
+                        activeColor: scheme.primary,
+                        enableHaptics: true,
+                      ),
+                      onTap: _submitting
+                          ? null
+                          : () => setState(() => _verified = !_verified),
+                      showDivider: false,
+                    ),
                   ),
                 ),
                 if (_error != null) ...[
@@ -2704,7 +3054,7 @@ class _GuardianApproveSheetState extends State<GuardianApproveSheet> {
                 ],
                 const SizedBox(height: 16),
                 GlassButtonWidget(
-                  onPressed: _submitting ? null : _approve,
+                  onPressed: (_submitting || !_verified) ? null : _approve,
                   child: _submitting
                       ? const GlassProgressIndicator.circular(
                           size: 18,

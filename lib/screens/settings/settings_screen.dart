@@ -15,11 +15,13 @@ import 'package:provider/provider.dart';
 import '../../config/api_config.dart';
 import '../../crypto/pgp_service.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/chat_provider.dart';
 import '../../providers/key_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/app_lock_state.dart';
 import '../../services/background_ws_service.dart';
+import '../../services/desktop_autostart_service.dart';
 import '../../services/encrypted_backup_service.dart';
 import '../../services/local_private_state_service.dart';
 import '../../services/notification_service.dart';
@@ -28,9 +30,11 @@ import '../../services/push_notification_service.dart';
 import '../../services/secure_storage_service.dart';
 import '../../utils/account_security_duration.dart';
 import '../../utils/backup_staleness.dart';
+import '../../utils/deadman_status.dart';
 import '../../utils/device_label.dart';
 import '../../widgets/glass.dart';
 import '../bots/bot_management_screen.dart';
+import '../admin/admin_home_screen.dart';
 import '../custom_emojis/custom_emoji_pack_screen.dart';
 import '../mini_apps/mini_apps_screen.dart';
 import '../stickers/sticker_pack_screen.dart';
@@ -40,6 +44,7 @@ import 'premium_screen.dart';
 import '../../services/mesh/nearby_mesh_service.dart';
 import '../nearby/nearby_screen.dart';
 import 'on_device_ai_screen.dart';
+import 'outbox_screen.dart';
 import 'proxy_settings_screen.dart';
 import 'social_recovery_screen.dart';
 import 'trust_center_screen.dart';
@@ -409,8 +414,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ],
     );
     if (!mounted || choice == null || choice == _deadmanDays) return;
-    await context.read<SecureStorageService>().setDeadmanDays(choice!);
+    final storage = context.read<SecureStorageService>();
+    await storage.setDeadmanDays(choice!);
+    await _refreshDeadmanWarning(choice!, storage);
     if (mounted) setState(() => _deadmanDays = choice!);
+  }
+
+  Future<void> _refreshDeadmanWarning(
+    int days,
+    SecureStorageService storage,
+  ) async {
+    final status = computeDeadmanStatus(
+      days: days,
+      lastRealUnlockAt: await storage.getLastRealUnlockAt(),
+      now: DateTime.now().toUtc(),
+    );
+    final fireAt = deadmanWarningFireAt(status);
+    if (fireAt == null) {
+      await NotificationService.cancelDeadmanWarning();
+    } else {
+      await NotificationService.scheduleDeadmanWarning(fireAt: fireAt);
+    }
+  }
+
+  String _callDataSaverLabel(CallDataSaverMode mode) => switch (mode) {
+    CallDataSaverMode.off => 'Off',
+    CallDataSaverMode.on => 'On',
+    CallDataSaverMode.auto => 'Auto',
+  };
+
+  Future<void> _pickCallDataSaverMode(SettingsProvider settings) async {
+    CallDataSaverMode? choice;
+    await showGlassActionSheet<void>(
+      context: context,
+      title: 'Data saver',
+      actions: [
+        for (final mode in CallDataSaverMode.values)
+          GlassActionSheetAction(
+            icon: settings.callDataSaverMode == mode
+                ? const Icon(Icons.check_rounded)
+                : null,
+            label: switch (mode) {
+              CallDataSaverMode.off => 'Off',
+              CallDataSaverMode.on => 'On',
+              CallDataSaverMode.auto => 'Auto on mobile data',
+            },
+            onPressed: () => choice = mode,
+          ),
+      ],
+    );
+    if (!mounted || choice == null) return;
+    await settings.setCallDataSaverMode(choice!);
   }
 
   Future<void> _setPushEnabled(bool value, SettingsProvider settings) async {
@@ -533,6 +587,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         showSensitive: settings.notificationSensitiveContent,
         conversationNotificationPreferences:
             settings.conversationNotificationPreferences,
+        notificationsPausedUntilMs: settings.notificationPauseUntilMs,
+        globalQuietStartMinute: settings.globalQuietHoursStartMinute,
+        globalQuietEndMinute: settings.globalQuietHoursEndMinute,
+        pauseAllowsCalls: settings.pauseAllowsCalls,
       );
       if (!mounted) return;
       if (!started) {
@@ -548,6 +606,111 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     await settings.setWsBackgroundEnabled(value);
+  }
+
+  Future<void> _setLaunchAtLogin(bool value, SettingsProvider settings) async {
+    if (!DesktopAutostartService.available) {
+      showAppToast(
+        context,
+        DesktopAutostartService.sandboxed
+            ? 'Autostart is unavailable in this sandboxed package'
+            : 'Autostart is unavailable on this platform',
+        isError: true,
+      );
+      return;
+    }
+
+    if (value) {
+      await DesktopAutostartService.setup();
+      await DesktopAutostartService.enable();
+      final enabled = await DesktopAutostartService.isEnabled();
+      if (!mounted) return;
+      if (!enabled) {
+        showAppToast(
+          context,
+          'Could not register launch at login',
+          isError: true,
+        );
+        return;
+      }
+    } else {
+      await DesktopAutostartService.disable();
+      final enabled = await DesktopAutostartService.isEnabled();
+      if (!mounted) return;
+      if (enabled) {
+        showAppToast(
+          context,
+          'Could not remove launch at login',
+          isError: true,
+        );
+        return;
+      }
+    }
+
+    await settings.setLaunchAtLogin(value);
+    if (mounted) {
+      showAppToast(
+        context,
+        value ? 'Launch at login enabled' : 'Launch at login disabled',
+      );
+    }
+  }
+
+  Future<void> _showPauseNotificationsSheet(SettingsProvider settings) async {
+    String? choice;
+    await showGlassActionSheet<void>(
+      context: context,
+      title: 'Pause notifications',
+      actions: [
+        GlassActionSheetAction(
+          label: 'For 1 hour',
+          onPressed: () => choice = '1h',
+        ),
+        GlassActionSheetAction(
+          label: 'For 8 hours',
+          onPressed: () => choice = '8h',
+        ),
+        GlassActionSheetAction(
+          label: 'Until tomorrow',
+          onPressed: () => choice = 'tomorrow',
+        ),
+        GlassActionSheetAction(
+          label: 'Until I turn it back on',
+          onPressed: () => choice = 'indefinite',
+        ),
+      ],
+    );
+    if (!mounted || choice == null) return;
+    switch (choice) {
+      case '1h':
+        await settings.pauseNotificationsFor(const Duration(hours: 1));
+        break;
+      case '8h':
+        await settings.pauseNotificationsFor(const Duration(hours: 8));
+        break;
+      case 'tomorrow':
+        await settings.pauseNotificationsUntil(_nextLocalTomorrowMorning());
+        break;
+      case 'indefinite':
+        await settings.pauseNotificationsIndefinitely();
+        break;
+    }
+  }
+
+  DateTime _nextLocalTomorrowMorning() {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day + 1, 8);
+  }
+
+  Future<void> _setGlobalQuietHoursEnabled(
+    bool enabled,
+    SettingsProvider settings,
+  ) {
+    if (!enabled) return settings.clearGlobalQuietHours();
+    return settings.setGlobalQuietHours(
+      startMinute: settings.globalQuietHoursStartMinute ?? 22 * 60,
+      endMinute: settings.globalQuietHoursEndMinute ?? 7 * 60,
+    );
   }
 
   void _editProfile() {
@@ -1967,6 +2130,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final user = auth.currentUser;
     final keys = context.watch<KeyProvider>();
     final settings = context.watch<SettingsProvider>();
+    final pendingOutboxCount = context.watch<ChatProvider>().pendingOutboxCount;
     final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
@@ -2148,6 +2312,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ),
+                if (user?.isSystemAdmin ?? false) ...[
+                  _GlassDivider(),
+                  _GlassTile(
+                    icon: Icons.admin_panel_settings_outlined,
+                    title: 'System Admin',
+                    subtitle: 'Reports, audit, and server health',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const AdminHomeScreen(),
+                      ),
+                    ),
+                  ),
+                ],
                 if (!kIsWeb) ...[
                   _GlassDivider(),
                   _GlassTile(
@@ -2187,6 +2365,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ],
                 ],
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.outbox_outlined,
+                  title: 'Outbox',
+                  subtitle: 'Messages waiting to send',
+                  trailing: pendingOutboxCount > 0
+                      ? _OutboxCountBadge(count: pendingOutboxCount)
+                      : null,
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const OutboxScreen()),
+                  ),
+                ),
                 _GlassDivider(),
                 _GlassTile(
                   icon: keys.hasKey ? Icons.verified_user : Icons.warning_amber,
@@ -2479,13 +2670,64 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   _GlassDivider(),
                 ],
+                if (!kIsWeb &&
+                    (defaultTargetPlatform == TargetPlatform.windows ||
+                        defaultTargetPlatform == TargetPlatform.linux ||
+                        defaultTargetPlatform == TargetPlatform.macOS)) ...[
+                  _GlassSwitchTile(
+                    icon: Icons.power_settings_new_rounded,
+                    title: 'Start OpenChat at login',
+                    subtitle: DesktopAutostartService.sandboxed
+                        ? 'Not available in this sandboxed package'
+                        : 'Launch minimized to tray on sign-in',
+                    value: settings.launchAtLogin,
+                    enabled: DesktopAutostartService.available,
+                    onChanged: (v) => _setLaunchAtLogin(v, settings),
+                  ),
+                  _GlassDivider(),
+                ],
                 _GlassSwitchTile(
                   icon: Icons.visibility_outlined,
                   title: 'Strict Privacy',
                   subtitle:
-                      'Disable typing, read receipts, link previews, and link opens; when off, typing and read receipts use classic metadata',
+                      'Default for typing, read receipts, link previews, and link opens; chats can override typing and receipts',
                   value: settings.strictPrivacyMode,
                   onChanged: settings.setStrictPrivacyMode,
+                ),
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.notifications_paused_outlined,
+                  title: 'Pause notifications',
+                  subtitle: settings.pauseStatusLabel,
+                  trailing: settings.hasManualNotificationPause
+                      ? TextButton.icon(
+                          key: const ValueKey(
+                            'settings-resume-notifications-button',
+                          ),
+                          icon: const Icon(Icons.notifications_active_outlined),
+                          label: const Text('Resume'),
+                          onPressed: settings.resumeNotifications,
+                        )
+                      : null,
+                  onTap: () => _showPauseNotificationsSheet(settings),
+                ),
+                _GlassDivider(),
+                _GlobalQuietHoursControls(
+                  settings: settings,
+                  onToggle: (enabled) =>
+                      _setGlobalQuietHoursEnabled(enabled, settings),
+                  onChanged: (start, end) => settings.setGlobalQuietHours(
+                    startMinute: start,
+                    endMinute: end,
+                  ),
+                ),
+                _GlassDivider(),
+                _GlassSwitchTile(
+                  icon: Icons.call_outlined,
+                  title: 'Allow calls while paused',
+                  subtitle: 'Incoming calls can still ring during pause',
+                  value: settings.pauseAllowsCalls,
+                  onChanged: settings.setPauseAllowsCalls,
                 ),
                 _GlassDivider(),
                 _GlassSwitchTile(
@@ -2668,6 +2910,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ],
                     ),
                   ),
+                  isLast: true,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // ── Calls ────────────────────────────────────────────────────────
+          const _SectionHeader('Calls'),
+          GlassCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                _GlassTile(
+                  icon: Icons.speed_outlined,
+                  title: 'Data saver',
+                  subtitle: switch (settings.callDataSaverMode) {
+                    CallDataSaverMode.off => 'Use full call quality',
+                    CallDataSaverMode.on => 'Cap outgoing video quality',
+                    CallDataSaverMode.auto =>
+                      'Cap outgoing video on mobile data',
+                  },
+                  trailing: GlassPicker(
+                    value: _callDataSaverLabel(settings.callDataSaverMode),
+                    width: 96,
+                    height: 38,
+                    textStyle: TextStyle(
+                      fontSize: 15,
+                      color: Theme.of(context).colorScheme.onSurface,
+                    ),
+                    onTap: () => _pickCallDataSaverMode(settings),
+                  ),
+                  onTap: () => _pickCallDataSaverMode(settings),
+                ),
+                _GlassDivider(),
+                _GlassSwitchTile(
+                  icon: Icons.voice_chat_outlined,
+                  title: 'Voice only on mobile data',
+                  subtitle: 'Start and answer calls without camera capture',
+                  value: settings.callVoiceOnlyOnMobile,
+                  onChanged: settings.setCallVoiceOnlyOnMobile,
                   isLast: true,
                 ),
               ],
@@ -2993,6 +3276,37 @@ class _SectionHeader extends StatelessWidget {
   );
 }
 
+class _OutboxCountBadge extends StatelessWidget {
+  final int count;
+
+  const _OutboxCountBadge({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: scheme.primary.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: scheme.primary.withValues(alpha: 0.14),
+          width: 0.5,
+        ),
+      ),
+      child: Text(
+        count > 99 ? '99+' : '$count',
+        style: TextStyle(
+          color: scheme.primary,
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0,
+        ),
+      ),
+    );
+  }
+}
+
 /// A row inside a glass card — backed by [GlassListTile] for native iOS 26
 /// tap feedback and Cupertino-adaptive text colours.
 class _GlassTile extends StatelessWidget {
@@ -3058,6 +3372,7 @@ class _GlassSwitchTile extends StatelessWidget {
   final String? subtitle;
   final bool value;
   final ValueChanged<bool> onChanged;
+  final bool enabled;
   final bool isLast;
 
   const _GlassSwitchTile({
@@ -3066,6 +3381,7 @@ class _GlassSwitchTile extends StatelessWidget {
     this.subtitle,
     required this.value,
     required this.onChanged,
+    this.enabled = true,
     this.isLast = false,
   });
 
@@ -3084,15 +3400,118 @@ class _GlassSwitchTile extends StatelessWidget {
       ),
       title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
       subtitle: subtitle != null ? Text(subtitle!) : null,
-      trailing: GlassSwitch(
-        value: value,
-        onChanged: onChanged,
-        activeColor: scheme.primary,
-        enableHaptics: true,
+      trailing: Opacity(
+        opacity: enabled ? 1 : 0.45,
+        child: GlassSwitch(
+          value: value,
+          onChanged: enabled ? onChanged : (_) {},
+          activeColor: scheme.primary,
+          enableHaptics: enabled,
+        ),
       ),
-      onTap: () => onChanged(!value),
+      onTap: enabled ? () => onChanged(!value) : null,
       isLast: isLast,
       showDivider: false,
+    );
+  }
+}
+
+class _GlobalQuietHoursControls extends StatelessWidget {
+  final SettingsProvider settings;
+  final ValueChanged<bool> onToggle;
+  final void Function(int startMinute, int endMinute) onChanged;
+
+  const _GlobalQuietHoursControls({
+    required this.settings,
+    required this.onToggle,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled =
+        settings.globalQuietHoursStartMinute != null &&
+        settings.globalQuietHoursEndMinute != null;
+    final start = settings.globalQuietHoursStartMinute ?? 22 * 60;
+    final end = settings.globalQuietHoursEndMinute ?? 7 * 60;
+    return Column(
+      children: [
+        _GlassSwitchTile(
+          icon: Icons.bedtime_outlined,
+          title: 'Global quiet hours',
+          subtitle: enabled
+              ? '${SettingsProvider.formatNotificationMinute(start)}-${SettingsProvider.formatNotificationMinute(end)}'
+              : 'Off',
+          value: enabled,
+          onChanged: onToggle,
+        ),
+        if (enabled)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _GlobalQuietHourPicker(
+                    label: 'From',
+                    value: start,
+                    onChanged: (value) => onChanged(value, end),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _GlobalQuietHourPicker(
+                    label: 'To',
+                    value: end,
+                    onChanged: (value) => onChanged(start, value),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _GlobalQuietHourPicker extends StatelessWidget {
+  final String label;
+  final int value;
+  final ValueChanged<int> onChanged;
+
+  const _GlobalQuietHourPicker({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 5),
+          child: Text(label, style: Theme.of(context).textTheme.labelMedium),
+        ),
+        GlassPicker(
+          value: SettingsProvider.formatNotificationMinute(value),
+          height: 40,
+          textStyle: TextStyle(fontSize: 15, color: scheme.onSurface),
+          onTap: () => showGlassActionSheet<void>(
+            context: context,
+            title: '$label hour',
+            actions: [
+              for (var hour = 0; hour < 24; hour++)
+                GlassActionSheetAction(
+                  label: '${hour.toString().padLeft(2, '0')}:00',
+                  onPressed: () => onChanged(hour * 60),
+                ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

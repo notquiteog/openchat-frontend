@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../utils/global_notification_pause.dart';
 import '../utils/local_conversation_preferences.dart';
 
 enum NotificationIntentKind { message, incomingCall }
@@ -25,6 +26,10 @@ NotificationIntent? notificationIntentFromRawLine(
   Map<String, ConversationNotificationPreference>
       conversationNotificationPreferences =
       const {},
+  int? notificationsPausedUntilMs,
+  int? globalQuietStartMinute,
+  int? globalQuietEndMinute,
+  bool pauseAllowsCalls = true,
 }) {
   try {
     final json = jsonDecode(rawLine) as Map<String, dynamic>;
@@ -37,6 +42,10 @@ NotificationIntent? notificationIntentFromRawLine(
       showSensitive: showSensitive,
       mutedConversationIds: mutedConversationIds,
       conversationNotificationPreferences: conversationNotificationPreferences,
+      notificationsPausedUntilMs: notificationsPausedUntilMs,
+      globalQuietStartMinute: globalQuietStartMinute,
+      globalQuietEndMinute: globalQuietEndMinute,
+      pauseAllowsCalls: pauseAllowsCalls,
     );
   } catch (_) {
     return null;
@@ -51,6 +60,10 @@ NotificationIntent? notificationIntentFromEvent({
   Map<String, ConversationNotificationPreference>
       conversationNotificationPreferences =
       const {},
+  int? notificationsPausedUntilMs,
+  int? globalQuietStartMinute,
+  int? globalQuietEndMinute,
+  bool pauseAllowsCalls = true,
 }) {
   final preferences = <String, ConversationNotificationPreference>{
     ...conversationNotificationPreferences,
@@ -58,8 +71,15 @@ NotificationIntent? notificationIntentFromEvent({
       if (!conversationNotificationPreferences.containsKey(id))
         id: const ConversationNotificationPreference.mutedForever(),
   };
+  final globallyPaused = isGloballyPausedAt(
+    DateTime.now(),
+    pausedUntilMs: notificationsPausedUntilMs,
+    quietStartMinute: globalQuietStartMinute,
+    quietEndMinute: globalQuietEndMinute,
+  );
 
   if (type == 'new_message') {
+    if (globallyPaused) return null;
     final convId = data['conversation_id'] as String? ?? 'msg';
     if (!shouldNotifyForConversation(
       conversationId: convId,
@@ -80,6 +100,7 @@ NotificationIntent? notificationIntentFromEvent({
   }
 
   if (type == 'join_request') {
+    if (globallyPaused) return null;
     final convId = data['conversation_id'] as String? ?? 'join';
     if (!shouldNotifyForConversation(
       conversationId: convId,
@@ -96,6 +117,7 @@ NotificationIntent? notificationIntentFromEvent({
   }
 
   if (type == 'call_offer' || type == 'incoming_call') {
+    if (globallyPaused && !pauseAllowsCalls) return null;
     // Calls respect mute / muted-until / quiet hours — previously every call
     // rang through regardless. Mentions-only mode deliberately does NOT
     // suppress calls (it is a message-volume control, not a call block).

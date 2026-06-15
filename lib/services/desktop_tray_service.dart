@@ -104,11 +104,15 @@ class DesktopTrayService with WindowListener, TrayListener {
 
       // Two items only: Show brings the window back; Exit quits cleanly.
       // "Hide to tray" is omitted — closing or minimising already hides.
-      await trayManager.setContextMenu(Menu(items: [
-        MenuItem(key: 'show', label: 'Show $_appName'),
-        MenuItem.separator(),
-        MenuItem(key: 'exit', label: 'Exit $_appName'),
-      ]));
+      await trayManager.setContextMenu(
+        Menu(
+          items: [
+            MenuItem(key: 'show', label: 'Show $_appName'),
+            MenuItem.separator(),
+            MenuItem(key: 'exit', label: 'Exit $_appName'),
+          ],
+        ),
+      );
       _trayInitialized = true;
     } catch (e, st) {
       debugPrint(
@@ -178,8 +182,7 @@ class DesktopTrayService with WindowListener, TrayListener {
   }
 
   @override
-  void onTrayIconRightMouseDown() =>
-      unawaited(trayManager.popUpContextMenu());
+  void onTrayIconRightMouseDown() => unawaited(trayManager.popUpContextMenu());
 
   @override
   void onTrayMenuItemClick(MenuItem menuItem) {
@@ -232,6 +235,10 @@ class DesktopTrayService with WindowListener, TrayListener {
     await windowManager.focus();
     NotificationService.setAppFocused(true);
   }
+
+  /// Used by OS autostart launches after tray initialization. If the tray is
+  /// unavailable, this falls back to a normal taskbar minimize via [_hideToTray].
+  Future<void> hideToTrayOnLaunch() => _hideToTray();
 
   // ── Private helpers ───────────────────────────────────────────────────────
 

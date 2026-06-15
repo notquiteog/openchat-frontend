@@ -9,6 +9,7 @@ import '../crypto/pgp_service.dart';
 import '../crypto/shamir.dart';
 import 'api_service.dart';
 import 'encrypted_backup_service.dart';
+import 'recovery_wordlist.dart';
 import 'secure_storage_service.dart';
 
 /// Orchestrates Shamir social key recovery.
@@ -33,8 +34,7 @@ class SocialRecoveryService {
     SecureStorageService? storage,
     EncryptedBackupService? backup,
   }) : _storage = storage ?? SecureStorageService(),
-       _backup =
-           backup ?? EncryptedBackupService(storage: storage);
+       _backup = backup ?? EncryptedBackupService(storage: storage);
 
   // ── Setup ──────────────────────────────────────────────────────────────────
 
@@ -140,12 +140,39 @@ class SocialRecoveryService {
     final fingerprint = await PgpService.fingerprintFromPublicKey(
       ephemeralPubkeyArmored,
     );
-    final digest = crypto.sha256
-        .convert(utf8.encode('openchat-recovery-verify:v1:$fingerprint'))
-        .toString()
+    return verificationCodeForFingerprint(fingerprint);
+  }
+
+  static Future<List<String>> verificationWords(
+    String ephemeralPubkeyArmored,
+  ) async {
+    final fingerprint = await PgpService.fingerprintFromPublicKey(
+      ephemeralPubkeyArmored,
+    );
+    return verificationWordsForFingerprint(fingerprint);
+  }
+
+  static String verificationCodeForFingerprint(String fingerprint) {
+    final digest = _verifyDigestBytes(fingerprint)
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join()
         .toUpperCase();
     return '${digest.substring(0, 4)}-${digest.substring(4, 8)}-${digest.substring(8, 12)}';
   }
+
+  static List<String> verificationWordsForFingerprint(String fingerprint) =>
+      verificationWordsFromDigestBytes(_verifyDigestBytes(fingerprint));
+
+  static List<String> verificationWordsFromDigestBytes(List<int> digestBytes) {
+    if (digestBytes.length < 6) {
+      throw ArgumentError.value(digestBytes.length, 'digestBytes.length');
+    }
+    return [for (var i = 0; i < 6; i++) pgpWordForByte(digestBytes[i], i)];
+  }
+
+  static List<int> _verifyDigestBytes(String fingerprint) => crypto.sha256
+      .convert(utf8.encode('openchat-recovery-verify:v1:$fingerprint'))
+      .bytes;
 
   // ── Requester side (keyless device) ───────────────────────────────────────
 
@@ -162,6 +189,9 @@ class SocialRecoveryService {
       ephemeralPrivateKey: ephemeral.privateKeyArmored,
       ephemeralPublicKey: ephemeral.publicKeyArmored,
       verificationCode: await verificationCode(ephemeral.publicKeyArmored),
+      verificationWords: await SocialRecoveryService.verificationWords(
+        ephemeral.publicKeyArmored,
+      ),
     );
   }
 
@@ -223,11 +253,13 @@ class RecoveryCeremony {
   final String ephemeralPrivateKey;
   final String ephemeralPublicKey;
   final String verificationCode;
+  final List<String> verificationWords;
 
   const RecoveryCeremony({
     required this.requestId,
     required this.ephemeralPrivateKey,
     required this.ephemeralPublicKey,
     required this.verificationCode,
+    required this.verificationWords,
   });
 }

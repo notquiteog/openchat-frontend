@@ -4,6 +4,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import '../firebase_options.dart';
+import '../utils/global_notification_pause.dart';
 import '../utils/local_conversation_preferences.dart';
 import 'api_service.dart';
 import 'background_notification_intent.dart';
@@ -246,6 +247,11 @@ class PushNotificationService {
         mutedConversationIds: NotificationService.mutedConversationIds,
         conversationNotificationPreferences:
             NotificationService.conversationNotificationPreferences,
+        notificationsPausedUntilMs:
+            NotificationService.globalNotificationPauseUntilMs,
+        globalQuietStartMinute: NotificationService.globalQuietHoursStartMinute,
+        globalQuietEndMinute: NotificationService.globalQuietHoursEndMinute,
+        pauseAllowsCalls: NotificationService.pauseAllowsCalls,
       );
       if (intent == null) return;
       switch (intent.kind) {
@@ -353,7 +359,9 @@ class PushNotificationService {
       }
       return;
     }
-    if (type == 'new_message' || type == 'group_call' || type == 'join_request') {
+    if (type == 'new_message' ||
+        type == 'group_call' ||
+        type == 'join_request') {
       final conversationId = conversationIdForData(msg.data) ?? '';
       if (conversationId.isEmpty) return;
       _notificationOpenedHandler?.call(conversationId);
@@ -380,9 +388,20 @@ class PushNotificationService {
     Map<String, ConversationNotificationPreference>
         conversationNotificationPreferences =
         const {},
+    int? notificationsPausedUntilMs,
+    int? globalQuietStartMinute,
+    int? globalQuietEndMinute,
+    bool pauseAllowsCalls = true,
   }) {
     final type = msg.data['type'] as String?;
+    final globallyPaused = isGloballyPausedAt(
+      DateTime.now(),
+      pausedUntilMs: notificationsPausedUntilMs,
+      quietStartMinute: globalQuietStartMinute,
+      quietEndMinute: globalQuietEndMinute,
+    );
     if (type == 'incoming_call') {
+      if (globallyPaused && !pauseAllowsCalls) return null;
       final isVideo = msg.data['is_video'];
       final body = isVideo == null
           ? 'Incoming call'
@@ -394,7 +413,10 @@ class PushNotificationService {
         body: body,
       );
     }
-    if (type == 'new_message' || type == 'group_call' || type == 'join_request') {
+    if (type == 'new_message' ||
+        type == 'group_call' ||
+        type == 'join_request') {
+      if (globallyPaused) return null;
       // Resolve the opaque route to a conversation id and backfill it so the
       // mute/rule logic downstream works unchanged.
       final resolvedData = Map<String, dynamic>.from(msg.data);
@@ -444,6 +466,10 @@ class PushNotificationService {
         mutedConversationIds: mutedConversationIds,
         conversationNotificationPreferences:
             conversationNotificationPreferences,
+        notificationsPausedUntilMs: notificationsPausedUntilMs,
+        globalQuietStartMinute: globalQuietStartMinute,
+        globalQuietEndMinute: globalQuietEndMinute,
+        pauseAllowsCalls: pauseAllowsCalls,
       );
     }
     return null;

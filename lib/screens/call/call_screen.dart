@@ -134,6 +134,7 @@ class _CallScreenState extends State<CallScreen> {
 
     final isVideo = session.isVideo;
     final statusText = cp.callStatusText;
+    final reconnecting = cp.isReconnecting;
     final micMuted = cp.isMicMuted;
     final cameraOff = !cp.isCameraEnabled;
     final avatarUrl = session.remoteAvatarUrl;
@@ -362,8 +363,25 @@ class _CallScreenState extends State<CallScreen> {
                                 vertical: 7,
                               ),
                               child: Row(
+                                key: reconnecting
+                                    ? const Key('call-reconnecting-pill')
+                                    : null,
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
+                                  if (reconnecting) ...[
+                                    SizedBox(
+                                      width: 12,
+                                      height: 12,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 1.6,
+                                        valueColor:
+                                            AlwaysStoppedAnimation<Color>(
+                                              Colors.amberAccent.shade100,
+                                            ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 7),
+                                  ],
                                   Text(
                                     statusText,
                                     style: const TextStyle(

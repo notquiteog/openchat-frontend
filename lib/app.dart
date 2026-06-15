@@ -5,7 +5,8 @@ import 'dart:math' as math;
 import 'package:app_links/app_links.dart';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show LogicalKeyboardKey;
+import 'package:flutter/services.dart'
+    show HardwareKeyboard, KeyDownEvent, KeyEvent;
 import 'package:local_auth/local_auth.dart';
 import 'package:provider/provider.dart';
 import 'package:share_handler/share_handler.dart';
@@ -15,6 +16,7 @@ import 'providers/call_provider.dart';
 import 'providers/chat_provider.dart';
 import 'providers/key_provider.dart';
 import 'providers/settings_provider.dart';
+import 'screens/admin/admin_home_screen.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/bots/bot_chats_screen.dart';
 import 'screens/call/call_screen.dart';
@@ -26,6 +28,7 @@ import 'screens/chat/chat_screen.dart';
 import 'screens/home/conversations_screen.dart';
 import 'screens/invites/invite_preview_screen.dart';
 import 'screens/onboarding/privacy_onboarding_screen.dart';
+import 'screens/packs/pack_preview_screen.dart';
 import 'screens/settings/pgp_keys_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'services/api_service.dart';
@@ -42,8 +45,11 @@ import 'services/push_notification_service.dart';
 import 'services/secure_storage_service.dart';
 import 'services/websocket_service.dart';
 import 'theme/app_theme.dart';
+import 'utils/app_lock_grace.dart';
+import 'utils/deadman_status.dart';
 import 'utils/invite_links.dart';
 import 'utils/identity_qr.dart';
+import 'utils/pack_links.dart';
 import 'widgets/chat_search_results_view.dart';
 import 'widgets/desktop.dart';
 import 'widgets/glass.dart';
@@ -518,6 +524,9 @@ class _AppRootState extends State<_AppRoot> {
   AppLifecycleListener? _lifecycleListener;
   StreamSubscription<Uri>? _inviteLinkSub;
   Timer? _reminderTimer;
+  Timer? _autoLockTimer;
+  DateTime? _backgroundedAt;
+  int _appLockGraceSeconds = 0;
   SettingsProvider? _settings;
   String? _pendingInviteToken;
   String? _lastInviteToken;
@@ -527,6 +536,10 @@ class _AppRootState extends State<_AppRoot> {
   String? _lastContactToken;
   DateTime? _lastContactHandledAt;
   bool _handlingContactLink = false;
+  PackLink? _pendingPackLink;
+  PackLink? _lastPackLink;
+  DateTime? _lastPackHandledAt;
+  bool _handlingPackLink = false;
   String? _pendingPushConversationId;
   bool _handlingPushConversation = false;
   StreamSubscription<SharedMedia>? _shareSub;
@@ -597,6 +610,7 @@ class _AppRootState extends State<_AppRoot> {
       // Cache the app-lock preference.
       final storage = context.read<SecureStorageService>();
       _appLockEnabled = await storage.getAppLockEnabled();
+      _appLockGraceSeconds = await storage.getAppLockGraceSeconds();
       appPinConfiguredListenable.value = await storage.hasAppLockPin();
       appPinUnlockHandler = _handleAppLockPin;
       deviceWipeRequestHandler = _handleDeviceWipeCommand;
@@ -608,7 +622,7 @@ class _AppRootState extends State<_AppRoot> {
         _setAppLocked(true);
       } else if (await storage.isLoggedIn()) {
         // No lock gate: opening the app is itself proof of presence.
-        unawaited(storage.recordRealUnlock());
+        unawaited(_recordRealUnlockAndRefreshDeadmanWarning());
       }
       _lifecycleListener = AppLifecycleListener(
         onHide: _onBackground,
@@ -770,9 +784,17 @@ class _AppRootState extends State<_AppRoot> {
       return;
     }
     final contactToken = contactLinkTokenFromUri(uri);
-    if (contactToken == null) return;
-    _pendingContactToken = contactToken;
-    _drainPendingContactLink();
+    if (contactToken != null) {
+      _pendingContactToken = contactToken;
+      _drainPendingContactLink();
+      return;
+    }
+    final packLink = packLinkFromUri(uri);
+    if (packLink != null) {
+      _pendingPackLink = packLink;
+      _drainPendingPackLink();
+      return;
+    }
   }
 
   void _drainPendingInviteLink() {
@@ -866,6 +888,51 @@ class _AppRootState extends State<_AppRoot> {
     });
   }
 
+  void _drainPendingPackLink() {
+    if (!mounted || _handlingPackLink) return;
+    final packLink = _pendingPackLink;
+    if (packLink == null) return;
+    if (_appLocked) return;
+    if (context.read<AuthProvider>().state != AuthState.authenticated) return;
+
+    final navigator = OpenChatApp.navigatorKey.currentState;
+    if (navigator == null) return;
+
+    final now = DateTime.now();
+    final handledRecently =
+        _lastPackLink == packLink &&
+        _lastPackHandledAt != null &&
+        now.difference(_lastPackHandledAt!) < const Duration(seconds: 2);
+    if (handledRecently) {
+      _pendingPackLink = null;
+      return;
+    }
+
+    _pendingPackLink = null;
+    _handlingPackLink = true;
+    _lastPackLink = packLink;
+    _lastPackHandledAt = now;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        _handlingPackLink = false;
+        return;
+      }
+      try {
+        await navigator.push(
+          MaterialPageRoute<void>(
+            builder: (_) =>
+                PackPreviewScreen(kind: packLink.kind, packId: packLink.packId),
+          ),
+        );
+      } finally {
+        if (mounted) _handlingPackLink = false;
+      }
+      if (!mounted) return;
+      _drainPendingPackLink();
+    });
+  }
+
   void _queuePushConversation(String conversationId) {
     final trimmed = conversationId.trim();
     if (trimmed.isEmpty) return;
@@ -925,18 +992,38 @@ class _AppRootState extends State<_AppRoot> {
     unawaited(BackgroundWsService.updateForegroundState(false));
     context.read<CallProvider>().refreshActiveCallNotification();
     unawaited(context.read<ChatProvider>().refreshLiveLocationNotifications());
+    unawaited(_scheduleAppLockForBackground());
+  }
+
+  Future<void> _scheduleAppLockForBackground() async {
     final storage = context.read<SecureStorageService>();
-    storage.getAppLockEnabled().then((enabled) {
-      if (!mounted) return;
-      _appLockEnabled = enabled;
-      _setAppLocked(_appLockEnabled);
-    });
-    if (_appLockEnabled) {
-      _setAppLocked(true);
+    final enabled = await storage.getAppLockEnabled();
+    final graceSeconds = await storage.getAppLockGraceSeconds();
+    if (!mounted) return;
+
+    _appLockEnabled = enabled;
+    _appLockGraceSeconds = graceSeconds;
+    _autoLockTimer?.cancel();
+    _autoLockTimer = null;
+
+    if (!_appLockEnabled) {
+      _backgroundedAt = null;
+      return;
     }
+
+    _backgroundedAt = DateTime.now();
+    if (_appLockGraceSeconds <= 0) {
+      _setAppLocked(true);
+      return;
+    }
+    _autoLockTimer = Timer(Duration(seconds: _appLockGraceSeconds), () {
+      if (mounted) _setAppLocked(true);
+    });
   }
 
   void _onForeground() {
+    _autoLockTimer?.cancel();
+    _autoLockTimer = null;
     NotificationService.setAppFocused(true);
     unawaited(BackgroundWsService.updateForegroundState(true));
     context.read<CallProvider>().refreshActiveCallNotification();
@@ -946,25 +1033,49 @@ class _AppRootState extends State<_AppRoot> {
       unawaited(context.read<ChatProvider>().connectWebSocket());
       unawaited(context.read<ChatProvider>().refreshConversationsSilently());
     }
+    unawaited(_handleAppLockForForeground());
+  }
+
+  Future<void> _handleAppLockForForeground() async {
     final storage = context.read<SecureStorageService>();
-    storage.getAppLockEnabled().then((enabled) {
-      if (!mounted) return;
-      _appLockEnabled = enabled;
-      if (!_appLockEnabled && _appLocked) {
-        _setAppLocked(false);
-        _drainPendingInviteLink();
-        _drainPendingContactLink();
-        _drainPendingPushConversation();
-        _drainPendingShare();
-      } else if (_appLocked) {
-        _promptAppUnlock();
-      } else {
-        _drainPendingInviteLink();
-        _drainPendingContactLink();
-        _drainPendingPushConversation();
-        _drainPendingShare();
+    final enabled = await storage.getAppLockEnabled();
+    final graceSeconds = await storage.getAppLockGraceSeconds();
+    if (!mounted) return;
+
+    _appLockEnabled = enabled;
+    _appLockGraceSeconds = graceSeconds;
+    if (!_appLockEnabled && _appLocked) {
+      _setAppLocked(false);
+      _backgroundedAt = null;
+      _drainPendingAfterUnlock();
+      return;
+    }
+
+    if (_appLockEnabled && !_appLocked) {
+      final shouldLock = appLockGraceElapsed(
+        backgroundedAt: _backgroundedAt,
+        now: DateTime.now(),
+        graceSeconds: _appLockGraceSeconds,
+      );
+      if (shouldLock) {
+        _setAppLocked(true);
       }
-    });
+    }
+    _backgroundedAt = null;
+
+    if (_appLocked) {
+      _promptAppUnlock();
+    } else {
+      _drainPendingAfterUnlock();
+    }
+  }
+
+  void _drainPendingAfterUnlock() {
+    _drainPendingInviteLink();
+    _drainPendingContactLink();
+    _drainPendingPackLink();
+    _drainPendingPushConversation();
+    _drainPendingShare();
   }
 
   Future<void> _promptAppUnlock() async {
@@ -988,12 +1099,31 @@ class _AppRootState extends State<_AppRoot> {
   /// shows the real vault, the dead-man clock resets, queued intents drain.
   void _completeRealUnlock() {
     vaultModeListenable.value = VaultMode.real;
-    unawaited(context.read<SecureStorageService>().recordRealUnlock());
+    unawaited(_recordRealUnlockAndRefreshDeadmanWarning());
     _setAppLocked(false);
-    _drainPendingInviteLink();
-    _drainPendingContactLink();
-    _drainPendingPushConversation();
-    _drainPendingShare();
+    _backgroundedAt = null;
+    _drainPendingAfterUnlock();
+  }
+
+  Future<void> _recordRealUnlockAndRefreshDeadmanWarning() async {
+    await context.read<SecureStorageService>().recordRealUnlock();
+    await _refreshDeadmanWarning();
+  }
+
+  Future<void> _refreshDeadmanWarning() async {
+    final storage = context.read<SecureStorageService>();
+    final days = await storage.getDeadmanDays();
+    final status = computeDeadmanStatus(
+      days: days,
+      lastRealUnlockAt: await storage.getLastRealUnlockAt(),
+      now: DateTime.now().toUtc(),
+    );
+    final fireAt = deadmanWarningFireAt(status);
+    if (fireAt == null) {
+      await NotificationService.cancelDeadmanWarning();
+    } else {
+      await NotificationService.scheduleDeadmanWarning(fireAt: fireAt);
+    }
   }
 
   /// PIN entry from the root lock screen. Returns false only for a WRONG pin —
@@ -1037,9 +1167,11 @@ class _AppRootState extends State<_AppRoot> {
     if (last == null) {
       // Switch just armed: start the clock now instead of wiping instantly.
       await storage.recordRealUnlock();
+      await _refreshDeadmanWarning();
       return;
     }
     if (DateTime.now().toUtc().difference(last) > Duration(days: days)) {
+      await NotificationService.cancelDeadmanWarning();
       await _runLocalWipe();
     }
   }
@@ -1084,6 +1216,7 @@ class _AppRootState extends State<_AppRoot> {
   Future<void> _runLocalWipe() async {
     final storage = context.read<SecureStorageService>();
     final auth = context.read<AuthProvider>();
+    await NotificationService.cancelDeadmanWarning();
     await LocalWipeService(storage).wipeEverything();
     vaultModeListenable.value = VaultMode.real;
     appPinConfiguredListenable.value = false;
@@ -1102,6 +1235,7 @@ class _AppRootState extends State<_AppRoot> {
     _escalatedCallSub?.cancel();
     _shareSub?.cancel();
     _reminderTimer?.cancel();
+    _autoLockTimer?.cancel();
     PushNotificationService.setForegroundIncomingCallHandler(null);
     PushNotificationService.setNotificationOpenedHandler(null);
     NotificationService.setIncomingCallPayloadHandler();
@@ -1182,6 +1316,7 @@ class _AppRootState extends State<_AppRoot> {
       _surfaceDueReminders();
       _drainPendingInviteLink();
       _drainPendingContactLink();
+      _drainPendingPackLink();
       _drainPendingPushConversation();
       // Re-register the FCM/APNs push token on every login so the backend
       // always has a current token. Silently skipped when Firebase credentials
@@ -1228,9 +1363,23 @@ class _AppRootState extends State<_AppRoot> {
   void _syncNotificationPreferences(SettingsProvider settings) {
     final preferences = settings.conversationNotificationPreferences;
     NotificationService.setConversationNotificationPreferences(preferences);
+    NotificationService.setGlobalNotificationPause(
+      pausedUntil: settings.notificationsPausedUntil,
+      quietStart: settings.globalQuietHoursStartMinute,
+      quietEnd: settings.globalQuietHoursEndMinute,
+      allowsCalls: settings.pauseAllowsCalls,
+    );
     unawaited(
       BackgroundWsService.updateConversationNotificationPreferences(
         preferences,
+      ),
+    );
+    unawaited(
+      BackgroundWsService.updateGlobalNotificationPause(
+        notificationsPausedUntilMs: settings.notificationPauseUntilMs,
+        globalQuietStartMinute: settings.globalQuietHoursStartMinute,
+        globalQuietEndMinute: settings.globalQuietHoursEndMinute,
+        pauseAllowsCalls: settings.pauseAllowsCalls,
       ),
     );
     if (settings.wsBackgroundEnabled) {
@@ -1275,6 +1424,10 @@ class _AppRootState extends State<_AppRoot> {
       showSensitive: settings.notificationSensitiveContent,
       conversationNotificationPreferences:
           settings.conversationNotificationPreferences,
+      notificationsPausedUntilMs: settings.notificationPauseUntilMs,
+      globalQuietStartMinute: settings.globalQuietHoursStartMinute,
+      globalQuietEndMinute: settings.globalQuietHoursEndMinute,
+      pauseAllowsCalls: settings.pauseAllowsCalls,
     );
   }
 
@@ -1339,10 +1492,13 @@ class _AppRootState extends State<_AppRoot> {
 
     if (auth.state == AuthState.authenticated &&
         !_appLocked &&
-        (_pendingInviteToken != null || _pendingContactToken != null)) {
+        (_pendingInviteToken != null ||
+            _pendingContactToken != null ||
+            _pendingPackLink != null)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _drainPendingInviteLink();
         _drainPendingContactLink();
+        _drainPendingPackLink();
       });
     }
 
@@ -1427,7 +1583,14 @@ class _HomeShellState extends State<_HomeShell> {
   Brightness? _barContentBrightness;
 
   @override
+  void initState() {
+    super.initState();
+    HardwareKeyboard.instance.addHandler(_handleGlobalShortcutKeyEvent);
+  }
+
+  @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleGlobalShortcutKeyEvent);
     _pageController.dispose();
     _searchCtrl.dispose();
     _searchFocus.dispose();
@@ -1460,6 +1623,102 @@ class _HomeShellState extends State<_HomeShell> {
   Future<void> _onSearchSelect(ChatSearchSelection selection) async {
     _setSearchActive(false);
     await handleChatSearchSelection(context, selection);
+  }
+
+  void _focusSearch() {
+    _setSearchActive(true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocus.requestFocus();
+    });
+  }
+
+  void _openSettings() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const SettingsScreen()),
+    );
+  }
+
+  void _showKeyboardShortcuts() {
+    showDialog<void>(
+      context: context,
+      builder: (_) => const DesktopShortcutsSheet(),
+    );
+  }
+
+  bool _handleGlobalShortcutKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+    final keyboard = HardwareKeyboard.instance;
+    final questionShortcut = desktopShortcutSpecs.firstWhere(
+      (shortcut) => shortcut.ignoreWhenEditing,
+    );
+    final bareQuestion =
+        event.character == '?' ||
+        (event.logicalKey == questionShortcut.key && keyboard.isShiftPressed);
+    if (!bareQuestion ||
+        keyboard.isControlPressed ||
+        keyboard.isMetaPressed ||
+        keyboard.isAltPressed) {
+      return false;
+    }
+    if (desktopShortcutTextInputFocused()) return false;
+    _showKeyboardShortcuts();
+    return true;
+  }
+
+  Map<ShortcutActivator, VoidCallback> _desktopShortcutBindings() {
+    final bindings = <ShortcutActivator, VoidCallback>{};
+    for (final shortcut in desktopShortcutSpecs) {
+      if (shortcut.ignoreWhenEditing) continue;
+      for (final activator in shortcut.activators) {
+        bindings[activator] = () => _runDesktopShortcut(shortcut);
+      }
+    }
+    return bindings;
+  }
+
+  void _runDesktopShortcut(DesktopShortcutSpec shortcut) {
+    switch (shortcut.action) {
+      case DesktopShortcutAction.search:
+        _focusSearch();
+        break;
+      case DesktopShortcutAction.newChat:
+        _setSearchActive(false);
+        _conversationsKey.currentState?.showNewConversation();
+        break;
+      case DesktopShortcutAction.previousConversation:
+        _conversationsKey.currentState?.focusPreviousConversation();
+        break;
+      case DesktopShortcutAction.nextConversation:
+        _conversationsKey.currentState?.focusNextConversation();
+        break;
+      case DesktopShortcutAction.jumpToConversation:
+        final index = shortcut.index;
+        if (index != null) {
+          _conversationsKey.currentState?.selectConversationByIndex(index);
+        }
+        break;
+      case DesktopShortcutAction.markSelectedRead:
+        _conversationsKey.currentState?.markSelectedConversationRead();
+        break;
+      case DesktopShortcutAction.archiveSelected:
+        _conversationsKey.currentState?.archiveSelectedConversation();
+        break;
+      case DesktopShortcutAction.openSettings:
+        _setSearchActive(false);
+        _openSettings();
+        break;
+      case DesktopShortcutAction.close:
+        if (_searchActive) {
+          _setSearchActive(false);
+        } else {
+          _conversationsKey.currentState?.closeSplitPane();
+        }
+        break;
+      case DesktopShortcutAction.showCheatSheet:
+        _showKeyboardShortcuts();
+        break;
+    }
   }
 
   @override
@@ -1500,6 +1759,17 @@ class _HomeShellState extends State<_HomeShell> {
           activeIcon: const Icon(Icons.smart_toy),
           label: 'Bots',
           glowColor: scheme.secondary,
+        ),
+      );
+    }
+    if (canShowAdminHome(user)) {
+      screens.add(const AdminHomeScreen());
+      tabs.add(
+        GlassBottomBarTab(
+          icon: const Icon(Icons.admin_panel_settings_outlined),
+          activeIcon: const Icon(Icons.admin_panel_settings_rounded),
+          label: 'Admin',
+          glowColor: scheme.error,
         ),
       );
     }
@@ -1600,10 +1870,7 @@ class _HomeShellState extends State<_HomeShell> {
               onTabSelected: _onTabSelected,
               searchActive: _searchActive,
               onSearchTap: () => _setSearchActive(!_searchActive),
-              onSettingsTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const SettingsScreen()),
-              ),
+              onSettingsTap: _openSettings,
             ),
             Expanded(child: body),
           ],
@@ -1693,19 +1960,7 @@ class _HomeShellState extends State<_HomeShell> {
     // Desktop keyboard shortcuts. CallbackShortcuts (not Shortcuts/Actions):
     // these fire from any focused descendant, including text fields' parents.
     return CallbackShortcuts(
-      bindings: {
-        const SingleActivator(LogicalKeyboardKey.keyK, control: true): () =>
-            _setSearchActive(!_searchActive),
-        const SingleActivator(LogicalKeyboardKey.keyK, meta: true): () =>
-            _setSearchActive(!_searchActive),
-        const SingleActivator(LogicalKeyboardKey.keyN, control: true): () =>
-            _conversationsKey.currentState?.showNewConversation(),
-        const SingleActivator(LogicalKeyboardKey.keyN, meta: true): () =>
-            _conversationsKey.currentState?.showNewConversation(),
-        const SingleActivator(LogicalKeyboardKey.escape): () {
-          if (_searchActive) _setSearchActive(false);
-        },
-      },
+      bindings: _desktopShortcutBindings(),
       child: FocusScope(autofocus: true, child: shell),
     );
   }

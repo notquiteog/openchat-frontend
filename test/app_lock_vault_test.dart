@@ -90,24 +90,47 @@ void main() {
         isTrue,
       );
     });
+
+    test('app-lock grace defaults and round-trips', () async {
+      final storage = SecureStorageService();
+      expect(await storage.getAppLockGraceSeconds(), 0);
+
+      await storage.setAppLockGraceSeconds(60);
+      expect(await storage.getAppLockGraceSeconds(), 60);
+
+      await storage.setAppLockGraceSeconds(80);
+      expect(await storage.getAppLockGraceSeconds(), 60);
+    });
   });
 
   group('backup exclusion of device-local lock policy', () {
-    test('recovery export never carries PINs, duress config, or timers',
-        () async {
-      final storage = SecureStorageService();
-      await storage.setAppLockPin('123456');
-      await storage.setDuressPin('999999');
-      await storage.setDuressAction('wipe');
-      await storage.setDeadmanDays(30);
-      await storage.recordRealUnlock();
+    test(
+      'recovery export never carries PINs, duress config, or timers',
+      () async {
+        final storage = SecureStorageService();
+        await storage.setAppLockPin('123456');
+        await storage.setDuressPin('999999');
+        await storage.setDuressAction('wipe');
+        await storage.setAppLockGraceSeconds(300);
+        await storage.setDeadmanDays(30);
+        await storage.recordRealUnlock();
 
-      final exported = await storage.exportRecoverySecrets();
-      expect(exported.keys, isNot(contains('app_lock_pin_v1')));
-      expect(exported.keys, isNot(contains('app_lock_duress_pin_v1')));
-      expect(exported.keys, isNot(contains('app_lock_duress_action_v1')));
-      expect(exported.keys, isNot(contains('deadman_days_v1')));
-      expect(exported.keys, isNot(contains('last_real_unlock_at_v1')));
+        final exported = await storage.exportRecoverySecrets();
+        expect(exported.keys, isNot(contains('app_lock_pin_v1')));
+        expect(exported.keys, isNot(contains('app_lock_duress_pin_v1')));
+        expect(exported.keys, isNot(contains('app_lock_duress_action_v1')));
+        expect(exported.keys, isNot(contains('app_lock_grace_seconds_v1')));
+        expect(exported.keys, isNot(contains('deadman_days_v1')));
+        expect(exported.keys, isNot(contains('last_real_unlock_at_v1')));
+      },
+    );
+
+    test('recovery import ignores app-lock grace policy', () async {
+      final storage = SecureStorageService();
+
+      await storage.importRecoverySecrets({'app_lock_grace_seconds_v1': '900'});
+
+      expect(await storage.getAppLockGraceSeconds(), 0);
     });
   });
 
@@ -171,10 +194,7 @@ void main() {
       expect(ids, contains('visible-1'));
       expect(ids, isNot(contains('secret-1')));
       expect(provider.isConversationVisibleInVault('secret-1'), isFalse);
-      expect(
-        provider.isConversationVisibleInVault('visible-1'),
-        isTrue,
-      );
+      expect(provider.isConversationVisibleInVault('visible-1'), isTrue);
     });
 
     test('flipping vault mode notifies listeners', () {
@@ -224,8 +244,7 @@ class _NoopCache extends MessageCacheService {
     String encryptedPayload,
     String plaintext,
     String? senderId,
-  ) =>
-      Future.value();
+  ) => Future.value();
 }
 
 class _NoopOutbox extends OfflineOutboxService {

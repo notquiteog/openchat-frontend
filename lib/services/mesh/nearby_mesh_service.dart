@@ -7,6 +7,7 @@ import 'package:flutter/widgets.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../crypto/pgp_service.dart';
+import '../../models/recent_nearby_peer.dart';
 import '../secure_storage_service.dart';
 import 'ble_mesh_transport.dart';
 import 'lan_mesh_transport.dart';
@@ -85,11 +86,12 @@ class NearbyMeshService extends ChangeNotifier with WidgetsBindingObserver {
   final Future<bool> Function(
     Map<String, dynamic> envelope,
     String senderFingerprint,
-  ) onEnvelope;
+  )
+  onEnvelope;
 
   /// Queued outbox envelopes addressed to the DM with this fingerprint.
   final Future<List<Map<String, dynamic>>> Function(String fingerprint)
-      envelopesForPeer;
+  envelopesForPeer;
 
   /// Contact display name for a verified fingerprint (null = unknown).
   final String? Function(String fingerprint) contactNameForFingerprint;
@@ -114,6 +116,7 @@ class NearbyMeshService extends ChangeNotifier with WidgetsBindingObserver {
   bool _resumeOnForeground = false;
   int _attachedScreens = 0;
   bool _keepAliveWhileAppOpen = false;
+  bool _historyEnabled = false;
   String? _selfFingerprint;
   String? _error;
 
@@ -148,6 +151,14 @@ class NearbyMeshService extends ChangeNotifier with WidgetsBindingObserver {
     } else {
       notifyListeners();
     }
+  }
+
+  bool get historyEnabled => _historyEnabled;
+  set historyEnabled(bool value) {
+    if (_historyEnabled == value) return;
+    _historyEnabled = value;
+    unawaited(_storage.setRecentNearbyEnabled(value).catchError((_) {}));
+    notifyListeners();
   }
 
   /// The Nearby screen came on stage: make sure the radio is up.
@@ -195,6 +206,9 @@ class NearbyMeshService extends ChangeNotifier with WidgetsBindingObserver {
       _observing = true;
     }
     _error = null;
+    try {
+      _historyEnabled = await _storage.getRecentNearbyEnabled();
+    } catch (_) {}
     final privateKey = await _storage.getPrivateKey();
     final publicKey = await _storage.getPublicKey();
     if (privateKey == null || publicKey == null) {
@@ -280,7 +294,8 @@ class NearbyMeshService extends ChangeNotifier with WidgetsBindingObserver {
       String fingerprint,
       String username,
       String userId,
-    }) self,
+    })
+    self,
   ) {
     if (!_running || _peers.containsKey(link.linkId)) return;
     final session = MeshSession(
@@ -308,68 +323,145 @@ class NearbyMeshService extends ChangeNotifier with WidgetsBindingObserver {
     _peers[link.linkId] = peer;
 
     final reassembler = MeshReassembler();
-    _subs.add(link.inboundChunks.listen((chunk) async {
-      try {
-        final frameBytes = reassembler.addChunk(chunk);
-        if (frameBytes == null) return;
-        await session.handleFrame(decodeMeshFrame(frameBytes));
-      } on MeshFrameException {
-        // Corrupt chunk stream — drop the partial frame, keep the link.
-      }
-    }, onDone: () => _dropPeer(link.linkId)));
-
-    _subs.add(session.stateChanges.listen((state) {
-      if (state == MeshSessionState.authenticated) {
-        final fp = session.peer!.fingerprint;
-        // The same person can surface on BLE and LAN at once. Keep one
-        // link, preferring LAN (~1000× the throughput).
-        final twin = _peers.values
-            .where((p) =>
-                p.linkId != peer.linkId &&
-                p.session.authenticated &&
-                p.fingerprint == fp)
-            .firstOrNull;
-        if (twin != null) {
-          final loser = peer.isLan && !twin.isLan ? twin : peer;
-          unawaited(loser.link?.close()); // onDone drops the peer entry
-          if (loser == peer) return;
+    _subs.add(
+      link.inboundChunks.listen((chunk) async {
+        try {
+          final frameBytes = reassembler.addChunk(chunk);
+          if (frameBytes == null) return;
+          await session.handleFrame(decodeMeshFrame(frameBytes));
+        } on MeshFrameException {
+          // Corrupt chunk stream — drop the partial frame, keep the link.
         }
-        peer.matchedContactName = contactNameForFingerprint(fp);
-        unawaited(deliverQueuedTo(peer));
-      }
-      notifyListeners();
-    }));
+      }, onDone: () => _dropPeer(link.linkId)),
+    );
 
-    _subs.add(session.acks.listen((ack) {
-      if (!peer.ackedNonces.add(ack.nonce)) return;
-      if (ack.accepted) {
-        peer.confirmedCount++;
-      } else {
-        peer.rejectedCount++;
-      }
-      onEnvelopeAcked?.call(ack.nonce, ack.accepted);
-      notifyListeners();
-    }));
-
-    _subs.add(session.messages.listen((envelope) async {
-      final fp = session.peer?.fingerprint;
-      if (fp == null) return;
-      final accepted = await onEnvelope(envelope, fp);
-      if (accepted) {
-        peer.receivedCount++;
+    _subs.add(
+      session.stateChanges.listen((state) {
+        if (state == MeshSessionState.authenticated) {
+          final fp = session.peer!.fingerprint;
+          // The same person can surface on BLE and LAN at once. Keep one
+          // link, preferring LAN (~1000× the throughput).
+          final twin = _peers.values
+              .where(
+                (p) =>
+                    p.linkId != peer.linkId &&
+                    p.session.authenticated &&
+                    p.fingerprint == fp,
+              )
+              .firstOrNull;
+          if (twin != null) {
+            final loser = peer.isLan && !twin.isLan ? twin : peer;
+            unawaited(loser.link?.close()); // onDone drops the peer entry
+            if (loser == peer) return;
+          }
+          if (link is LanMeshLink) link.markAuthenticated();
+          unawaited(_rememberPeer(session.peer!, isLan: peer.isLan));
+          peer.matchedContactName = contactNameForFingerprint(fp);
+          unawaited(deliverQueuedTo(peer));
+        }
         notifyListeners();
-      }
-      final nonce = envelope['client_nonce']?.toString() ?? '';
-      if (nonce.isNotEmpty) {
-        // Receipt back to the sender; harmlessly ignored by older builds.
-        unawaited(
-          session.sendAck(nonce, accepted: accepted).catchError((_) {}),
-        );
-      }
-    }));
+      }),
+    );
+
+    _subs.add(
+      session.acks.listen((ack) {
+        if (!peer.ackedNonces.add(ack.nonce)) return;
+        if (ack.accepted) {
+          peer.confirmedCount++;
+        } else {
+          peer.rejectedCount++;
+        }
+        onEnvelopeAcked?.call(ack.nonce, ack.accepted);
+        notifyListeners();
+      }),
+    );
+
+    _subs.add(
+      session.messages.listen((envelope) async {
+        final fp = session.peer?.fingerprint;
+        if (fp == null) return;
+        final accepted = await onEnvelope(envelope, fp);
+        if (accepted) {
+          peer.receivedCount++;
+          notifyListeners();
+        }
+        final nonce = envelope['client_nonce']?.toString() ?? '';
+        if (nonce.isNotEmpty) {
+          // Receipt back to the sender; harmlessly ignored by older builds.
+          unawaited(
+            session.sendAck(nonce, accepted: accepted).catchError((_) {}),
+          );
+        }
+      }),
+    );
 
     unawaited(session.start().catchError((_) {}));
     notifyListeners();
+  }
+
+  Future<List<RecentNearbyPeer>> recentPeers() async {
+    try {
+      return await _storage.getRecentNearbyPeers();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> clearRecentPeers() async {
+    await _storage.clearRecentNearbyPeers();
+    notifyListeners();
+  }
+
+  Future<void> forgetRecentPeer(String fingerprint) async {
+    final normalized = normalizeRecentNearbyFingerprint(fingerprint);
+    final peers = await _storage.getRecentNearbyPeers();
+    final next = peers
+        .where((peer) => peer.fingerprint != normalized)
+        .toList(growable: false);
+    if (next.isEmpty) {
+      await _storage.clearRecentNearbyPeers();
+    } else {
+      await _storage.saveRecentNearbyPeers(next);
+    }
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  Future<void> debugRememberRecentPeer(MeshPeer peer, {required bool isLan}) =>
+      _rememberPeer(peer, isLan: isLan);
+
+  Future<void> _rememberPeer(MeshPeer peer, {required bool isLan}) async {
+    if (!_historyEnabled) return;
+    final incoming = RecentNearbyPeer.fromMeshPeer(
+      peer,
+      transport: isLan ? recentNearbyTransportLan : recentNearbyTransportBle,
+    );
+    if (incoming.fingerprint.isEmpty) return;
+    try {
+      final previous = await _storage.getRecentNearbyPeers();
+      RecentNearbyPeer? existing;
+      for (final entry in previous) {
+        if (entry.fingerprint == incoming.fingerprint) {
+          existing = entry;
+          break;
+        }
+      }
+      final merged = incoming.copyWith(
+        userId: incoming.userId.isNotEmpty
+            ? incoming.userId
+            : existing?.userId ?? '',
+        publicKeyArmored: incoming.publicKeyArmored.isNotEmpty
+            ? incoming.publicKeyArmored
+            : existing?.publicKeyArmored ?? '',
+      );
+      final next = <RecentNearbyPeer>[
+        merged,
+        for (final entry in previous)
+          if (entry.fingerprint != incoming.fingerprint) entry,
+      ]..sort((a, b) => b.lastSeenAt.compareTo(a.lastSeenAt));
+      await _storage.saveRecentNearbyPeers(next.take(50).toList());
+      notifyListeners();
+    } catch (_) {}
   }
 
   /// Pushes every queued outbox message for this verified peer over the

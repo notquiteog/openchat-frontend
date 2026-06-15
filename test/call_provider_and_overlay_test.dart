@@ -5,19 +5,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openchat/providers/call_provider.dart';
+import 'package:openchat/providers/settings_provider.dart';
 import 'package:openchat/screens/call/call_screen.dart';
 import 'package:openchat/services/app_lock_state.dart';
 import 'package:openchat/services/call_audio.dart';
 import 'package:openchat/services/call_foreground_service.dart';
 import 'package:openchat/services/call_history_service.dart';
 import 'package:openchat/services/call_media_permissions.dart';
+import 'package:openchat/services/call_quality_policy.dart';
 import 'package:openchat/services/call_service.dart';
+import 'package:openchat/services/network_service.dart';
 import 'package:openchat/services/sfu_call_controller.dart';
 import 'package:openchat/services/api_service.dart';
 import 'package:openchat/services/notification_service.dart';
 import 'package:openchat/services/secure_storage_service.dart';
 import 'package:openchat/services/websocket_service.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   group('CallProvider audio sync', () {
@@ -85,6 +89,47 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       expect(provider.callStatusText, '01:05');
+
+      provider.dispose();
+      service.dispose();
+    });
+
+    test('surfaces reconnecting while the call remains connected', () async {
+      var now = DateTime.utc(2026, 6, 1, 12, 0, 30);
+      final connectedAt = DateTime.utc(2026, 6, 1, 12, 0, 0);
+      final service = _FakeCallService();
+      final provider = CallProvider(
+        service,
+        audio: _FakeCallAudio(),
+        now: () => now,
+      );
+      final session = CallSession(
+        callId: 'c-reconnect',
+        remoteUserId: 'u-reconnect',
+        remoteUsername: 'rex',
+        isVideo: false,
+        isIncoming: false,
+        state: CallState.connected,
+      )..connectedAt = connectedAt;
+
+      service.emitSession(session);
+      await Future<void>.delayed(Duration.zero);
+      expect(provider.callStatusText, '00:30');
+      expect(provider.isReconnecting, isFalse);
+
+      session.reconnecting = true;
+      service.emitSession(session);
+      await Future<void>.delayed(Duration.zero);
+      expect(session.state, CallState.connected);
+      expect(provider.callStatusText, 'Reconnecting…');
+      expect(provider.isReconnecting, isTrue);
+
+      now = DateTime.utc(2026, 6, 1, 12, 2, 30);
+      session.reconnecting = false;
+      service.emitSession(session);
+      await Future<void>.delayed(Duration.zero);
+      expect(provider.callStatusText, '02:30');
+      expect(provider.isReconnecting, isFalse);
 
       provider.dispose();
       service.dispose();
@@ -425,6 +470,56 @@ void main() {
       expect(video['height'], isA<Map>());
       expect(video['frameRate'], isA<Map>());
     });
+
+    test('data saver lowers requested camera resolution and frame rate', () {
+      final constraints = buildCallMediaConstraintsForTesting(
+        isVideo: true,
+        policy: const CallQualityPolicy.dataSaver(),
+      );
+
+      final video = constraints['video'] as Map;
+      expect(video['width'], {'ideal': 640});
+      expect(video['height'], {'ideal': 360});
+      expect(video['frameRate'], {'ideal': 20});
+    });
+  });
+
+  group('Call data saver settings', () {
+    test(
+      'voice-only on mobile data downgrades outgoing video call start',
+      () async {
+        SharedPreferences.setMockInitialValues({});
+        final settings = SettingsProvider();
+        await settings.load();
+        await settings.setCallVoiceOnlyOnMobile(true);
+        final network = _FakeNetwork(NetworkClass.mobile);
+        final service = _FakeCallService();
+        final permissionRequests = <bool>[];
+        final provider = CallProvider(
+          service,
+          audio: _FakeCallAudio(),
+          settings: settings,
+          network: network,
+          mediaPermissionGate: ({required isVideo}) async {
+            permissionRequests.add(isVideo);
+          },
+        );
+
+        await provider.startCall(
+          targetUserId: 'user-2',
+          targetUsername: 'River',
+          conversationId: 'conv-1',
+          isVideo: true,
+        );
+
+        expect(permissionRequests, [false]);
+        expect(service.startCallIsVideo, [false]);
+
+        provider.dispose();
+        service.dispose();
+        settings.dispose();
+      },
+    );
   });
 
   group('Incoming call lifecycle', () {
@@ -1036,17 +1131,18 @@ void main() {
           callHistory: history,
         );
 
-        final session = CallSession(
-          callId: 'c-history-in',
-          remoteUserId: 'u-peer',
-          remoteUsername: 'peer',
-          conversationId: 'conv-h',
-          isVideo: false,
-          isIncoming: true,
-          state: CallState.connected,
-        )
-          ..wasConnected = true
-          ..connectedAt = DateTime.now();
+        final session =
+            CallSession(
+                callId: 'c-history-in',
+                remoteUserId: 'u-peer',
+                remoteUsername: 'peer',
+                conversationId: 'conv-h',
+                isVideo: false,
+                isIncoming: true,
+                state: CallState.connected,
+              )
+              ..wasConnected = true
+              ..connectedAt = DateTime.now();
         service.emitSession(session);
         await Future<void>.delayed(Duration.zero);
 
@@ -1088,17 +1184,18 @@ void main() {
           callHistory: history,
         );
 
-        final session = CallSession(
-          callId: 'c-history-out',
-          remoteUserId: 'u-peer',
-          remoteUsername: 'peer',
-          conversationId: 'conv-h',
-          isVideo: true,
-          isIncoming: false,
-          state: CallState.connected,
-        )
-          ..wasConnected = true
-          ..connectedAt = DateTime.now();
+        final session =
+            CallSession(
+                callId: 'c-history-out',
+                remoteUserId: 'u-peer',
+                remoteUsername: 'peer',
+                conversationId: 'conv-h',
+                isVideo: true,
+                isIncoming: false,
+                state: CallState.connected,
+              )
+              ..wasConnected = true
+              ..connectedAt = DateTime.now();
         service.emitSession(session);
         await Future<void>.delayed(Duration.zero);
 
@@ -1236,6 +1333,44 @@ void main() {
   });
 
   group('E2EE chip on call UIs', () {
+    testWidgets('reconnecting calls show a distinct status pill', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+
+      final service = _FakeCallService();
+      final provider = CallProvider(service, audio: _FakeCallAudio());
+      try {
+        service.emitSession(
+          CallSession(
+              callId: 'c-reconnecting-ui',
+              remoteUserId: 'u-reconnecting-ui',
+              remoteUsername: 'reconnect-peer',
+              isVideo: false,
+              isIncoming: false,
+              state: CallState.connected,
+            )
+            ..connectedAt = DateTime.now()
+            ..reconnecting = true,
+        );
+
+        await tester.pumpWidget(
+          ChangeNotifierProvider<CallProvider>.value(
+            value: provider,
+            child: const MaterialApp(home: Scaffold(body: CallOverlay())),
+          ),
+        );
+        await tester.pump();
+
+        expect(find.byKey(const Key('call-reconnecting-pill')), findsOneWidget);
+        expect(find.text('Reconnecting…'), findsOneWidget);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+        provider.dispose();
+        service.dispose();
+      }
+    });
+
     testWidgets('sealed calls show the lock, plaintext calls do not', (
       tester,
     ) async {
@@ -1417,6 +1552,23 @@ class _FakeCallHistory extends CallHistoryService {
   Future<void> record(CallHistoryEntry e) async {
     entries.add(e);
   }
+}
+
+class _FakeNetwork extends NetworkService {
+  _FakeNetwork(this._current);
+
+  NetworkClass _current;
+
+  @override
+  NetworkClass get current => _current;
+
+  void set(NetworkClass value) {
+    _current = value;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> init() async {}
 }
 
 class _FakeCallService extends CallService {

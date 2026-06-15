@@ -13,18 +13,12 @@ import 'package:uuid/uuid.dart';
 import '../config/api_config.dart';
 import '../services/api_service.dart';
 import '../services/call_platform_controls.dart';
+import '../services/call_quality_policy.dart';
 import '../services/call_signal_codec.dart';
 import '../services/secure_storage_service.dart';
 import '../services/websocket_service.dart';
 
-enum CallState {
-  idle,
-  ringing,
-  calling,
-  connecting,
-  connected,
-  ended,
-}
+enum CallState { idle, ringing, calling, connecting, connected, ended }
 
 /// Whether a decoded incoming call signal came out of a sealed envelope.
 /// `encryption_mode` is authoritative: the privacy codec emits it only after
@@ -55,6 +49,7 @@ class CallSession {
   bool sealed;
 
   bool wasConnected = false;
+  bool reconnecting = false;
   DateTime? connectedAt;
 
   CallSession({
@@ -133,19 +128,40 @@ class _PeerState {
 Map<String, dynamic> buildCallMediaConstraintsForTesting({
   required bool isVideo,
   bool usingFrontCamera = true,
+  CallQualityPolicy policy = const CallQualityPolicy.normal(),
+}) => _buildCallMediaConstraints(
+  audio: true,
+  isVideo: isVideo,
+  usingFrontCamera: usingFrontCamera,
+  includeFacingMode: true,
+  policy: policy,
+);
+
+Map<String, dynamic> _buildCallMediaConstraints({
+  required bool audio,
+  required bool isVideo,
+  required bool usingFrontCamera,
+  required bool includeFacingMode,
+  required CallQualityPolicy policy,
 }) {
+  final width = policy.dataSaver ? 640 : 1280;
+  final height = policy.dataSaver ? 360 : 720;
+  final frameRate = policy.dataSaver ? policy.maxFramerate : 30;
   return {
-    'audio': {
-      'echoCancellation': true,
-      'noiseSuppression': true,
-      'autoGainControl': true,
-    },
+    'audio': audio
+        ? {
+            'echoCancellation': true,
+            'noiseSuppression': true,
+            'autoGainControl': true,
+          }
+        : false,
     'video': isVideo
         ? {
-            'facingMode': usingFrontCamera ? 'user' : 'environment',
-            'width': {'ideal': 1280},
-            'height': {'ideal': 720},
-            'frameRate': {'ideal': 30},
+            if (includeFacingMode)
+              'facingMode': usingFrontCamera ? 'user' : 'environment',
+            'width': {'ideal': width},
+            'height': {'ideal': height},
+            'frameRate': {'ideal': frameRate},
           }
         : false,
   };
@@ -170,7 +186,8 @@ String? _sdpField(Map<String, dynamic> data, String key) {
 /// Guarantees the SDP ends with a line terminator. `setRemoteDescription`
 /// fails with "Invalid type or sdp" if the final line isn't newline-terminated,
 /// which happens when an upstream trim() or server normalization strips it.
-String _ensureSdpTerminator(String sdp) => sdp.endsWith('\n') ? sdp : '$sdp\r\n';
+String _ensureSdpTerminator(String sdp) =>
+    sdp.endsWith('\n') ? sdp : '$sdp\r\n';
 
 String _candType(String candidate) {
   final i = candidate.indexOf('typ ');
@@ -209,6 +226,8 @@ class CallService {
   bool _usingFrontCamera = true;
   bool _isScreenSharing = false;
   String? _selectedAudioOutputId;
+  CallQualityPolicy Function() _qualityPolicyResolver = () =>
+      const CallQualityPolicy.normal();
 
   final _sessionController = StreamController<CallSession?>.broadcast();
   final _incomingCallController = StreamController<CallSession>.broadcast();
@@ -255,7 +274,8 @@ class CallService {
   // incoming missed-call timeout can overlap (dialing out while another call
   // rings in) — sharing one Timer field made one cancel the other.
   Timer? _ringTimer; // outgoing: give up dialing after [ringTimeout]
-  Timer? _incomingRingTimer; // pending incoming: missed call after [ringTimeout]
+  Timer?
+  _incomingRingTimer; // pending incoming: missed call after [ringTimeout]
   Timer? _connectTimer;
 
   /// Local user id, used to normalize incoming participant lists (the
@@ -311,12 +331,26 @@ class CallService {
     CallSignalCodec? signalCodec,
     CallPlatformControls? platformControls,
     SecureStorageService? storage,
+    CallQualityPolicy Function()? qualityPolicy,
   }) : _signalCodec = signalCodec ?? const PlainCallSignalCodec(),
        _platformControls = platformControls ?? const CallPlatformControls(),
        // ignore: prefer_initializing_formals
        _storage = storage {
+    if (qualityPolicy != null) _qualityPolicyResolver = qualityPolicy;
     _wsSub = _ws.events.listen(_handleWsEvent);
     unawaited(_ensureSelfUserId());
+  }
+
+  void setQualityPolicyResolver(CallQualityPolicy Function() resolver) {
+    _qualityPolicyResolver = resolver;
+  }
+
+  CallQualityPolicy _policy() {
+    try {
+      return _qualityPolicyResolver();
+    } catch (_) {
+      return const CallQualityPolicy.normal();
+    }
   }
 
   Future<void> _ensureSelfUserId() async {
@@ -374,7 +408,9 @@ class CallService {
     try {
       await _initLocalRenderer();
       _iceServers = await _api.getIceServers();
-      debugPrint('CallService: ICE servers loaded: ${_iceServers.length} -> ${_iceServers.map((s) => s.url).toList()}');
+      debugPrint(
+        'CallService: ICE servers loaded: ${_iceServers.length} -> ${_iceServers.map((s) => s.url).toList()}',
+      );
       _localStream = await _getUserMedia(isVideo: isVideo);
       _localRenderer.srcObject = _localStream;
       _sessionController.add(_session);
@@ -406,11 +442,7 @@ class CallService {
     await renderer.initialize();
 
     final pc = await _createPeerConnection();
-    final peerState = _PeerState(
-      userId: userId,
-      pc: pc,
-      renderer: renderer,
-    );
+    final peerState = _PeerState(userId: userId, pc: pc, renderer: renderer);
     _peers[userId] = peerState;
 
     _setupPcCallbacks(pc, peerState, userId, callId, conversationId);
@@ -421,6 +453,7 @@ class CallService {
         await pc.addTrack(track, stream);
       }
     }
+    await _applySenderCaps(pc);
 
     final offer = await pc.createOffer({
       'offerToReceiveAudio': 1,
@@ -445,7 +478,9 @@ class CallService {
   // ── Incoming call actions ───────────────────────────────────────────────────
 
   Future<void> acceptIncomingCall(CallSession session) async {
-    debugPrint('CallService: acceptIncomingCall start (callId=${session.callId})');
+    debugPrint(
+      'CallService: acceptIncomingCall start (callId=${session.callId})',
+    );
     _cancelIncomingRingTimer();
     _pendingIncoming = null;
     _session = session..state = CallState.connecting;
@@ -467,7 +502,9 @@ class CallService {
     try {
       await _initLocalRenderer();
       _iceServers = await _api.getIceServers();
-      debugPrint('CallService: ICE servers loaded: ${_iceServers.length} -> ${_iceServers.map((s) => s.url).toList()}');
+      debugPrint(
+        'CallService: ICE servers loaded: ${_iceServers.length} -> ${_iceServers.map((s) => s.url).toList()}',
+      );
       _localStream = await _getUserMedia(isVideo: session.isVideo);
       _localRenderer.srcObject = _localStream;
 
@@ -485,12 +522,20 @@ class CallService {
       // Apply ICE candidates that trickled in during ringing. They're queued
       // until setRemoteDescription succeeds, then flushed with the rest below.
       if (_pendingRemoteCandidates.isNotEmpty) {
-        debugPrint('CallService: flushing ${_pendingRemoteCandidates.length} buffered remote ICE candidate(s)');
+        debugPrint(
+          'CallService: flushing ${_pendingRemoteCandidates.length} buffered remote ICE candidate(s)',
+        );
         peerState.pendingCandidates.addAll(_pendingRemoteCandidates);
         _pendingRemoteCandidates.clear();
       }
 
-      _setupPcCallbacks(pc, peerState, session.remoteUserId, session.callId, conversationId);
+      _setupPcCallbacks(
+        pc,
+        peerState,
+        session.remoteUserId,
+        session.callId,
+        conversationId,
+      );
 
       final stream = _localStream;
       if (stream != null) {
@@ -498,6 +543,7 @@ class CallService {
           await pc.addTrack(track, stream);
         }
       }
+      await _applySenderCaps(pc);
 
       await pc.setRemoteDescription(
         RTCSessionDescription(_ensureSdpTerminator(remoteSdp), 'offer'),
@@ -526,7 +572,9 @@ class CallService {
         ),
       );
       _ws.sendCallAnswer(answerData);
-      debugPrint('CallService: answer sent for ${session.callId}, awaiting connection');
+      debugPrint(
+        'CallService: answer sent for ${session.callId}, awaiting connection',
+      );
       // (call_ringing is sent when the offer first arrives, not here — by
       // answer time the caller is already past the ringing state.)
       _startConnectTimer();
@@ -662,7 +710,9 @@ class CallService {
           // Stale hangup from a previous call — must not end the active one
           // NOR remove a live group peer whose caller_id happens to match.
           // (Checked BEFORE the group branch for exactly that reason.)
-          debugPrint('CallService: hangup for stale call $hangupCallId ignored');
+          debugPrint(
+            'CallService: hangup for stale call $hangupCallId ignored',
+          );
         } else if (_session?.isGroupCall == true &&
             _session?.state == CallState.connected) {
           // One participant left a connected group call: tear down just their
@@ -693,7 +743,9 @@ class CallService {
             rejectCallId != s.callId) {
           // Stale reject from a previous call — must not end the active one
           // NOR remove a live group peer whose caller_id happens to match.
-          debugPrint('CallService: reject for stale call $rejectCallId ignored');
+          debugPrint(
+            'CallService: reject for stale call $rejectCallId ignored',
+          );
         } else if (s != null && s.isGroupCall) {
           // One invitee declined a group call — drop just their peer; the
           // call continues for everyone else.
@@ -815,7 +867,8 @@ class CallService {
 
     // Route answer to the right peer (backend injects caller_id into relay).
     final callerId = decoded['caller_id']?.toString() ?? '';
-    final peer = _peers[callerId] ?? _peers[s.remoteUserId] ?? _peers.values.firstOrNull;
+    final peer =
+        _peers[callerId] ?? _peers[s.remoteUserId] ?? _peers.values.firstOrNull;
     if (peer == null) return;
 
     unawaited(_applyRemoteAnswer(peer, sdp));
@@ -860,20 +913,28 @@ class CallService {
       // candidates and the call never connects.
       if (_pendingIncoming != null) {
         _pendingRemoteCandidates.add(candidate);
-        debugPrint('CallService: buffered early remote ICE candidate (${_candType(candidateStr)})');
+        debugPrint(
+          'CallService: buffered early remote ICE candidate (${_candType(candidateStr)})',
+        );
       } else {
-        debugPrint('CallService: remote ICE candidate dropped — no peer (callerId=$callerId)');
+        debugPrint(
+          'CallService: remote ICE candidate dropped — no peer (callerId=$callerId)',
+        );
       }
       return;
     }
 
     if (peer.remoteDescriptionSet) {
-      debugPrint('CallService: remote ICE candidate (${_candType(candidateStr)}) applied');
+      debugPrint(
+        'CallService: remote ICE candidate (${_candType(candidateStr)}) applied',
+      );
       try {
         await peer.pc.addCandidate(candidate);
       } catch (_) {}
     } else {
-      debugPrint('CallService: remote ICE candidate (${_candType(candidateStr)}) queued (no remote desc yet)');
+      debugPrint(
+        'CallService: remote ICE candidate (${_candType(candidateStr)}) queued (no remote desc yet)',
+      );
       peer.pendingCandidates.add(candidate);
     }
   }
@@ -939,7 +1000,8 @@ class CallService {
     // Escalation only matters for the active mesh call; unknown or stale call
     // ids are ignored (e.g. the escalate raced our own hangup).
     if (s == null || callId.isEmpty || callId != s.callId) return;
-    final convId = s.conversationId ?? decoded['conversation_id']?.toString() ?? '';
+    final convId =
+        s.conversationId ?? decoded['conversation_id']?.toString() ?? '';
     if (convId.isEmpty) return;
     debugPrint('CallService: peer escalated ${s.callId} to SFU');
     final e2eeKey = decoded['e2ee_key']?.toString();
@@ -1132,7 +1194,8 @@ class CallService {
       // caller; the loser silently cancels its outgoing attempt and rings for
       // the winner's offer instead. (The loser's offer is ignored by the
       // winner below, so no reject is sent in either direction.)
-      final glare = active != null &&
+      final glare =
+          active != null &&
           !active.isIncoming &&
           !active.wasConnected &&
           (active.state == CallState.calling ||
@@ -1235,10 +1298,7 @@ class CallService {
   /// Without this, hangup() signaled the recipient list as-is and the caller
   /// was never told we hung up (its PC then failed, ICE-restarted, and rang
   /// us again as a false missed call).
-  List<String> _participantUserIds(
-    Map<String, dynamic> data,
-    String callerId,
-  ) {
+  List<String> _participantUserIds(Map<String, dynamic> data, String callerId) {
     final raw = data['participant_user_ids'];
     final ids = <String>{};
     if (raw is List) {
@@ -1284,7 +1344,9 @@ class CallService {
     pc.onIceCandidate = (RTCIceCandidate candidate) {
       final c = candidate.candidate;
       if (c != null && c.isNotEmpty) {
-        debugPrint('CallService: local ICE candidate (${_candType(c)}) -> $userId');
+        debugPrint(
+          'CallService: local ICE candidate (${_candType(c)}) -> $userId',
+        );
         _ws.sendCallIceCandidate(
           targetUserId: userId,
           conversationId: conversationId,
@@ -1370,6 +1432,21 @@ class CallService {
     }
   }
 
+  Future<void> _applySenderCaps(RTCPeerConnection pc) async {
+    final policy = _policy();
+    if (!policy.dataSaver) return;
+    try {
+      final senders = await pc.senders;
+      for (final sender in senders) {
+        if (sender.track?.kind != 'video') continue;
+        final params = sender.parameters;
+        await sender.setParameters(applyVideoSenderCaps(params, policy));
+      }
+    } catch (e) {
+      debugPrint('CallService: could not apply video sender caps: $e');
+    }
+  }
+
   /// Whether this device has acquired a camera track for the current call.
   /// False on the receiving side of a remote video upgrade until the user
   /// turns their own camera on ([setCameraEnabled] can only toggle an
@@ -1407,15 +1484,15 @@ class CallService {
     }
 
     debugPrint('CallService: upgrading ${s.callId} to video');
-    final cameraStream = await navigator.mediaDevices.getUserMedia({
-      'audio': false,
-      'video': {
-        'facingMode': _usingFrontCamera ? 'user' : 'environment',
-        'width': {'ideal': 1280},
-        'height': {'ideal': 720},
-        'frameRate': {'ideal': 30},
-      },
-    });
+    final cameraStream = await navigator.mediaDevices.getUserMedia(
+      _buildCallMediaConstraints(
+        audio: false,
+        isVideo: true,
+        usingFrontCamera: _usingFrontCamera,
+        includeFacingMode: _isMobilePlatform,
+        policy: _policy(),
+      ),
+    );
     final videoTrack = cameraStream.getVideoTracks().firstOrNull;
     if (videoTrack == null) {
       await _stopLocalStream(cameraStream);
@@ -1432,6 +1509,7 @@ class CallService {
     _localRenderer.srcObject = _localStream;
     for (final p in _peers.values) {
       await p.pc.addTrack(videoTrack, _localStream ?? cameraStream);
+      await _applySenderCaps(p.pc);
     }
 
     s.isVideo = true;
@@ -1505,10 +1583,9 @@ class CallService {
 
     final MediaStream screenStream;
     try {
-      screenStream = await navigator.mediaDevices.getDisplayMedia(<String, dynamic>{
-        'video': true,
-        'audio': false,
-      });
+      screenStream = await navigator.mediaDevices.getDisplayMedia(
+        <String, dynamic>{'video': true, 'audio': false},
+      );
     } catch (_) {
       if (isAndroid) unawaited(_platformControls.stopMediaProjection());
       rethrow;
@@ -1700,7 +1777,6 @@ class CallService {
       } catch (_) {}
       return;
     }
-
   }
 
   // ── Connected state ─────────────────────────────────────────────────────────
@@ -1717,6 +1793,7 @@ class CallService {
       s.wasConnected = true;
       s.connectedAt = DateTime.now();
     }
+    s.reconnecting = false;
     s.state = CallState.connected;
     if (_isMobilePlatform) {
       final outputId = _selectedAudioOutputId;
@@ -1780,12 +1857,12 @@ class CallService {
     _iceRestartTimer = Timer(_iceRestartTimeout, () {
       _iceRestartTimer = null;
       final current = _session;
-      if (current != null && current.state != CallState.connected) {
+      if (current != null && current.reconnecting) {
         debugPrint('CallService: ICE restart failed -> cleanup');
         _cleanup();
       }
     });
-    s.state = CallState.connecting;
+    s.reconnecting = true;
     _sessionController.add(s);
 
     unawaited(() async {
@@ -1829,8 +1906,7 @@ class CallService {
       // incoming offer and waits for its own answer. Both sides want the
       // same outcome, so either resolution converges.
       final signalingState = peer.pc.signalingState;
-      if (signalingState ==
-          RTCSignalingState.RTCSignalingStateHaveLocalOffer) {
+      if (signalingState == RTCSignalingState.RTCSignalingStateHaveLocalOffer) {
         if (!s.isIncoming) {
           debugPrint(
             'CallService: renegotiation glare — impolite side ignoring offer',
@@ -1838,7 +1914,9 @@ class CallService {
           return;
         }
         debugPrint('CallService: renegotiation glare — rolling back');
-        await peer.pc.setLocalDescription(RTCSessionDescription('', 'rollback'));
+        await peer.pc.setLocalDescription(
+          RTCSessionDescription('', 'rollback'),
+        );
       }
       if (videoUpgrade && !s.isVideo) {
         // The peer turned their camera on: render their video immediately.
@@ -1889,28 +1967,17 @@ class CallService {
       } catch (_) {}
     }
 
-    final constraints = <String, dynamic>{
-      'audio': {
-        'echoCancellation': true,
-        'noiseSuppression': true,
-        'autoGainControl': true,
-      },
-      'video': isVideo
-          ? {
-              // facingMode selects the front/back camera and only applies on
-              // mobile. It MUST be a plain string: the flutter_webrtc Android/iOS
-              // plugins read it via ConstraintsMap.getString(), so the web-style
-              // {'ideal': ...} object throws ClassCastException (HashMap cannot be
-              // cast to String) and hard-crashes the app on a video call. Desktop
-              // ignores facingMode, so we omit it there entirely.
-              if (_isMobilePlatform)
-                'facingMode': _usingFrontCamera ? 'user' : 'environment',
-              'width': {'ideal': 1280},
-              'height': {'ideal': 720},
-              'frameRate': {'ideal': 30},
-            }
-          : false,
-    };
+    // facingMode selects the front/back camera and only applies on mobile. It
+    // MUST be a plain string: the flutter_webrtc Android/iOS plugins read it
+    // via ConstraintsMap.getString(), so the web-style {'ideal': ...} object
+    // throws ClassCastException and hard-crashes on video call start.
+    final constraints = _buildCallMediaConstraints(
+      audio: true,
+      isVideo: isVideo,
+      usingFrontCamera: _usingFrontCamera,
+      includeFacingMode: _isMobilePlatform,
+      policy: _policy(),
+    );
     try {
       return await navigator.mediaDevices.getUserMedia(constraints);
     } catch (_) {
@@ -1992,18 +2059,20 @@ class CallService {
     // Close the peer connections FIRST, then stop and dispose the local
     // capture — the standard teardown order (don't dispose tracks still
     // attached to an open sender).
-    unawaited(Future.microtask(() async {
-      for (final peer in peersSnapshot.values) {
-        try {
-          await peer.pc.close();
-        } catch (_) {}
-        try {
-          await peer.renderer.dispose();
-        } catch (_) {}
-      }
-      await _stopLocalStream(localStream);
-      await _stopLocalStream(screenStream);
-    }));
+    unawaited(
+      Future.microtask(() async {
+        for (final peer in peersSnapshot.values) {
+          try {
+            await peer.pc.close();
+          } catch (_) {}
+          try {
+            await peer.renderer.dispose();
+          } catch (_) {}
+        }
+        await _stopLocalStream(localStream);
+        await _stopLocalStream(screenStream);
+      }),
+    );
 
     _isCleaningUp = false;
   }

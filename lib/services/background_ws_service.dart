@@ -126,6 +126,10 @@ class BackgroundWsService {
     Map<String, ConversationNotificationPreference>
         conversationNotificationPreferences =
         const {},
+    int? notificationsPausedUntilMs,
+    int? globalQuietStartMinute,
+    int? globalQuietEndMinute,
+    bool pauseAllowsCalls = true,
   }) async {
     if (!kIsWeb && Platform.isIOS) {
       return false;
@@ -142,6 +146,12 @@ class BackgroundWsService {
         await updateConversationNotificationPreferences(
           conversationNotificationPreferences,
         );
+        await updateGlobalNotificationPause(
+          notificationsPausedUntilMs: notificationsPausedUntilMs,
+          globalQuietStartMinute: globalQuietStartMinute,
+          globalQuietEndMinute: globalQuietEndMinute,
+          pauseAllowsCalls: pauseAllowsCalls,
+        );
         await updateForegroundState(_appForeground);
         await setAutoStartOnBoot(true);
         return true;
@@ -151,6 +161,12 @@ class BackgroundWsService {
         await updateSensitiveContent(showSensitive);
         await updateConversationNotificationPreferences(
           conversationNotificationPreferences,
+        );
+        await updateGlobalNotificationPause(
+          notificationsPausedUntilMs: notificationsPausedUntilMs,
+          globalQuietStartMinute: globalQuietStartMinute,
+          globalQuietEndMinute: globalQuietEndMinute,
+          pauseAllowsCalls: pauseAllowsCalls,
         );
         // The isolate boots assuming background (correct for boot auto-start,
         // where no main isolate exists); replay the real lifecycle state so a
@@ -213,6 +229,21 @@ class BackgroundWsService {
     });
   }
 
+  static Future<void> updateGlobalNotificationPause({
+    int? notificationsPausedUntilMs,
+    int? globalQuietStartMinute,
+    int? globalQuietEndMinute,
+    bool pauseAllowsCalls = true,
+  }) async {
+    if (!_mobileOnly) return;
+    _service.invoke('setGlobalNotificationPause', {
+      'notificationsPausedUntilMs': notificationsPausedUntilMs,
+      'globalQuietStartMinute': globalQuietStartMinute,
+      'globalQuietEndMinute': globalQuietEndMinute,
+      'pauseAllowsCalls': pauseAllowsCalls,
+    });
+  }
+
   // ── iOS background handler ─────────────────────────────────────────────────
 
   @pragma('vm:entry-point')
@@ -236,6 +267,10 @@ class BackgroundWsService {
     Map<String, ConversationNotificationPreference>
     conversationNotificationPreferences = const {};
     Set<String> mutedConversationIds = const {};
+    int? notificationsPausedUntilMs;
+    int? globalQuietStartMinute;
+    int? globalQuietEndMinute;
+    bool pauseAllowsCalls = true;
 
     WebSocketChannel? channel;
     Timer? reconnectTimer;
@@ -299,6 +334,10 @@ class BackgroundWsService {
               showSensitive,
               mutedConversationIds,
               conversationNotificationPreferences,
+              notificationsPausedUntilMs,
+              globalQuietStartMinute,
+              globalQuietEndMinute,
+              pauseAllowsCalls,
             );
           },
           onError: (_) {
@@ -352,6 +391,13 @@ class BackgroundWsService {
       );
     });
 
+    service.on('setGlobalNotificationPause').listen((data) {
+      notificationsPausedUntilMs = data?['notificationsPausedUntilMs'] as int?;
+      globalQuietStartMinute = data?['globalQuietStartMinute'] as int?;
+      globalQuietEndMinute = data?['globalQuietEndMinute'] as int?;
+      pauseAllowsCalls = data?['pauseAllowsCalls'] as bool? ?? true;
+    });
+
     // Initialise local notifications inside the background isolate.
     await notif.initialize(
       settings: const InitializationSettings(
@@ -369,9 +415,15 @@ class BackgroundWsService {
     // isolate still gets token + notification rules.
     final localState = await _loadLocalPrivateState();
     token ??= await SecureStorageService().getAccessToken();
-    showSensitive = decodePrivateNotificationSettings(
+    final notificationSettings = decodePrivateNotificationSettings(
       localState[privateStateNotificationSettingsKey],
-    ).sensitiveContent;
+    );
+    showSensitive = notificationSettings.sensitiveContent;
+    notificationsPausedUntilMs =
+        notificationSettings.notificationsPausedUntilMs;
+    globalQuietStartMinute = notificationSettings.globalQuietHoursStartMinute;
+    globalQuietEndMinute = notificationSettings.globalQuietHoursEndMinute;
+    pauseAllowsCalls = notificationSettings.pauseAllowsCalls;
     conversationNotificationPreferences =
         decodePrivateConversationNotificationPreferences(
           localState[privateStateConversationNotificationPreferencesKey],
@@ -390,6 +442,10 @@ class BackgroundWsService {
     Set<String> mutedConversationIds,
     Map<String, ConversationNotificationPreference>
     conversationNotificationPreferences,
+    int? notificationsPausedUntilMs,
+    int? globalQuietStartMinute,
+    int? globalQuietEndMinute,
+    bool pauseAllowsCalls,
   ) {
     if (raw is! String) return;
     for (final line in raw.trim().split('\n')) {
@@ -400,6 +456,10 @@ class BackgroundWsService {
         mutedConversationIds: mutedConversationIds,
         conversationNotificationPreferences:
             conversationNotificationPreferences,
+        notificationsPausedUntilMs: notificationsPausedUntilMs,
+        globalQuietStartMinute: globalQuietStartMinute,
+        globalQuietEndMinute: globalQuietEndMinute,
+        pauseAllowsCalls: pauseAllowsCalls,
       );
       if (intent == null) continue;
       _showIntent(notif, intent);
@@ -413,11 +473,19 @@ class BackgroundWsService {
     Map<String, ConversationNotificationPreference>
         conversationNotificationPreferences =
         const {},
+    int? notificationsPausedUntilMs,
+    int? globalQuietStartMinute,
+    int? globalQuietEndMinute,
+    bool pauseAllowsCalls = true,
   }) => intent_mapper.notificationIntentFromRawLine(
     rawLine,
     showSensitive: showSensitive,
     mutedConversationIds: mutedConversationIds,
     conversationNotificationPreferences: conversationNotificationPreferences,
+    notificationsPausedUntilMs: notificationsPausedUntilMs,
+    globalQuietStartMinute: globalQuietStartMinute,
+    globalQuietEndMinute: globalQuietEndMinute,
+    pauseAllowsCalls: pauseAllowsCalls,
   );
 
   static NotificationIntent? notificationIntentFromEvent({
@@ -428,12 +496,20 @@ class BackgroundWsService {
     Map<String, ConversationNotificationPreference>
         conversationNotificationPreferences =
         const {},
+    int? notificationsPausedUntilMs,
+    int? globalQuietStartMinute,
+    int? globalQuietEndMinute,
+    bool pauseAllowsCalls = true,
   }) => intent_mapper.notificationIntentFromEvent(
     type: type,
     data: data,
     showSensitive: showSensitive,
     mutedConversationIds: mutedConversationIds,
     conversationNotificationPreferences: conversationNotificationPreferences,
+    notificationsPausedUntilMs: notificationsPausedUntilMs,
+    globalQuietStartMinute: globalQuietStartMinute,
+    globalQuietEndMinute: globalQuietEndMinute,
+    pauseAllowsCalls: pauseAllowsCalls,
   );
 
   static Future<Map<String, dynamic>> _loadLocalPrivateState() async {

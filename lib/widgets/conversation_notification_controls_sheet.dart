@@ -140,6 +140,9 @@ class _ConversationNotificationControlsSheetState
     final preference = settings.notificationPreferenceForConversation(
       widget.conversationId,
     );
+    final privacyPreference = settings.privacyPreferenceForConversation(
+      widget.conversationId,
+    );
     final scheme = Theme.of(context).colorScheme;
     return GlassBottomSheetFrame(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
@@ -280,8 +283,7 @@ class _ConversationNotificationControlsSheetState
                         context: context,
                         title: 'Notification sound',
                         actions: [
-                          for (final entry
-                              in messageNotificationSounds.entries)
+                          for (final entry in messageNotificationSounds.entries)
                             GlassActionSheetAction(
                               label: entry.value,
                               onPressed: () => _setPreference(
@@ -298,6 +300,67 @@ class _ConversationNotificationControlsSheetState
                       ),
                     ),
                   ],
+                ),
+              ),
+              const Divider(height: 18),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+                child: Text(
+                  'Privacy',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: scheme.primary,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              _PrivacySwitchTile(
+                icon: Icons.keyboard_alt_outlined,
+                label: 'Send typing indicator',
+                subtitle: _privacySubtitle(
+                  overrideValue: privacyPreference.shareTyping,
+                  globalStrict: settings.strictPrivacyMode,
+                  enabled: settings.shareTypingForConversation(
+                    widget.conversationId,
+                  ),
+                  sharedLabel: 'Typing is shared in this chat',
+                  suppressedLabel: 'Typing is hidden in this chat',
+                ),
+                value: settings.shareTypingForConversation(
+                  widget.conversationId,
+                ),
+                hasOverride: privacyPreference.shareTyping != null,
+                onChanged: (value) => settings.setConversationShareTyping(
+                  widget.conversationId,
+                  value,
+                ),
+                onReset: () => settings.setConversationShareTyping(
+                  widget.conversationId,
+                  null,
+                ),
+              ),
+              _PrivacySwitchTile(
+                icon: Icons.done_all_rounded,
+                label: 'Send read receipts',
+                subtitle: _privacySubtitle(
+                  overrideValue: privacyPreference.shareReadReceipts,
+                  globalStrict: settings.strictPrivacyMode,
+                  enabled: settings.shareReadReceiptsForConversation(
+                    widget.conversationId,
+                  ),
+                  sharedLabel: 'Read receipts are shared in this chat',
+                  suppressedLabel: 'Read receipts are hidden in this chat',
+                ),
+                value: settings.shareReadReceiptsForConversation(
+                  widget.conversationId,
+                ),
+                hasOverride: privacyPreference.shareReadReceipts != null,
+                onChanged: (value) => settings.setConversationShareReadReceipts(
+                  widget.conversationId,
+                  value,
+                ),
+                onReset: () => settings.setConversationShareReadReceipts(
+                  widget.conversationId,
+                  null,
                 ),
               ),
               const Divider(height: 18),
@@ -339,6 +402,19 @@ class _ConversationNotificationControlsSheetState
       ),
     );
   }
+}
+
+String _privacySubtitle({
+  required bool? overrideValue,
+  required bool globalStrict,
+  required bool enabled,
+  required String sharedLabel,
+  required String suppressedLabel,
+}) {
+  if (overrideValue != null) {
+    return enabled ? sharedLabel : suppressedLabel;
+  }
+  return globalStrict ? 'Following Strict Privacy' : 'Following global default';
 }
 
 class _QuietHoursControls extends StatelessWidget {
@@ -491,6 +567,54 @@ class _SwitchTile extends StatelessWidget {
         onChanged: onChanged,
         activeColor: Theme.of(context).colorScheme.primary,
         enableHaptics: true,
+      ),
+      onTap: () => onChanged(!value),
+    );
+  }
+}
+
+class _PrivacySwitchTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final bool value;
+  final bool hasOverride;
+  final ValueChanged<bool> onChanged;
+  final VoidCallback onReset;
+
+  const _PrivacySwitchTile({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.value,
+    required this.hasOverride,
+    required this.onChanged,
+    required this.onReset,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return GlassListTile(
+      leading: Icon(icon),
+      title: Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+      subtitle: Text(subtitle),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (hasOverride)
+            IconButton(
+              tooltip: 'Follow global setting',
+              icon: const Icon(Icons.restart_alt_rounded),
+              onPressed: onReset,
+            ),
+          GlassSwitch(
+            value: value,
+            onChanged: onChanged,
+            activeColor: scheme.primary,
+            enableHaptics: true,
+          ),
+        ],
       ),
       onTap: () => onChanged(!value),
     );

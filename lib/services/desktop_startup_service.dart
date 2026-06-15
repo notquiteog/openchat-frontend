@@ -6,6 +6,8 @@ import 'desktop_tray_service.dart';
 
 typedef DesktopTrayInitializer = Future<void> Function();
 
+const desktopStartMinimizedArg = '--minimized';
+
 class DesktopStartupService {
   static const trayStartupTimeout = Duration(seconds: 2);
 
@@ -29,6 +31,7 @@ class DesktopStartupService {
   static Future<void> startTray({
     DesktopTrayInitializer? initializer,
     Duration timeout = trayStartupTimeout,
+    bool startMinimized = false,
   }) async {
     if (!supported) return;
 
@@ -36,6 +39,13 @@ class DesktopStartupService {
       // Create and persist the canonical singleton instance.
       _instance = DesktopTrayService();
       await runTrayInitializerWithTimeout(_instance!.init, timeout);
+      if (startMinimized) {
+        try {
+          await _instance!.hideToTrayOnLaunch();
+        } catch (error) {
+          debugPrint('Desktop autostart hide skipped: $error');
+        }
+      }
     } else {
       // Test path: caller supplies a custom initializer.
       await runTrayInitializerWithTimeout(initializer, timeout);

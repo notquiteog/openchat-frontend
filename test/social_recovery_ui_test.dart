@@ -19,6 +19,7 @@ import 'package:openchat/services/offline_outbox_service.dart';
 import 'package:openchat/services/secure_storage_service.dart';
 import 'package:openchat/services/social_recovery_service.dart';
 import 'package:openchat/services/websocket_service.dart';
+import 'package:openchat/widgets/glass.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -90,9 +91,11 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(
-      wrap(const Scaffold(body: SingleChildScrollView(
-        child: SocialRecoverySection(),
-      ))),
+      wrap(
+        const Scaffold(
+          body: SingleChildScrollView(child: SocialRecoverySection()),
+        ),
+      ),
     );
     await tester.pump(); // post-frame -> _load
     await tester.pump(); // fake-api futures resolve
@@ -113,6 +116,14 @@ void main() {
             // fake still derives the code from the pubkey it was handed, so
             // the wiring (request pubkey -> code on screen) is what's tested.
             codeLoader: (armored) async => 'CODE:${armored.substring(0, 9)}',
+            wordsLoader: (_) async => const [
+              'aardvark',
+              'adviser',
+              'accrue',
+              'aggregate',
+              'adrift',
+              'almighty',
+            ],
             onApprove: () async {
               approveCalls++;
             },
@@ -122,11 +133,24 @@ void main() {
     );
     await tester.pump(); // resolve the code future
 
-    expect(find.text('CODE:EPHEMERAL'), findsOneWidget,
-        reason: 'the code shown must derive from the request ephemeral key');
+    for (final word in const [
+      'aardvark',
+      'adviser',
+      'accrue',
+      'aggregate',
+      'adrift',
+      'almighty',
+    ]) {
+      expect(find.text(word), findsOneWidget);
+    }
+    expect(
+      find.text('CODE:EPHEMERAL'),
+      findsOneWidget,
+      reason: 'the code shown must derive from the request ephemeral key',
+    );
     expect(
       find.textContaining(
-        'Only approve if you have verified this code with them over a call',
+        'Only approve if you have verified these words or this code',
       ),
       findsOneWidget,
     );
@@ -134,11 +158,106 @@ void main() {
       find.textContaining('Anyone with their password could be impersonating'),
       findsOneWidget,
     );
-    expect(find.textContaining('@maya'), findsOneWidget);
+    expect(
+      find.text(
+        'I verified these words or this code with @maya over a call or in person',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('@maya'), findsWidgets);
 
     await tester.tap(find.text('Approve and send share'));
     await tester.pump();
+    expect(
+      approveCalls,
+      0,
+      reason: 'Approve must be gated until out-of-band verification is checked',
+    );
+
+    await tester.tap(find.byKey(const Key('guardian-verified-switch')));
+    await tester.pump();
+    await tester.tap(find.text('Approve and send share'));
+    await tester.pump();
     expect(approveCalls, 1, reason: 'Approve must invoke the service call');
+  });
+
+  testWidgets('approve sheet starts with the verification gate off', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: GuardianApproveSheet(
+            requesterName: '@maya',
+            ephemeralPubkeyArmored: 'EPHEMERAL-ARMOR',
+            codeLoader: (_) async => 'AAAA-BBBB-CCCC',
+            wordsLoader: (_) async => const [
+              'aardvark',
+              'adviser',
+              'accrue',
+              'aggregate',
+              'adrift',
+              'almighty',
+            ],
+            onApprove: () async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final switchWidget = tester.widget<GlassSwitch>(
+      find.byKey(const Key('guardian-verified-switch')),
+    );
+    expect(switchWidget.value, isFalse);
+    expect(
+      find.text(
+        'I verified these words or this code with @maya over a call or in person',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('approve sheet warns on repeated recent recovery requests', (
+    tester,
+  ) async {
+    Widget sheet({int recentRequestCount = 1}) => MaterialApp(
+      home: Scaffold(
+        body: GuardianApproveSheet(
+          requesterName: '@maya',
+          ephemeralPubkeyArmored: 'EPHEMERAL-ARMOR',
+          recentRequestCount: recentRequestCount,
+          codeLoader: (_) async => 'AAAA-BBBB-CCCC',
+          wordsLoader: (_) async => const [
+            'aardvark',
+            'adviser',
+            'accrue',
+            'aggregate',
+            'adrift',
+            'almighty',
+          ],
+          onApprove: () async {},
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(sheet(recentRequestCount: 3));
+    await tester.pump();
+
+    expect(
+      find.textContaining(
+        'This account has requested recovery 3 times in the last 24 hours',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.pumpWidget(sheet());
+    await tester.pump();
+
+    expect(
+      find.byKey(const Key('guardian-recent-requests-warning')),
+      findsNothing,
+    );
   });
 
   testWidgets('approve sheet surfaces a StateError message verbatim and '
@@ -150,6 +269,14 @@ void main() {
             requesterName: '@maya',
             ephemeralPubkeyArmored: 'EPHEMERAL-ARMOR',
             codeLoader: (_) async => 'AAAA-BBBB-CCCC',
+            wordsLoader: (_) async => const [
+              'aardvark',
+              'adviser',
+              'accrue',
+              'aggregate',
+              'adrift',
+              'almighty',
+            ],
             onApprove: () async => throw StateError(
               'You hold no recovery share for this account on this device.',
             ),
@@ -159,6 +286,8 @@ void main() {
     );
     await tester.pump();
 
+    await tester.tap(find.byKey(const Key('guardian-verified-switch')));
+    await tester.pump();
     await tester.tap(find.text('Approve and send share'));
     await tester.pump(); // submitting spinner
     await tester.pump(); // error lands
@@ -167,14 +296,18 @@ void main() {
       find.text('You hold no recovery share for this account on this device.'),
       findsOneWidget,
     );
-    expect(find.text('Approve and send share'), findsOneWidget,
-        reason: 'a failed approval must not dismiss the sheet');
+    expect(
+      find.text('Approve and send share'),
+      findsOneWidget,
+      reason: 'a failed approval must not dismiss the sheet',
+    );
   });
 
   // ── (b) Decoy invisibility ─────────────────────────────────────────────────
 
-  testWidgets('recovery section is invisible in a duress (decoy) session',
-      (tester) async {
+  testWidgets('recovery section is invisible in a duress (decoy) session', (
+    tester,
+  ) async {
     vaultModeListenable.value = VaultMode.decoy;
     api.recoveryConfig = {
       'threshold': 2,
@@ -187,8 +320,11 @@ void main() {
     expect(find.text('YOU GUARD'), findsNothing);
     expect(find.text('Social recovery on'), findsNothing);
     expect(find.text('Set up social recovery'), findsNothing);
-    expect(api.recoveryCalls, 0,
-        reason: 'a decoy session must not even fetch recovery state');
+    expect(
+      api.recoveryCalls,
+      0,
+      reason: 'a decoy session must not even fetch recovery state',
+    );
 
     // Flipping back to a real unlock brings the section in.
     vaultModeListenable.value = VaultMode.real;
@@ -225,10 +361,7 @@ void main() {
     expect(find.text('@maya'), findsOneWidget);
     expect(find.text('Share held on this device'), findsOneWidget);
     expect(find.text('@rio'), findsOneWidget);
-    expect(
-      find.textContaining('Share missing on this device'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('Share missing on this device'), findsOneWidget);
 
     // A recovery_request WS event refreshes the pending list live.
     api.guardianRequests = [
@@ -239,10 +372,12 @@ void main() {
         'user': {'username': 'maya'},
       },
     ];
-    ws.handleRawFrame(jsonEncode({
-      'type': 'recovery_request',
-      'data': {'request_id': 'req-9', 'user_id': 'friend-1'},
-    }));
+    ws.handleRawFrame(
+      jsonEncode({
+        'type': 'recovery_request',
+        'data': {'request_id': 'req-9', 'user_id': 'friend-1'},
+      }),
+    );
     await tester.pump();
     await tester.pump();
     await tester.pump();
@@ -269,23 +404,39 @@ void main() {
       ephemeralPrivateKey: 'EPHEMERAL-PRIVATE',
       ephemeralPublicKey: 'EPHEMERAL-PUBLIC',
       verificationCode: 'AAAA-BBBB-CCCC',
+      verificationWords: [
+        'aardvark',
+        'adviser',
+        'accrue',
+        'aggregate',
+        'adrift',
+        'almighty',
+      ],
     );
 
     await tester.pumpWidget(
-      wrap(SocialRecoveryScreen(
-        // startCeremony mints a PGP key on the native bridge — inject the
-        // ceremony instead. The service below only ever reaches the
-        // below-threshold early return of tryFinishCeremony (no PGP).
-        service: SocialRecoveryService(storage: storage),
-        initialCeremony: ceremony,
-      )),
+      wrap(
+        SocialRecoveryScreen(
+          // startCeremony mints a PGP key on the native bridge — inject the
+          // ceremony instead. The service below only ever reaches the
+          // below-threshold early return of tryFinishCeremony (no PGP).
+          service: SocialRecoveryService(storage: storage),
+          initialCeremony: ceremony,
+        ),
+      ),
     );
     await tester.pump(); // post-frame -> _start
     await tester.pump(); // initial refresh resolves
     await tester.pump();
 
-    expect(find.text('AAAA-BBBB-CCCC'), findsOneWidget,
-        reason: 'the verification code must be displayed to read aloud');
+    expect(
+      find.text('AAAA-BBBB-CCCC'),
+      findsOneWidget,
+      reason: 'the verification code must be displayed to read aloud',
+    );
+    for (final word in ceremony.verificationWords) {
+      expect(find.text(word), findsOneWidget);
+    }
     expect(find.text('0 of 3 shares received'), findsOneWidget);
 
     // A guardian submits a share: WS event + updated server state.
@@ -294,16 +445,21 @@ void main() {
       'threshold': 3,
       'encrypted_shares': <String>['encrypted-share-1'],
     };
-    ws.handleRawFrame(jsonEncode({
-      'type': 'recovery_share',
-      'data': {'request_id': 'req-1', 'shares_submitted': 1},
-    }));
+    ws.handleRawFrame(
+      jsonEncode({
+        'type': 'recovery_share',
+        'data': {'request_id': 'req-1', 'shares_submitted': 1},
+      }),
+    );
     await tester.pump();
     await tester.pump();
     await tester.pump();
 
-    expect(find.text('1 of 3 shares received'), findsOneWidget,
-        reason: 'a share event must advance the threshold progress');
+    expect(
+      find.text('1 of 3 shares received'),
+      findsOneWidget,
+      reason: 'a share event must advance the threshold progress',
+    );
 
     await tester.tap(find.text('Cancel ceremony'));
     await tester.pump();
@@ -342,12 +498,14 @@ class _FakeApi extends ApiService {
   }
 
   @override
-  Future<List<Map<String, dynamic>>> listGuardedUsers() async =>
-      [for (final user in guardedUsers) Map<String, dynamic>.from(user)];
+  Future<List<Map<String, dynamic>>> listGuardedUsers() async => [
+    for (final user in guardedUsers) Map<String, dynamic>.from(user),
+  ];
 
   @override
-  Future<List<Map<String, dynamic>>> listGuardianRecoveryRequests() async =>
-      [for (final req in guardianRequests) Map<String, dynamic>.from(req)];
+  Future<List<Map<String, dynamic>>> listGuardianRecoveryRequests() async => [
+    for (final req in guardianRequests) Map<String, dynamic>.from(req),
+  ];
 
   @override
   Future<Map<String, dynamic>> getRecoveryRequest(String requestId) async =>
@@ -395,8 +553,7 @@ class _NoopCache extends MessageCacheService {
     String encryptedPayload,
     String plaintext,
     String? senderId,
-  ) =>
-      Future.value();
+  ) => Future.value();
 }
 
 class _NoopOutbox extends OfflineOutboxService {

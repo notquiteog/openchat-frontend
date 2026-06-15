@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:cached_network_image/cached_network_image.dart';
@@ -122,11 +124,11 @@ class ConversationsScreenState extends State<ConversationsScreen> {
     _syncStoriesOffsetForFolder(folderId);
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final auth = context.watch<AuthProvider>();
-    final chat = context.watch<ChatProvider>();
-    final settings = context.watch<SettingsProvider>();
+  _ResolvedInboxData _resolveInboxData({
+    required AuthProvider auth,
+    required ChatProvider chat,
+    required SettingsProvider settings,
+  }) {
     final currentUserID = auth.currentUser?.id ?? '';
     final drafts = settings.messageDrafts;
     final pinnedConversationIds = settings.pinnedConversationIds;
@@ -147,7 +149,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
       botsOwnTab: settings.botsOwnTab,
       hasArchived: archivedConversationIds.isNotEmpty,
     );
-    final folderSourceConversations = chat.conversations
+    final folderSourceConversations = chat.conversations.toList()
       ..sort(
         (a, b) => compareConversationsForInbox(
           a,
@@ -175,6 +177,135 @@ class ConversationsScreenState extends State<ConversationsScreen> {
               pinnedConversationIds: pinnedConversationIds,
             ),
           );
+    final conversations = selectedFolder == null
+        ? baseConversations
+              .where(
+                (conversation) => conversationMatchesSmartInboxFilter(
+                  conversation,
+                  filter: selectedFilter,
+                  currentUserId: currentUserID,
+                  archivedConversationIds: archivedConversationIds,
+                  unreadMentionMessageIds: unreadMentionMessageIds,
+                ),
+              )
+              .toList()
+        : _folderConversations(
+            selectedFolder,
+            folderSourceConversations,
+            archivedConversationIds,
+            currentUserID,
+            unreadMentionMessageIds,
+            settings.conversationNotificationPreferences,
+          );
+    return _ResolvedInboxData(
+      currentUserID: currentUserID,
+      drafts: drafts,
+      pinnedConversationIds: pinnedConversationIds,
+      archivedConversationIds: archivedConversationIds,
+      unreadMentionMessageIds: unreadMentionMessageIds,
+      folders: folders,
+      selectedFolder: selectedFolder,
+      availableFilters: availableFilters,
+      selectedFilter: selectedFilter,
+      folderSourceConversations: folderSourceConversations,
+      baseConversations: baseConversations,
+      conversations: conversations,
+    );
+  }
+
+  List<Conversation> visibleConversations() {
+    return _resolveInboxData(
+      auth: context.read<AuthProvider>(),
+      chat: context.read<ChatProvider>(),
+      settings: context.read<SettingsProvider>(),
+    ).conversations;
+  }
+
+  void focusNextConversation() => _focusRelativeConversation(1);
+
+  void focusPreviousConversation() => _focusRelativeConversation(-1);
+
+  void selectConversationByIndex(int index) {
+    if (index < 1) return;
+    final conversations = visibleConversations();
+    if (index > conversations.length) return;
+    _openConversation(context, conversations[index - 1]);
+  }
+
+  void markSelectedConversationRead() {
+    final conv = _selectedConversationForShortcut();
+    final lastMessage = conv?.lastMessage;
+    if (conv == null || lastMessage == null || conv.unreadCount <= 0) return;
+    unawaited(
+      context.read<ChatProvider>().sendReadReceipt(conv.id, lastMessage.id),
+    );
+  }
+
+  void archiveSelectedConversation() {
+    final conv = _selectedConversationForShortcut();
+    if (conv == null) return;
+    closeSplitPane();
+    unawaited(
+      context.read<SettingsProvider>().toggleConversationArchived(conv.id),
+    );
+  }
+
+  void closeSplitPane() {
+    if (_splitSelectedId == null) return;
+    setState(() {
+      _splitSelectedId = null;
+      _splitInitialMessageId = null;
+    });
+  }
+
+  void _focusRelativeConversation(int delta) {
+    final conversations = visibleConversations();
+    if (conversations.isEmpty) return;
+    final currentIndex = conversations.indexWhere(
+      (conversation) => conversation.id == _splitSelectedId,
+    );
+    final targetIndex = currentIndex == -1
+        ? (delta > 0 ? 0 : conversations.length - 1)
+        : (currentIndex + delta) % conversations.length;
+    _openConversation(
+      context,
+      conversations[targetIndex < 0
+          ? targetIndex + conversations.length
+          : targetIndex],
+    );
+  }
+
+  Conversation? _selectedConversationForShortcut() {
+    final selectedId = _splitSelectedId;
+    if (selectedId == null) return null;
+    return context
+        .read<ChatProvider>()
+        .conversations
+        .where((conversation) => conversation.id == selectedId)
+        .firstOrNull;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    final chat = context.watch<ChatProvider>();
+    final settings = context.watch<SettingsProvider>();
+    final inboxData = _resolveInboxData(
+      auth: auth,
+      chat: chat,
+      settings: settings,
+    );
+    final currentUserID = inboxData.currentUserID;
+    final drafts = inboxData.drafts;
+    final pinnedConversationIds = inboxData.pinnedConversationIds;
+    final archivedConversationIds = inboxData.archivedConversationIds;
+    final unreadMentionMessageIds = inboxData.unreadMentionMessageIds;
+    final folders = inboxData.folders;
+    final selectedFolder = inboxData.selectedFolder;
+    final availableFilters = inboxData.availableFilters;
+    final selectedFilter = inboxData.selectedFilter;
+    final folderSourceConversations = inboxData.folderSourceConversations;
+    final baseConversations = inboxData.baseConversations;
     final folderCounts = {
       for (final folder in folders)
         folder.id: _folderConversationCount(
@@ -200,26 +331,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
             )
             .length,
     };
-    final conversations = selectedFolder == null
-        ? baseConversations
-              .where(
-                (conversation) => conversationMatchesSmartInboxFilter(
-                  conversation,
-                  filter: selectedFilter,
-                  currentUserId: currentUserID,
-                  archivedConversationIds: archivedConversationIds,
-                  unreadMentionMessageIds: unreadMentionMessageIds,
-                ),
-              )
-              .toList()
-        : _folderConversations(
-            selectedFolder,
-            folderSourceConversations,
-            archivedConversationIds,
-            currentUserID,
-            unreadMentionMessageIds,
-            settings.conversationNotificationPreferences,
-          );
+    final conversations = inboxData.conversations;
 
     final inbox = Scaffold(
       extendBodyBehindAppBar: true,
@@ -2417,6 +2529,36 @@ class _ConvAvatar extends StatelessWidget {
   }
 }
 
+class _ResolvedInboxData {
+  final String currentUserID;
+  final Map<String, MessageDraft> drafts;
+  final Set<String> pinnedConversationIds;
+  final Set<String> archivedConversationIds;
+  final Map<String, String> unreadMentionMessageIds;
+  final List<ChatFolder> folders;
+  final ChatFolder? selectedFolder;
+  final List<SmartInboxFilter> availableFilters;
+  final SmartInboxFilter selectedFilter;
+  final List<Conversation> folderSourceConversations;
+  final List<Conversation> baseConversations;
+  final List<Conversation> conversations;
+
+  const _ResolvedInboxData({
+    required this.currentUserID,
+    required this.drafts,
+    required this.pinnedConversationIds,
+    required this.archivedConversationIds,
+    required this.unreadMentionMessageIds,
+    required this.folders,
+    required this.selectedFolder,
+    required this.availableFilters,
+    required this.selectedFilter,
+    required this.folderSourceConversations,
+    required this.baseConversations,
+    required this.conversations,
+  });
+}
+
 // ── Search delegate ────────────────────────────────────────────────────────────
 
 /// showSearch shell kept for flows that want a full-screen search route
@@ -2463,8 +2605,7 @@ class _SplitViewPlaceholder extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final isMac = Theme.of(context).platform == TargetPlatform.macOS;
-    final mod = isMac ? '⌘' : 'Ctrl';
+    final mod = modKeyLabel(context);
     return Scaffold(
       body: Center(
         child: Column(
@@ -2498,61 +2639,17 @@ class _SplitViewPlaceholder extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 28),
-            _ShortcutHint(keys: '$mod K', label: 'Search'),
+            ShortcutHintRow(keys: '$mod K', label: 'Search'),
             const SizedBox(height: 8),
-            _ShortcutHint(keys: '$mod N', label: 'New chat'),
+            ShortcutHintRow(keys: '$mod N', label: 'New chat'),
+            const SizedBox(height: 8),
+            const ShortcutHintRow(
+              keys: '?',
+              label: 'Press ? for all shortcuts',
+            ),
           ],
         ),
       ),
-    );
-  }
-}
-
-/// A `⌘ K  Search`-style keyboard hint row on the split-view placeholder.
-class _ShortcutHint extends StatelessWidget {
-  final String keys;
-  final String label;
-
-  const _ShortcutHint({required this.keys, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-            color: scheme.onSurface.withValues(alpha: 0.05),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(
-              color: scheme.onSurface.withValues(alpha: 0.12),
-              width: 0.5,
-            ),
-          ),
-          child: Text(
-            keys,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.3,
-              color: scheme.onSurface.withValues(alpha: 0.6),
-            ),
-          ),
-        ),
-        const SizedBox(width: 10),
-        SizedBox(
-          width: 72,
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 12.5,
-              color: scheme.onSurface.withValues(alpha: 0.5),
-            ),
-          ),
-        ),
-      ],
     );
   }
 }

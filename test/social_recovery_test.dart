@@ -2,10 +2,12 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openchat/crypto/shamir.dart';
 import 'package:openchat/services/api_service.dart';
+import 'package:openchat/services/recovery_wordlist.dart';
 import 'package:openchat/services/secure_storage_service.dart';
 import 'package:openchat/services/social_recovery_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -41,8 +43,7 @@ void main() {
     return Uint8List.fromList(clear);
   }
 
-  test('configure → threshold shares decrypt the blob to the bundle',
-      () async {
+  test('configure → threshold shares decrypt the blob to the bundle', () async {
     final storage = SecureStorageService();
     final api = _CapturingApi(storage);
     final service = SocialRecoveryService(storage: storage);
@@ -75,10 +76,16 @@ void main() {
     final bundle = jsonDecode(utf8.decode(bundleBytes)) as Map<String, dynamic>;
     expect(bundle['openchat_recovery_bundle'], 1);
     final secure = bundle['secure_storage'] as Map<String, dynamic>;
-    expect(secure['pgp_private_key'], 'PRIVATE-ARMOR',
-        reason: 'the bundle must carry the identity key');
-    expect(secure.containsKey('access_token'), isFalse,
-        reason: 'session tokens never ride recovery bundles');
+    expect(
+      secure['pgp_private_key'],
+      'PRIVATE-ARMOR',
+      reason: 'the bundle must carry the identity key',
+    );
+    expect(
+      secure.containsKey('access_token'),
+      isFalse,
+      reason: 'session tokens never ride recovery bundles',
+    );
   });
 
   test('a single share cannot decrypt the blob (GCM authenticates)', () async {
@@ -124,6 +131,60 @@ void main() {
     // Malformed payloads are ignored, never stored.
     await service.storeIncomingShare({'openchat_recovery_share': 1});
     expect((await storage.listHeldRecoveryShares()).length, 1);
+  });
+
+  test('PGP word list contains the canonical 256 even and odd words', () {
+    expect(pgpWordListEven, hasLength(256));
+    expect(pgpWordListOdd, hasLength(256));
+    expect(pgpWordForByte(0x00, 0), 'aardvark');
+    expect(pgpWordForByte(0x00, 1), 'adroitness');
+    expect(pgpWordForByte(0x01, 0), 'absurd');
+    expect(pgpWordForByte(0x01, 1), 'adviser');
+    expect(pgpWordForByte(0x82, 0), 'miser');
+    expect(pgpWordForByte(0x82, 1), 'Istanbul');
+    expect(pgpWordForByte(0xE5, 0), 'topmost');
+    expect(pgpWordForByte(0xE5, 1), 'travesty');
+    expect(pgpWordForByte(0xFF, 0), 'Zulu');
+    expect(pgpWordForByte(0xFF, 1), 'Yucatan');
+  });
+
+  test('verification words use alternating lists from the digest bytes', () {
+    expect(
+      SocialRecoveryService.verificationWordsFromDigestBytes([
+        0x00,
+        0x01,
+        0x02,
+        0x03,
+        0x04,
+        0x05,
+      ]),
+      ['aardvark', 'adviser', 'accrue', 'aggregate', 'adrift', 'almighty'],
+    );
+  });
+
+  test('verification words and code derive from the same salted digest', () {
+    const fingerprint = 'FINGERPRINT';
+    final digest = crypto.sha256
+        .convert(utf8.encode('openchat-recovery-verify:v1:$fingerprint'))
+        .bytes;
+    final expectedHex = digest
+        .take(6)
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join()
+        .toUpperCase();
+
+    expect(
+      SocialRecoveryService.verificationCodeForFingerprint(fingerprint),
+      '${expectedHex.substring(0, 4)}-${expectedHex.substring(4, 8)}-${expectedHex.substring(8, 12)}',
+    );
+    expect(
+      SocialRecoveryService.verificationWordsForFingerprint(fingerprint),
+      SocialRecoveryService.verificationWordsFromDigestBytes(digest),
+    );
+    expect(
+      SocialRecoveryService.verificationWordsForFingerprint('OTHER'),
+      isNot(SocialRecoveryService.verificationWordsForFingerprint(fingerprint)),
+    );
   });
 }
 

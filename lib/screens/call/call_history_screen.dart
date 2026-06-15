@@ -5,6 +5,8 @@ import '../../providers/call_provider.dart';
 import '../../services/call_history_service.dart';
 import '../../widgets/glass.dart';
 
+enum _CallFilter { all, missed }
+
 class CallHistoryScreen extends StatefulWidget {
   const CallHistoryScreen({super.key});
 
@@ -15,6 +17,12 @@ class CallHistoryScreen extends StatefulWidget {
 class _CallHistoryScreenState extends State<CallHistoryScreen> {
   bool _loading = true;
   List<CallHistoryEntry> _entries = const [];
+  _CallFilter _filter = _CallFilter.all;
+
+  List<CallHistoryEntry> get _visible => switch (_filter) {
+    _CallFilter.all => _entries,
+    _CallFilter.missed => _entries.where((e) => e.isMissed).toList(),
+  };
 
   @override
   void initState() {
@@ -51,27 +59,96 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
     }
   }
 
+  Future<void> _deleteEntry(CallHistoryEntry entry) async {
+    setState(() {
+      _entries = _entries.where((e) => e.id != entry.id).toList();
+    });
+    await context.read<CallHistoryService>().delete(entry.id);
+    if (mounted) showAppToast(context, 'Call removed');
+  }
+
+  Future<void> _confirmClearAll() async {
+    if (_entries.isEmpty) return;
+    final confirmed = await GlassDialog.show<bool>(
+      context: context,
+      title: 'Clear call history?',
+      message:
+          'This permanently deletes the call log on this device. It cannot be undone.',
+      actions: [
+        GlassDialogAction(
+          label: 'Cancel',
+          onPressed: () => Navigator.pop(context, false),
+        ),
+        GlassDialogAction(
+          label: 'Clear all',
+          isDestructive: true,
+          onPressed: () => Navigator.pop(context, true),
+        ),
+      ],
+    );
+    if (confirmed != true || !mounted) return;
+    await context.read<CallHistoryService>().clear();
+    if (!mounted) return;
+    setState(() {
+      _entries = const [];
+      _filter = _CallFilter.all;
+    });
+    showAppToast(context, 'Call history cleared');
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final visible = _visible;
     return Scaffold(
       extendBodyBehindAppBar: true,
-      appBar: const GlassAppBar(title: Text('Calls')),
+      appBar: GlassAppBar(
+        title: const Text('Calls'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.more_vert_rounded),
+            tooltip: 'More',
+            onPressed: _entries.isEmpty ? null : _confirmClearAll,
+          ),
+        ],
+      ),
       body: _loading
           ? const Center(child: GlassProgressIndicator.circular())
           : _entries.isEmpty
           ? _empty(theme)
-          : RefreshIndicator(
-              onRefresh: _load,
-              child: ListView(
-                padding: EdgeInsets.fromLTRB(
-                  16,
-                  MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
-                  16,
-                  MediaQuery.paddingOf(context).bottom + 32,
+          : Column(
+              children: [
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
+                    16,
+                    8,
+                  ),
+                  child: GlassSegmentedControl(
+                    segments: const ['All', 'Missed'],
+                    selectedIndex: _filter.index,
+                    onSegmentSelected: (index) =>
+                        setState(() => _filter = _CallFilter.values[index]),
+                  ),
                 ),
-                children: _buildSections(theme),
-              ),
+                Expanded(
+                  child: visible.isEmpty
+                      ? _empty(theme)
+                      : RefreshIndicator(
+                          onRefresh: _load,
+                          child: ListView(
+                            padding: EdgeInsets.fromLTRB(
+                              16,
+                              12,
+                              16,
+                              MediaQuery.paddingOf(context).bottom + 32,
+                            ),
+                            children: _buildSections(theme),
+                          ),
+                        ),
+                ),
+              ],
             ),
     );
   }
@@ -88,7 +165,9 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
           ),
           const SizedBox(height: 12),
           Text(
-            'No calls yet',
+            _filter == _CallFilter.missed && _entries.isNotEmpty
+                ? 'No missed calls'
+                : 'No calls yet',
             style: TextStyle(
               color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
             ),
@@ -132,7 +211,7 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
                     indent: 60,
                     color: theme.colorScheme.onSurface.withValues(alpha: 0.10),
                   ),
-                _row(theme, bucket[i]),
+                _dismissibleRow(theme, bucket[i]),
               ],
             ],
           ),
@@ -141,7 +220,7 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
       bucket = [];
     }
 
-    for (final e in _entries) {
+    for (final e in _visible) {
       final label = _dateLabel(e.startedAt);
       if (label != currentLabel) {
         flush();
@@ -151,6 +230,31 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
     }
     flush();
     return out;
+  }
+
+  Widget _deleteBackground(ThemeData theme) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.error.withValues(alpha: 0.90),
+      ),
+      child: const Align(
+        alignment: Alignment.centerRight,
+        child: Padding(
+          padding: EdgeInsets.only(right: 22),
+          child: Icon(Icons.delete_outline_rounded, color: Colors.white),
+        ),
+      ),
+    );
+  }
+
+  Widget _dismissibleRow(ThemeData theme, CallHistoryEntry entry) {
+    return Dismissible(
+      key: ValueKey(entry.id),
+      direction: DismissDirection.endToStart,
+      background: _deleteBackground(theme),
+      onDismissed: (_) => _deleteEntry(entry),
+      child: _row(theme, entry),
+    );
   }
 
   Widget _row(ThemeData theme, CallHistoryEntry e) {
@@ -203,8 +307,10 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
           ),
           IconButton(
             visualDensity: VisualDensity.compact,
-            icon: Icon(e.isVideo ? Icons.videocam_outlined : Icons.call,
-                size: 20),
+            icon: Icon(
+              e.isVideo ? Icons.videocam_outlined : Icons.call,
+              size: 20,
+            ),
             color: theme.colorScheme.primary,
             onPressed: (e.peerUserId != null && e.conversationId != null)
                 ? () => _callBack(e, video: e.isVideo)

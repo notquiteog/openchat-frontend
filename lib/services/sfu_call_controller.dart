@@ -6,6 +6,8 @@ import 'package:livekit_client/livekit_client.dart';
 
 import 'api_service.dart';
 import 'call_platform_controls.dart';
+import 'call_quality_policy.dart';
+import 'sfu_call_reactions.dart';
 import 'websocket_service.dart';
 
 /// A finished SFU group call from this device's perspective (join → leave),
@@ -39,10 +41,17 @@ class SfuCallEnd {
 /// 1:1 calls never use this. Registered app-wide so a call survives navigating
 /// away from the call screen (enabling "leave/join an active call any time").
 class SfuCallController extends ChangeNotifier {
-  SfuCallController(this._api, this._ws, {this.onCallEnded});
+  SfuCallController(
+    this._api,
+    this._ws, {
+    this.onCallEnded,
+    CallQualityPolicy Function()? qualityPolicy,
+  }) : _qualityPolicyResolver =
+           qualityPolicy ?? (() => const CallQualityPolicy.normal());
 
   final ApiService _api;
   final WebSocketService _ws;
+  final CallQualityPolicy Function() _qualityPolicyResolver;
 
   /// Invoked once per successful join when the call ends (leave, remote
   /// disconnect, or dispose) — wired to the call-history recorder.
@@ -51,6 +60,10 @@ class SfuCallController extends ChangeNotifier {
   Room? _room;
   EventsListener<RoomEvent>? _listener;
   Timer? _heartbeat;
+  final StreamController<SfuCallReaction> _reactionAnnouncements =
+      StreamController<SfuCallReaction>.broadcast();
+  final Set<String> _raisedHands = {};
+  int _reactionSeq = 0;
 
   /// Bumped by every [_teardown]. An in-flight [join] captures the value at
   /// entry and re-checks it after each await: if leave() ran meanwhile, the
@@ -72,9 +85,19 @@ class SfuCallController extends ChangeNotifier {
   bool get isActive => _room != null || _connecting;
   bool get isConnecting => _connecting;
   bool get isConnected => _room?.connectionState == ConnectionState.connected;
+  bool get isReconnecting =>
+      _room?.connectionState == ConnectionState.reconnecting;
   String? get conversationId => _conversationId;
   String? get title => _title;
   bool get isVideo => _isVideo;
+  Stream<SfuCallReaction> get reactionAnnouncements =>
+      _reactionAnnouncements.stream;
+  Set<String> get raisedHands => Set.unmodifiable(_raisedHands);
+  String? get selfIdentity => _room?.localParticipant?.identity;
+  bool get selfRaisedHand {
+    final identity = selfIdentity;
+    return identity != null && _raisedHands.contains(identity);
+  }
 
   /// True when this room's media frames are end-to-end encrypted (every
   /// participant joined with the shared frame key; the SFU routes ciphertext).
@@ -88,6 +111,31 @@ class SfuCallController extends ChangeNotifier {
   bool get isScreenSharing =>
       _room?.localParticipant?.isScreenShareEnabled() ?? false;
   bool get isFrontCamera => _usingFrontCamera;
+
+  CallQualityPolicy _policy() {
+    try {
+      return _qualityPolicyResolver();
+    } catch (_) {
+      return const CallQualityPolicy.normal();
+    }
+  }
+
+  CameraCaptureOptions _cameraCaptureOptions(CallQualityPolicy policy) =>
+      CameraCaptureOptions(
+        params: policy.dataSaver
+            ? VideoParametersPresets.h360_169
+            : VideoParametersPresets.h720_169,
+        maxFrameRate: policy.maxFramerate.toDouble(),
+      );
+
+  VideoPublishOptions _videoPublishOptions(CallQualityPolicy policy) =>
+      VideoPublishOptions(
+        videoEncoding: VideoEncoding(
+          maxBitrate: policy.maxVideoBitrate,
+          maxFramerate: policy.maxFramerate,
+        ),
+        simulcast: true,
+      );
 
   /// Local participant first, then remotes — the render order for the grid.
   List<Participant> get participants {
@@ -148,11 +196,14 @@ class SfuCallController extends ChangeNotifier {
         notifyListeners();
         return;
       }
+      final policy = _policy();
       final room = Room(
         roomOptions: RoomOptions(
           adaptiveStream: true,
           dynacast: true,
-          e2eeOptions: e2ee,
+          encryption: e2ee,
+          defaultCameraCaptureOptions: _cameraCaptureOptions(policy),
+          defaultVideoPublishOptions: _videoPublishOptions(policy),
         ),
       );
       final listener = room.createListener();
@@ -172,7 +223,10 @@ class SfuCallController extends ChangeNotifier {
       }
       await room.localParticipant?.setMicrophoneEnabled(true);
       if (isVideo) {
-        await room.localParticipant?.setCameraEnabled(true);
+        await room.localParticipant?.setCameraEnabled(
+          true,
+          cameraCaptureOptions: _cameraCaptureOptions(policy),
+        );
       }
       if (lostRace()) {
         await _disposeOrphan(room, listener);
@@ -226,12 +280,60 @@ class SfuCallController extends ChangeNotifier {
         notifyListeners();
       })
       ..on<ParticipantDisconnectedEvent>((_) => _onParticipantLeft())
+      ..on<ParticipantConnectionQualityUpdatedEvent>((_) => notifyListeners())
       ..on<TrackSubscribedEvent>((_) => notifyListeners())
       ..on<TrackUnsubscribedEvent>((_) => notifyListeners())
+      ..on<DataReceivedEvent>(
+        (event) =>
+            _onData(event.participant?.identity, event.data, event.topic),
+      )
+      ..on<RoomReconnectingEvent>((_) => notifyListeners())
+      ..on<RoomReconnectedEvent>((_) => notifyListeners())
       ..on<RoomDisconnectedEvent>((_) => _onDisconnected());
   }
 
   void _onRoomChange() => notifyListeners();
+
+  void _onData(String? identity, List<int> bytes, String? topic) {
+    if (topic != sfuCallReactionTopic ||
+        identity == null ||
+        identity.isEmpty ||
+        !_knownIdentity(identity)) {
+      return;
+    }
+    final packet = SfuCallReactionCodec.decode(bytes);
+    if (packet == null) return;
+    switch (packet.kind) {
+      case SfuCallPacketKind.reaction:
+        final emoji = packet.emoji;
+        if (emoji == null) return;
+        _emitReaction(identity: identity, emoji: emoji);
+        break;
+      case SfuCallPacketKind.raiseHand:
+        final raised = packet.handRaised ?? false;
+        if (raised) {
+          _raisedHands.add(identity);
+        } else {
+          _raisedHands.remove(identity);
+        }
+        notifyListeners();
+    }
+  }
+
+  bool _knownIdentity(String identity) {
+    return participants.any((participant) => participant.identity == identity);
+  }
+
+  void _emitReaction({required String identity, required String emoji}) {
+    _reactionSeq += 1;
+    _reactionAnnouncements.add(
+      SfuCallReaction(
+        id: '$identity-${DateTime.now().microsecondsSinceEpoch}-$_reactionSeq',
+        identity: identity,
+        emoji: emoji,
+      ),
+    );
+  }
 
   void _onParticipantLeft() {
     final r = _room;
@@ -266,7 +368,10 @@ class SfuCallController extends ChangeNotifier {
   Future<void> toggleCamera() async {
     final lp = _room?.localParticipant;
     if (lp == null) return;
-    await lp.setCameraEnabled(!lp.isCameraEnabled());
+    await lp.setCameraEnabled(
+      !lp.isCameraEnabled(),
+      cameraCaptureOptions: _cameraCaptureOptions(_policy()),
+    );
     notifyListeners();
   }
 
@@ -316,6 +421,38 @@ class SfuCallController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> sendReaction(String emoji) async {
+    if (!sfuCallReactionEmojiAllowlist.contains(emoji)) return;
+    final lp = _room?.localParticipant;
+    final identity = lp?.identity;
+    if (lp == null || identity == null || identity.isEmpty) return;
+    final bytes = SfuCallReactionCodec.encodeReaction(emoji);
+    try {
+      await lp.publishData(bytes, reliable: true, topic: sfuCallReactionTopic);
+      _emitReaction(identity: identity, emoji: emoji);
+    } catch (_) {}
+  }
+
+  Future<void> toggleRaiseHand() async {
+    final lp = _room?.localParticipant;
+    final identity = lp?.identity;
+    if (lp == null || identity == null || identity.isEmpty) return;
+    final raised = !_raisedHands.contains(identity);
+    if (raised) {
+      _raisedHands.add(identity);
+    } else {
+      _raisedHands.remove(identity);
+    }
+    notifyListeners();
+    try {
+      await lp.publishData(
+        SfuCallReactionCodec.encodeRaiseHand(raised),
+        reliable: true,
+        topic: sfuCallReactionTopic,
+      );
+    } catch (_) {}
+  }
+
   Future<void> leave() async {
     await _teardown();
     notifyListeners();
@@ -336,6 +473,7 @@ class SfuCallController extends ChangeNotifier {
     _joinedAt = null;
     _sawRemote = false;
     _mediaE2EE = false;
+    _raisedHands.clear();
     _heartbeat?.cancel();
     _heartbeat = null;
     unawaited(_platformControls.stopMediaProjection());
@@ -372,6 +510,7 @@ class SfuCallController extends ChangeNotifier {
   @override
   void dispose() {
     unawaited(_teardown());
+    unawaited(_reactionAnnouncements.close());
     super.dispose();
   }
 }

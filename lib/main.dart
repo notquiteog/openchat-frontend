@@ -18,6 +18,7 @@ import 'services/api_service.dart';
 import 'services/background_ws_service.dart';
 import 'services/badge_service.dart';
 import 'services/call_history_service.dart';
+import 'services/call_quality_policy.dart';
 import 'services/call_service.dart';
 import 'services/call_signal_codec.dart';
 import 'services/sfu_call_controller.dart';
@@ -32,6 +33,7 @@ import 'services/proxy_service.dart';
 import 'services/secure_storage_service.dart';
 import 'services/security_service.dart';
 import 'services/websocket_service.dart';
+import 'utils/global_notification_pause.dart';
 import 'utils/local_conversation_preferences.dart';
 
 /// Background FCM handler — runs in a separate isolate when the app is
@@ -91,6 +93,18 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
 Future<bool> _shouldRingForCall(String conversationId) async {
   try {
     final privateState = await LocalPrivateStateService().readState();
+    final notificationSettings = decodePrivateNotificationSettings(
+      privateState[privateStateNotificationSettingsKey],
+    );
+    final globallyPaused = isGloballyPausedAt(
+      DateTime.now(),
+      pausedUntilMs: notificationSettings.notificationsPausedUntilMs,
+      quietStartMinute: notificationSettings.globalQuietHoursStartMinute,
+      quietEndMinute: notificationSettings.globalQuietHoursEndMinute,
+    );
+    if (globallyPaused && !notificationSettings.pauseAllowsCalls) {
+      return false;
+    }
     final preferences = decodePrivateConversationNotificationPreferences(
       privateState[privateStateConversationNotificationPreferencesKey],
     );
@@ -123,6 +137,17 @@ Future<String> _resolveConversationId(Map<String, dynamic> data) async {
 
 Future<bool> _shouldShowMessageNotification(String conversationId) async {
   final privateState = await LocalPrivateStateService().readState();
+  final notificationSettings = decodePrivateNotificationSettings(
+    privateState[privateStateNotificationSettingsKey],
+  );
+  if (isGloballyPausedAt(
+    DateTime.now(),
+    pausedUntilMs: notificationSettings.notificationsPausedUntilMs,
+    quietStartMinute: notificationSettings.globalQuietHoursStartMinute,
+    quietEndMinute: notificationSettings.globalQuietHoursEndMinute,
+  )) {
+    return false;
+  }
   final preferences = decodePrivateConversationNotificationPreferences(
     privateState[privateStateConversationNotificationPreferencesKey],
   );
@@ -144,7 +169,7 @@ Future<void> _guardStartupStep(
   }
 }
 
-void main() async {
+void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   // Linux/Windows need a just_audio platform backend for voice notes and tones.
   JustAudioMediaKit.ensureInitialized();
@@ -152,7 +177,8 @@ void main() async {
   // On Impeller (iOS/Android) this unlocks real refraction + chromatic
   // aberration; on Skia it primes the lightweight fragment shader.
   await LiquidGlassWidgets.initialize();
-  await DesktopStartupService.startTray();
+  final startMinimized = args.contains(desktopStartMinimizedArg);
+  await DesktopStartupService.startTray(startMinimized: startMinimized);
   // Every pre-runApp step below talks to platform plugins. None of them is
   // worth a black screen: if plugin registration broke (a release build once
   // shipped where one plugin's NoClassDefFoundError aborted the whole
@@ -247,10 +273,8 @@ class _Providers extends StatelessWidget {
           ),
         ),
         ChangeNotifierProxyProvider<ChatProvider, SmpProvider>(
-          create: (ctx) => SmpProvider(
-            chat: ctx.read<ChatProvider>(),
-            storage: storage,
-          ),
+          create: (ctx) =>
+              SmpProvider(chat: ctx.read<ChatProvider>(), storage: storage),
           update: (_, _, previous) => previous!,
         ),
         // App-level so the radio can outlive the Nearby screen (keep-alive
@@ -267,8 +291,7 @@ class _Providers extends StatelessWidget {
                 .meshEnvelopesForFingerprint(fingerprint),
             contactNameForFingerprint: (fingerprint) {
               final chat = ctx.read<ChatProvider>();
-              final convID =
-                  chat.dmConversationIdForFingerprint(fingerprint);
+              final convID = chat.dmConversationIdForFingerprint(fingerprint);
               if (convID == null) return null;
               return chat.conversations
                   .where((c) => c.id == convID)
@@ -284,7 +307,12 @@ class _Providers extends StatelessWidget {
           ),
         ),
         ChangeNotifierProvider(
-          create: (_) => CallProvider(callService, callHistory: callHistory),
+          create: (ctx) => CallProvider(
+            callService,
+            callHistory: callHistory,
+            settings: ctx.read<SettingsProvider>(),
+            network: ctx.read<NetworkService>(),
+          ),
         ),
         // SFU call ends are logged through CallProvider so the device call
         // history covers group SFU calls too (sfu = true entries).
@@ -293,6 +321,17 @@ class _Providers extends StatelessWidget {
             api,
             ws,
             onCallEnded: ctx.read<CallProvider>().recordSfuCallEnded,
+            qualityPolicy: () {
+              final settings = ctx.read<SettingsProvider>();
+              final net = ctx.read<NetworkService>().current;
+              final forceAudioOnly = settings.voiceOnlyForNetwork(net);
+              if (settings.dataSaverActive(net)) {
+                return CallQualityPolicy.dataSaver(
+                  forceAudioOnly: forceAudioOnly,
+                );
+              }
+              return CallQualityPolicy.normal(forceAudioOnly: forceAudioOnly);
+            },
           ),
         ),
         ChangeNotifierProvider(

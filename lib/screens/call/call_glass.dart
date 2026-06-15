@@ -344,6 +344,84 @@ class CallControlsPanel extends StatelessWidget {
   }
 }
 
+class FloatingReaction extends StatefulWidget {
+  final String emoji;
+  final VoidCallback? onCompleted;
+
+  const FloatingReaction({super.key, required this.emoji, this.onCompleted});
+
+  @override
+  State<FloatingReaction> createState() => _FloatingReactionState();
+}
+
+class _FloatingReactionState extends State<FloatingReaction>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller =
+      AnimationController(
+          vsync: this,
+          duration: const Duration(milliseconds: 2500),
+        )
+        ..addStatusListener((status) {
+          if (status == AnimationStatus.completed) widget.onCompleted?.call();
+        })
+        ..forward();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        final t = Curves.easeOutCubic.transform(_controller.value);
+        return Opacity(
+          opacity: (1 - t).clamp(0.0, 1.0),
+          child: Transform.translate(
+            offset: Offset(0, -84 * t),
+            child: Transform.scale(scale: 0.82 + 0.36 * (1 - t), child: child),
+          ),
+        );
+      },
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.28),
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.18),
+            width: 0.7,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Text(widget.emoji, style: const TextStyle(fontSize: 34)),
+        ),
+      ),
+    );
+  }
+}
+
+class RaiseHandBadge extends StatelessWidget {
+  const RaiseHandBadge({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassContainer(
+      shape: const LiquidRoundedSuperellipse(borderRadius: 18),
+      useOwnLayer: true,
+      quality: GlassQuality.standard,
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+      settings: LiquidGlassSettings(
+        glassColor: callAnswerColor.withValues(alpha: 0.34),
+      ),
+      child: const Icon(Icons.back_hand_rounded, color: Colors.white, size: 17),
+    );
+  }
+}
+
 /// Pill name label (with optional mic-off badge) shown over a participant tile.
 class CallParticipantLabel extends StatelessWidget {
   final String name;

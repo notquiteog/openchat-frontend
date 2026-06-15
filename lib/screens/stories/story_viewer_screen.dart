@@ -8,11 +8,14 @@ import 'package:video_player/video_player.dart';
 import '../../config/api_config.dart';
 import '../../crypto/pgp_service.dart';
 import '../../models/story.dart';
+import '../../models/story_viewer.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/chat_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/attachment_service.dart';
 import '../../services/secure_storage_service.dart';
+import '../../utils/story_background.dart';
 import '../../widgets/custom_emoji_image.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/reaction_emoji_picker.dart';
@@ -97,6 +100,13 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
         _stories[_index] = _story.withDecryptedMeta(meta);
       }
 
+      if (_story.isText) {
+        await api.viewStory(_story.id);
+        if (!mounted) return;
+        setState(() => _state = _StoryLoadState.done);
+        return;
+      }
+
       final attachmentId = _story.attachmentId;
       if (attachmentId == null) throw StateError('missing attachment');
 
@@ -179,6 +189,76 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
     await _react(key);
   }
 
+  Future<void> _showViewers() async {
+    List<StoryViewer> viewers;
+    try {
+      viewers = await context.read<ApiService>().getStoryViewers(_story.id);
+    } catch (e) {
+      if (mounted) {
+        showAppToast(context, 'Could not load viewers', isError: true);
+      }
+      return;
+    }
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const GlassSheetGrabber(),
+            const GlassSheetHeader(
+              icon: Icons.visibility_outlined,
+              title: 'Viewers',
+              subtitle: 'People who viewed this story',
+            ),
+            if (viewers.isEmpty)
+              const Padding(
+                padding: EdgeInsets.fromLTRB(18, 8, 18, 24),
+                child: Text('No views yet'),
+              )
+            else
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [for (final viewer in viewers) _viewerTile(viewer)],
+                ),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _viewerTile(StoryViewer viewer) {
+    final username = viewer.username.trim();
+    final display = viewer.displayName?.trim();
+    final title = display != null && display.isNotEmpty
+        ? display
+        : username.isNotEmpty
+        ? '@$username'
+        : 'Unknown viewer';
+    final avatar = viewer.avatarUrl;
+    return GlassListTile(
+      leading: CircleAvatar(
+        backgroundImage: avatar != null && avatar.isNotEmpty
+            ? NetworkImage(ApiConfig.resolveMedia(avatar))
+            : null,
+        child: avatar == null || avatar.isEmpty
+            ? Text(username.isNotEmpty ? username[0].toUpperCase() : '?')
+            : null,
+      ),
+      title: Text(title),
+      subtitle: username.isNotEmpty ? Text('@$username') : null,
+      trailing: viewer.reaction == null
+          ? null
+          : ReactionGlyph(viewer.reaction!, size: 24),
+    );
+  }
+
   void _next() {
     if (_index >= _stories.length - 1) {
       Navigator.pop(context);
@@ -223,6 +303,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                 currentUserId: currentUserId,
                 index: _index,
                 total: _stories.length,
+                onShowViewers: _showViewers,
                 onClose: () => Navigator.pop(context),
               ),
             ),
@@ -232,6 +313,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
               bottom: 12,
               child: _StoryFooter(
                 story: _story,
+                currentUserId: currentUserId,
                 recentKeys: recentKeys,
                 onReact: _react,
                 onMore: _openReactionPicker,
@@ -260,6 +342,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
           gaplessPlayback: true,
         ),
       ),
+      _StoryLoadState.done when _story.isText => _TextStoryMedia(story: _story),
       _StoryLoadState.error => Center(
         child: Text(
           _error ?? 'Story unavailable',
@@ -268,6 +351,42 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
       ),
       _ => Center(child: GlassProgressIndicator.circular(color: Colors.white)),
     };
+  }
+}
+
+class _TextStoryMedia extends StatelessWidget {
+  final Story story;
+
+  const _TextStoryMedia({required this.story});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = story.caption.trim();
+    return DecoratedBox(
+      decoration: storyBackgroundDecoration(story.background),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(28, 96, 28, 150),
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 36,
+              fontWeight: FontWeight.w800,
+              height: 1.12,
+              shadows: [
+                Shadow(
+                  blurRadius: 18,
+                  color: Colors.black38,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -305,6 +424,7 @@ class _StoryHeader extends StatelessWidget {
   final String currentUserId;
   final int index;
   final int total;
+  final VoidCallback onShowViewers;
   final VoidCallback onClose;
 
   const _StoryHeader({
@@ -312,12 +432,15 @@ class _StoryHeader extends StatelessWidget {
     required this.currentUserId,
     required this.index,
     required this.total,
+    required this.onShowViewers,
     required this.onClose,
   });
 
   @override
   Widget build(BuildContext context) {
     final avatar = story.displayAvatar(currentUserId);
+    final isAuthor =
+        story.conversationId == null && story.userId == currentUserId;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -364,33 +487,38 @@ class _StoryHeader extends StatelessWidget {
             // Views counter (author sees how many viewed). Sits left of the
             // close button so the two never overlap.
             if (story.viewCount > 0) ...[
-              GlassContainer(
-                shape: const LiquidRoundedSuperellipse(borderRadius: 999),
-                allowElevation: true,
-                glowIntensity: 0.06,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 5,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.visibility_outlined,
-                        color: Colors.white,
-                        size: 14,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        '${story.viewCount}',
-                        style: const TextStyle(
+              GestureDetector(
+                key: const Key('story-view-count-badge'),
+                behavior: HitTestBehavior.opaque,
+                onTap: isAuthor ? onShowViewers : () {},
+                child: GlassContainer(
+                  shape: const LiquidRoundedSuperellipse(borderRadius: 999),
+                  allowElevation: true,
+                  glowIntensity: 0.06,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 5,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.visibility_outlined,
                           color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
+                          size: 14,
                         ),
-                      ),
-                    ],
+                        const SizedBox(width: 4),
+                        Text(
+                          '${story.viewCount}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -414,8 +542,9 @@ class _StoryHeader extends StatelessWidget {
   }
 }
 
-class _StoryFooter extends StatelessWidget {
+class _StoryFooter extends StatefulWidget {
   final Story story;
+  final String currentUserId;
 
   /// Recent reaction keys (unicode or `custom:<id>`) for the quick bar.
   final List<String> recentKeys;
@@ -424,25 +553,73 @@ class _StoryFooter extends StatelessWidget {
 
   const _StoryFooter({
     required this.story,
+    required this.currentUserId,
     required this.recentKeys,
     required this.onReact,
     required this.onMore,
   });
 
   @override
+  State<_StoryFooter> createState() => _StoryFooterState();
+}
+
+class _StoryFooterState extends State<_StoryFooter> {
+  final _replyCtrl = TextEditingController();
+  bool _sending = false;
+
+  @override
+  void dispose() {
+    _replyCtrl.dispose();
+    super.dispose();
+  }
+
+  bool get _canReply =>
+      widget.story.conversationId == null &&
+      widget.story.userId != widget.currentUserId;
+
+  Future<void> _sendReply() async {
+    final text = _replyCtrl.text.trim();
+    if (text.isEmpty || _sending) return;
+    setState(() => _sending = true);
+    try {
+      final chat = context.read<ChatProvider>();
+      final dm = await chat.openDM(widget.story.userId);
+      final prefix = widget.story.caption.trim().isEmpty
+          ? 'Replying to your story'
+          : 'Replying to your story: ${widget.story.caption.trim()}';
+      final sent = await chat.sendMessage(
+        convID: dm.id,
+        plaintext: '$prefix\n\n$text',
+      );
+      if (!mounted) return;
+      if (sent) {
+        _replyCtrl.clear();
+        showAppToast(context, 'Reply sent');
+      } else {
+        showAppToast(context, 'Could not send reply', isError: true);
+      }
+    } catch (_) {
+      if (mounted) showAppToast(context, 'Could not send reply', isError: true);
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     // If the viewer reacted with something outside the recent set, surface it
     // first so the selection stays visible.
+    final story = widget.story;
     final current = story.viewerReaction;
     final keys = <String>[
-      if (current != null && !recentKeys.contains(current)) current,
-      ...recentKeys,
+      if (current != null && !widget.recentKeys.contains(current)) current,
+      ...widget.recentKeys,
     ];
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        if (story.caption.isNotEmpty) ...[
+        if (story.caption.isNotEmpty && !story.isText) ...[
           GlassContainer(
             shape: const LiquidRoundedSuperellipse(borderRadius: 22),
             allowElevation: true,
@@ -473,7 +650,7 @@ class _StoryFooter extends StatelessWidget {
               for (final key in keys)
                 _StoryReactButton(
                   selected: story.viewerReaction == key,
-                  onTap: () => onReact(key),
+                  onTap: () => widget.onReact(key),
                   child: ReactionGlyph(key, size: 26),
                 ),
               Container(
@@ -484,7 +661,7 @@ class _StoryFooter extends StatelessWidget {
               ),
               _StoryReactButton(
                 selected: false,
-                onTap: onMore,
+                onTap: widget.onMore,
                 child: const Icon(
                   Icons.add_rounded,
                   size: 24,
@@ -494,7 +671,71 @@ class _StoryFooter extends StatelessWidget {
             ],
           ),
         ),
+        if (_canReply) ...[
+          const SizedBox(height: 10),
+          _StoryReplyBar(
+            controller: _replyCtrl,
+            sending: _sending,
+            onSend: _sendReply,
+          ),
+        ],
       ],
+    );
+  }
+}
+
+class _StoryReplyBar extends StatelessWidget {
+  final TextEditingController controller;
+  final bool sending;
+  final VoidCallback onSend;
+
+  const _StoryReplyBar({
+    required this.controller,
+    required this.sending,
+    required this.onSend,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassContainer(
+      shape: const LiquidRoundedSuperellipse(borderRadius: 999),
+      allowElevation: true,
+      glowIntensity: 0.06,
+      padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: controller,
+              enabled: !sending,
+              minLines: 1,
+              maxLines: 2,
+              style: const TextStyle(color: Colors.white),
+              cursorColor: Colors.white,
+              decoration: const InputDecoration(
+                hintText: 'Reply to story...',
+                hintStyle: TextStyle(color: Colors.white54),
+                border: InputBorder.none,
+                isDense: true,
+              ),
+              onSubmitted: (_) => onSend(),
+            ),
+          ),
+          GlassCircleIconButton(
+            onPressed: sending ? null : onSend,
+            tooltip: 'Send reply',
+            size: 38,
+            glowIntensity: 0.04,
+            icon: sending
+                ? const GlassProgressIndicator.circular(
+                    size: 18,
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  )
+                : const Icon(Icons.send_rounded, color: Colors.white, size: 18),
+          ),
+        ],
+      ),
     );
   }
 }

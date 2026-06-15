@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:uuid/uuid.dart';
+import '../crypto/amf_service.dart';
 import '../crypto/pgp_service.dart';
 import '../crypto/smp_service.dart';
 import '../models/chat_folder.dart';
@@ -13,6 +14,7 @@ import '../models/key_transparency_event.dart';
 import '../models/message.dart';
 import '../models/user.dart';
 import '../providers/settings_provider.dart';
+import '../services/amf_key_service.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
 import '../services/key_cache_service.dart';
@@ -44,7 +46,10 @@ class ChatSendException implements Exception {
 class _PooledPostToken {
   final String token;
   final DateTime fetchedAt;
-  const _PooledPostToken(this.token, this.fetchedAt);
+  // The AMF (Hecate) franking token minted together with this post token, used
+  // once to frank the send it accompanies. Null when the server omitted it.
+  final AmfToken? amf;
+  const _PooledPostToken(this.token, this.fetchedAt, {this.amf});
 
   bool isStale(Duration maxAge) =>
       DateTime.now().difference(fetchedAt) >= maxAge;
@@ -105,6 +110,9 @@ class _PreparedEncryptedPayload {
   final DateTime? autoDeleteExpiresAt;
   final String senderId;
   final String? postToken;
+  // Base64 AMF commitment to send server-visible (server stamps it). Set only
+  // for franked immediate text/media sends; null otherwise.
+  final String? frankCom;
 
   const _PreparedEncryptedPayload({
     required this.encryptedPayload,
@@ -115,6 +123,7 @@ class _PreparedEncryptedPayload {
     required this.autoDeleteExpiresAt,
     required this.senderId,
     this.postToken,
+    this.frankCom,
   });
 }
 
@@ -295,6 +304,7 @@ class ChatProvider extends ChangeNotifier {
   }
 
   int get pendingOutboxCount => _outboxItems.length;
+  List<OfflineOutboxItem> get outboxItems => List.unmodifiable(_outboxItems);
 
   Set<String> typingUsersFor(String convID) => _typingUsers[convID] ?? {};
 
@@ -358,12 +368,18 @@ class ChatProvider extends ChangeNotifier {
   Future<List<MessageSearchResult>> searchMessages(
     String query, {
     String? conversationId,
+    String? senderId,
+    DateTime? from,
+    DateTime? to,
     Set<MessageSearchCategory>? categories,
     int limit = 40,
   }) {
     return _search.search(
       query,
       conversationId: conversationId,
+      senderId: senderId,
+      from: from,
+      to: to,
       categories: categories,
       limit: limit,
     );
@@ -1180,6 +1196,36 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> retryOutboxItem(String id) async {
+    await _ensureOutboxLoaded();
+    final index = _outboxItems.indexWhere((item) => item.id == id);
+    if (index == -1) return;
+    final requeued = _outboxItems[index].copyWith(
+      attempts: 0,
+      status: OfflineOutboxStatus.queued,
+      clearLastError: true,
+    );
+    await _updateOutboxItem(requeued);
+    if (_ws.isMonitoring && !_drainingOutbox) {
+      unawaited(drainOutbox());
+    } else {
+      unawaited(_ws.connect());
+    }
+  }
+
+  Future<void> discardOutboxItem(String id) async {
+    await _ensureOutboxLoaded();
+    await _removeOutboxItem(id);
+  }
+
+  Future<void> clearOutbox() async {
+    await _ensureOutboxLoaded();
+    _outboxItems = const [];
+    await _outbox.clearAll();
+    _overlayOutboxOnLoadedMessages();
+    notifyListeners();
+  }
+
   Future<void> _updateOutboxItem(OfflineOutboxItem item) async {
     final next = List<OfflineOutboxItem>.from(_outboxItems);
     final index = next.indexWhere((existing) => existing.id == item.id);
@@ -1316,6 +1362,9 @@ class ChatProvider extends ChangeNotifier {
         // timed-out-but-committed POST returns the original message instead
         // of duplicating it for every recipient.
         clientNonce: data['pending_message_id'] as String? ?? item.id,
+        // A delayed franked send still stamps; the receiver treats the (now
+        // possibly stale) franking as display-only via the tri-state verify.
+        frankCom: data['frank_com'] as String?,
       );
     } else {
       if (isEncrypted) {
@@ -2440,6 +2489,10 @@ class ChatProvider extends ChangeNotifier {
     String? topicId,
     String? mediaGroupId,
     bool includePostToken = true,
+    // When true, attach AMF (Hecate) franking so the message is CSAM-reportable.
+    // Only the regular immediate text/media send sets this; polls/games/
+    // scheduled sends stay unfranked (they don't carry a com to stamp).
+    bool frankMessage = false,
   }) async {
     final conv = _conversations[convID];
     if (conv == null) {
@@ -2468,31 +2521,37 @@ class ChatProvider extends ChangeNotifier {
         topicId: topicId,
         mediaGroupId: mediaGroupId,
       );
-      final cleartextPayload = await _signedPgpCleartextPayload(
+      // Fetch the token bundle first so the AMF token is available to frank
+      // into the encrypted envelope (the franking must be embedded before
+      // encryption, and com sent server-visible).
+      final tokenBundle = includePostToken
+          ? await _sealedPostToken(convID, privateKey)
+          : null;
+      final signed = await _signedPgpCleartextPayload(
         convID: convID,
         plaintextPayload: artifactPayload,
         messageType: messageType,
         senderId: userID,
         privateKey: privateKey,
+        amfToken: frankMessage ? tokenBundle?.amf : null,
       );
       final encrypted = await _mls.encryptPayload(
         api: _api,
         conversation: conv,
-        plaintextPayload: cleartextPayload,
+        plaintextPayload: signed.cleartext,
       );
       return _PreparedEncryptedPayload(
         encryptedPayload: encrypted,
         signature: '',
-        cleartextPayload: cleartextPayload,
+        cleartextPayload: signed.cleartext,
         isEncrypted: true,
         autoDeleteSeconds: conv.messageTtlSeconds,
         autoDeleteExpiresAt: conv.messageTtlSeconds > 0
             ? DateTime.now().add(Duration(seconds: conv.messageTtlSeconds))
             : null,
         senderId: userID,
-        postToken: includePostToken
-            ? await _sealedPostToken(convID, privateKey)
-            : null,
+        postToken: tokenBundle?.token,
+        frankCom: signed.frankComB64,
       );
     }
     if (conv.usesPgp && privateKey.isEmpty) {
@@ -2527,18 +2586,24 @@ class ChatProvider extends ChangeNotifier {
       topicId: topicId,
       mediaGroupId: mediaGroupId,
     );
-    final cleartextPayload = await _signedPgpCleartextPayload(
+    // Fetch the token bundle first so the AMF token can be franked into the
+    // envelope before encryption (com is sent server-visible).
+    final tokenBundle = includePostToken
+        ? await _sealedPostToken(convID, privateKey)
+        : null;
+    final signed = await _signedPgpCleartextPayload(
       convID: convID,
       plaintextPayload: artifactPayload,
       messageType: messageType,
       senderId: userID,
       privateKey: privateKey,
+      amfToken: frankMessage ? tokenBundle?.amf : null,
     );
 
     final String encrypted;
     try {
       encrypted = await PgpService.encrypt(
-        plaintext: cleartextPayload,
+        plaintext: signed.cleartext,
         recipients: recipients,
         signingPrivateKeyArmored: privateKey,
       ).timeout(const Duration(seconds: 30));
@@ -2550,21 +2615,18 @@ class ChatProvider extends ChangeNotifier {
       throw ChatSendException('Encryption failed: $e');
     }
 
-    final postToken = includePostToken
-        ? await _sealedPostToken(convID, privateKey)
-        : null;
-
     return _PreparedEncryptedPayload(
       encryptedPayload: encrypted,
       signature: '',
-      cleartextPayload: cleartextPayload,
+      cleartextPayload: signed.cleartext,
       isEncrypted: true,
       autoDeleteSeconds: conv.messageTtlSeconds,
       autoDeleteExpiresAt: conv.messageTtlSeconds > 0
           ? DateTime.now().add(Duration(seconds: conv.messageTtlSeconds))
           : null,
       senderId: userID,
-      postToken: postToken,
+      postToken: tokenBundle?.token,
+      frankCom: signed.frankComB64,
     );
   }
 
@@ -2592,6 +2654,9 @@ class ChatProvider extends ChangeNotifier {
       messageType: messageType,
       replyTo: replyTo,
       topicId: topicId,
+      // Frank immediate (non-scheduled) sends so they're CSAM-reportable. A
+      // scheduled send isn't stamped here, so leave it unfranked.
+      frankMessage: scheduledFor == null,
     );
     final serverMessageType = prepared.isEncrypted ? 'text' : messageType;
 
@@ -2662,6 +2727,7 @@ class ChatProvider extends ChangeNotifier {
         encryptedPayload: prepared.encryptedPayload,
         signature: prepared.signature,
         postToken: prepared.postToken,
+        frankCom: prepared.frankCom,
         replyTo: replyTo,
         attachmentId: attachmentId,
         topicId: topicId,
@@ -2688,6 +2754,7 @@ class ChatProvider extends ChangeNotifier {
               topicId: null,
               silent: silent,
               clientNonce: pending.id,
+              frankCom: prepared.frankCom,
             )
           : await _api.sendMessage(
               convID: convID,
@@ -2718,6 +2785,7 @@ class ChatProvider extends ChangeNotifier {
           encryptedPayload: prepared.encryptedPayload,
           signature: prepared.signature,
           postToken: prepared.postToken,
+        frankCom: prepared.frankCom,
           replyTo: replyTo,
           attachmentId: attachmentId,
           topicId: topicId,
@@ -2766,6 +2834,7 @@ class ChatProvider extends ChangeNotifier {
     required String encryptedPayload,
     required String signature,
     String? postToken,
+    String? frankCom,
     required bool isEncrypted,
     required int autoDeleteSeconds,
     required DateTime? autoDeleteExpiresAt,
@@ -2786,6 +2855,7 @@ class ChatProvider extends ChangeNotifier {
         'encrypted_payload': encryptedPayload,
         'signature': signature,
         'post_token': ?postToken,
+        'frank_com': ?frankCom,
         'message_type': messageType,
         'local_message_type': localMessageType,
         'is_encrypted': isEncrypted,
@@ -2966,12 +3036,13 @@ class ChatProvider extends ChangeNotifier {
     );
   }
 
-  Future<String> _signedPgpCleartextPayload({
+  Future<({String cleartext, String? frankComB64})> _signedPgpCleartextPayload({
     required String convID,
     required String plaintextPayload,
     required String messageType,
     required String senderId,
     required String privateKey,
+    AmfToken? amfToken,
   }) async {
     final fingerprint = await _storage.getFingerprint() ?? '';
     final createdAt = DateTime.now().toUtc().toIso8601String();
@@ -2990,11 +3061,29 @@ class ChatProvider extends ChangeNotifier {
     // equivocated, and the server can't strip what it can't read. ~150 bytes,
     // absorbed by the plaintext padding buckets.
     final sthGossip = await KtAuditService(storage: _storage).gossipPayload();
-    return jsonEncode({
+    // AMF (Hecate) Frank: when a franking token accompanies this send, compute
+    // x2/σ2/r/com over the SAME (convID, type, payload) the receiver will see,
+    // embed {x1,x2,r,t1,σ1,σ2,pk_e} in the encrypted envelope, and surface only
+    // com to the server (returned separately). sk_e is used here once and
+    // dropped (the token is single-use).
+    Map<String, dynamic>? frankingJson;
+    String? frankComB64;
+    if (amfToken != null) {
+      final franking = await AmfService.frank(
+        amfToken,
+        conversationId: convID,
+        messageType: messageType,
+        payload: plaintextPayload,
+      );
+      frankingJson = franking.toPayloadJson();
+      frankComB64 = base64Encode(franking.com);
+    }
+    final cleartext = jsonEncode({
       'openchat_message': 1,
       'type': messageType,
       'payload': plaintextPayload,
       'kt_sth': ?sthGossip,
+      'franking': ?frankingJson,
       'sender': {
         'id': senderId,
         'key_fingerprint': fingerprint,
@@ -3002,6 +3091,7 @@ class ChatProvider extends ChangeNotifier {
         'created_at': createdAt,
       },
     });
+    return (cleartext: cleartext, frankComB64: frankComB64);
   }
 
   // Per-conversation pool of pre-fetched, single-use sealed post tokens, each
@@ -3016,28 +3106,39 @@ class ChatProvider extends ChangeNotifier {
   // Stay well under the server's 15-minute token TTL.
   static const Duration _postTokenMaxAge = Duration(minutes: 10);
 
-  Future<String> _sealedPostToken(String convID, String privateKey) async {
+  Future<({String token, AmfToken? amf})> _sealedPostToken(
+    String convID,
+    String privateKey,
+  ) async {
     final pool = _postTokenPool[convID];
-    String? token;
     if (pool != null) {
       // Drop expired tokens, then take the freshest still-valid one.
       pool.removeWhere((t) => t.isStale(_postTokenMaxAge));
       if (pool.isNotEmpty) {
-        token = pool.removeLast().token;
+        final pooled = pool.removeLast();
+        unawaited(_refillPostTokenPool(convID, privateKey));
+        return (token: pooled.token, amf: pooled.amf);
       }
     }
-    token ??= await _fetchSealedPostToken(convID, privateKey);
+    final fetched = await _fetchSealedPostToken(convID, privateKey);
     // Top the pool back up in the background, on a jittered schedule.
     unawaited(_refillPostTokenPool(convID, privateKey));
-    return token;
+    return fetched;
   }
 
-  Future<String> _fetchSealedPostToken(String convID, String privateKey) async {
-    final encrypted = await _api.getEncryptedSealedPostToken(convID);
-    return PgpService.decrypt(
-      encryptedArmor: encrypted,
+  Future<({String token, AmfToken? amf})> _fetchSealedPostToken(
+    String convID,
+    String privateKey,
+  ) async {
+    final bundle = await _api.getSealedPostTokenBundle(convID);
+    final token = await PgpService.decrypt(
+      encryptedArmor: bundle.encryptedPostToken,
       privateKeyArmored: privateKey,
     );
+    final amf = bundle.amfToken != null
+        ? AmfToken.fromJson(bundle.amfToken!)
+        : null;
+    return (token: token, amf: amf);
   }
 
   Future<void> _refillPostTokenPool(String convID, String privateKey) async {
@@ -3052,9 +3153,9 @@ class ChatProvider extends ChangeNotifier {
         // Jitter each fetch so issuances don't cluster around send time.
         await Future.delayed(Duration(milliseconds: 500 + rng.nextInt(2500)));
         try {
-          final token = await _fetchSealedPostToken(convID, privateKey);
+          final fetched = await _fetchSealedPostToken(convID, privateKey);
           (_postTokenPool[convID] ??= []).add(
-            _PooledPostToken(token, DateTime.now()),
+            _PooledPostToken(fetched.token, DateTime.now(), amf: fetched.amf),
           );
         } catch (_) {
           break; // back off on error; the next send retries
@@ -3070,6 +3171,73 @@ class ChatProvider extends ChangeNotifier {
   // per conversation; in-memory (a replay across restarts re-verifies, but the
   // durable plaintext cache already short-circuits known message ids).
   final Map<String, Map<String, String>> _seenProofSignatures = {};
+
+  // CSAM-report blobs for messages whose AMF (Hecate) franking verified as
+  // VALID this session, keyed by message id. Re-populated whenever a message is
+  // decrypted (live or on reload). The report dialog reads this to decide
+  // whether a message is provably reportable and to assemble the report.
+  final Map<String, Map<String, dynamic>> _frankingReports = {};
+  late final AmfKeyService _amfKeys = AmfKeyService(_api, _storage);
+
+  /// The CSAM report blob for [messageId] if its franking verified as valid
+  /// (fresh + structurally sound); null when it isn't provably reportable.
+  Map<String, dynamic>? frankingReportFor(String messageId) =>
+      _frankingReports[messageId];
+
+  /// AMF (Hecate) Verify on receipt: if this message carries a server stamp and
+  /// the embedded franking verifies as VALID, stash the assembled report blob so
+  /// the message becomes CSAM-reportable. Best-effort and display-neutral — a
+  /// stale/invalid/missing franking simply leaves the message non-reportable;
+  /// authenticity is already enforced by the sender-proof gate.
+  Future<void> _recordFrankingIfValid(Message msg, String raw) async {
+    final comB64 = msg.frankCom;
+    final t2 = msg.frankT2;
+    final sig3B64 = msg.frankSig3;
+    if (comB64 == null ||
+        comB64.isEmpty ||
+        t2 == null ||
+        sig3B64 == null ||
+        sig3B64.isEmpty) {
+      return;
+    }
+    try {
+      final env = jsonDecode(raw);
+      if (env is! Map) return;
+      final franking = env['franking'];
+      final type = env['type'];
+      final payload = env['payload'];
+      if (franking is! Map || type is! String || payload is! String) return;
+      final f = AmfFranking.fromPayloadJson(
+        Map<String, dynamic>.from(franking),
+      );
+      if (f == null) return;
+      final fm = AmfFrankedMessage(
+        conversationId: msg.conversationId,
+        messageType: type,
+        payload: payload,
+        x1: f.x1,
+        x2: f.x2,
+        r: f.r,
+        pkE: f.pkE,
+        t1: f.t1,
+        sig1: f.sig1,
+        sig2: f.sig2,
+        com: base64Decode(comB64),
+        t2: t2,
+        sig3: base64Decode(sig3B64),
+      );
+      final keys = await _amfKeys.pinnedKeys();
+      if (await AmfService.verifyDetailed(fm, keys) ==
+          AmfVerifyOutcome.valid) {
+        _frankingReports[msg.id] = fm.toReportJson();
+      } else {
+        _frankingReports.remove(msg.id);
+      }
+    } catch (_) {
+      // Any failure (key fetch, parse) leaves the message non-reportable; it
+      // never affects whether the message is displayed.
+    }
+  }
 
   Future<String?> _verifiedPgpSenderId(
     String raw,
@@ -3713,13 +3881,13 @@ class ChatProvider extends ChangeNotifier {
   }
 
   void sendTyping(String convID) {
-    if (_settings.strictPrivacyMode) return;
+    if (!_settings.shareTypingForConversation(convID)) return;
     _ws.sendTyping(convID);
   }
 
   Future<void> sendReadReceipt(String convID, String messageID) async {
     await _settings.clearUnreadMention(convID);
-    if (_settings.strictPrivacyMode) return;
+    if (!_settings.shareReadReceiptsForConversation(convID)) return;
     final userID = _selfId ?? await _storage.getUserID() ?? '';
     if (userID.isEmpty) return;
     _rememberReadReceipt(
@@ -4809,6 +4977,7 @@ class ChatProvider extends ChangeNotifier {
         _applyArtifactState(msg);
         _hydrateMessageSender(msg);
         _indexMessage(msg);
+        unawaited(_recordFrankingIfValid(msg, raw));
       } else {
         debugPrint(
           'ChatProvider: decrypt FAILED (MLS returned empty — sender '
@@ -4849,6 +5018,7 @@ class ChatProvider extends ChangeNotifier {
         _applyArtifactState(msg);
         _hydrateMessageSender(msg);
         _indexMessage(msg);
+        unawaited(_recordFrankingIfValid(msg, raw));
       }
       // Empty-string result without an exception can be a transient PGP
       // service state issue (e.g. library internal buffer race on concurrent
