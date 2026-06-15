@@ -188,6 +188,23 @@ class SettingsProvider extends ChangeNotifier {
   static const _kConversationNotificationPreferences =
       conversationNotificationPreferencesPreferenceKey;
   static const _kNotificationCurrentUser = 'notification_current_user_id';
+  static const _kRecentReactions = 'recent_reactions';
+
+  /// Fallback reactions used to pad the quick-reaction bar before the user has
+  /// reacted enough to fill it from history.
+  static const List<String> defaultQuickReactions = [
+    '👍',
+    '❤️',
+    '😂',
+    '🔥',
+    '🎉',
+    '👀',
+    '🙏',
+    '😮',
+  ];
+
+  /// How many recent reaction keys to retain.
+  static const int _maxRecentReactions = 40;
 
   /// OpenChat brand blue — the historical default seed.
   static const int defaultSeed = 0xFF3D5AFE;
@@ -219,6 +236,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _autoDownloadMobile = true;
   int _autoDownloadMaxMb = 0; // 0 = no size cap
   bool _reduceTransparency = false;
+  List<String> _recentReactions = const [];
   SmartInboxFilter _smartInboxFilter = SmartInboxFilter.all;
   double _desktopSidebarWidth = defaultDesktopSidebarWidth;
   final Map<String, MessageDraft> _messageDrafts = {};
@@ -243,6 +261,37 @@ class SettingsProvider extends ChangeNotifier {
   bool get botsOwnTab => _botsOwnTab;
   SmartInboxFilter get smartInboxFilter => _smartInboxFilter;
   bool get isLoaded => _loaded;
+
+  /// Recently used reaction keys, most-recent first (unicode or `custom:<id>`).
+  List<String> get recentReactions => List.unmodifiable(_recentReactions);
+
+  /// The keys to show in the quick-reaction bar: recents first, padded with
+  /// [defaultQuickReactions] up to [count].
+  List<String> quickReactions({int count = 6}) {
+    final out = <String>[];
+    for (final key in _recentReactions) {
+      if (out.length >= count) break;
+      if (!out.contains(key)) out.add(key);
+    }
+    for (final key in defaultQuickReactions) {
+      if (out.length >= count) break;
+      if (!out.contains(key)) out.add(key);
+    }
+    return out;
+  }
+
+  /// Records a reaction key as recently used, moving it to the front.
+  Future<void> pushRecentReaction(String key) async {
+    if (key.isEmpty) return;
+    final next = [key, ..._recentReactions.where((k) => k != key)];
+    if (next.length > _maxRecentReactions) {
+      next.removeRange(_maxRecentReactions, next.length);
+    }
+    _recentReactions = next;
+    notifyListeners();
+    await _prefs?.setStringList(_kRecentReactions, _recentReactions);
+  }
+
   Map<String, MessageDraft> get messageDrafts =>
       Map.unmodifiable(_messageDrafts);
   Map<String, List<ChannelPinnedMessage>> get pinnedChannelMessages =>
@@ -363,6 +412,7 @@ class SettingsProvider extends ChangeNotifier {
     _autoDownloadMobile = _prefs!.getBool(_kAutoDlMobile) ?? true;
     _autoDownloadMaxMb = _prefs!.getInt(_kAutoDlMaxMb) ?? 0;
     _reduceTransparency = _prefs!.getBool(_kReduceTransparency) ?? false;
+    _recentReactions = _prefs!.getStringList(_kRecentReactions) ?? const [];
     _smartInboxFilter = smartInboxFilterFromName(
       _prefs!.getString(_kSmartInboxFilter),
     );

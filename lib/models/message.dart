@@ -366,8 +366,9 @@ class MessageContact {
     if (fingerprint != null) 'fingerprint': fingerprint,
   };
 
-  String get displayLabel =>
-      (displayName != null && displayName!.isNotEmpty) ? displayName! : username;
+  String get displayLabel => (displayName != null && displayName!.isNotEmpty)
+      ? displayName!
+      : username;
 }
 
 class MessageContent {
@@ -902,7 +903,8 @@ class Message {
   }
 
   /// True for any system control message that must not render in the chat list.
-  bool get isHiddenControl => smpControl != null || recoveryShareControl != null;
+  bool get isHiddenControl =>
+      smpControl != null || recoveryShareControl != null;
 
   /// Parsed server-rolled dice/randomiser, or null. The value is set by the
   /// server (the client only animates to it), so it's read from the plaintext
@@ -1297,7 +1299,12 @@ class MessageTipTotal {
   }
 }
 
+/// Prefix marking a custom-emoji reaction key (`custom:<uuid>`). Plain unicode
+/// reactions carry no prefix. Mirrors the backend's `reactionCustomPrefix`.
+const String customReactionPrefix = 'custom:';
+
 class MessageReactionSummary {
+  /// Either a unicode emoji (e.g. `👍`) or a custom-emoji key (`custom:<uuid>`).
   final String emoji;
   final int count;
   final bool reactedByMe;
@@ -1307,6 +1314,13 @@ class MessageReactionSummary {
     required this.count,
     this.reactedByMe = false,
   });
+
+  /// True when this reaction is an in-app custom emoji rather than unicode.
+  bool get isCustomEmoji => emoji.startsWith(customReactionPrefix);
+
+  /// The custom emoji's id when [isCustomEmoji], else null.
+  String? get customEmojiId =>
+      isCustomEmoji ? emoji.substring(customReactionPrefix.length) : null;
 
   factory MessageReactionSummary.fromJson(Map<String, dynamic> json) =>
       MessageReactionSummary(

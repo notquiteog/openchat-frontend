@@ -149,7 +149,6 @@ class SelfStateEvent {
 
 typedef UploadProgressCallback = void Function(int sentBytes, int totalBytes);
 
-
 class ApiService {
   final SecureStorageService _storage;
   final http.Client _httpClient;
@@ -689,10 +688,10 @@ class ApiService {
     // Contribute fresh client-side entropy so neither the server (which committed
     // to its seed before this bet) nor any player can grind the provably-fair
     // outcome: it's HMAC(server_seed, combined client seeds).
-    final resp = await _post(
-      '${_gameBase(convID, isChannel)}/$roundID/bets',
-      {'selection': selection, 'client_seed': _randomClientSeed()},
-    );
+    final resp = await _post('${_gameBase(convID, isChannel)}/$roundID/bets', {
+      'selection': selection,
+      'client_seed': _randomClientSeed(),
+    });
     return resp['data'] as Map<String, dynamic>;
   }
 
@@ -1570,8 +1569,9 @@ class ApiService {
       'is_anonymous': isAnonymous,
       // Quiz mode is single-answer with no revoting (reveal after voting);
       // meeting mode is multi-answer (pick all times that work).
-      'allows_multiple_answers':
-          meeting ? true : (quiz ? false : allowsMultipleAnswers),
+      'allows_multiple_answers': meeting
+          ? true
+          : (quiz ? false : allowsMultipleAnswers),
       'allows_revoting': quiz ? false : allowsRevoting,
       if (quiz) 'type': 'quiz' else if (meeting) 'type': 'meeting',
       if (quiz && correctOptionId != null)
@@ -1681,8 +1681,7 @@ class ApiService {
   /// avatar_url?, emoji}.
   Future<List<Map<String, dynamic>>> getMessageReactors(String msgID) async {
     final resp = await _get('/api/v1/messages/$msgID/reactions');
-    return ((resp['data'] as List?) ?? const [])
-        .cast<Map<String, dynamic>>();
+    return ((resp['data'] as List?) ?? const []).cast<Map<String, dynamic>>();
   }
 
   Future<void> sendBotCallback({
@@ -2494,8 +2493,9 @@ class ApiService {
   /// Active SFU group call in a conversation (for the join banner). Returns
   /// {active, mode, participant_ids}.
   Future<Map<String, dynamic>> getActiveCall(String conversationId) async {
-    final resp =
-        await _get('/api/v1/conversations/$conversationId/active-call');
+    final resp = await _get(
+      '/api/v1/conversations/$conversationId/active-call',
+    );
     return resp['data'] as Map<String, dynamic>;
   }
 
@@ -2508,8 +2508,7 @@ class ApiService {
     if (cached != null) return cached;
     final resp = await _get('/api/v1/config', authenticated: false);
     final data = resp['data'];
-    final enabled =
-        data is Map<String, dynamic> && data['web_mirror'] == true;
+    final enabled = data is Map<String, dynamic> && data['web_mirror'] == true;
     _webMirrorEnabled = enabled;
     return enabled;
   }
@@ -2543,7 +2542,6 @@ class ApiService {
     return servers;
   }
 
-
   // ---- Stickers ----
 
   Future<List<dynamic>> getStickerPacks() async {
@@ -2576,13 +2574,17 @@ class ApiService {
 
   /// Search publicly discoverable sticker packs.
   Future<List<dynamic>> discoverStickerPacks(String query) async {
-    final resp = await _get('/api/v1/discover/stickers?q=${Uri.encodeQueryComponent(query)}');
+    final resp = await _get(
+      '/api/v1/discover/stickers?q=${Uri.encodeQueryComponent(query)}',
+    );
     return resp['data'] as List? ?? const [];
   }
 
   /// Search publicly discoverable custom-emoji packs.
   Future<List<dynamic>> discoverCustomEmojiPacks(String query) async {
-    final resp = await _get('/api/v1/discover/custom-emoji?q=${Uri.encodeQueryComponent(query)}');
+    final resp = await _get(
+      '/api/v1/discover/custom-emoji?q=${Uri.encodeQueryComponent(query)}',
+    );
     return resp['data'] as List? ?? const [];
   }
 
@@ -3150,7 +3152,10 @@ class ApiService {
       if (entry is Map) {
         final route = entry['route']?.toString();
         final convID = entry['conversation_id']?.toString();
-        if (route != null && route.isNotEmpty && convID != null && convID.isNotEmpty) {
+        if (route != null &&
+            route.isNotEmpty &&
+            convID != null &&
+            convID.isNotEmpty) {
           map[route] = convID;
         }
       }
@@ -3169,11 +3174,7 @@ class ApiService {
     required Map<String, String> fields,
   }) async {
     if (fileBytes.length > kMaxImageUploadBytes) {
-      throw ApiException(
-        413,
-        'FILE_TOO_LARGE',
-        'Image must be under 50 MB',
-      );
+      throw ApiException(413, 'FILE_TOO_LARGE', 'Image must be under 50 MB');
     }
     Future<http.Response> send() async {
       final token = await _storage.getAccessToken();

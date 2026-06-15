@@ -55,6 +55,8 @@ import '../../widgets/desktop.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/location_map_preview.dart';
 import '../../widgets/message_action_sheet.dart';
+import '../../widgets/reaction_emoji_picker.dart';
+import '../../widgets/reaction_menu.dart';
 import '../../widgets/mention_autocomplete_panel.dart';
 import '../../widgets/message_bubble.dart';
 import '../../widgets/scheduled_messages_sheet.dart';
@@ -1287,10 +1289,20 @@ class _ChatScreenState extends State<ChatScreen> {
       title: title,
       actions: [
         for (final (label, value) in actions)
-          GlassActionSheetAction(label: label, onPressed: () => picked = value),
+          GlassActionSheetAction(
+            label: label,
+            icon: Icon(_attachmentVariantIcon(value)),
+            onPressed: () => picked = value,
+          ),
       ],
     );
     return picked;
+  }
+
+  IconData _attachmentVariantIcon(String value) {
+    if (value.startsWith('view_once_')) return Icons.timer_outlined;
+    if (value.startsWith('spoiler_')) return Icons.visibility_off_outlined;
+    return Icons.attach_file_rounded;
   }
 
   /// Unified photo send: one multi-select picker; a single selection sends
@@ -2729,8 +2741,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                                   ? null
                                                   : (
                                                       details,
-                                                    ) => _showReactionMenu(
-                                                      context,
+                                                    ) => _showReactionBar(
                                                       msg,
                                                       details.globalPosition,
                                                     ),
@@ -2752,11 +2763,12 @@ class _ChatScreenState extends State<ChatScreen> {
                                                   context
                                                       .read<ChatProvider>()
                                                       .stopLiveLocation(msg.id),
-                                              onLongPress: () =>
+                                              onLongPress: (pos) =>
                                                   _showMessageMenu(
                                                     context,
                                                     msg,
                                                     isMe,
+                                                    anchor: pos,
                                                   ),
                                               onSecondaryTapUp: (details) =>
                                                   _showMessageMenu(
@@ -3646,158 +3658,26 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  static const List<String> _fullReactionEmojis = [
-    '👍',
-    '👎',
-    '❤️',
-    '🔥',
-    '🎉',
-    '👀',
-    '😂',
-    '🤣',
-    '😊',
-    '😍',
-    '😮',
-    '😢',
-    '😡',
-    '🙏',
-    '👏',
-    '🙌',
-    '💯',
-    '✅',
-    '❌',
-    '⭐',
-    '🥳',
-    '🤔',
-    '😴',
-    '🤯',
-    '😎',
-    '🥰',
-    '😅',
-    '😭',
-    '🤩',
-    '😇',
-    '🤝',
-    '💪',
-    '🫡',
-    '🤌',
-    '👌',
-    '✌️',
-    '🤞',
-    '🫶',
-    '💔',
-    '💕',
-    '🚀',
-    '⚡',
-    '🌟',
-    '🎯',
-    '🏆',
-    '🎁',
-    '☕',
-    '🍻',
-    '🍕',
-    '🤖',
-  ];
-
-  Future<void> _showFullReactionPicker(Message msg) async {
-    final picked = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (sheetCtx) => GlassBottomSheetFrame(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const GlassSheetGrabber(),
-            const Padding(
-              padding: EdgeInsets.all(10),
-              child: Text(
-                'React',
-                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-              ),
-            ),
-            ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: MediaQuery.sizeOf(sheetCtx).height * 0.4,
-              ),
-              child: GridView.count(
-                crossAxisCount: 8,
-                shrinkWrap: true,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                children: [
-                  for (final emoji in _fullReactionEmojis)
-                    GestureDetector(
-                      onTap: () => Navigator.pop(sheetCtx, emoji),
-                      child: Center(
-                        child: Text(
-                          emoji,
-                          style: const TextStyle(fontSize: 26),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-    if (picked != null && mounted) _toggleReaction(msg, picked);
-  }
-
-  void _showReactionMenu(BuildContext context, Message msg, Offset anchor) {
+  /// Single tap on a message → the reaction bar (6 recents + an expand button
+  /// for the full system/custom-emoji picker). Long-press opens the action menu.
+  Future<void> _showReactionBar(Message msg, Offset anchor) async {
     if (msg.type == MessageType.system) return;
-    const emojis = ['👍', '❤️', '😂', '🔥', '🎉', '👀'];
-    showDialog<void>(
+    final res = await showMessageReactionBar(
       context: context,
-      barrierColor: Colors.transparent,
-      builder: (ctx) {
-        final size = MediaQuery.sizeOf(ctx);
-        final viewPadding = MediaQuery.viewPaddingOf(ctx);
-        final popupWidth = math.min(292.0, math.max(0.0, size.width - 16));
-        const popupHeight = 52.0;
-        final maxLeft = math.max(8.0, size.width - popupWidth - 8);
-        final maxTop = math.max(
-          viewPadding.top + 8,
-          size.height - viewPadding.bottom - popupHeight - 8,
-        );
-        final left = (anchor.dx - popupWidth / 2)
-            .clamp(8.0, maxLeft)
-            .toDouble();
-        final top = (anchor.dy - popupHeight - 10)
-            .clamp(viewPadding.top + 8, maxTop)
-            .toDouble();
-
-        return DefaultTextStyle(
-          style: (Theme.of(ctx).textTheme.bodyMedium ?? const TextStyle())
-              .copyWith(decoration: TextDecoration.none, letterSpacing: 0),
-          child: IconTheme(
-            data: IconThemeData(color: Theme.of(ctx).colorScheme.onSurface),
-            child: Stack(
-              children: [
-                Positioned(
-                  left: left,
-                  top: top,
-                  width: popupWidth,
-                  child: _ReactionPopup(
-                    emojis: emojis,
-                    onSelected: (emoji) {
-                      Navigator.pop(ctx);
-                      if (emoji == '+') {
-                        _showFullReactionPicker(msg);
-                      } else {
-                        _toggleReaction(msg, emoji);
-                      }
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+      anchor: anchor,
+      recentReactionKeys: _settings.quickReactions(),
     );
+    if (res == null || !mounted) return;
+    final String key;
+    if (res is ReactionExpand) {
+      final picked = await showReactionEmojiPicker(context);
+      if (picked == null || !mounted) return;
+      key = picked;
+    } else {
+      key = (res as ReactionPicked).key;
+    }
+    _settings.pushRecentReaction(key);
+    _toggleReaction(msg, key);
   }
 
   Future<void> _showMessageMenu(
@@ -3816,134 +3696,135 @@ class _ChatScreenState extends State<ChatScreen> {
         context.read<ChatProvider>().isLiveLocationActive(msg.id) &&
         msg.location != null &&
         msg.location!.isLive;
-    final selected = await showMessageActionSheet<String>(
-      context: context,
-      message: msg,
-      anchor: anchor,
-      actions: [
-        if (!isSystem)
-          const MessageActionSheetItem(
-            value: 'reply',
-            icon: Icons.reply_rounded,
-            label: 'Reply',
-          ),
-        if (!isSystem &&
-            !isMe &&
-            msg.sender != null &&
-            (conv.isGroup || conv.isChannel))
-          const MessageActionSheetItem(
-            value: 'reply_private',
-            icon: Icons.lock_outline_rounded,
-            label: 'Reply privately',
-          ),
-        if (msg.effectiveReplyTo != null)
-          const MessageActionSheetItem(
-            value: 'jump_reply',
-            icon: Icons.subdirectory_arrow_left_rounded,
-            label: 'Jump to replied message',
-          ),
-        if (hasCopyableText)
-          const MessageActionSheetItem(
-            value: 'copy_text',
-            icon: Icons.copy_rounded,
-            label: 'Copy text',
-          ),
-        if (msg.type == MessageType.text && hasCopyableText) ...[
-          const MessageActionSheetItem(
-            value: 'forward',
-            icon: Icons.forward_rounded,
-            label: 'Forward',
-          ),
-          const MessageActionSheetItem(
-            value: 'forward_anon',
-            icon: Icons.fast_forward_rounded,
-            label: 'Forward anonymously',
-          ),
-        ],
-        if (hasCopyableText || canDownloadMessageAttachment(msg))
-          const MessageActionSheetItem(
-            value: 'share',
-            icon: Icons.share_rounded,
-            label: 'Share',
-          ),
+    final actions = <MessageActionSheetItem<String>>[
+      if (!isSystem)
         const MessageActionSheetItem(
-          value: 'copy_link',
-          icon: Icons.link_rounded,
-          label: 'Copy message link',
+          value: 'reply',
+          icon: Icons.reply_rounded,
+          label: 'Reply',
         ),
-        if (msg.reactions.isNotEmpty)
-          const MessageActionSheetItem(
-            value: 'reactions',
-            icon: Icons.emoji_emotions_outlined,
-            label: 'Who reacted',
-          ),
-        if (!isSystem)
-          const MessageActionSheetItem(
-            value: 'remind',
-            icon: Icons.alarm_add_outlined,
-            label: 'Remind me',
-          ),
-        // Channels route unattributed posts' tips to the owner, so any
-        // non-self post qualifies there; elsewhere we need a visible sender.
-        if (!isMe && !isSystem && (conv.isChannel || msg.sender != null))
-          const MessageActionSheetItem(
-            value: 'tip',
-            icon: Icons.bolt_rounded,
-            label: 'Tip',
-          ),
-        if (hasCopyableText && TranslationService.isSupported)
-          MessageActionSheetItem(
-            value: 'translate',
-            icon: Icons.translate_rounded,
-            label: context.read<ChatProvider>().translationFor(msg.id) == null
-                ? 'Translate'
-                : 'Hide translation',
-          ),
-        if (canDownloadMessageAttachment(msg))
-          MessageActionSheetItem(
-            value: 'download',
-            icon: Icons.download_rounded,
-            label: 'Download attachment',
-            subtitle: suggestedAttachmentFileName(msg),
-          ),
-        if (!isMe && msg.sender != null)
-          MessageActionSheetItem(
-            value: 'sender',
-            icon: Icons.person_outline_rounded,
-            label: 'View sender',
-            subtitle: '@${msg.sender!.username}',
-          ),
-        if (isMe && msg.type == MessageType.text && msg.isDecrypted)
-          const MessageActionSheetItem(
-            value: 'edit',
-            icon: Icons.edit_outlined,
-            label: 'Edit',
-          ),
-        if (isLiveLocation)
-          const MessageActionSheetItem(
-            value: 'stop_location',
-            icon: Icons.location_off_rounded,
-            label: 'Stop location sharing',
-            color: Colors.orange,
-            dividerBefore: true,
-          ),
-        if (!isMe && !isSystem && msg.sender != null)
-          const MessageActionSheetItem(
-            value: 'report',
-            icon: Icons.flag_outlined,
-            label: 'Report',
-            color: Colors.orange,
-            dividerBefore: true,
-          ),
-        if (canDelete)
-          const MessageActionSheetItem(
-            value: 'delete',
-            icon: Icons.delete_outline_rounded,
-            label: 'Delete',
-            color: Colors.red,
-            dividerBefore: true,
-          ),
+      if (!isSystem &&
+          !isMe &&
+          msg.sender != null &&
+          (conv.isGroup || conv.isChannel))
+        const MessageActionSheetItem(
+          value: 'reply_private',
+          icon: Icons.lock_outline_rounded,
+          label: 'Reply privately',
+        ),
+      if (msg.effectiveReplyTo != null)
+        const MessageActionSheetItem(
+          value: 'jump_reply',
+          icon: Icons.subdirectory_arrow_left_rounded,
+          label: 'Jump to replied message',
+        ),
+      if (hasCopyableText)
+        const MessageActionSheetItem(
+          value: 'copy_text',
+          icon: Icons.copy_rounded,
+          label: 'Copy text',
+        ),
+      if (msg.type == MessageType.text && hasCopyableText) ...[
+        const MessageActionSheetItem(
+          value: 'forward',
+          icon: Icons.forward_rounded,
+          label: 'Forward',
+        ),
+        const MessageActionSheetItem(
+          value: 'forward_anon',
+          icon: Icons.fast_forward_rounded,
+          label: 'Forward anonymously',
+        ),
       ],
+      if (hasCopyableText || canDownloadMessageAttachment(msg))
+        const MessageActionSheetItem(
+          value: 'share',
+          icon: Icons.share_rounded,
+          label: 'Share',
+        ),
+      const MessageActionSheetItem(
+        value: 'copy_link',
+        icon: Icons.link_rounded,
+        label: 'Copy message link',
+      ),
+      if (msg.reactions.isNotEmpty)
+        const MessageActionSheetItem(
+          value: 'reactions',
+          icon: Icons.emoji_emotions_outlined,
+          label: 'Who reacted',
+        ),
+      if (!isSystem)
+        const MessageActionSheetItem(
+          value: 'remind',
+          icon: Icons.alarm_add_outlined,
+          label: 'Remind me',
+        ),
+      // Channels route unattributed posts' tips to the owner, so any
+      // non-self post qualifies there; elsewhere we need a visible sender.
+      if (!isMe && !isSystem && (conv.isChannel || msg.sender != null))
+        const MessageActionSheetItem(
+          value: 'tip',
+          icon: Icons.bolt_rounded,
+          label: 'Tip',
+        ),
+      if (hasCopyableText && TranslationService.isSupported)
+        MessageActionSheetItem(
+          value: 'translate',
+          icon: Icons.translate_rounded,
+          label: context.read<ChatProvider>().translationFor(msg.id) == null
+              ? 'Translate'
+              : 'Hide translation',
+        ),
+      if (canDownloadMessageAttachment(msg))
+        MessageActionSheetItem(
+          value: 'download',
+          icon: Icons.download_rounded,
+          label: 'Download attachment',
+          subtitle: suggestedAttachmentFileName(msg),
+        ),
+      if (!isMe && msg.sender != null)
+        MessageActionSheetItem(
+          value: 'sender',
+          icon: Icons.person_outline_rounded,
+          label: 'View sender',
+          subtitle: '@${msg.sender!.username}',
+        ),
+      if (isMe && msg.type == MessageType.text && msg.isDecrypted)
+        const MessageActionSheetItem(
+          value: 'edit',
+          icon: Icons.edit_outlined,
+          label: 'Edit',
+        ),
+      if (isLiveLocation)
+        const MessageActionSheetItem(
+          value: 'stop_location',
+          icon: Icons.location_off_rounded,
+          label: 'Stop location sharing',
+          color: Colors.orange,
+          dividerBefore: true,
+        ),
+      if (!isMe && !isSystem && msg.sender != null)
+        const MessageActionSheetItem(
+          value: 'report',
+          icon: Icons.flag_outlined,
+          label: 'Report',
+          color: Colors.orange,
+          dividerBefore: true,
+        ),
+      if (canDelete)
+        const MessageActionSheetItem(
+          value: 'delete',
+          icon: Icons.delete_outline_rounded,
+          label: 'Delete',
+          color: Colors.red,
+          dividerBefore: true,
+        ),
+    ];
+    final media = MediaQuery.sizeOf(context);
+    final selected = await showMessageContextMenu<String>(
+      context: context,
+      anchor: anchor ?? Offset(media.width / 2, media.height / 2),
+      actions: actions,
     );
     if (selected == null || !mounted) return;
 
@@ -5531,50 +5412,6 @@ class _AnimatedMessageEntry extends StatelessWidget {
         ),
       ),
       child: child,
-    );
-  }
-}
-
-class _ReactionPopup extends StatelessWidget {
-  final List<String> emojis;
-  final ValueChanged<String> onSelected;
-
-  const _ReactionPopup({required this.emojis, required this.onSelected});
-
-  @override
-  Widget build(BuildContext context) {
-    return GlassContainer(
-      shape: LiquidRoundedSuperellipse(borderRadius: 999),
-      allowElevation: true,
-      glowIntensity: 0.08,
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          for (final emoji in emojis)
-            GestureDetector(
-              onTap: () => onSelected(emoji),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                child: Text(emoji, style: const TextStyle(fontSize: 26)),
-              ),
-            ),
-          // "+" opens the full emoji picker (any emoji, not just the quick set).
-          GestureDetector(
-            onTap: () => onSelected('+'),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-              child: Icon(
-                Icons.add_circle_outline_rounded,
-                size: 26,
-                color: Theme.of(
-                  context,
-                ).colorScheme.onSurface.withValues(alpha: 0.7),
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

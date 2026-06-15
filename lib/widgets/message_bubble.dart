@@ -33,6 +33,7 @@ import '../services/transcription_service.dart';
 import '../utils/link_preview_utils.dart';
 import '../utils/mention_utils.dart';
 import '../utils/skill_game.dart';
+import 'custom_emoji_image.dart';
 import 'die_3d.dart';
 import 'game_play_sheet.dart';
 import 'glass.dart';
@@ -45,7 +46,10 @@ class MessageBubble extends StatelessWidget {
   final bool showAvatar;
   final VoidCallback? onTap;
   final GestureTapUpCallback? onTapUp;
-  final VoidCallback? onLongPress;
+
+  /// Long-press carries the global press position so the caller can morph the
+  /// reaction/context menu out of the touch point.
+  final void Function(Offset globalPosition)? onLongPress;
 
   /// Desktop right-click: the pointer-native way to open the message menu.
   final GestureTapUpCallback? onSecondaryTapUp;
@@ -117,11 +121,13 @@ class MessageBubble extends StatelessWidget {
     if (callEvent != null) {
       return GestureDetector(
         onSecondaryTapUp: onSecondaryTapUp,
+        onLongPressStart: onLongPress == null
+            ? null
+            : (d) => onLongPress!(d.globalPosition),
         child: _CallEventChip(
           event: callEvent,
           time: message.createdAt,
           onTap: onTap,
-          onLongPress: onLongPress,
         ),
       );
     }
@@ -199,7 +205,9 @@ class MessageBubble extends StatelessWidget {
                 GestureDetector(
                   onTap: onTap,
                   onTapUp: onTapUp,
-                  onLongPress: onLongPress,
+                  onLongPressStart: onLongPress == null
+                      ? null
+                      : (d) => onLongPress!(d.globalPosition),
                   onSecondaryTapUp: onSecondaryTapUp,
                   child: _buildBubble(context),
                 ),
@@ -537,14 +545,8 @@ class _CallEventChip extends StatelessWidget {
   final CallEventInfo event;
   final DateTime time;
   final VoidCallback? onTap;
-  final VoidCallback? onLongPress;
 
-  const _CallEventChip({
-    required this.event,
-    required this.time,
-    this.onTap,
-    this.onLongPress,
-  });
+  const _CallEventChip({required this.event, required this.time, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -558,7 +560,6 @@ class _CallEventChip extends StatelessWidget {
     return Center(
       child: GestureDetector(
         onTap: onTap,
-        onLongPress: onLongPress,
         child: Container(
           margin: const EdgeInsets.symmetric(vertical: 6),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -735,7 +736,8 @@ class _DiceBubbleState extends State<_DiceBubble>
     final hop = _bounceHeight(t);
     final lift = (hop / 26.0).clamp(0.0, 1.0);
     // Sideways skid from the throw, dying out as the die settles.
-    final drift = 11.0 *
+    final drift =
+        11.0 *
         (1 - Curves.easeOutCubic.transform(t)) *
         (((seed >> 9) & 1) == 0 ? 1.0 : -1.0);
     return SizedBox(
@@ -760,9 +762,7 @@ class _DiceBubbleState extends State<_DiceBubble>
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withValues(
-                        alpha: 0.30 - 0.19 * lift,
-                      ),
+                      color: Colors.black.withValues(alpha: 0.30 - 0.19 * lift),
                       blurRadius: 5 + 7 * lift,
                     ),
                   ],
@@ -2989,14 +2989,37 @@ class _ReactionChips extends StatelessWidget {
                         : textColor.withValues(alpha: 0.16),
                   ),
                 ),
-                child: Text(
-                  '${reaction.emoji} ${reaction.count}',
-                  style: TextStyle(
-                    color: color,
-                    fontSize: 12,
-                    fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
-                  ),
-                ),
+                child: reaction.isCustomEmoji
+                    ? Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CustomEmojiImage(
+                            customEmojiId: reaction.customEmojiId!,
+                            size: 15,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${reaction.count}',
+                            style: TextStyle(
+                              color: color,
+                              fontSize: 12,
+                              fontWeight: selected
+                                  ? FontWeight.w800
+                                  : FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      )
+                    : Text(
+                        '${reaction.emoji} ${reaction.count}',
+                        style: TextStyle(
+                          color: color,
+                          fontSize: 12,
+                          fontWeight: selected
+                              ? FontWeight.w800
+                              : FontWeight.w500,
+                        ),
+                      ),
               );
               if (onReactionTap == null) return chip;
               return GestureDetector(

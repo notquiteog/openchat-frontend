@@ -43,6 +43,8 @@ import '../../widgets/day_separator.dart';
 import '../../widgets/desktop.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/message_action_sheet.dart';
+import '../../widgets/reaction_emoji_picker.dart';
+import '../../widgets/reaction_menu.dart';
 import '../../widgets/mention_autocomplete_panel.dart';
 import '../../widgets/message_bubble.dart';
 import '../../widgets/scheduled_messages_sheet.dart';
@@ -2891,34 +2893,26 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     );
   }
 
-  void _showReactionMenu(Message msg) {
+  /// Single tap on a post → the reaction bar (recents + expand to the full
+  /// picker). Long-press opens the action menu.
+  Future<void> _showReactionBar(Message msg, Offset anchor) async {
     if (msg.type == MessageType.system) return;
-    showModalBottomSheet<void>(
+    final res = await showMessageReactionBar(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => GlassBottomSheetFrame(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-        child: Wrap(
-          alignment: WrapAlignment.center,
-          spacing: 10,
-          children: [
-            for (final emoji in const ['👍', '❤️', '😂', '🔥', '🎉', '👀'])
-              InkWell(
-                borderRadius: BorderRadius.circular(22),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _toggleReaction(msg, emoji);
-                },
-                child: Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Text(emoji, style: const TextStyle(fontSize: 26)),
-                ),
-              ),
-          ],
-        ),
-      ),
+      anchor: anchor,
+      recentReactionKeys: _settings.quickReactions(),
     );
+    if (res == null || !mounted) return;
+    final String key;
+    if (res is ReactionExpand) {
+      final picked = await showReactionEmojiPicker(context);
+      if (picked == null || !mounted) return;
+      key = picked;
+    } else {
+      key = (res as ReactionPicked).key;
+    }
+    _settings.pushRecentReaction(key);
+    _toggleReaction(msg, key);
   }
 
   Future<void> _showPostMenu(Message msg, bool isMe, {Offset? anchor}) async {
@@ -2929,65 +2923,66 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final isPinned = settings.isChannelMessagePinned(channel.id, msg.id);
     final hasCopyableText =
         !isSystem && msg.isDecrypted && (msg.decryptedContent ?? '').isNotEmpty;
-    final selected = await showMessageActionSheet<String>(
-      context: context,
-      message: msg,
-      anchor: anchor,
-      actions: [
-        if (canPin)
-          MessageActionSheetItem(
-            value: 'pin',
-            icon: isPinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
-            label: isPinned ? 'Unpin message' : 'Pin message',
-          ),
-        if (hasCopyableText)
-          const MessageActionSheetItem(
-            value: 'copy_text',
-            icon: Icons.copy_rounded,
-            label: 'Copy text',
-          ),
-        const MessageActionSheetItem(
-          value: 'copy_link',
-          icon: Icons.link_rounded,
-          label: 'Copy message link',
+    final actions = <MessageActionSheetItem<String>>[
+      if (canPin)
+        MessageActionSheetItem(
+          value: 'pin',
+          icon: isPinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
+          label: isPinned ? 'Unpin message' : 'Pin message',
         ),
-        if (!isSystem)
-          const MessageActionSheetItem(
-            value: 'remind',
-            icon: Icons.alarm_add_outlined,
-            label: 'Remind me',
-          ),
-        if (canDownloadMessageAttachment(msg))
-          MessageActionSheetItem(
-            value: 'download',
-            icon: Icons.download_rounded,
-            label: 'Download attachment',
-            subtitle: suggestedAttachmentFileName(msg),
-          ),
-        if (!isMe && msg.sender != null)
-          MessageActionSheetItem(
-            value: 'sender',
-            icon: Icons.person_outline_rounded,
-            label: 'Sender actions',
-            subtitle: '@${msg.sender!.username}',
-          ),
-        if (!isMe && !isSystem && msg.sender != null)
-          const MessageActionSheetItem(
-            value: 'report',
-            icon: Icons.flag_outlined,
-            label: 'Report',
-            color: Colors.orange,
-            dividerBefore: true,
-          ),
-        if (canDelete)
-          const MessageActionSheetItem(
-            value: 'delete',
-            icon: Icons.delete_outline_rounded,
-            label: 'Delete',
-            color: Colors.red,
-            dividerBefore: true,
-          ),
-      ],
+      if (hasCopyableText)
+        const MessageActionSheetItem(
+          value: 'copy_text',
+          icon: Icons.copy_rounded,
+          label: 'Copy text',
+        ),
+      const MessageActionSheetItem(
+        value: 'copy_link',
+        icon: Icons.link_rounded,
+        label: 'Copy message link',
+      ),
+      if (!isSystem)
+        const MessageActionSheetItem(
+          value: 'remind',
+          icon: Icons.alarm_add_outlined,
+          label: 'Remind me',
+        ),
+      if (canDownloadMessageAttachment(msg))
+        MessageActionSheetItem(
+          value: 'download',
+          icon: Icons.download_rounded,
+          label: 'Download attachment',
+          subtitle: suggestedAttachmentFileName(msg),
+        ),
+      if (!isMe && msg.sender != null)
+        MessageActionSheetItem(
+          value: 'sender',
+          icon: Icons.person_outline_rounded,
+          label: 'Sender actions',
+          subtitle: '@${msg.sender!.username}',
+        ),
+      if (!isMe && !isSystem && msg.sender != null)
+        const MessageActionSheetItem(
+          value: 'report',
+          icon: Icons.flag_outlined,
+          label: 'Report',
+          color: Colors.orange,
+          dividerBefore: true,
+        ),
+      if (canDelete)
+        const MessageActionSheetItem(
+          value: 'delete',
+          icon: Icons.delete_outline_rounded,
+          label: 'Delete',
+          color: Colors.red,
+          dividerBefore: true,
+        ),
+    ];
+    final media = MediaQuery.sizeOf(context);
+    final selected = await showMessageContextMenu<String>(
+      context: context,
+      anchor: anchor ?? Offset(media.width / 2, media.height / 2),
+      actions: actions,
     );
     if (!mounted || selected == null) return;
 
@@ -4342,11 +4337,14 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                                       isChannel: true,
                                       showAvatar: showAvatar,
                                       meBubbleColor: meBubbleColor,
-                                      onTap: () => _showReactionMenu(msg),
+                                      onTapUp: (details) => _showReactionBar(
+                                        msg,
+                                        details.globalPosition,
+                                      ),
                                       onReactionTap: (emoji) =>
                                           _toggleReaction(msg, emoji),
-                                      onLongPress: () =>
-                                          _showPostMenu(msg, isMe),
+                                      onLongPress: (pos) =>
+                                          _showPostMenu(msg, isMe, anchor: pos),
                                       onSecondaryTapUp: (details) =>
                                           _showPostMenu(
                                             msg,

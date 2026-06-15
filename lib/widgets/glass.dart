@@ -1282,37 +1282,54 @@ class GlassMenuSection extends StatelessWidget {
   final List<GlassMenuEntry> entries;
   final EdgeInsetsGeometry margin;
 
+  /// When true the section renders its own frosted [GlassContainer] surface
+  /// (for floating overlays that aren't already inside a glass sheet). When
+  /// false it draws a translucent fill meant to sit on an already-blurred
+  /// surface like a [GlassBottomSheetFrame].
+  final bool frosted;
+
   const GlassMenuSection({
     super.key,
     required this.entries,
     this.margin = const EdgeInsets.fromLTRB(10, 2, 10, 2),
+    this.frosted = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final rows = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < entries.length; i++)
+          _tile(context, entries[i], i == entries.length - 1),
+      ],
+    );
     return Padding(
       padding: margin,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(22),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: scheme.onSurface.withValues(alpha: 0.05),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(
-              color: scheme.onSurface.withValues(alpha: 0.06),
-              width: 0.5,
+      child: frosted
+          ? GlassContainer(
+              shape: const LiquidRoundedSuperellipse(borderRadius: 22),
+              allowElevation: true,
+              glowIntensity: 0.06,
+              clipBehavior: Clip.antiAlias,
+              padding: EdgeInsets.zero,
+              child: rows,
+            )
+          : ClipRRect(
+              borderRadius: BorderRadius.circular(22),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: scheme.onSurface.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(
+                    color: scheme.onSurface.withValues(alpha: 0.06),
+                    width: 0.5,
+                  ),
+                ),
+                child: rows,
+              ),
             ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (var i = 0; i < entries.length; i++)
-                _tile(context, entries[i], i == entries.length - 1),
-            ],
-          ),
-        ),
-      ),
     );
   }
 

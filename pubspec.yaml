@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.5.62+130
+version: 0.5.63+130
 publish_to: 'none'
 
 environment:
@@ -143,6 +143,7 @@ dependencies:
   # Matrix4 comes from; exact version pinned in dependency_overrides).
   vector_math: ^2.4.0
   desktop_drop: ^0.7.1
+  emoji_picker_flutter: ^4.4.0
 flutter:
   uses-material-design: true
   assets:
