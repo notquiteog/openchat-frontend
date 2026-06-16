@@ -57,7 +57,7 @@ class _PrivacyOnboardingScreenState extends State<PrivacyOnboardingScreen> {
       icon: Icons.shield_outlined,
       title: 'Your privacy defaults',
       body:
-          'Push previews are off by default, private state stays encrypted on this device, and you can review keys, sessions, and metadata controls in the Trust Center.',
+          'Push previews are off by default, private state stays encrypted on this device, and you can review keys, sessions, and metadata controls in Privacy & Security.',
     ),
   ];
 

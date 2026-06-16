@@ -14,7 +14,6 @@ enum ChannelTopBarAction {
 enum ChannelModerationAction { openModeration, archive, unarchive, delete }
 
 enum ChannelSettingsAction {
-  appearance,
   sharedContent,
   analytics,
   scheduledPosts,
@@ -67,7 +66,12 @@ class ChannelActionPolicy {
     final moderation = <ChannelModerationAction>[];
     final settings = <ChannelSettingsAction>[];
 
-    if (opensModeration || canManageLifecycle) {
+    // The shield opens the moderation hub. It surfaces whenever the caller can
+    // do anything channel-admin: moderate, manage the lifecycle, or manage the
+    // channel's settings / encryption / analytics (those four now live inside
+    // the hub rather than the gear menu).
+    final managesChannel = managesInfo || managesEncryption || viewsAnalytics;
+    if (opensModeration || canManageLifecycle || managesChannel) {
       topBar.add(ChannelTopBarAction.moderation);
       if (opensModeration) {
         moderation.add(ChannelModerationAction.openModeration);
@@ -91,11 +95,7 @@ class ChannelActionPolicy {
         viewsAnalytics;
     if (isSubscribed || hasAdminSettings) {
       topBar.add(ChannelTopBarAction.settings);
-      settings.add(ChannelSettingsAction.appearance);
       settings.add(ChannelSettingsAction.sharedContent);
-      if (viewsAnalytics) {
-        settings.add(ChannelSettingsAction.analytics);
-      }
       settings.add(ChannelSettingsAction.scheduledPosts);
       settings.add(ChannelSettingsAction.deleteOwnMessages);
       // Whether the channel actually sells subscriptions is only known after
@@ -103,21 +103,18 @@ class ChannelActionPolicy {
       settings.add(ChannelSettingsAction.giftSubscription);
     }
 
-    if (managesInfo) {
-      settings.add(ChannelSettingsAction.edit);
-      settings.add(ChannelSettingsAction.subscriptionPlan);
-    }
+    // Analytics, channel settings (edit), subscription price, and encryption
+    // mode were relocated from this gear menu into the moderation hub — see
+    // ModerationScreen's "Channel" section. They stay gated by the same
+    // permissions (info / encryption / analytics) there.
     if (managesInvites) {
       settings.add(ChannelSettingsAction.inviteLinks);
     }
-    if (managesInfo) {
-      if (isPremium) settings.add(ChannelSettingsAction.background);
+    if (managesInfo && isPremium) {
+      settings.add(ChannelSettingsAction.background);
     }
     if (managesSettings) {
       settings.add(ChannelSettingsAction.autoDelete);
-    }
-    if (managesEncryption) {
-      settings.add(ChannelSettingsAction.encryption);
     }
 
     if (!canManageLifecycle) {

@@ -2691,9 +2691,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final chatStyle = context.select<SettingsProvider, ChatStyle>(
       (settings) => settings.chatStyleFor(widget.conversation.id),
     );
-    final meBubbleColor = chatStyle.myBubbleColor != null
-        ? Color(chatStyle.myBubbleColor!)
-        : auth.currentUser?.bubbleColor != null
+    // My bubble colour is global (published to the profile); there is no
+    // per-chat override.
+    final meBubbleColor = auth.currentUser?.bubbleColor != null
         ? Color(auth.currentUser!.bubbleColor!)
         : null;
     final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
@@ -3101,8 +3101,6 @@ class _ChatScreenState extends State<ChatScreen> {
   /// own bubble color can be published for any chat type.
   Future<void> _showChatAppearance(BuildContext context) async {
     final settings = context.read<SettingsProvider>();
-    final api = context.read<ApiService>();
-    final auth = context.read<AuthProvider>();
     final convID = conv.id;
     final isDm = conv.isDM;
     var style = settings.chatStyleFor(convID);
@@ -3115,19 +3113,9 @@ class _ChatScreenState extends State<ChatScreen> {
       elevation: 0,
       builder: (sheetCtx) => StatefulBuilder(
         builder: (sheetCtx, setSheet) {
-          Future<void> apply(
-            ChatStyle next, {
-            bool publishBubble = false,
-          }) async {
+          Future<void> apply(ChatStyle next) async {
             style = next;
             await settings.setChatStyle(convID, next);
-            if (publishBubble) {
-              await api.updateProfile(
-                bubbleColor: next.myBubbleColor,
-                clearBubbleColor: next.myBubbleColor == null,
-              );
-              await auth.refreshCurrentUser();
-            }
             setSheet(() {});
           }
 
@@ -3141,16 +3129,16 @@ class _ChatScreenState extends State<ChatScreen> {
                 GlassSheetHeader(
                   icon: Icons.palette_outlined,
                   title: 'Chat appearance',
-                  subtitle: 'Tune the background, bubble color, and shape.',
+                  subtitle:
+                      'Tune the background and bubble shape. Your bubble '
+                      'colour is set in Settings → Appearance.',
                   actions: [
                     GlassCircleIconButton(
                       tooltip: 'Reset appearance',
                       size: 36,
                       glowIntensity: 0.04,
                       icon: const Icon(Icons.restart_alt_rounded, size: 18),
-                      onPressed: () => unawaited(
-                        apply(const ChatStyle(), publishBubble: true),
-                      ),
+                      onPressed: () => unawaited(apply(const ChatStyle())),
                     ),
                   ],
                 ),
@@ -3200,18 +3188,6 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   const Divider(height: 24),
                 ],
-                const Text('My bubble color'),
-                const SizedBox(height: 8),
-                ColorChoices(
-                  selected: style.myBubbleColor,
-                  onSelected: (c) => apply(
-                    c == null
-                        ? style.copyWith(clearMyBubbleColor: true)
-                        : style.copyWith(myBubbleColor: c),
-                    publishBubble: true,
-                  ),
-                ),
-                const SizedBox(height: 16),
                 Row(
                   children: [
                     const Text('Bubble shape'),

@@ -9,14 +9,16 @@ import 'glass.dart';
 /// reportable: the **Platform admins** destination is always available.
 ///
 /// Destinations:
-///  - **System admins (CSAM)** — anonymous, provable report. Selectable only
-///    when [csamBlob] is non-null (this message's AMF/Hecate franking verified
-///    as VALID on receipt). Goes to the platform's CSAM queue.
-///  - **Platform admins** — a general, identity-attached report to the
-///    platform's moderators (routed to them only, bypassing the chat's admins).
-///    Always available. For end-to-end-encrypted messages the moderators get
-///    your reason + identity but not the content; for non-encrypted messages
-///    they can read the content directly.
+///  - **Platform admins** — a report to the platform's moderators (a.k.a. the
+///    system admins; these are the same people, so there is one destination,
+///    not two). Routed to them only, bypassing the chat's own admins. Always
+///    available. For end-to-end-encrypted messages the moderators get your
+///    reason + identity but not the content; for non-encrypted messages they
+///    can read the content directly. When this message carries a valid
+///    AMF/Hecate franking proof ([csamBlob] non-null), a nested **"This is
+///    child sexual abuse material"** option upgrades it to an anonymous,
+///    provable (deanonymizable) CSAM report instead of the identity-attached
+///    one.
 ///  - **Channel/Group admins** — a general report to this chat's own admins.
 ///    Shown when [hasAdmins] is true (groups and channels).
 ///
@@ -36,8 +38,8 @@ Future<void> showReportMessageDialog({
   // when this message's AMF franking verified as valid on receipt.
   final canCsam = csamBlob != null;
 
-  var toCsam = false; // anonymous, provable CSAM report (reportCsam)
-  var toPlatform = false; // general report to platform admins (target: system)
+  var toPlatform = false; // report to the platform admins / moderators
+  var asCsam = false; // file the platform report as the provable CSAM report
   var toGroup = false; // report to this chat's own admins (target: admins)
   final reasonCtrl = TextEditingController();
 
@@ -45,8 +47,8 @@ Future<void> showReportMessageDialog({
     context: context,
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, setLocal) {
-        final needsReason = toPlatform || toGroup;
-        final canSubmit = (toCsam && canCsam) || toPlatform || toGroup;
+        final needsReason = (toPlatform && !asCsam) || toGroup;
+        final canSubmit = toPlatform || toGroup;
         return GlassAlertDialog(
           title: const Text('Report message'),
           content: Column(
@@ -55,18 +57,6 @@ Future<void> showReportMessageDialog({
             children: [
               const Text('Send this report to:'),
               const SizedBox(height: 8),
-              _ReportDestinationTile(
-                icon: Icons.verified_user_outlined,
-                title: 'System admins (CSAM)',
-                subtitle: canCsam
-                    ? 'Anonymous, provable report to platform moderators. '
-                          'Use ONLY for child sexual abuse material.'
-                    : 'Unavailable — this message has no verifiable franking '
-                          'proof.',
-                value: toCsam,
-                enabled: canCsam,
-                onChanged: (v) => setLocal(() => toCsam = v),
-              ),
               _ReportDestinationTile(
                 icon: Icons.shield_outlined,
                 title: 'Platform admins',
@@ -77,8 +67,25 @@ Future<void> showReportMessageDialog({
                           'across any chat. This message is not encrypted.',
                 value: toPlatform,
                 enabled: true,
-                onChanged: (v) => setLocal(() => toPlatform = v),
+                onChanged: (v) => setLocal(() {
+                  toPlatform = v;
+                  if (!v) asCsam = false;
+                }),
               ),
+              if (toPlatform && canCsam)
+                Padding(
+                  padding: const EdgeInsets.only(left: 28),
+                  child: _ReportDestinationTile(
+                    icon: Icons.report_gmailerrorred_outlined,
+                    title: 'This is child sexual abuse material',
+                    subtitle:
+                        'Send an anonymous, provable report instead of a '
+                        'standard one. Use ONLY for CSAM.',
+                    value: asCsam,
+                    enabled: true,
+                    onChanged: (v) => setLocal(() => asCsam = v),
+                  ),
+                ),
               if (hasAdmins)
                 _ReportDestinationTile(
                   icon: Icons.groups_outlined,
@@ -124,24 +131,22 @@ Future<void> showReportMessageDialog({
   final api = context.read<ApiService>();
   var anyOk = false;
   var anyErr = false;
-  if (toCsam && csamBlob != null) {
-    try {
-      await api.reportCsam(csamBlob);
-      anyOk = true;
-    } catch (_) {
-      anyErr = true;
-    }
-  }
   if (toPlatform) {
     try {
-      await api.createModerationReport(
-        conversationId,
-        channel: isChannel,
-        messageID: messageId,
-        reportedUserID: reportedUserId,
-        reason: reason,
-        target: 'system',
-      );
+      if (asCsam && csamBlob != null) {
+        // Anonymous, provable CSAM report (AMF/Hecate) to the platform
+        // moderators — replaces the identity-attached moderation report.
+        await api.reportCsam(csamBlob);
+      } else {
+        await api.createModerationReport(
+          conversationId,
+          channel: isChannel,
+          messageID: messageId,
+          reportedUserID: reportedUserId,
+          reason: reason,
+          target: 'system',
+        );
+      }
       anyOk = true;
     } catch (_) {
       anyErr = true;

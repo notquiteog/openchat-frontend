@@ -139,6 +139,39 @@ void main() {
     },
   );
 
+  test('recovery bundle includes encrypted account/key manifest', () async {
+    final source = _FakeBackupStorage(
+      secrets: {
+        'user_id': 'user-1',
+        'username': 'alice',
+        'pgp_fingerprint': 'abc123',
+        'pgp_private_key': 'SECRET-PGP-KEY-MATERIAL',
+        'pgp_public_key': 'PUBLIC-PGP-KEY-MATERIAL',
+      },
+      privateState: {
+        'chat_folders': ['work'],
+        'private_contacts': {'bob': 'contact'},
+      },
+    );
+
+    final payload = await EncryptedBackupService(
+      storage: source,
+      privateState: _FakePrivateState(source),
+    ).buildRecoveryBundlePayload();
+
+    final manifest = payload['manifest'] as Map<String, Object?>;
+    expect(manifest['version'], 1);
+    expect(manifest['user_id'], 'user-1');
+    expect(manifest['username'], 'alice');
+    expect(manifest['key_fingerprint'], 'ABC123');
+    expect(manifest['has_private_key'], isTrue);
+    expect(manifest['has_public_key'], isTrue);
+    expect(manifest['local_private_state_keys'], [
+      'chat_folders',
+      'private_contacts',
+    ]);
+  });
+
   test('restore fails cleanly when no server backup exists', () async {
     final fresh = _FakeBackupStorage();
     final api = _FakeBackupApi();

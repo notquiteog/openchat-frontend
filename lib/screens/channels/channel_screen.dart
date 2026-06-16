@@ -36,7 +36,6 @@ import '../../widgets/attachment_upload_progress.dart';
 import '../../widgets/conversation_encryption_status.dart';
 import '../../widgets/conversation_info_panel.dart';
 import '../../widgets/conversation_invite_links_sheet.dart';
-import '../../widgets/color_choices.dart';
 import '../../widgets/custom_emoji_picker.dart';
 import '../../widgets/custom_emoji_text_controller.dart';
 import '../../widgets/disappearing_messages_picker.dart';
@@ -1555,7 +1554,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                   child: GestureDetector(
                     onTap: () async {
                       final api = context.read<ApiService>();
-                      final messenger = ScaffoldMessenger.of(ctx);
                       final picked = await ImagePicker().pickImage(
                         source: ImageSource.gallery,
                         maxWidth: 512,
@@ -1571,9 +1569,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                         );
                         setDlgState(() => pendingAvatarUrl = url);
                       } catch (e) {
-                        messenger.showSnackBar(
-                          SnackBar(content: Text('Avatar upload failed: $e')),
-                        );
+                        if (ctx.mounted) {
+                          showAppToast(
+                            ctx,
+                            'Avatar upload failed: $e',
+                            isError: true,
+                          );
+                        }
                       }
                     },
                     child: Stack(
@@ -1799,7 +1801,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final api = context.read<ApiService>();
     final chat = context.read<ChatProvider>();
     final mls = context.read<MlsService>();
-    final messenger = ScaffoldMessenger.of(context);
     final selected = await showDialog<EncryptionMode>(
       context: context,
       builder: (ctx) => GlassAlertDialog(
@@ -1854,82 +1855,30 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         });
       }
       await chat.loadConversations();
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text('Encryption mode set to ${selected.shortLabel}'),
-        ),
-      );
+      if (mounted) {
+        showAppToast(context, 'Encryption mode set to ${selected.shortLabel}');
+      }
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+      if (mounted) {
+        showAppToast(context, 'Failed: $e', isError: true);
+      }
     }
   }
 
-  Future<void> _showChatAppearance() async {
-    final settings = context.read<SettingsProvider>();
-    final api = context.read<ApiService>();
-    final auth = context.read<AuthProvider>();
-    var style = settings.chatStyleFor(channel.id);
-
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withValues(alpha: 0.18),
-      elevation: 0,
-      builder: (sheetCtx) => StatefulBuilder(
-        builder: (sheetCtx, setSheet) {
-          Future<void> apply(ChatStyle next) async {
-            style = next;
-            await settings.setChatStyle(channel.id, next);
-            await api.updateProfile(
-              bubbleColor: next.myBubbleColor,
-              clearBubbleColor: next.myBubbleColor == null,
-            );
-            await auth.refreshCurrentUser();
-            setSheet(() {});
-          }
-
-          return GlassBottomSheetFrame(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      'Chat appearance',
-                      style: Theme.of(sheetCtx).textTheme.titleMedium,
-                    ),
-                    const Spacer(),
-                    TextButton(
-                      onPressed: () => apply(const ChatStyle()),
-                      child: const Text('Reset'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                const Text('My bubble color'),
-                const SizedBox(height: 8),
-                ColorChoices(
-                  selected: style.myBubbleColor,
-                  onSelected: (color) => apply(
-                    color == null
-                        ? style.copyWith(clearMyBubbleColor: true)
-                        : style.copyWith(myBubbleColor: color),
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
+  void _openAnalytics() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChannelAnalyticsScreen(conversation: channel),
       ),
     );
   }
 
   /// The shield button now opens moderation directly (no intermediate menu).
-  /// Channel lifecycle (archive / unarchive / delete) lives inside that screen;
-  /// it hands back a [ChannelModerationResult] so we can reflect the new state.
+  /// Channel lifecycle (archive / unarchive / delete) lives inside that screen,
+  /// as do channel settings, analytics, encryption mode, and subscription price
+  /// (delegated back here via callbacks). It hands back a
+  /// [ChannelModerationResult] so we can reflect any lifecycle change.
   Future<void> _openModeration() async {
     final auth = context.read<AuthProvider>();
     final currentUserId = auth.currentUser?.id ?? '';
@@ -1943,6 +1892,13 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           canManageModeration: _canManageChannelModeration,
           canManageRoles: _canManageChannelRoles,
           canManageSettings: _canManageChannelSettings,
+          canManageInfo: _canManageChannelInfo,
+          canManageEncryption: _canManageChannelEncryption,
+          canViewAnalytics: _isAdmin,
+          onEditSettings: _editChannelSettings,
+          onOpenAnalytics: _openAnalytics,
+          onSetSubscriptionPrice: _setSubscriptionPrice,
+          onSetEncryption: _setEncryption,
           canManageLifecycle: canManageLifecycle,
           isArchived: _archived || channel.isArchived,
         ),
@@ -1988,8 +1944,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             for (final item in placement.settingsMenu)
               _ChanTile(
                 icon: switch (item) {
-                  ChannelSettingsAction.appearance =>
-                    Icons.format_color_fill_outlined,
                   ChannelSettingsAction.sharedContent =>
                     Icons.photo_library_outlined,
                   ChannelSettingsAction.analytics => Icons.query_stats_outlined,
@@ -2011,7 +1965,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                     Icons.card_giftcard_rounded,
                 },
                 label: switch (item) {
-                  ChannelSettingsAction.appearance => 'Chat appearance',
                   ChannelSettingsAction.sharedContent => 'Shared content',
                   ChannelSettingsAction.analytics => 'Analytics',
                   ChannelSettingsAction.scheduledPosts => 'Scheduled posts',
@@ -2040,8 +1993,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     );
     if (!mounted || action == null) return;
     switch (action) {
-      case ChannelSettingsAction.appearance:
-        _showChatAppearance();
       case ChannelSettingsAction.sharedContent:
         unawaited(
           showSharedContentSheet(
@@ -2054,12 +2005,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           ),
         );
       case ChannelSettingsAction.analytics:
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => ChannelAnalyticsScreen(conversation: channel),
-          ),
-        );
+        _openAnalytics();
       case ChannelSettingsAction.scheduledPosts:
         showScheduledMessagesSheet(
           context,
@@ -4253,10 +4199,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final isArchived = _archived || channel.isArchived;
     final settings = context.watch<SettingsProvider>();
     final pinnedMessages = settings.pinnedMessagesForChannel(channel.id);
-    final chatStyle = settings.chatStyleFor(channel.id);
-    final meBubbleColor = chatStyle.myBubbleColor != null
-        ? Color(chatStyle.myBubbleColor!)
-        : auth.currentUser?.bubbleColor != null
+    // My bubble colour is global (published to the profile); there is no
+    // per-channel override.
+    final meBubbleColor = auth.currentUser?.bubbleColor != null
         ? Color(auth.currentUser!.bubbleColor!)
         : null;
     final mentionSuggestions = _mentionSuggestions(currentUserId);

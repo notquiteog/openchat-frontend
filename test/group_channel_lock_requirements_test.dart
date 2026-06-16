@@ -114,13 +114,8 @@ void main() {
       );
       expect(
         placement.settingsMenu,
-        contains(ChannelSettingsAction.appearance),
-      );
-      expect(
-        placement.settingsMenu,
         contains(ChannelSettingsAction.sharedContent),
       );
-      expect(placement.settingsMenu, contains(ChannelSettingsAction.analytics));
       expect(
         placement.settingsMenu,
         contains(ChannelSettingsAction.scheduledPosts),
@@ -133,13 +128,27 @@ void main() {
         placement.settingsMenu,
         contains(ChannelSettingsAction.autoDelete),
       );
+      // Analytics, channel settings (edit), subscription price, and encryption
+      // mode moved out of the gear menu into the moderation hub (the shield).
       expect(
         placement.settingsMenu,
-        contains(ChannelSettingsAction.encryption),
+        isNot(contains(ChannelSettingsAction.analytics)),
+      );
+      expect(
+        placement.settingsMenu,
+        isNot(contains(ChannelSettingsAction.encryption)),
+      );
+      expect(
+        placement.settingsMenu,
+        isNot(contains(ChannelSettingsAction.edit)),
+      );
+      expect(
+        placement.settingsMenu,
+        isNot(contains(ChannelSettingsAction.subscriptionPlan)),
       );
     });
 
-    test('channel subscribers get chat appearance for their bubble color', () {
+    test('channel subscribers get the shared settings menu', () {
       final placement = ChannelActionPolicy.actionsFor(
         channel: _conversation(type: ConversationType.channel),
         isAdmin: false,
@@ -150,7 +159,6 @@ void main() {
 
       expect(placement.topBar, contains(ChannelTopBarAction.settings));
       expect(placement.settingsMenu, [
-        ChannelSettingsAction.appearance,
         ChannelSettingsAction.sharedContent,
         ChannelSettingsAction.scheduledPosts,
         ChannelSettingsAction.deleteOwnMessages,

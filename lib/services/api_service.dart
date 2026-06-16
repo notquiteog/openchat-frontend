@@ -483,6 +483,21 @@ class ApiService {
         .toList();
   }
 
+  Future<List<User>> listBlockedUsers({int limit = 100}) async {
+    final resp = await _get('/api/v1/me/blocks?limit=$limit');
+    return (resp['data'] as List? ?? [])
+        .map((e) => User.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> blockUser(String userID) async {
+    await _post('/api/v1/me/blocks', {'user_id': userID});
+  }
+
+  Future<void> unblockUser(String userID) async {
+    await _delete('/api/v1/me/blocks/$userID');
+  }
+
   Future<ContactBundle> getMyContactBundle() async {
     final resp = await _get('/api/v1/users/me/contact-bundle');
     return ContactBundle.fromJson(resp['data'] as Map<String, dynamic>);
@@ -795,8 +810,14 @@ class ApiService {
 
   // ---- Channels ----
 
-  Future<List<Conversation>> searchChannels(String query) async {
-    final resp = await _get('/api/v1/channels?q=${Uri.encodeComponent(query)}');
+  Future<List<Conversation>> searchChannels(
+    String query, {
+    bool includeGroups = false,
+  }) async {
+    final groupsParam = includeGroups ? '&include_groups=true' : '';
+    final resp = await _get(
+      '/api/v1/channels?q=${Uri.encodeComponent(query)}$groupsParam',
+    );
     return (resp['data'] as List)
         .map((e) => Conversation.fromJson(e as Map<String, dynamic>))
         .toList();

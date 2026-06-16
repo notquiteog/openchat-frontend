@@ -201,6 +201,37 @@ String messageDeepLink({
   ).toString();
 }
 
+class MessageLink {
+  final String conversationId;
+  final String messageId;
+
+  const MessageLink({required this.conversationId, required this.messageId});
+
+  @override
+  bool operator ==(Object other) =>
+      other is MessageLink &&
+      other.conversationId == conversationId &&
+      other.messageId == messageId;
+
+  @override
+  int get hashCode => Object.hash(conversationId, messageId);
+}
+
+MessageLink? messageLinkFromUri(Uri uri) {
+  if (uri.scheme.toLowerCase() != 'openchat') return null;
+  if (uri.host.toLowerCase() != 'message') return null;
+  final conversationId = uri.queryParameters['conversation_id']?.trim();
+  final messageId = uri.queryParameters['message_id']?.trim();
+  if (!_validMessageLinkPart(conversationId)) return null;
+  if (!_validMessageLinkPart(messageId)) return null;
+  return MessageLink(conversationId: conversationId!, messageId: messageId!);
+}
+
+bool _validMessageLinkPart(String? value) {
+  if (value == null || value.isEmpty || value.length > 256) return false;
+  return !value.contains(RegExp(r'[\x00-\x1F\x7F]'));
+}
+
 bool canDownloadMessageAttachment(Message message) {
   return message.content?.attachmentId != null;
 }

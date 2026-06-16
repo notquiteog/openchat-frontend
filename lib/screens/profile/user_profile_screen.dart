@@ -34,6 +34,9 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   StreamSubscription<WsEvent>? _wsSub;
   KeyTrustPin? _keyTrustPin;
   String? _keyTrustPinUserId;
+  bool _isBlocked = false;
+  bool _blockStatusLoaded = false;
+  bool _blockBusy = false;
 
   @override
   void initState() {
@@ -52,6 +55,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       _wsSub = context.read<WebSocketService>().events.listen(_onWsEvent);
     }
     unawaited(_loadKeyTrustPin());
+    unawaited(_loadBlockStatus());
   }
 
   void _fetchFreshUser() async {
@@ -118,6 +122,18 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
 
   bool get _viewerIsAdmin =>
       context.read<AuthProvider>().currentUser?.isSystemAdmin ?? false;
+
+  Future<void> _loadBlockStatus() async {
+    if (_isOwnProfile || _blockStatusLoaded) return;
+    _blockStatusLoaded = true;
+    try {
+      final blocked = await context.read<ApiService>().listBlockedUsers();
+      if (!mounted) return;
+      setState(() {
+        _isBlocked = blocked.any((user) => user.id == _user.id);
+      });
+    } catch (_) {}
+  }
 
   void _showAdminMenu(BuildContext context) {
     showModalBottomSheet<void>(
@@ -271,6 +287,34 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       _snack('Failed: $e');
     } finally {
       setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _toggleBlock() async {
+    if (_isOwnProfile || _blockBusy) return;
+    final nextBlocked = !_isBlocked;
+    final api = context.read<ApiService>();
+    if (nextBlocked) {
+      final ok = await _confirm(
+        'Block @${_user.username}?',
+        'They will not be able to start or continue a direct chat with you.',
+      );
+      if (!ok) return;
+    }
+    setState(() => _blockBusy = true);
+    try {
+      if (nextBlocked) {
+        await api.blockUser(_user.id);
+      } else {
+        await api.unblockUser(_user.id);
+      }
+      if (!mounted) return;
+      setState(() => _isBlocked = nextBlocked);
+      _snack(nextBlocked ? 'User blocked.' : 'User unblocked.');
+    } catch (e) {
+      _snack('Failed: $e');
+    } finally {
+      if (mounted) setState(() => _blockBusy = false);
     }
   }
 
@@ -724,6 +768,14 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
       appBar: GlassAppBar(
         title: Text('@${_user.username}'),
         actions: [
+          if (!_isOwnProfile)
+            IconButton(
+              icon: Icon(
+                _isBlocked ? Icons.person_add_alt_1 : Icons.block_rounded,
+              ),
+              tooltip: _isBlocked ? 'Unblock user' : 'Block user',
+              onPressed: _blockBusy ? null : _toggleBlock,
+            ),
           if (isAdmin && !_isOwnProfile)
             IconButton(
               icon: const Icon(Icons.more_vert),

@@ -15,6 +15,31 @@ void main() {
     expect(uri.queryParameters['message_id'], 'msg/2');
   });
 
+  test('messageLinkFromUri parses stable message URI', () {
+    final parsed = messageLinkFromUri(
+      Uri.parse(messageDeepLink(conversationId: 'conv-1', messageId: 'msg-2')),
+    );
+
+    expect(parsed?.conversationId, 'conv-1');
+    expect(parsed?.messageId, 'msg-2');
+  });
+
+  test('messageLinkFromUri rejects non-message and empty message URIs', () {
+    expect(messageLinkFromUri(Uri.parse('openchat://invite/token')), isNull);
+    expect(
+      messageLinkFromUri(
+        Uri.parse('openchat://message?conversation_id=conv-1'),
+      ),
+      isNull,
+    );
+    expect(
+      messageLinkFromUri(
+        Uri.parse('openchat://message?conversation_id=%00&message_id=msg-1'),
+      ),
+      isNull,
+    );
+  });
+
   test('suggestedAttachmentFileName sanitizes explicit names', () {
     final message = _message(MessageType.file);
     message.setDecryptedContent(

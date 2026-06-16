@@ -251,8 +251,8 @@ class _SocialRecoveryScreenState extends State<SocialRecoveryScreen> {
           else if (ceremony != null) ...[
             GlassCard(
               child: Text(
-                'Ask each guardian to open Trust Center → You Guard on their '
-                'device and approve your request. They will only see your '
+                'Ask each guardian to open Privacy & Security → You Guard on '
+                'their device and approve your request. They will only see your '
                 'share after verifying the words or code below with you directly.',
                 style: TextStyle(
                   fontSize: 13,

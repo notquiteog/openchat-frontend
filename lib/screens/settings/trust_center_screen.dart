@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
@@ -21,7 +24,11 @@ import '../../services/api_service.dart';
 import '../../services/app_lock_state.dart';
 import '../../services/encrypted_backup_service.dart';
 import '../../services/kt_audit_service.dart';
+import '../../services/local_private_state_service.dart';
+import '../../services/mesh/nearby_mesh_service.dart';
 import '../../services/mls_service.dart';
+import '../../services/notification_service.dart';
+import '../../services/passphrase_strength.dart';
 import '../../services/secure_storage_service.dart';
 import '../../services/security_service.dart';
 import '../../services/social_recovery_service.dart';
@@ -33,9 +40,12 @@ import '../../utils/device_label.dart';
 import '../../utils/identity_qr.dart';
 import '../../utils/trust_center_summary.dart';
 import '../../widgets/glass.dart';
+import '../nearby/nearby_screen.dart';
+import 'device_pairing_screen.dart';
 import 'identity_qr_scanner_screen.dart';
 import 'smp_verify_screen.dart';
 import 'pgp_keys_screen.dart';
+import 'proxy_settings_screen.dart';
 import 'social_recovery_screen.dart';
 
 String formatKtAlarmEvidenceForExport(Map<String, dynamic> alarm) {
@@ -787,6 +797,650 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
     }
   }
 
+  // ── Login & key recovery (folded in from the old Settings screen) ──────────
+
+  Future<void> _changePassword() async {
+    final currentCtrl = TextEditingController();
+    final newCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    final api = context.read<ApiService>();
+    final messenger = ScaffoldMessenger.of(context);
+    final formKey = GlobalKey<FormState>();
+    bool submitting = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => GlassAlertDialog(
+          title: const Text('Change Password'),
+          content: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: currentCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Current password',
+                  ),
+                  validator: (v) =>
+                      (v == null || v.isEmpty) ? 'Required' : null,
+                ),
+                TextFormField(
+                  controller: newCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: 'New password'),
+                  validator: (v) => (v == null || v.length < 8)
+                      ? 'At least 8 characters'
+                      : null,
+                ),
+                TextFormField(
+                  controller: confirmCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Confirm new password',
+                  ),
+                  validator: (v) =>
+                      v != newCtrl.text ? 'Passwords do not match' : null,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: submitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: submitting
+                  ? null
+                  : () async {
+                      if (!formKey.currentState!.validate()) return;
+                      setDlg(() => submitting = true);
+                      try {
+                        await api.changePassword(
+                          currentPassword: currentCtrl.text,
+                          newPassword: newCtrl.text,
+                        );
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        messenger.showSnackBar(
+                          const SnackBar(content: Text('Password changed')),
+                        );
+                      } catch (e) {
+                        setDlg(() => submitting = false);
+                        messenger.showSnackBar(
+                          SnackBar(content: Text('Failed: $e')),
+                        );
+                      }
+                    },
+              child: submitting
+                  ? const GlassProgressIndicator.circular(
+                      size: 16,
+                      strokeWidth: 2,
+                    )
+                  : const Text('Change'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── App lock PIN + duress PIN + dead-man switch ───────────────────────────
+
+  /// Glass dialog with PIN + confirm fields (digits only, min 4). Returns the
+  /// PIN or null. [validate] runs after the local checks and returns an error
+  /// string to reject (e.g. a duress PIN colliding with the real PIN).
+  Future<String?> _promptNewPin({
+    required String title,
+    String? message,
+    Future<String?> Function(String pin)? validate,
+  }) async {
+    final pinCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    String? errorText;
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDlg) => GlassAlertDialog(
+            icon: const Icon(Icons.pin_outlined),
+            title: Text(title),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (message != null) ...[
+                  Text(message),
+                  const SizedBox(height: 12),
+                ],
+                TextField(
+                  controller: pinCtrl,
+                  obscureText: true,
+                  autofocus: true,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: InputDecoration(
+                    labelText: 'PIN (at least 4 digits)',
+                    errorText: errorText,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: confirmCtrl,
+                  obscureText: true,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: const InputDecoration(labelText: 'Confirm PIN'),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  final pin = pinCtrl.text.trim();
+                  if (pin.length < 4) {
+                    setDlg(() => errorText = 'Use at least 4 digits');
+                    return;
+                  }
+                  if (pin != confirmCtrl.text.trim()) {
+                    setDlg(() => errorText = 'PINs do not match');
+                    return;
+                  }
+                  final validationError = await validate?.call(pin);
+                  if (!ctx.mounted) return;
+                  if (validationError != null) {
+                    setDlg(() => errorText = validationError);
+                    return;
+                  }
+                  Navigator.pop(ctx, pin);
+                },
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } finally {
+      pinCtrl.dispose();
+      confirmCtrl.dispose();
+    }
+  }
+
+  Future<void> _setAppLockPinFlow({required String title}) async {
+    final storage = context.read<SecureStorageService>();
+    final pin = await _promptNewPin(title: title);
+    if (pin == null || !mounted) return;
+    await storage.setAppLockPin(pin);
+    appPinConfiguredListenable.value = true;
+    if (mounted) setState(() => _appPinConfigured = true);
+  }
+
+  Future<void> _manageAppLockPin() async {
+    if (!_appPinConfigured) {
+      await _setAppLockPinFlow(title: 'Set app lock PIN');
+      return;
+    }
+    String? choice;
+    await showGlassActionSheet<void>(
+      context: context,
+      title: 'App lock PIN',
+      actions: [
+        GlassActionSheetAction(
+          label: 'Change PIN',
+          onPressed: () => choice = 'change',
+        ),
+        GlassActionSheetAction(
+          label: 'Remove PIN',
+          style: GlassActionSheetStyle.destructive,
+          onPressed: () => choice = 'remove',
+        ),
+      ],
+    );
+    if (!mounted || choice == null) return;
+    if (choice == 'change') {
+      await _setAppLockPinFlow(title: 'Change app lock PIN');
+      return;
+    }
+    final storage = context.read<SecureStorageService>();
+    await storage.clearAppLockPin();
+    // A duress PIN without a real PIN to hide behind is meaningless (and the
+    // lock screen would treat any leftover code as the only unlock) — clear it.
+    await storage.clearDuressPin();
+    appPinConfiguredListenable.value = false;
+    if (mounted) {
+      setState(() {
+        _appPinConfigured = false;
+        _duressPinConfigured = false;
+      });
+    }
+  }
+
+  Future<void> _setDuressPinFlow() async {
+    final storage = context.read<SecureStorageService>();
+    final pin = await _promptNewPin(
+      title: _duressPinConfigured ? 'Change duress PIN' : 'Set duress PIN',
+      message:
+          'A second unlock code for coerced unlocks. It must differ from '
+          'your real PIN.',
+      validate: (pin) async =>
+          await storage.classifyAppLockPin(pin) == AppLockPinKind.real
+          ? 'This is your real PIN — choose a different one'
+          : null,
+    );
+    if (pin == null || !mounted) return;
+    await storage.setDuressPin(pin);
+    if (mounted) setState(() => _duressPinConfigured = true);
+  }
+
+  Future<void> _manageDuressPin() async {
+    if (!_duressPinConfigured) {
+      await _setDuressPinFlow();
+      return;
+    }
+    String? choice;
+    await showGlassActionSheet<void>(
+      context: context,
+      title: 'Duress PIN',
+      actions: [
+        GlassActionSheetAction(
+          label: 'Change duress PIN',
+          onPressed: () => choice = 'change',
+        ),
+        GlassActionSheetAction(
+          label: 'Remove duress PIN',
+          style: GlassActionSheetStyle.destructive,
+          onPressed: () => choice = 'remove',
+        ),
+      ],
+    );
+    if (!mounted || choice == null) return;
+    if (choice == 'change') {
+      await _setDuressPinFlow();
+      return;
+    }
+    await context.read<SecureStorageService>().clearDuressPin();
+    if (mounted) setState(() => _duressPinConfigured = false);
+  }
+
+  Future<void> _pickDuressAction() async {
+    String? choice;
+    await showGlassActionSheet<void>(
+      context: context,
+      title: 'Duress PIN action',
+      message: 'What happens when the duress PIN is entered.',
+      actions: [
+        GlassActionSheetAction(
+          icon: _duressAction == 'decoy'
+              ? const Icon(Icons.check_rounded)
+              : null,
+          label: 'Open decoy',
+          onPressed: () => choice = 'decoy',
+        ),
+        GlassActionSheetAction(
+          icon: _duressAction == 'wipe'
+              ? const Icon(Icons.check_rounded)
+              : null,
+          label: 'Wipe this device',
+          style: GlassActionSheetStyle.destructive,
+          onPressed: () => choice = 'wipe',
+        ),
+      ],
+    );
+    if (!mounted || choice == null || choice == _duressAction) return;
+    if (choice == 'wipe') {
+      var confirmed = false;
+      await GlassDialog.show<void>(
+        context: context,
+        title: 'Wipe on duress PIN?',
+        message:
+            'Entering this PIN under coercion silently destroys all local '
+            'data. Unrecoverable without your backup.',
+        actions: [
+          GlassDialogAction(
+            label: 'Cancel',
+            onPressed: () => Navigator.pop(context),
+          ),
+          GlassDialogAction(
+            label: 'Wipe device',
+            isDestructive: true,
+            onPressed: () {
+              confirmed = true;
+              Navigator.pop(context);
+            },
+          ),
+        ],
+      );
+      if (!confirmed || !mounted) return;
+    }
+    await context.read<SecureStorageService>().setDuressAction(choice!);
+    if (mounted) setState(() => _duressAction = choice!);
+  }
+
+  Future<void> _pickDeadmanDays() async {
+    int? choice;
+    await showGlassActionSheet<void>(
+      context: context,
+      title: 'Auto-wipe',
+      message:
+          'If the app sees no real unlock for this long, local data is '
+          'destroyed.',
+      actions: [
+        for (final days in const [0, 7, 14, 30, 90])
+          GlassActionSheetAction(
+            icon: _deadmanDays == days ? const Icon(Icons.check_rounded) : null,
+            label: days == 0 ? 'Off' : '$days days',
+            onPressed: () => choice = days,
+          ),
+      ],
+    );
+    if (!mounted || choice == null || choice == _deadmanDays) return;
+    final storage = context.read<SecureStorageService>();
+    await storage.setDeadmanDays(choice!);
+    await _refreshDeadmanWarning(choice!, storage);
+    if (mounted) setState(() => _deadmanDays = choice!);
+  }
+
+  Future<void> _refreshDeadmanWarning(
+    int days,
+    SecureStorageService storage,
+  ) async {
+    final status = computeDeadmanStatus(
+      days: days,
+      lastRealUnlockAt: await storage.getLastRealUnlockAt(),
+      now: DateTime.now().toUtc(),
+    );
+    final fireAt = deadmanWarningFireAt(status);
+    if (fireAt == null) {
+      await NotificationService.cancelDeadmanWarning();
+    } else {
+      await NotificationService.scheduleDeadmanWarning(fireAt: fireAt);
+    }
+  }
+
+  // ── Encrypted backups (folded in from the old Settings screen) ─────────────
+
+  Future<void> _exportEncryptedBackup() async {
+    if (kIsWeb) return;
+    final passphrase = await _promptBackupPassphrase(confirm: true);
+    if (passphrase == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final service = EncryptedBackupService(
+        storage: context.read<SecureStorageService>(),
+        privateState: LocalPrivateStateService(
+          storage: context.read<SecureStorageService>(),
+        ),
+      );
+      final encoded = await service.exportBackup(passphrase: passphrase);
+      final now = DateTime.now().toUtc();
+      final name =
+          'openchat-recovery-${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}.ocbackup.json';
+      final location = await getSaveLocation(suggestedName: name);
+      if (location == null) return;
+      await File(location.path).writeAsString(encoded);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Encrypted backup exported')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Export failed: $e')));
+    }
+  }
+
+  /// Stores the encrypted recovery bundle on the server as an opaque blob —
+  /// zero-knowledge: only ciphertext leaves the device.
+  Future<void> _uploadBackupToServer() async {
+    final passphrase = await _promptBackupPassphrase(
+      confirm: true,
+      requireStrong: true,
+    );
+    if (passphrase == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final service = EncryptedBackupService(
+        storage: context.read<SecureStorageService>(),
+        privateState: LocalPrivateStateService(
+          storage: context.read<SecureStorageService>(),
+        ),
+      );
+      await service.uploadToServer(
+        api: context.read<ApiService>(),
+        passphrase: passphrase,
+      );
+      // Optimistic: reflect the just-now upload without a metadata round-trip.
+      if (mounted) {
+        setState(() {
+          _lastBackupAt = DateTime.now();
+          _backupLoaded = true;
+        });
+      }
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Encrypted backup stored on server')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Backup failed: $e')));
+    }
+  }
+
+  Future<void> _restoreBackupFromServer() async {
+    final passphrase = await _promptBackupPassphrase(confirm: false);
+    if (passphrase == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final service = EncryptedBackupService(
+        storage: context.read<SecureStorageService>(),
+        privateState: LocalPrivateStateService(
+          storage: context.read<SecureStorageService>(),
+        ),
+      );
+      final keyProvider = context.read<KeyProvider>();
+      final settingsProvider = context.read<SettingsProvider>();
+      await service.restoreFromServer(
+        api: context.read<ApiService>(),
+        passphrase: passphrase,
+      );
+      await keyProvider.load();
+      await settingsProvider.reload();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Backup restored from server')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Restore failed: $e')));
+    }
+  }
+
+  Future<void> _deleteServerBackup() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => GlassAlertDialog(
+        icon: const Icon(Icons.delete_outline),
+        title: const Text('Delete server backup?'),
+        content: const Text(
+          'The encrypted backup blob is removed from the server. Local data '
+          'is not affected.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await context.read<ApiService>().deleteServerBackup();
+      if (mounted) {
+        setState(() {
+          _lastBackupAt = null;
+          _backupLoaded = true;
+        });
+      }
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Server backup deleted')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+    }
+  }
+
+  Future<void> _importEncryptedBackup() async {
+    if (kIsWeb) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final file = await openFile(
+        acceptedTypeGroups: const [
+          XTypeGroup(
+            label: 'OpenChat backup',
+            extensions: ['json', 'ocbackup'],
+          ),
+        ],
+      );
+      if (file == null || !mounted) return;
+      final passphrase = await _promptBackupPassphrase(confirm: false);
+      if (passphrase == null || !mounted) return;
+      final service = EncryptedBackupService(
+        storage: context.read<SecureStorageService>(),
+        privateState: LocalPrivateStateService(
+          storage: context.read<SecureStorageService>(),
+        ),
+      );
+      final keyProvider = context.read<KeyProvider>();
+      final settingsProvider = context.read<SettingsProvider>();
+      await service.importBackup(
+        encodedBackup: await file.readAsString(),
+        passphrase: passphrase,
+      );
+      await keyProvider.load();
+      await settingsProvider.reload();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Encrypted backup imported')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Import failed: $e')));
+    }
+  }
+
+  Future<String?> _promptBackupPassphrase({
+    required bool confirm,
+    bool requireStrong = false,
+  }) async {
+    final passCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    String? errorText;
+    var obscureText = true;
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDlg) => GlassAlertDialog(
+            icon: const Icon(Icons.enhanced_encryption_outlined),
+            title: Text(confirm ? 'Encrypt recovery backup' : 'Decrypt backup'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: passCtrl,
+                  obscureText: obscureText,
+                  onChanged: (_) => setDlg(() => errorText = null),
+                  decoration: InputDecoration(
+                    labelText: 'Backup passphrase',
+                    errorText: errorText,
+                    suffixIcon: IconButton(
+                      tooltip: obscureText
+                          ? 'Show passphrase'
+                          : 'Hide passphrase',
+                      icon: Icon(
+                        obscureText
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                      ),
+                      onPressed: () => setDlg(() => obscureText = !obscureText),
+                    ),
+                  ),
+                ),
+                if (confirm) ...[
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: confirmCtrl,
+                    obscureText: obscureText,
+                    onChanged: (_) => setDlg(() => errorText = null),
+                    decoration: const InputDecoration(
+                      labelText: 'Confirm passphrase',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _PassphraseStrengthMeter(passphrase: passCtrl.text),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      icon: const Icon(Icons.auto_awesome_rounded),
+                      label: const Text('Generate strong passphrase'),
+                      onPressed: () {
+                        final generated = PassphraseStrength.generate();
+                        setDlg(() {
+                          passCtrl.text = generated;
+                          confirmCtrl.text = generated;
+                          obscureText = false;
+                          errorText = null;
+                        });
+                      },
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final passphrase = passCtrl.text.trim();
+                  if (passphrase.length < 12) {
+                    setDlg(() {
+                      errorText = 'Use at least 12 characters';
+                    });
+                    return;
+                  }
+                  if (confirm && passphrase != confirmCtrl.text.trim()) {
+                    setDlg(() {
+                      errorText = 'Passphrases do not match';
+                    });
+                    return;
+                  }
+                  if (requireStrong &&
+                      !PassphraseStrength.isStrongEnoughForServer(passphrase)) {
+                    setDlg(() {
+                      errorText = 'Choose a stronger passphrase';
+                    });
+                    return;
+                  }
+                  Navigator.pop(ctx, passphrase);
+                },
+                child: Text(confirm ? 'Export' : 'Import'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } finally {
+      passCtrl.dispose();
+      confirmCtrl.dispose();
+    }
+  }
+
   void _showFingerprintQr(String fingerprint) {
     showDialog<void>(
       context: context,
@@ -935,7 +1589,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: GlassAppBar(
-        title: const Text('Trust Center'),
+        title: const Text('Privacy & Security'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
@@ -1232,11 +1886,57 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
               ),
             ),
             const SizedBox(height: 20),
+            const _TrustSectionHeader('Backups'),
+            GlassCard(
+              padding: EdgeInsets.zero,
+              child: Column(
+                children: [
+                  if (!kIsWeb) ...[
+                    _TrustRow(
+                      icon: Icons.backup_outlined,
+                      title: 'Export encrypted backup',
+                      subtitle: 'Private key, trust pins, drafts, and folders',
+                      onTap: _exportEncryptedBackup,
+                    ),
+                    _TrustRow(
+                      icon: Icons.restore_outlined,
+                      title: 'Import encrypted backup',
+                      subtitle: 'Restore keys and encrypted local state',
+                      onTap: _importEncryptedBackup,
+                    ),
+                  ],
+                  _TrustRow(
+                    icon: Icons.cloud_upload_outlined,
+                    title: 'Store encrypted backup on server',
+                    subtitle: _lastBackupAt != null
+                        ? backupStatusLabel(backupStatus)
+                        : 'Zero-knowledge: only the passphrase-encrypted blob '
+                              'leaves this device',
+                    onTap: _uploadBackupToServer,
+                  ),
+                  _TrustRow(
+                    icon: Icons.cloud_download_outlined,
+                    title: 'Restore from server backup',
+                    subtitle: 'Download and decrypt with your passphrase',
+                    onTap: _restoreBackupFromServer,
+                  ),
+                  _TrustRow(
+                    icon: Icons.cloud_off_outlined,
+                    title: 'Delete server backup',
+                    subtitle: 'Remove the stored blob from the server',
+                    onTap: _deleteServerBackup,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
             const _TrustSectionHeader('Devices'),
             GlassCard(
               padding: EdgeInsets.zero,
-              child: _sessions.isEmpty
-                  ? _TrustRow(
+              child: Column(
+                children: [
+                  if (_sessions.isEmpty)
+                    _TrustRow(
                       icon: Icons.devices_outlined,
                       title: 'Active sessions',
                       subtitle: _loading
@@ -1248,9 +1948,9 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                               strokeWidth: 2,
                             )
                           : null,
-                      isLast: true,
                     )
-                  : ValueListenableBuilder<VaultMode>(
+                  else
+                    ValueListenableBuilder<VaultMode>(
                       // Wipe is vault-only: a coerced decoy session must not
                       // be able to send signed wipe commands to the account's
                       // other devices.
@@ -1288,11 +1988,36 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                                   ),
                                 ],
                               ),
-                              isLast: index == _sessions.length - 1,
                             ),
                         ],
                       ),
                     ),
+                  if (!kIsWeb)
+                    _TrustRow(
+                      icon: Icons.phonelink_lock_outlined,
+                      title: 'Link this device',
+                      subtitle: 'Create a one-time encrypted pairing QR',
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) => const DevicePairingScreen(),
+                        ),
+                      ),
+                    ),
+                  if (NearbyMeshService.isSupported)
+                    _TrustRow(
+                      icon: Icons.bluetooth_audio_rounded,
+                      title: 'Nearby',
+                      subtitle: 'Exchange queued messages over Bluetooth',
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) => const NearbyScreen(),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
             const SizedBox(height: 20),
             const _TrustSectionHeader('Account Protection'),
@@ -1300,6 +2025,13 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
               padding: EdgeInsets.zero,
               child: Column(
                 children: [
+                  _TrustRow(
+                    icon: Icons.password_outlined,
+                    title: 'Change password',
+                    subtitle: 'Update your account login password',
+                    onTap: _changePassword,
+                  ),
+                  const _TrustDivider(),
                   _TrustRow(
                     icon: Icons.security_outlined,
                     title: '2FA password',
@@ -1350,6 +2082,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                               label: deadmanCountdownLabel(deadmanStatus),
                               color: deadmanColor,
                             ),
+                            onTap: _pickDeadmanDays,
                           ),
                           const _TrustDivider(),
                           _TrustRow(
@@ -1367,6 +2100,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                                   ? Colors.green
                                   : Colors.orange,
                             ),
+                            onTap: _manageAppLockPin,
                           ),
                           if (_appPinConfigured) ...[
                             const _TrustDivider(),
@@ -1387,7 +2121,19 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                                     ? Colors.green
                                     : Colors.orange,
                               ),
+                              onTap: _manageDuressPin,
                             ),
+                            if (_duressPinConfigured) ...[
+                              const _TrustDivider(),
+                              _TrustRow(
+                                icon: Icons.fork_right_rounded,
+                                title: 'Duress PIN action',
+                                subtitle: _duressAction == 'wipe'
+                                    ? 'Wipe this device'
+                                    : 'Open decoy',
+                                onTap: _pickDuressAction,
+                              ),
+                            ],
                           ],
                         ],
                       );
@@ -1439,6 +2185,24 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
             // Hides itself entirely (headers included) in VaultMode.decoy and
             // carries its own trailing spacing so the layout collapses cleanly.
             SocialRecoverySection(localKeyMissing: !keys.hasKey),
+            if (!kIsWeb) ...[
+              const _TrustSectionHeader('Network'),
+              GlassCard(
+                padding: EdgeInsets.zero,
+                child: _TrustRow(
+                  icon: Icons.vpn_lock_outlined,
+                  title: 'Proxy & Tor',
+                  subtitle: 'Route traffic through HTTP, SOCKS5, or Tor',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute<void>(
+                      builder: (_) => const ProxySettingsScreen(),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+            ],
             const _TrustSectionHeader('Privacy Controls'),
             GlassCard(
               padding: EdgeInsets.zero,
@@ -1467,14 +2231,6 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                         'Default for typing, read receipts, link previews, and link opens; chats can override typing and receipts',
                     value: settings.strictPrivacyMode,
                     onChanged: settings.setStrictPrivacyMode,
-                  ),
-                  const _TrustDivider(),
-                  _TrustSwitchRow(
-                    icon: Icons.visibility_outlined,
-                    title: 'Sensitive notification content',
-                    subtitle: 'Show sender and previews in notifications',
-                    value: settings.notificationSensitiveContent,
-                    onChanged: settings.setNotificationSensitiveContent,
                   ),
                   const _TrustDivider(),
                   _TrustRow(
@@ -1803,6 +2559,93 @@ class _TrustDivider extends StatelessWidget {
       color: Theme.of(context).dividerColor.withValues(alpha: 0.22),
     );
   }
+}
+
+class _PassphraseStrengthMeter extends StatelessWidget {
+  final String passphrase;
+
+  const _PassphraseStrengthMeter({required this.passphrase});
+
+  @override
+  Widget build(BuildContext context) {
+    final level = PassphraseStrength.level(passphrase);
+    final fraction = PassphraseStrength.fraction(passphrase);
+    final color = _strengthColor(context, level);
+    final scheme = Theme.of(context).colorScheme;
+    return GlassContainer(
+      padding: const EdgeInsets.all(10),
+      shape: const LiquidRoundedSuperellipse(borderRadius: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(_strengthIcon(level), size: 16, color: color),
+              const SizedBox(width: 6),
+              Text(
+                PassphraseStrength.label(passphrase),
+                style: TextStyle(fontWeight: FontWeight.w700, color: color),
+              ),
+              const Spacer(),
+              Text(
+                '${PassphraseStrength.estimateBits(passphrase).round()} bits',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: scheme.onSurface.withValues(alpha: 0.58),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          LayoutBuilder(
+            builder: (context, constraints) => Stack(
+              children: [
+                Container(
+                  height: 7,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(99),
+                    color: scheme.onSurface.withValues(alpha: 0.10),
+                  ),
+                ),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 260),
+                  curve: Curves.easeOutCubic,
+                  width: constraints.maxWidth * fraction,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(99),
+                    gradient: LinearGradient(
+                      colors: [color.withValues(alpha: 0.72), color],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _strengthColor(BuildContext context, PassphraseStrengthLevel level) {
+    final scheme = Theme.of(context).colorScheme;
+    return switch (level) {
+      PassphraseStrengthLevel.tooShort => scheme.outline,
+      PassphraseStrengthLevel.weak => scheme.error,
+      PassphraseStrengthLevel.fair => Colors.orange,
+      PassphraseStrengthLevel.good => Colors.teal,
+      PassphraseStrengthLevel.strong => Colors.green,
+    };
+  }
+
+  IconData _strengthIcon(PassphraseStrengthLevel level) => switch (level) {
+    PassphraseStrengthLevel.tooShort => Icons.horizontal_rule_rounded,
+    PassphraseStrengthLevel.weak => Icons.warning_amber_rounded,
+    PassphraseStrengthLevel.fair => Icons.shield_outlined,
+    PassphraseStrengthLevel.good => Icons.verified_user_outlined,
+    PassphraseStrengthLevel.strong => Icons.verified_user_rounded,
+  };
 }
 
 Color _levelColor(BuildContext context, TrustCenterLevel level) {

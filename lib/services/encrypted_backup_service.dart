@@ -27,12 +27,22 @@ class EncryptedBackupService {
 
   /// The raw recovery bundle (also the payload social recovery encrypts under
   /// its Shamir-split secret).
-  Future<Map<String, Object?>> buildRecoveryBundlePayload() async => {
-    'openchat_recovery_bundle': 1,
-    'created_at': DateTime.now().toUtc().toIso8601String(),
-    'secure_storage': await _storage.exportRecoverySecrets(),
-    'local_private_state': await _privateState.readState(),
-  };
+  Future<Map<String, Object?>> buildRecoveryBundlePayload() async {
+    final createdAt = DateTime.now().toUtc().toIso8601String();
+    final secureStorage = await _storage.exportRecoverySecrets();
+    final localPrivateState = await _privateState.readState();
+    return {
+      'openchat_recovery_bundle': 1,
+      'created_at': createdAt,
+      'manifest': recoveryBundleManifest(
+        secureStorage: secureStorage,
+        localPrivateState: localPrivateState,
+        createdAt: createdAt,
+      ),
+      'secure_storage': secureStorage,
+      'local_private_state': localPrivateState,
+    };
+  }
 
   /// Imports a decrypted recovery-bundle payload (the inverse of
   /// [buildRecoveryBundlePayload]); shared by passphrase backups and social
@@ -205,4 +215,37 @@ class EncryptedBackupService {
     final random = Random.secure();
     return List<int>.generate(length, (_) => random.nextInt(256));
   }
+}
+
+Map<String, Object?> recoveryBundleManifest({
+  required Map<String, String> secureStorage,
+  required Map<String, Object?> localPrivateState,
+  required String createdAt,
+}) {
+  final privateStateKeys =
+      localPrivateState.keys
+          .map((key) => key.toString())
+          .where((key) => key.trim().isNotEmpty)
+          .toList()
+        ..sort();
+  final fingerprint = _manifestString(
+    secureStorage['pgp_fingerprint'],
+  )?.toUpperCase();
+  return {
+    'version': 1,
+    'created_at': createdAt,
+    'user_id': _manifestString(secureStorage['user_id']),
+    'username': _manifestString(secureStorage['username']),
+    'key_fingerprint': fingerprint,
+    'has_private_key':
+        _manifestString(secureStorage['pgp_private_key']) != null,
+    'has_public_key': _manifestString(secureStorage['pgp_public_key']) != null,
+    'local_private_state_keys': privateStateKeys,
+  };
+}
+
+String? _manifestString(Object? value) {
+  final text = value?.toString().trim();
+  if (text == null || text.isEmpty) return null;
+  return text;
 }

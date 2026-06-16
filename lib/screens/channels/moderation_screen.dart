@@ -31,6 +31,18 @@ class ModerationScreen extends StatefulWidget {
   final bool canManageRoles;
   final bool canManageSettings;
 
+  /// Channel-management capabilities. These gate the "Channel" section, whose
+  /// actions are delegated back to the channel screen via the callbacks below
+  /// (it already owns the edit dialog, encryption switch, price editor, and
+  /// analytics route, plus the state refresh each one triggers).
+  final bool canManageInfo;
+  final bool canManageEncryption;
+  final bool canViewAnalytics;
+  final VoidCallback? onEditSettings;
+  final VoidCallback? onOpenAnalytics;
+  final VoidCallback? onSetSubscriptionPrice;
+  final VoidCallback? onSetEncryption;
+
   /// Owner / system admin: may archive, unarchive, and delete the channel.
   final bool canManageLifecycle;
   final bool isArchived;
@@ -41,6 +53,13 @@ class ModerationScreen extends StatefulWidget {
     required this.canManageModeration,
     required this.canManageRoles,
     required this.canManageSettings,
+    this.canManageInfo = false,
+    this.canManageEncryption = false,
+    this.canViewAnalytics = false,
+    this.onEditSettings,
+    this.onOpenAnalytics,
+    this.onSetSubscriptionPrice,
+    this.onSetEncryption,
     this.canManageLifecycle = false,
     this.isArchived = false,
   });
@@ -71,6 +90,17 @@ class _ModerationScreenState extends State<ModerationScreen> {
   bool get _canMod => widget.canManageModeration;
   bool get _canRoles => widget.canManageRoles;
   bool get _canManageMembers => _canMod || (_canRoles && _conv.isChannel);
+
+  bool get _canEditChannel =>
+      widget.canManageInfo && widget.onEditSettings != null;
+  bool get _canViewAnalytics =>
+      widget.canViewAnalytics && widget.onOpenAnalytics != null;
+  bool get _canSetSubscription =>
+      widget.canManageInfo &&
+      _conv.isChannel &&
+      widget.onSetSubscriptionPrice != null;
+  bool get _canSetEncryption =>
+      widget.canManageEncryption && widget.onSetEncryption != null;
 
   @override
   void initState() {
@@ -394,6 +424,37 @@ class _ModerationScreenState extends State<ModerationScreen> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final manage =
+        <({IconData icon, String title, String subtitle, VoidCallback? onTap})>[
+          if (_canEditChannel)
+            (
+              icon: Icons.tune_rounded,
+              title: 'Channel settings',
+              subtitle: 'Name, description, handle, and visibility.',
+              onTap: widget.onEditSettings,
+            ),
+          if (_canViewAnalytics)
+            (
+              icon: Icons.query_stats_outlined,
+              title: 'Analytics',
+              subtitle: 'Reach, subscribers, and post performance.',
+              onTap: widget.onOpenAnalytics,
+            ),
+          if (_canSetSubscription)
+            (
+              icon: Icons.payments_outlined,
+              title: 'Subscription price',
+              subtitle: 'Set or change the paid subscription plan.',
+              onTap: widget.onSetSubscriptionPrice,
+            ),
+          if (_canSetEncryption)
+            (
+              icon: Icons.lock_outline_rounded,
+              title: 'Encryption mode',
+              subtitle: 'Switch between PGP and MLS encryption.',
+              onTap: widget.onSetEncryption,
+            ),
+        ];
     return PopScope<ChannelModerationResult>(
       // We intercept the pop so the lifecycle change (if any) rides back to the
       // channel screen on either the app-bar button or a system/swipe back.
@@ -430,6 +491,29 @@ class _ModerationScreenState extends State<ModerationScreen> {
                   if (_archived) ...[
                     const SizedBox(height: 14),
                     _ArchivedBanner(),
+                  ],
+
+                  // Channel management ------------------------------------
+                  if (manage.isNotEmpty) ...[
+                    const SizedBox(height: 20),
+                    _SectionHeader('Channel'),
+                    _Card([
+                      for (var i = 0; i < manage.length; i++)
+                        GlassListTile(
+                          showDivider: i != manage.length - 1,
+                          leading: _LeadingIcon(
+                            manage[i].icon,
+                            color: scheme.primary,
+                          ),
+                          title: Text(
+                            manage[i].title,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          subtitle: Text(manage[i].subtitle),
+                          trailing: const Icon(Icons.chevron_right_rounded),
+                          onTap: manage[i].onTap,
+                        ),
+                    ]),
                   ],
 
                   // People ------------------------------------------------
@@ -713,7 +797,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
                   // Lifecycle ---------------------------------------------
                   if (widget.canManageLifecycle) ...[
                     const SizedBox(height: 20),
-                    _SectionHeader('Channel'),
+                    _SectionHeader('Danger zone'),
                     _Card([
                       if (!_archived)
                         GlassListTile(

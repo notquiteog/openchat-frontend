@@ -119,6 +119,7 @@ void main() {
     expect(peopleY, lessThan(groupsY));
     expect(groupsY, lessThan(channelsY));
     expect(channelsY, lessThan(messagesY));
+    expect(find.text('Remote Alpine Group'), findsOneWidget);
   });
 }
 
@@ -155,13 +156,22 @@ class _SearchApi extends ApiService {
   ];
 
   @override
-  Future<List<Conversation>> searchChannels(String query) async => [
+  Future<List<Conversation>> searchChannels(
+    String query, {
+    bool includeGroups = false,
+  }) async => [
     _conversation(
       'remote-channel',
       'Alpine Broadcast',
       type: ConversationType.channel,
       handle: 'alpine-broadcast',
     ),
+    if (includeGroups)
+      _conversation(
+        'remote-group',
+        'Remote Alpine Group',
+        type: ConversationType.group,
+      ),
   ];
 }
 

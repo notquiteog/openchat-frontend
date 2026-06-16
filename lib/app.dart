@@ -50,6 +50,7 @@ import 'utils/app_lock_grace.dart';
 import 'utils/deadman_status.dart';
 import 'utils/invite_links.dart';
 import 'utils/identity_qr.dart';
+import 'utils/message_actions.dart';
 import 'utils/pack_links.dart';
 import 'widgets/chat_search_results_view.dart';
 import 'widgets/desktop.dart';
@@ -585,6 +586,10 @@ class _AppRootState extends State<_AppRoot> {
   PackLink? _lastPackLink;
   DateTime? _lastPackHandledAt;
   bool _handlingPackLink = false;
+  MessageLink? _pendingMessageLink;
+  MessageLink? _lastMessageLink;
+  DateTime? _lastMessageLinkHandledAt;
+  bool _handlingMessageLink = false;
   String? _pendingPushConversationId;
   bool _handlingPushConversation = false;
   StreamSubscription<SharedMedia>? _shareSub;
@@ -840,6 +845,12 @@ class _AppRootState extends State<_AppRoot> {
       _drainPendingPackLink();
       return;
     }
+    final messageLink = messageLinkFromUri(uri);
+    if (messageLink != null) {
+      _pendingMessageLink = messageLink;
+      _drainPendingMessageLink();
+      return;
+    }
   }
 
   void _drainPendingInviteLink() {
@@ -975,6 +986,68 @@ class _AppRootState extends State<_AppRoot> {
       }
       if (!mounted) return;
       _drainPendingPackLink();
+    });
+  }
+
+  void _drainPendingMessageLink() {
+    if (!mounted || _handlingMessageLink) return;
+    final link = _pendingMessageLink;
+    if (link == null) return;
+    if (_appLocked) return;
+    if (context.read<AuthProvider>().state != AuthState.authenticated) return;
+
+    final navigator = OpenChatApp.navigatorKey.currentState;
+    if (navigator == null) return;
+
+    final now = DateTime.now();
+    final handledRecently =
+        _lastMessageLink == link &&
+        _lastMessageLinkHandledAt != null &&
+        now.difference(_lastMessageLinkHandledAt!) < const Duration(seconds: 2);
+    if (handledRecently) {
+      _pendingMessageLink = null;
+      return;
+    }
+
+    _pendingMessageLink = null;
+    _handlingMessageLink = true;
+    _lastMessageLink = link;
+    _lastMessageLinkHandledAt = now;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        _handlingMessageLink = false;
+        return;
+      }
+      try {
+        final chat = context.read<ChatProvider>();
+        final conv =
+            chat.conversationById(link.conversationId) ??
+            await chat.ensureConversationLoaded(link.conversationId);
+        if (conv == null || !mounted) {
+          OpenChatApp.scaffoldMessengerKey.currentState?.showSnackBar(
+            const SnackBar(content: Text('Conversation is not available')),
+          );
+          return;
+        }
+        await navigator.push(
+          MaterialPageRoute<void>(
+            builder: (_) => conv.isChannel
+                ? ChannelFeedScreen(
+                    channel: conv,
+                    initialPostId: link.messageId,
+                  )
+                : ChatScreen(
+                    conversation: conv,
+                    initialMessageId: link.messageId,
+                  ),
+          ),
+        );
+      } finally {
+        if (mounted) _handlingMessageLink = false;
+      }
+      if (!mounted) return;
+      _drainPendingMessageLink();
     });
   }
 
@@ -1119,6 +1192,7 @@ class _AppRootState extends State<_AppRoot> {
     _drainPendingInviteLink();
     _drainPendingContactLink();
     _drainPendingPackLink();
+    _drainPendingMessageLink();
     _drainPendingPushConversation();
     _drainPendingShare();
   }
@@ -1362,6 +1436,7 @@ class _AppRootState extends State<_AppRoot> {
       _drainPendingInviteLink();
       _drainPendingContactLink();
       _drainPendingPackLink();
+      _drainPendingMessageLink();
       _drainPendingPushConversation();
       // Re-register the FCM/APNs push token on every login so the backend
       // always has a current token. Silently skipped when Firebase credentials

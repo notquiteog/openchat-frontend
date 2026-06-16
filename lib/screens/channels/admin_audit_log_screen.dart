@@ -359,6 +359,7 @@ IconData _auditIcon(String action) => switch (action) {
   'join_request_rejected' => Icons.how_to_reg_outlined,
   'encryption_updated' => Icons.lock_outline_rounded,
   'slow_mode_updated' || 'message_ttl_updated' => Icons.timer_outlined,
+  'ring_all_on_call_start_updated' => Icons.notifications_active_outlined,
   'topic_created' ||
   'topic_updated' ||
   'topics_enabled_updated' => Icons.forum_outlined,
@@ -386,6 +387,7 @@ String _auditTitle(AdminAuditEvent event) => switch (event.action) {
   'invite_link_revoked' => 'Revoked invite link',
   'slow_mode_updated' => 'Updated slow mode',
   'message_ttl_updated' => 'Updated disappearing messages',
+  'ring_all_on_call_start_updated' => 'Updated group-call ringing',
   'encryption_updated' => 'Updated encryption',
   'join_approval_updated' => 'Updated join approval',
   'topics_enabled_updated' => 'Updated topics',
@@ -441,6 +443,7 @@ String? _auditMetadataDetail(AdminAuditEvent event) {
     case 'topics_enabled_updated':
     case 'encryption_updated':
     case 'owner_only_post_updated':
+    case 'ring_all_on_call_start_updated':
       final enabled = metadata['enabled'] ?? metadata['required'];
       return enabled is bool ? (enabled ? 'On' : 'Off') : null;
     case 'channel_archived':

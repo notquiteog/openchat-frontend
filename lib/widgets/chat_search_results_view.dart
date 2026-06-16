@@ -103,13 +103,19 @@ Future<void> handleChatSearchSelection(
       if (openConversation != null) {
         openConversation(conv, result.messageId);
       } else {
+        final conversation = conv;
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => ChatScreen(
-              conversation: conv!,
-              initialMessageId: result.messageId,
-            ),
+            builder: (_) => conversation.isChannel
+                ? ChannelFeedScreen(
+                    channel: conversation,
+                    initialPostId: result.messageId,
+                  )
+                : ChatScreen(
+                    conversation: conversation,
+                    initialMessageId: result.messageId,
+                  ),
           ),
         );
       }
@@ -336,7 +342,9 @@ class _ChatSearchResultsViewState extends State<ChatSearchResultsView> {
     );
     final results = await Future.wait([
       api.searchUsers(term).catchError((_) => <User>[]),
-      api.searchChannels(term).catchError((_) => <Conversation>[]),
+      api
+          .searchChannels(term, includeGroups: true)
+          .catchError((_) => <Conversation>[]),
       chat
           .searchMessages(
             messageTerm,
@@ -347,10 +355,16 @@ class _ChatSearchResultsViewState extends State<ChatSearchResultsView> {
           )
           .catchError((_) => <MessageSearchResult>[]),
     ]);
-    final remoteChannels = results[1] as List<Conversation>;
+    final remoteConversations = results[1] as List<Conversation>;
+    final remoteGroups = remoteConversations
+        .where((conversation) => conversation.isGroup)
+        .toList();
+    final remoteChannels = remoteConversations
+        .where((conversation) => conversation.isChannel)
+        .toList();
     return _SearchResults(
       users: results[0] as List<User>,
-      groups: localGroups,
+      groups: _dedupeConversations(localGroups, remoteGroups),
       channels: _dedupeConversations(localChannels, remoteChannels),
       messages: results[2] as List<MessageSearchResult>,
     );
