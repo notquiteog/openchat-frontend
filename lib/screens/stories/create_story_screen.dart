@@ -327,17 +327,19 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
                     shrinkWrap: true,
                     children: [
                       for (final u in contacts)
-                        CheckboxListTile(
-                          value: selected.contains(u.id),
-                          onChanged: (v) => setSheet(() {
-                            if (v == true) {
-                              selected.add(u.id);
-                            } else {
-                              selected.remove(u.id);
-                            }
-                          }),
+                        GlassListTile(
                           title: Text(u.displayName),
                           subtitle: Text('@${u.username}'),
+                          trailing: GlassSwitch(
+                            value: selected.contains(u.id),
+                            onChanged: (v) => setSheet(() {
+                              if (v) {
+                                selected.add(u.id);
+                              } else {
+                                selected.remove(u.id);
+                              }
+                            }),
+                          ),
                         ),
                     ],
                   ),

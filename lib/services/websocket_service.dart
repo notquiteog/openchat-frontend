@@ -48,6 +48,10 @@ enum WsEventType {
   groupCallJoin,
   groupCallLeave,
   groupCallState,
+  // Ring-all (#9): a ring-all group call started / ended. Carries
+  // {conversation_id, initiator_id}. Foregrounded apps ring on these.
+  groupCallRing,
+  groupCallRingCancel,
   stageState,
   gameUpdated,
   // A pending join request, delivered only to members who can approve it.
@@ -661,6 +665,8 @@ class WebSocketService extends ChangeNotifier {
     'group_call_join' => WsEventType.groupCallJoin,
     'group_call_leave' => WsEventType.groupCallLeave,
     'group_call_state' => WsEventType.groupCallState,
+    'group_call_ring' => WsEventType.groupCallRing,
+    'group_call_ring_cancel' => WsEventType.groupCallRingCancel,
     'stage_state' => WsEventType.stageState,
     'game_updated' => WsEventType.gameUpdated,
     'join_request' => WsEventType.joinRequest,

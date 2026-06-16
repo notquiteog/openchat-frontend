@@ -187,6 +187,11 @@ class SettingsProvider extends ChangeNotifier {
   static const _kCallDataSaver = 'call_data_saver_mode';
   static const _kCallVoiceOnlyMobile = 'call_voice_only_mobile';
   static const _kReduceTransparency = 'reduce_transparency';
+  static const _kBoldText = 'a11y_bold_text';
+  static const _kReduceMotion = 'a11y_reduce_motion';
+  static const _kUiTextScale = 'a11y_ui_text_scale';
+  static const _kNotificationHintsEnabled = 'notification_hints_enabled';
+  static const _kLocaleTag = 'app_locale_tag';
   static const _kSmartInboxFilter = 'smart_inbox_filter';
   static const _kThemeMode = 'theme_mode';
   static const _kDesktopSidebarWidth = 'desktop_sidebar_width';
@@ -255,6 +260,11 @@ class SettingsProvider extends ChangeNotifier {
   CallDataSaverMode _callDataSaverMode = CallDataSaverMode.off;
   bool _callVoiceOnlyOnMobile = false;
   bool _reduceTransparency = false;
+  bool _boldText = false;
+  bool _reduceMotion = false;
+  double _uiTextScale = 1.0;
+  bool _notificationHintsEnabled = false;
+  String? _localeTag;
   List<String> _recentReactions = const [];
   SmartInboxFilter _smartInboxFilter = SmartInboxFilter.all;
   double _desktopSidebarWidth = defaultDesktopSidebarWidth;
@@ -456,6 +466,36 @@ class SettingsProvider extends ChangeNotifier {
   static const double minMessageFontScale = 0.8;
   static const double maxMessageFontScale = 1.5;
 
+  /// App-wide accessibility prefs (device-level; survive logout like theme).
+  bool get boldText => _boldText;
+  bool get reduceMotion => _reduceMotion;
+
+  /// App-wide UI text scale folded into MediaQuery.textScaler. Clamped
+  /// conservatively because the glass chrome has many fixed-height surfaces.
+  double get uiTextScale => _uiTextScale;
+  static const double minUiTextScale = 1.0;
+  static const double maxUiTextScale = 1.3;
+
+  /// Opt-in rich notification previews (#54): when on, sealed sends upload a
+  /// per-recipient PGP-sealed hint so a recipient's device can show a name +
+  /// preview. Off by default; stays end-to-end encrypted (device-level pref).
+  bool get notificationHintsEnabled => _notificationHintsEnabled;
+
+  /// App language (#46). null = follow the device locale. Device-level pref
+  /// (survives logout, like theme).
+  Locale? get locale {
+    final tag = _localeTag;
+    if (tag == null || tag.isEmpty) return null;
+    return _parseLocaleTag(tag);
+  }
+
+  String? get localeTag => _localeTag;
+
+  static Locale _parseLocaleTag(String tag) {
+    final parts = tag.split(RegExp(r'[_-]'));
+    return parts.length > 1 ? Locale(parts[0], parts[1]) : Locale(parts[0]);
+  }
+
   /// Global voice/audio playback rate for inline message players.
   double get voicePlaybackSpeed => _voicePlaybackSpeed;
   static const double minVoicePlaybackSpeed = 1.0;
@@ -552,6 +592,15 @@ class SettingsProvider extends ChangeNotifier {
     );
     _callVoiceOnlyOnMobile = _prefs!.getBool(_kCallVoiceOnlyMobile) ?? false;
     _reduceTransparency = _prefs!.getBool(_kReduceTransparency) ?? false;
+    _boldText = _prefs!.getBool(_kBoldText) ?? false;
+    _reduceMotion = _prefs!.getBool(_kReduceMotion) ?? false;
+    _uiTextScale = (_prefs!.getDouble(_kUiTextScale) ?? 1.0).clamp(
+      minUiTextScale,
+      maxUiTextScale,
+    );
+    _notificationHintsEnabled =
+        _prefs!.getBool(_kNotificationHintsEnabled) ?? false;
+    _localeTag = _prefs!.getString(_kLocaleTag);
     _recentReactions = _prefs!.getStringList(_kRecentReactions) ?? const [];
     _smartInboxFilter = smartInboxFilterFromName(
       _prefs!.getString(_kSmartInboxFilter),
@@ -1492,6 +1541,25 @@ class SettingsProvider extends ChangeNotifier {
     );
   }
 
+  // Generic aliases (#2): message pins are keyed by an opaque conversation id,
+  // so the channel-pin storage already serves DM/group conversations. These
+  // thin wrappers give call sites a conversation-named API.
+  List<ChannelPinnedMessage> pinnedMessagesForConversation(String convId) =>
+      pinnedMessagesForChannel(convId);
+  bool isConversationMessagePinned(String convId, String messageId) =>
+      isChannelMessagePinned(convId, messageId);
+  Future<void> setConversationMessagePinned(
+    String convId,
+    ChannelPinnedMessage pinnedMessage,
+    bool pinned,
+  ) => setChannelMessagePinned(convId, pinnedMessage, pinned);
+  Future<void> replaceConversationPinnedMessages(
+    String convId,
+    List<ChannelPinnedMessage> messages,
+  ) => replaceChannelPinnedMessages(convId, messages);
+  Future<void> unpinConversationMessage(String convId, String messageId) =>
+      unpinChannelMessage(convId, messageId);
+
   Future<void> setPushNotificationsEnabled(bool value) async {
     _pushEnabled = value;
     if (value) {
@@ -1608,6 +1676,41 @@ class SettingsProvider extends ChangeNotifier {
     _reduceTransparency = value;
     notifyListeners();
     await _prefs?.setBool(_kReduceTransparency, value);
+  }
+
+  Future<void> setBoldText(bool value) async {
+    _boldText = value;
+    notifyListeners();
+    await _prefs?.setBool(_kBoldText, value);
+  }
+
+  Future<void> setReduceMotion(bool value) async {
+    _reduceMotion = value;
+    notifyListeners();
+    await _prefs?.setBool(_kReduceMotion, value);
+  }
+
+  Future<void> setUiTextScale(double value) async {
+    _uiTextScale = value.clamp(minUiTextScale, maxUiTextScale);
+    notifyListeners();
+    await _prefs?.setDouble(_kUiTextScale, _uiTextScale);
+  }
+
+  Future<void> setNotificationHintsEnabled(bool value) async {
+    _notificationHintsEnabled = value;
+    notifyListeners();
+    await _prefs?.setBool(_kNotificationHintsEnabled, value);
+  }
+
+  /// Set the app language (#46). null/empty = follow the device locale.
+  Future<void> setLocale(String? tag) async {
+    _localeTag = (tag == null || tag.isEmpty) ? null : tag;
+    notifyListeners();
+    if (_localeTag == null) {
+      await _prefs?.remove(_kLocaleTag);
+    } else {
+      await _prefs?.setString(_kLocaleTag, _localeTag!);
+    }
   }
 
   ChatStyle chatStyleFor(String convID) {

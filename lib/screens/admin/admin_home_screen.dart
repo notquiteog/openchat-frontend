@@ -284,7 +284,10 @@ class _CsamSectionState extends State<_CsamSection> {
     try {
       await api.resolveCsamReport(reportID, action);
       if (!mounted) return;
-      showAppToast(context, action == 'ban' ? 'Sender banned' : 'Report dismissed');
+      showAppToast(
+        context,
+        action == 'ban' ? 'Sender banned' : 'Report dismissed',
+      );
       _reload();
     } catch (e) {
       if (!mounted) return;

@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:uuid/uuid.dart';
 import '../crypto/amf_service.dart';
+import '../crypto/blind_token.dart' as blind;
 import '../crypto/pgp_service.dart';
 import '../crypto/smp_service.dart';
 import '../models/chat_folder.dart';
@@ -49,7 +50,17 @@ class _PooledPostToken {
   // The AMF (Hecate) franking token minted together with this post token, used
   // once to frank the send it accompanies. Null when the server omitted it.
   final AmfToken? amf;
-  const _PooledPostToken(this.token, this.fetchedAt, {this.amf});
+  // Blinded-token fields (#53): the unblinded signature (base64) and the
+  // signing key id. Null on the legacy bearer path (token is the bearer token).
+  final String? signature;
+  final String? keyId;
+  const _PooledPostToken(
+    this.token,
+    this.fetchedAt, {
+    this.amf,
+    this.signature,
+    this.keyId,
+  });
 
   bool isStale(Duration maxAge) =>
       DateTime.now().difference(fetchedAt) >= maxAge;
@@ -110,6 +121,10 @@ class _PreparedEncryptedPayload {
   final DateTime? autoDeleteExpiresAt;
   final String senderId;
   final String? postToken;
+  // Blinded post-token fields (#53): set when the post token is a blind token
+  // (postToken then carries the base64 raw token). Null on the bearer path.
+  final String? postTokenSignature;
+  final String? postTokenKeyId;
   // Base64 AMF commitment to send server-visible (server stamps it). Set only
   // for franked immediate text/media sends; null otherwise.
   final String? frankCom;
@@ -123,8 +138,35 @@ class _PreparedEncryptedPayload {
     required this.autoDeleteExpiresAt,
     required this.senderId,
     this.postToken,
+    this.postTokenSignature,
+    this.postTokenKeyId,
     this.frankCom,
   });
+}
+
+/// A poll tally computed entirely on this device from sealed ballots (#57).
+/// The server stores the ballots opaquely and never sees these counts.
+class SealedPollTally {
+  /// Votes per option id (poll option `id`/`persistentId`).
+  final Map<String, int> countsByOptionId;
+
+  /// Number of distinct ballots counted (one per blind token).
+  final int totalVoters;
+
+  /// A recomputation is in flight; existing counts shown meanwhile.
+  final bool computing;
+
+  /// The last recomputation failed (e.g. offline); counts may be stale.
+  final bool failed;
+
+  const SealedPollTally({
+    this.countsByOptionId = const {},
+    this.totalVoters = 0,
+    this.computing = false,
+    this.failed = false,
+  });
+
+  int countFor(String optionId) => countsByOptionId[optionId] ?? 0;
 }
 
 class ChatProvider extends ChangeNotifier {
@@ -414,6 +456,7 @@ class ChatProvider extends ChangeNotifier {
     // previous account's auth, and the remaining caches are keyed by ids the
     // next account can re-encounter.
     _postTokenPool.clear();
+    _signingKeyCache.clear();
     _seenProofSignatures.clear();
     _gameRounds.clear();
     _messageTranslations.clear();
@@ -1353,6 +1396,11 @@ class ChatProvider extends ChangeNotifier {
         convID: item.conversationId,
         encryptedPayload: data['encrypted_payload'] as String? ?? '',
         postToken: postToken,
+        // Carry the blind-token signature/key id (#53) so a queued blind token
+        // is redeemed correctly on drain (omitting them would misroute it to
+        // the bearer verifier and fail).
+        postTokenSignature: data['post_token_signature'] as String?,
+        postTokenKeyId: data['post_token_key_id'] as String?,
         replyTo: null,
         attachmentId: data['attachment_id'] as String?,
         topicId: null,
@@ -1903,6 +1951,7 @@ class ChatProvider extends ChangeNotifier {
     bool silent = false,
     bool quiz = false,
     bool meeting = false,
+    bool sealedTally = false,
     int? correctOptionId,
     String? explanation,
   }) async {
@@ -1917,6 +1966,7 @@ class ChatProvider extends ChangeNotifier {
         silent: silent,
         quiz: quiz,
         meeting: meeting,
+        sealedTally: sealedTally,
         correctOptionId: correctOptionId,
         explanation: explanation,
       );
@@ -1960,9 +2010,27 @@ class ChatProvider extends ChangeNotifier {
     required bool silent,
     bool quiz = false,
     bool meeting = false,
+    bool sealedTally = false,
     int? correctOptionId,
     String? explanation,
   }) async {
+    // Server-blind tally (#57): ballots are sealed to every member and counted
+    // on-device, so the feature only works in PGP conversations (an MLS
+    // application message reveals its sender to the group, which would
+    // deanonymise the vote) and is force-anonymous and never a quiz — the
+    // backend enforces the same, but we mirror it so the local poll is honest.
+    if (sealedTally) {
+      final conv = _conversations[convID];
+      if (conv?.usesPgp != true || conv?.usesMls == true) {
+        throw const ChatSendException(
+          'Sealed tallies are only available in PGP-encrypted chats.',
+        );
+      }
+      if (quiz) {
+        throw const ChatSendException('A quiz cannot use a sealed tally.');
+      }
+      isAnonymous = true;
+    }
     final pollEffectiveMultiple = meeting ? true : allowsMultipleAnswers;
     final pollType = quiz ? 'quiz' : (meeting ? 'meeting' : 'regular');
     final userID = await _storage.getUserID() ?? '';
@@ -1990,6 +2058,7 @@ class ChatProvider extends ChangeNotifier {
       isAnonymous: isAnonymous,
       allowsMultipleAnswers: pollEffectiveMultiple,
       allowsRevoting: !quiz,
+      sealedTally: sealedTally,
       isClosed: false,
       totalVoterCount: 0,
       correctOptionIds: quiz && correctOptionId != null
@@ -2015,6 +2084,7 @@ class ChatProvider extends ChangeNotifier {
         'is_anonymous': isAnonymous,
         'allows_multiple_answers': pollEffectiveMultiple,
         'allows_revoting': !quiz,
+        if (sealedTally) 'sealed_tally': true,
         'options': [
           for (var i = 0; i < cleanOptions.length; i++)
             {
@@ -2057,12 +2127,15 @@ class ChatProvider extends ChangeNotifier {
         optionIDs: optionIDs,
         encryptedPayload: prepared.encryptedPayload,
         postToken: prepared.postToken ?? '',
+        postTokenSignature: prepared.postTokenSignature,
+        postTokenKeyId: prepared.postTokenKeyId,
         isAnonymous: isAnonymous,
         allowsMultipleAnswers: pollEffectiveMultiple,
         allowsRevoting: !quiz,
         silent: silent,
         quiz: quiz,
         meeting: meeting,
+        sealedTally: sealedTally,
         correctOptionId: correctOptionId,
         explanation: explanation,
       );
@@ -2193,10 +2266,55 @@ class ChatProvider extends ChangeNotifier {
     // and guessing false there would route an anonymous poll to the
     // attributed endpoint, which the server rejects.
     bool? isAnonymous,
+    // Likewise the bubble knows whether the poll uses a server-blind tally,
+    // which routes the vote to the opaque-ballot endpoint instead.
+    bool? sealedTally,
   }) async {
     final list = _messages[convID];
     final pollMessage = list?.where((m) => m.poll?.id == pollID).firstOrNull;
     final anonymous = isAnonymous ?? pollMessage?.poll?.isAnonymous ?? false;
+    final sealed = sealedTally ?? pollMessage?.poll?.sealedTally ?? false;
+
+    // Server-blind tally (#57): seal the choice to every member and store it
+    // against the blind token's hash. The server never sees it — the tally is
+    // recomputed on-device from all ballots — so we record the vote locally and
+    // kick a tally refresh rather than reading a (non-existent) server count.
+    if (sealed) {
+      var token = await _storage.getPollVoteToken(pollID);
+      if (token == null || token.isEmpty) {
+        token = await _api.requestPollVoteToken(pollID);
+        await _storage.savePollVoteToken(pollID, token);
+        await Future<void>.delayed(
+          Duration(milliseconds: 200 + Random().nextInt(1300)),
+        );
+      }
+      final sealedBallot = await _sealPollBallot(convID, pollID, optionIDs);
+      await _api.submitPollBallot(pollID, token, sealedBallot);
+      _rememberPollVote(pollID, optionIDs);
+      final base = pollMessage?.poll ?? _pollSnapshots[pollID];
+      if (base != null) {
+        _pollSnapshots[pollID] = base.copyWith(
+          voterOptionIds: List.of(optionIDs),
+        );
+      }
+      _pollVoterStateAuthoritative.add(pollID);
+      final live = _messages[convID];
+      final idx = live?.indexWhere((m) => m.poll?.id == pollID) ?? -1;
+      if (live != null && idx != -1) {
+        final updated = List<Message>.from(live);
+        final current = updated[idx];
+        updated[idx] = current.copyWith(
+          poll: (current.poll ?? base)?.copyWith(
+            voterOptionIds: List.of(optionIDs),
+          ),
+        );
+        _messages[convID] = updated;
+      }
+      notifyListeners();
+      // Refresh the on-device tally so the new ballot is reflected everywhere.
+      unawaited(refreshSealedTally(pollID, convID));
+      return;
+    }
 
     final Poll updatedPoll;
     if (anonymous) {
@@ -2253,6 +2371,140 @@ class ChatProvider extends ChangeNotifier {
     // render their own post snapshots and pick the result up from
     // pollSnapshot()/myPollVotes().
     notifyListeners();
+  }
+
+  // ── Server-blind sealed-tally polls (#57) ───────────────────────────────
+  // The server stores opaque ballots keyed by a blind token hash and never
+  // sees the choices; each member decrypts every ballot and aggregates the
+  // tally on-device. Cached per poll id; recomputed on vote and on demand.
+  final Map<String, SealedPollTally> _sealedTallies = {};
+  final Set<String> _sealedTallyInFlight = {};
+
+  /// The on-device tally for a sealed-tally poll, or null if never computed.
+  SealedPollTally? sealedTally(String pollID) => _sealedTallies[pollID];
+
+  /// Computes the sealed tally once if it isn't cached yet. Safe to call from
+  /// build() — it no-ops when a tally exists or a compute is already running.
+  void ensureSealedTally(String pollID, String convID) {
+    if (_sealedTallies.containsKey(pollID) ||
+        _sealedTallyInFlight.contains(pollID)) {
+      return;
+    }
+    unawaited(refreshSealedTally(pollID, convID));
+  }
+
+  /// Recomputes a sealed poll's tally from every ballot on the server. Ballots
+  /// that can't be decrypted (corrupt, or from a key we don't hold) are skipped
+  /// so one bad row can't break the whole count.
+  Future<void> refreshSealedTally(String pollID, String convID) async {
+    if (_sealedTallyInFlight.contains(pollID)) return;
+    _sealedTallyInFlight.add(pollID);
+    final prev = _sealedTallies[pollID];
+    _sealedTallies[pollID] = SealedPollTally(
+      countsByOptionId: prev?.countsByOptionId ?? const {},
+      totalVoters: prev?.totalVoters ?? 0,
+      computing: true,
+    );
+    notifyListeners();
+    try {
+      final ballots = await _api.fetchPollBallots(pollID);
+      // The server already upserts one row per token hash, but dedupe
+      // defensively (last write wins by updated_at) in case of duplicate rows.
+      final latestByToken = <String, Map<String, dynamic>>{};
+      for (final b in ballots) {
+        final th = (b['token_hash'] ?? '').toString();
+        if (th.isEmpty) continue;
+        final existing = latestByToken[th];
+        if (existing == null ||
+            (b['updated_at'] ?? '').toString().compareTo(
+                  (existing['updated_at'] ?? '').toString(),
+                ) >=
+                0) {
+          latestByToken[th] = b;
+        }
+      }
+      final counts = <String, int>{};
+      var voters = 0;
+      for (final b in latestByToken.values) {
+        final payload = (b['encrypted_payload'] ?? '').toString();
+        if (payload.isEmpty) continue;
+        final optionIDs = await _openPollBallot(payload);
+        if (optionIDs == null) continue;
+        voters++;
+        for (final id in optionIDs) {
+          counts[id] = (counts[id] ?? 0) + 1;
+        }
+      }
+      _sealedTallies[pollID] = SealedPollTally(
+        countsByOptionId: counts,
+        totalVoters: voters,
+      );
+    } catch (_) {
+      final prior = _sealedTallies[pollID];
+      _sealedTallies[pollID] = SealedPollTally(
+        countsByOptionId: prior?.countsByOptionId ?? const {},
+        totalVoters: prior?.totalVoters ?? 0,
+        failed: true,
+      );
+    } finally {
+      _sealedTallyInFlight.remove(pollID);
+      notifyListeners();
+    }
+  }
+
+  /// Seals a sealed-tally ballot to every conversation member (including self,
+  /// so this device can count its own vote). UNSIGNED on purpose: every member
+  /// decrypts the ballot to tally it, so an embedded signature would let any
+  /// member attribute this otherwise-anonymous vote.
+  Future<String> _sealPollBallot(
+    String convID,
+    String pollID,
+    List<String> optionIDs,
+  ) async {
+    final conv = _conversations[convID];
+    if (conv == null) {
+      throw const ChatSendException('Conversation is not ready.');
+    }
+    if (conv.usesMls || !conv.usesPgp) {
+      throw const ChatSendException(
+        'Sealed tallies are only available in PGP-encrypted chats.',
+      );
+    }
+    final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
+    final recipients = await _freshRecipientKeys(convID, conv);
+    if (recipients.isEmpty) {
+      throw const ChatSendException(
+        'Could not load recipient keys. Refresh the chat and try again.',
+      );
+    }
+    final body = jsonEncode({'poll_id': pollID, 'option_ids': optionIDs});
+    return PgpService.encrypt(
+      plaintext: body,
+      recipients: recipients,
+      signingPrivateKeyArmored: privateKey,
+      sign: false,
+    );
+  }
+
+  /// Opens a sealed-tally ballot, returning the selected option ids — or null
+  /// if it can't be decrypted (not a recipient, locked key, or corrupt).
+  Future<List<String>?> _openPollBallot(String encryptedPayload) async {
+    final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
+    if (privateKey.isEmpty) return null;
+    try {
+      final raw = await PgpService.decrypt(
+        encryptedArmor: encryptedPayload,
+        privateKeyArmored: privateKey,
+      );
+      if (raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return null;
+      final ids = decoded['option_ids'];
+      if (ids is! List) return null;
+      return ids.map((e) => e.toString()).toList();
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Records a call outcome as a `system` message in the DM. The payload is
@@ -2551,6 +2803,8 @@ class ChatProvider extends ChangeNotifier {
             : null,
         senderId: userID,
         postToken: tokenBundle?.token,
+        postTokenSignature: tokenBundle?.signature,
+        postTokenKeyId: tokenBundle?.keyId,
         frankCom: signed.frankComB64,
       );
     }
@@ -2615,6 +2869,23 @@ class ChatProvider extends ChangeNotifier {
       throw ChatSendException('Encryption failed: $e');
     }
 
+    // Rich notification previews (#54): for immediate text/media sends, when the
+    // account opted in, seal a per-recipient preview hint and upload it so the
+    // recipient's device can show a name+preview push. Best-effort, off the send
+    // path; the recipient resolves the route→sender locally so the hint only
+    // needs to carry the preview text.
+    if (frankMessage && _settings.notificationHintsEnabled) {
+      unawaited(
+        _uploadNotificationHints(
+          convID,
+          recipients,
+          messageType,
+          plaintextPayload,
+          privateKey,
+        ),
+      );
+    }
+
     return _PreparedEncryptedPayload(
       encryptedPayload: encrypted,
       signature: '',
@@ -2626,8 +2897,63 @@ class ChatProvider extends ChangeNotifier {
           : null,
       senderId: userID,
       postToken: tokenBundle?.token,
+      postTokenSignature: tokenBundle?.signature,
+      postTokenKeyId: tokenBundle?.keyId,
       frankCom: signed.frankComB64,
     );
+  }
+
+  /// Seals a per-recipient preview hint (#54) and uploads it. The hint carries
+  /// only the truncated preview — the recipient derives the sender locally from
+  /// the route. Best-effort: any failure leaves the recipient on the generic
+  /// "New message" push.
+  Future<void> _uploadNotificationHints(
+    String convID,
+    List<PgpRecipient> recipients,
+    String messageType,
+    String plaintextPayload,
+    String privateKey,
+  ) async {
+    if (recipients.isEmpty || privateKey.isEmpty) return;
+    try {
+      final body = jsonEncode({
+        'preview': _notificationHintPreview(messageType, plaintextPayload),
+      });
+      final hints = <Map<String, String>>[];
+      for (final r in recipients) {
+        try {
+          final sealed = await PgpService.encrypt(
+            plaintext: body,
+            recipients: [r],
+            signingPrivateKeyArmored: privateKey,
+          );
+          hints.add({'recipient_user_id': r.userId, 'sealed_hint': sealed});
+        } catch (_) {}
+      }
+      await _api.uploadNotificationHints(convID, hints);
+    } catch (_) {}
+  }
+
+  String _notificationHintPreview(String messageType, String plaintextPayload) {
+    switch (messageType) {
+      case 'image':
+        return 'Photo';
+      case 'video':
+        return 'Video';
+      case 'voice':
+        return 'Voice message';
+      case 'audio':
+        return 'Audio';
+      case 'file':
+        return 'File';
+      case 'sticker':
+        return 'Sticker';
+      case 'location':
+        return 'Location';
+    }
+    var text = plaintextPayload.trim();
+    if (text.length > 120) text = '${text.substring(0, 120)}…';
+    return text.isEmpty ? 'New message' : text;
   }
 
   Future<Message?> _sendEncryptedPayloadWithResult({
@@ -2666,6 +2992,8 @@ class ChatProvider extends ChangeNotifier {
           convID: convID,
           encryptedPayload: prepared.encryptedPayload,
           postToken: prepared.postToken ?? '',
+          postTokenSignature: prepared.postTokenSignature,
+          postTokenKeyId: prepared.postTokenKeyId,
           scheduledFor: scheduledFor,
           replyTo: null,
           attachmentId: attachmentId,
@@ -2727,6 +3055,8 @@ class ChatProvider extends ChangeNotifier {
         encryptedPayload: prepared.encryptedPayload,
         signature: prepared.signature,
         postToken: prepared.postToken,
+        postTokenSignature: prepared.postTokenSignature,
+        postTokenKeyId: prepared.postTokenKeyId,
         frankCom: prepared.frankCom,
         replyTo: replyTo,
         attachmentId: attachmentId,
@@ -2749,6 +3079,8 @@ class ChatProvider extends ChangeNotifier {
               convID: convID,
               encryptedPayload: prepared.encryptedPayload,
               postToken: prepared.postToken ?? '',
+              postTokenSignature: prepared.postTokenSignature,
+              postTokenKeyId: prepared.postTokenKeyId,
               replyTo: null,
               attachmentId: attachmentId,
               topicId: null,
@@ -2785,7 +3117,7 @@ class ChatProvider extends ChangeNotifier {
           encryptedPayload: prepared.encryptedPayload,
           signature: prepared.signature,
           postToken: prepared.postToken,
-        frankCom: prepared.frankCom,
+          frankCom: prepared.frankCom,
           replyTo: replyTo,
           attachmentId: attachmentId,
           topicId: topicId,
@@ -2834,6 +3166,8 @@ class ChatProvider extends ChangeNotifier {
     required String encryptedPayload,
     required String signature,
     String? postToken,
+    String? postTokenSignature,
+    String? postTokenKeyId,
     String? frankCom,
     required bool isEncrypted,
     required int autoDeleteSeconds,
@@ -2855,6 +3189,8 @@ class ChatProvider extends ChangeNotifier {
         'encrypted_payload': encryptedPayload,
         'signature': signature,
         'post_token': ?postToken,
+        'post_token_signature': ?postTokenSignature,
+        'post_token_key_id': ?postTokenKeyId,
         'frank_com': ?frankCom,
         'message_type': messageType,
         'local_message_type': localMessageType,
@@ -3106,10 +3442,14 @@ class ChatProvider extends ChangeNotifier {
   // Stay well under the server's 15-minute token TTL.
   static const Duration _postTokenMaxAge = Duration(minutes: 10);
 
-  Future<({String token, AmfToken? amf})> _sealedPostToken(
-    String convID,
-    String privateKey,
-  ) async {
+  // Cached blind-signing public key per conversation (#53). Invalidated when a
+  // blind sign is rejected (the server rotated the key on a membership/mode
+  // change), so the next fetch re-fetches and re-mints under the new key.
+  final Map<String, ({BigInt n, BigInt e, String keyId, bool blindEnabled})>
+  _signingKeyCache = {};
+
+  Future<({String token, String? signature, String? keyId, AmfToken? amf})>
+  _sealedPostToken(String convID, String privateKey) async {
     final pool = _postTokenPool[convID];
     if (pool != null) {
       // Drop expired tokens, then take the freshest still-valid one.
@@ -3117,7 +3457,12 @@ class ChatProvider extends ChangeNotifier {
       if (pool.isNotEmpty) {
         final pooled = pool.removeLast();
         unawaited(_refillPostTokenPool(convID, privateKey));
-        return (token: pooled.token, amf: pooled.amf);
+        return (
+          token: pooled.token,
+          signature: pooled.signature,
+          keyId: pooled.keyId,
+          amf: pooled.amf,
+        );
       }
     }
     final fetched = await _fetchSealedPostToken(convID, privateKey);
@@ -3126,10 +3471,51 @@ class ChatProvider extends ChangeNotifier {
     return fetched;
   }
 
-  Future<({String token, AmfToken? amf})> _fetchSealedPostToken(
-    String convID,
-    String privateKey,
-  ) async {
+  Future<({String token, String? signature, String? keyId, AmfToken? amf})>
+  _fetchSealedPostToken(String convID, String privateKey) async {
+    // Blind path (#53): mint a fresh random token, blind it under the
+    // conversation's signing key, have the server blind-sign it (it never sees
+    // the token), and unblind. Any failure falls back to the bearer path so
+    // sealed sending never breaks.
+    try {
+      final key = _signingKeyCache[convID] ??= await () async {
+        final k = await _api.getSealedPostSigningKey(convID);
+        return (
+          n: blind.blindModulusFromBytes(k.n),
+          e: blind.blindExponentFromBytes(k.e),
+          keyId: k.keyId,
+          blindEnabled: k.blindEnabled,
+        );
+      }();
+      if (key.blindEnabled) {
+        final token = blind.generatePostToken();
+        final blinded = blind.blindToken(token, key.n, key.e);
+        final signed = await _api.blindSignPostToken(
+          convID,
+          base64Encode(blinded.blinded),
+          key.keyId,
+        );
+        final sig = blind.unblindSignature(
+          base64Decode(signed.blindSignature),
+          blinded.blindingFactor,
+          key.n,
+        );
+        final amf = signed.amfToken != null
+            ? AmfToken.fromJson(signed.amfToken!)
+            : null;
+        return (
+          token: base64Encode(token),
+          signature: base64Encode(sig),
+          keyId: signed.keyId,
+          amf: amf,
+        );
+      }
+    } catch (_) {
+      // Rotation/serialization/network hiccup — drop the cached key and use the
+      // bearer path below.
+      _signingKeyCache.remove(convID);
+    }
+
     final bundle = await _api.getSealedPostTokenBundle(convID);
     final token = await PgpService.decrypt(
       encryptedArmor: bundle.encryptedPostToken,
@@ -3138,7 +3524,7 @@ class ChatProvider extends ChangeNotifier {
     final amf = bundle.amfToken != null
         ? AmfToken.fromJson(bundle.amfToken!)
         : null;
-    return (token: token, amf: amf);
+    return (token: token, signature: null, keyId: null, amf: amf);
   }
 
   Future<void> _refillPostTokenPool(String convID, String privateKey) async {
@@ -3155,7 +3541,13 @@ class ChatProvider extends ChangeNotifier {
         try {
           final fetched = await _fetchSealedPostToken(convID, privateKey);
           (_postTokenPool[convID] ??= []).add(
-            _PooledPostToken(fetched.token, DateTime.now(), amf: fetched.amf),
+            _PooledPostToken(
+              fetched.token,
+              DateTime.now(),
+              amf: fetched.amf,
+              signature: fetched.signature,
+              keyId: fetched.keyId,
+            ),
           );
         } catch (_) {
           break; // back off on error; the next send retries
@@ -3227,8 +3619,7 @@ class ChatProvider extends ChangeNotifier {
         sig3: base64Decode(sig3B64),
       );
       final keys = await _amfKeys.pinnedKeys();
-      if (await AmfService.verifyDetailed(fm, keys) ==
-          AmfVerifyOutcome.valid) {
+      if (await AmfService.verifyDetailed(fm, keys) == AmfVerifyOutcome.valid) {
         _frankingReports[msg.id] = fm.toReportJson();
       } else {
         _frankingReports.remove(msg.id);
@@ -5210,6 +5601,28 @@ class ChatProvider extends ChangeNotifier {
       _deleteSearchMessage(msgID);
       notifyListeners();
     } catch (_) {}
+  }
+
+  /// Batch-delete a set of messages (#1 multi-select). Optimistically removes
+  /// them locally; idempotent with the per-id WS messageDeleted handler.
+  Future<int> deleteMessages(String convID, List<String> msgIDs) async {
+    if (msgIDs.isEmpty) return 0;
+    try {
+      final count = await _api.deleteMessagesByIds(convID, msgIDs);
+      final ids = msgIDs.toSet();
+      for (final id in msgIDs) {
+        await _stopLiveLocationShare(id, shouldNotify: false);
+      }
+      final list = _messages[convID] ?? [];
+      _messages[convID] = list.where((m) => !ids.contains(m.id)).toList();
+      for (final id in msgIDs) {
+        _deleteSearchMessage(id);
+      }
+      notifyListeners();
+      return count;
+    } catch (_) {
+      return 0;
+    }
   }
 
   Future<void> loadConversationMembers(String convID) async {

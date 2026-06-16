@@ -9,6 +9,7 @@ import 'app.dart';
 import 'providers/auth_provider.dart';
 import 'providers/call_provider.dart';
 import 'providers/group_call_presence_provider.dart';
+import 'providers/group_ring_provider.dart';
 import 'providers/chat_provider.dart';
 import 'providers/key_provider.dart';
 import 'providers/settings_provider.dart';
@@ -69,8 +70,12 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
       payload: jsonEncode(message.data),
     );
   } else if (message.notification == null &&
-      (type == 'new_message' || type == 'group_call')) {
+      (type == 'new_message' ||
+          type == 'group_call' ||
+          type == 'group_call_ring')) {
     final conversationId = await _resolveConversationId(message.data);
+    // Ring-all (#9) honours per-chat mute too — same gate as a "Call started"
+    // push (a muted group shouldn't ring everyone on a push-only device).
     if (!await _shouldShowMessageNotification(conversationId)) {
       return;
     }
@@ -78,7 +83,11 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
     final shown = await NotificationService.showMessage(
       conversationId: conversationId,
       title: 'OpenChat',
-      body: type == 'group_call' ? 'Call started' : 'New message',
+      body: switch (type) {
+        'group_call' => 'Call started',
+        'group_call_ring' => 'Incoming group call',
+        _ => 'New message',
+      },
     );
     if (shown && type == 'new_message') {
       // Best-effort launcher badge bump while the app isn't running; the
@@ -340,6 +349,7 @@ class _Providers extends StatelessWidget {
         ChangeNotifierProvider(
           create: (_) => GroupCallPresenceProvider(ws, api),
         ),
+        ChangeNotifierProvider(create: (_) => GroupRingProvider(ws)),
       ],
       child: const OpenChatApp(),
     );

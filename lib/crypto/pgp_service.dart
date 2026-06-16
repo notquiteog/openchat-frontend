@@ -164,6 +164,12 @@ class PgpService {
     required List<PgpRecipient> recipients,
     required String signingPrivateKeyArmored,
     String signingKeyPassphrase = '',
+    // When false, the ciphertext carries NO sender signature. Used only for
+    // server-blind sealed-tally poll ballots (#57): every member decrypts the
+    // ballot to count it, so an embedded signature would let any member
+    // attribute the (anonymous) vote. Defaults to true — every other caller
+    // signs so the recipient can verify the sender proof.
+    bool sign = true,
   }) async {
     final normalizedRecipients = _normalizeRecipients(recipients);
     if (normalizedRecipients.isEmpty) {
@@ -178,6 +184,7 @@ class PgpService {
       recipients: normalizedRecipients,
       signingPrivateKeyArmored: signingPrivateKeyArmored,
       signingKeyPassphrase: signingKeyPassphrase,
+      sign: sign,
     );
   }
 
@@ -216,6 +223,7 @@ class PgpService {
     required List<PgpRecipient> recipients,
     required String signingPrivateKeyArmored,
     required String signingKeyPassphrase,
+    bool sign = true,
   }) async {
     final slots = <Map<String, String>>[];
     final paddedPlaintext = _padStructuredPlaintext(plaintext);
@@ -232,9 +240,11 @@ class PgpService {
       ..cipher = Cipher.AES256
       ..hash = Hash.SHA512;
     for (final recipient in recipients) {
-      final signer = Entity()
-        ..privateKey = signingPrivateKeyArmored
-        ..passphrase = signingKeyPassphrase;
+      final signer = sign
+          ? (Entity()
+              ..privateKey = signingPrivateKeyArmored
+              ..passphrase = signingKeyPassphrase)
+          : null;
       slots.add({
         'ciphertext': await _serial(
           () => OpenPGP.encrypt(

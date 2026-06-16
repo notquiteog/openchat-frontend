@@ -3835,6 +3835,7 @@ class _PollBubbleState extends State<_PollBubble> {
         pollID: poll.id,
         optionIDs: next,
         isAnonymous: base.isAnonymous,
+        sealedTally: base.sealedTally,
       );
     } finally {
       if (mounted) setState(() => _voting = false);
@@ -3924,14 +3925,62 @@ class _PollBubbleState extends State<_PollBubble> {
     }
   }
 
+  /// The on-device sealed tally (#57), watched so the bubble repaints when the
+  /// background recompute lands. Null in provider-less trees (widget tests).
+  SealedPollTally? _watchSealedTally(BuildContext context, String pollId) {
+    try {
+      return context.select<ChatProvider, SealedPollTally?>(
+        (chat) => chat.sealedTally(pollId),
+      );
+    } on ProviderNotFoundException {
+      return null;
+    }
+  }
+
+  /// Kicks a one-time tally computation for a sealed poll, deferred past build
+  /// so the provider's notifyListeners doesn't fire mid-frame.
+  void _ensureSealedTally(BuildContext context, String pollId) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      try {
+        context.read<ChatProvider>().ensureSealedTally(
+          pollId,
+          widget.message.conversationId,
+        );
+      } on ProviderNotFoundException {
+        // No provider (widget test) — nothing to compute.
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final pollId = widget.message.poll!.id;
-    final poll = _mergedPoll(
+    var poll = _mergedPoll(
       _watchLocalVotes(context, pollId),
       _watchSnapshot(context, pollId),
       voterAuthoritative: _readVoterAuthoritative(context, pollId),
     );
+    // Server-blind tally (#57): the server only knows the opaque ballot count,
+    // so per-option counts come from the on-device tally. Overlay it onto the
+    // rendered poll; `serverBallotCount` lets us flag ballots this device can't
+    // read (cast before we joined / under a rotated key).
+    SealedPollTally? sealed;
+    int? serverBallotCount;
+    if (poll.sealedTally) {
+      sealed = _watchSealedTally(context, pollId);
+      _ensureSealedTally(context, pollId);
+      serverBallotCount = poll.totalVoterCount;
+      if (sealed != null) {
+        poll = poll.copyWith(
+          options: [
+            for (final o in poll.options)
+              o.copyWith(voterCount: sealed.countFor(o.id)),
+          ],
+          totalVoterCount: math.max(poll.totalVoterCount, sealed.totalVoters),
+        );
+      }
+    }
     final cs = Theme.of(context).colorScheme;
     final total = math.max(1, poll.totalVoterCount);
     // Quiz: reveal the correct answer + explanation once the user has voted
@@ -4065,6 +4114,40 @@ class _PollBubbleState extends State<_PollBubble> {
                   ),
                 ],
               ),
+            ),
+            const SizedBox(height: 6),
+          ],
+          if (poll.sealedTally) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.shield_outlined,
+                  size: 13,
+                  color: widget.textColor.withValues(alpha: 0.62),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    (sealed?.failed ?? false)
+                        ? 'Counted on your device · tally may be stale (offline)'
+                        : (sealed == null || sealed.computing)
+                        ? 'Counting privately on your device…'
+                        : (serverBallotCount != null &&
+                              serverBallotCount > sealed.totalVoters)
+                        ? 'Counted on your device · '
+                              '${serverBallotCount - sealed.totalVoters} earlier '
+                              'ballot(s) aren’t readable here'
+                        : 'Counted on your device — the server never sees the '
+                              'result',
+                    style: TextStyle(
+                      color: widget.textColor.withValues(alpha: 0.62),
+                      fontSize: 11,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 6),
           ],

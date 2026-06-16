@@ -1,0 +1,8 @@
+# #46 — gen-l10n config. Emit generated Dart into source-controlled lib/l10n/
+# (output-dir) so it is reviewable and importable via a relative path. Requires
+# `flutter: generate: true` in pubspec. Run `flutter gen-l10n`.
+arb-dir: lib/l10n
+template-arb-file: app_en.arb
+output-localization-file: app_localizations.dart
+output-dir: lib/l10n
+nullable-getter: false

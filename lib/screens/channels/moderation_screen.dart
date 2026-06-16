@@ -27,6 +27,7 @@ class ModerationScreen extends StatefulWidget {
 
 class _ModerationScreenState extends State<ModerationScreen> {
   late bool _ownerOnly;
+  late bool _ringAll;
   late int _newMemberCooldownSeconds;
   late bool _blockLinks;
   late bool _blockMedia;
@@ -36,6 +37,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
   List<ConversationMember> _members = [];
   bool _canManageModeration = false;
   bool _canManageRoles = false;
+  bool _canManageSettings = false;
   bool _loading = true;
   bool _savingAntiSpam = false;
 
@@ -43,6 +45,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
   void initState() {
     super.initState();
     _ownerOnly = widget.conversation.ownerOnlyPost;
+    _ringAll = widget.conversation.ringAllOnCallStart;
     _newMemberCooldownSeconds = widget.conversation.newMemberCooldownSeconds;
     _blockLinks = widget.conversation.antiSpamBlockLinks;
     _blockMedia = widget.conversation.antiSpamBlockMedia;
@@ -60,6 +63,8 @@ class _ModerationScreenState extends State<ModerationScreen> {
           me?.hasPermission(AdminPermission.manageModeration) ?? false;
       final canManageRoles =
           me?.hasPermission(AdminPermission.manageRoles) ?? false;
+      final canManageSettings =
+          me?.hasPermission(AdminPermission.manageSettings) ?? false;
       final mutes = canManageModeration
           ? await api.listMutes(widget.conversation.id)
           : <dynamic>[];
@@ -76,6 +81,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
         _members = members;
         _canManageModeration = canManageModeration;
         _canManageRoles = canManageRoles;
+        _canManageSettings = canManageSettings;
         _loading = false;
       });
     } catch (e) {
@@ -95,6 +101,20 @@ class _ModerationScreenState extends State<ModerationScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _ownerOnly = !value);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed: $e')));
+    }
+  }
+
+  Future<void> _toggleRingAll(bool value) async {
+    final api = context.read<ApiService>();
+    setState(() => _ringAll = value);
+    try {
+      await api.setRingAllOnCall(widget.conversation.id, value);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _ringAll = !value);
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Failed: $e')));
@@ -391,8 +411,10 @@ class _ModerationScreenState extends State<ModerationScreen> {
                 if (_canManageModeration)
                   GlassListTile(
                     leading: const Icon(Icons.campaign_outlined),
-                    title: const Text('Admins-only posting',
-                        style: TextStyle(fontWeight: FontWeight.w600)),
+                    title: const Text(
+                      'Admins-only posting',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
                     subtitle: const Text(
                       'When on, regular members can\'t send messages.',
                     ),
@@ -403,6 +425,25 @@ class _ModerationScreenState extends State<ModerationScreen> {
                       enableHaptics: true,
                     ),
                     onTap: () => _toggleOwnerOnly(!_ownerOnly),
+                  ),
+                if (_canManageSettings && widget.conversation.isGroup)
+                  GlassListTile(
+                    leading: const Icon(Icons.notifications_active_outlined),
+                    title: const Text(
+                      'Ring everyone on call start',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: const Text(
+                      'Starting a group call rings every member like an '
+                      'incoming call, not just a banner.',
+                    ),
+                    trailing: GlassSwitch(
+                      value: _ringAll,
+                      onChanged: _toggleRingAll,
+                      activeColor: Theme.of(context).colorScheme.primary,
+                      enableHaptics: true,
+                    ),
+                    onTap: () => _toggleRingAll(!_ringAll),
                   ),
                 if (_canManageModeration) ...[
                   const Divider(),
@@ -440,12 +481,15 @@ class _ModerationScreenState extends State<ModerationScreen> {
                   ),
                   GlassListTile(
                     leading: const Icon(Icons.perm_media_outlined),
-                    title: const Text('Block media',
-                        style: TextStyle(fontWeight: FontWeight.w600)),
+                    title: const Text(
+                      'Block media',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
                     trailing: GlassSwitch(
                       value: _blockMedia,
                       onChanged: (value) {
-                        if (!_savingAntiSpam) _saveAntiSpamControls(blockMedia: value);
+                        if (!_savingAntiSpam)
+                          _saveAntiSpamControls(blockMedia: value);
                       },
                       activeColor: Theme.of(context).colorScheme.primary,
                       enableHaptics: true,
@@ -456,12 +500,15 @@ class _ModerationScreenState extends State<ModerationScreen> {
                   ),
                   GlassListTile(
                     leading: const Icon(Icons.link_off_rounded),
-                    title: const Text('Block links',
-                        style: TextStyle(fontWeight: FontWeight.w600)),
+                    title: const Text(
+                      'Block links',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
                     trailing: GlassSwitch(
                       value: _blockLinks,
                       onChanged: (value) {
-                        if (!_savingAntiSpam) _saveAntiSpamControls(blockLinks: value);
+                        if (!_savingAntiSpam)
+                          _saveAntiSpamControls(blockLinks: value);
                       },
                       activeColor: Theme.of(context).colorScheme.primary,
                       enableHaptics: true,

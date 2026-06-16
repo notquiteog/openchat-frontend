@@ -10,6 +10,7 @@ import 'package:flutter/services.dart'
 import 'package:local_auth/local_auth.dart';
 import 'package:provider/provider.dart';
 import 'package:share_handler/share_handler.dart';
+import 'l10n/app_localizations.dart';
 import 'models/conversation.dart';
 import 'providers/auth_provider.dart';
 import 'providers/call_provider.dart';
@@ -53,6 +54,7 @@ import 'utils/pack_links.dart';
 import 'widgets/chat_search_results_view.dart';
 import 'widgets/desktop.dart';
 import 'widgets/glass.dart';
+import 'widgets/group_ring_overlay.dart';
 
 class OpenChatApp extends StatelessWidget {
   const OpenChatApp({super.key});
@@ -71,6 +73,7 @@ class OpenChatApp extends StatelessWidget {
     final settings = context.watch<SettingsProvider>();
     final seed = settings.seedColor;
     final reduceTransparency = settings.reduceTransparency;
+    final reduceMotion = settings.reduceMotion;
     return MaterialApp(
       title: 'OpenChat',
       navigatorKey: navigatorKey,
@@ -79,12 +82,22 @@ class OpenChatApp extends StatelessWidget {
         reduceTransparency: reduceTransparency,
       ),
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.light(seed: seed, reduceTransparency: reduceTransparency),
+      theme: AppTheme.light(
+        seed: seed,
+        reduceTransparency: reduceTransparency,
+        reduceMotion: reduceMotion,
+      ),
       darkTheme: AppTheme.dark(
         seed: seed,
         reduceTransparency: reduceTransparency,
+        reduceMotion: reduceMotion,
       ),
       themeMode: settings.themeMode,
+      // #46 — i18n: null locale follows the device; delegates bundle the
+      // generated AppLocalizations + Global Material/Widgets/Cupertino ones.
+      locale: settings.locale,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       home: const _AppRoot(),
       // Float call + live-location bars above every route so they persist while
       // navigating. The live connection banner stays topmost.
@@ -102,6 +115,15 @@ class OpenChatApp extends StatelessWidget {
         final reduceTransparency = context.select<SettingsProvider, bool>(
           (s) => s.reduceTransparency,
         );
+        final reduceMotion = context.select<SettingsProvider, bool>(
+          (s) => s.reduceMotion,
+        );
+        final boldText = context.select<SettingsProvider, bool>(
+          (s) => s.boldText,
+        );
+        final uiTextScale = context.select<SettingsProvider, double>(
+          (s) => s.uiTextScale,
+        );
         final callExtra = context.select<CallProvider, double>(
           (cp) => cp.minimizedContentTopInset,
         );
@@ -117,7 +139,21 @@ class OpenChatApp extends StatelessWidget {
           (chat) => chat.liveLocationTopInset,
         );
         final locExtra = isFullScreenVideoCall ? 0.0 : rawLocExtra;
-        final mq = MediaQuery.of(context);
+        final baseMq = MediaQuery.of(context);
+        // Fold the user UI-text-scale slider into the OS text scaler, then clamp
+        // to a conservative ceiling (the glass chrome has many fixed-height
+        // surfaces). boldText is applied by Flutter's text rendering directly.
+        // Basing withTop() on this a11y MediaQuery means screens and the call
+        // overlay inherit a single consistent scale.
+        final mq = baseMq.copyWith(
+          textScaler: TextScaler.linear(
+            (baseMq.textScaler.scale(1.0) * uiTextScale).clamp(
+              SettingsProvider.minUiTextScale,
+              SettingsProvider.maxUiTextScale,
+            ),
+          ),
+          boldText: boldText,
+        );
 
         MediaQueryData withTop(double extra) => extra == 0
             ? mq
@@ -176,6 +212,13 @@ class OpenChatApp extends StatelessWidget {
                 child: const CallOverlay(),
               ),
             ),
+            // Ring-all group calls (#9): an incoming-call-style ring card. Same
+            // wrapper rules as CallOverlay — no Material between Stack and the
+            // glass surface.
+            DefaultTextStyle.merge(
+              style: const TextStyle(decoration: TextDecoration.none),
+              child: const GroupRingOverlay(),
+            ),
             // Location bar — sees no extra offset → anchors at the very top.
             DefaultTextStyle.merge(
               style: const TextStyle(decoration: TextDecoration.none),
@@ -220,6 +263,8 @@ class OpenChatApp extends StatelessWidget {
 
         return GlassAccessibilityScope(
           reduceTransparency: reduceTransparency,
+          // null → fall back to the OS "Remove animations" flag; true forces it.
+          reduceMotion: reduceMotion ? true : null,
           child: appChrome,
         );
       },

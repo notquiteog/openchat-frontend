@@ -9,6 +9,7 @@ import '../config/api_config.dart' show ApiConfig, IceServer;
 import '../crypto/pgp_service.dart';
 import 'app_lock_state.dart';
 import '../models/admin_audit_event.dart';
+import '../models/bot_command.dart';
 import '../models/channel_analytics.dart';
 import '../models/channel_pinned_message.dart';
 import '../models/contact_bundle.dart';
@@ -991,6 +992,55 @@ class ApiService {
     await _delete('/api/v1/channels/$chanID/posts/$msgID/pin');
   }
 
+  // ── DM/group message pins (#2) — channels keep their own /posts route. ──
+  Future<List<ChannelPinnedMessage>> getConversationPinnedMessages(
+    String convID,
+  ) async {
+    final resp = await _get('/api/v1/conversations/$convID/pinned-messages');
+    return (resp['data'] as List)
+        .map((e) => ChannelPinnedMessage.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// A bot's public command list, keyed by its USER id (#31). [] if none.
+  Future<List<BotCommand>> getBotCommands(String botUserId) async {
+    final resp = await _get('/api/v1/users/$botUserId/bot-commands');
+    return (resp['data'] as List? ?? [])
+        .map((e) => BotCommand.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> pinConversationMessage(String convID, String msgID) async {
+    await _put('/api/v1/conversations/$convID/messages/$msgID/pin', {});
+  }
+
+  Future<void> unpinConversationMessage(String convID, String msgID) async {
+    await _delete('/api/v1/conversations/$convID/messages/$msgID/pin');
+  }
+
+  // ── Encrypted notification hints (#54) ──
+  /// Fetch this device's sealed notification hint for a route; null if none.
+  Future<String?> getNotificationHint(String route) async {
+    try {
+      final resp = await _get('/api/v1/me/notification-hints/$route');
+      return resp['data']?['sealed_hint'] as String?;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Upload per-recipient sealed hints for a sealed send. Each entry is
+  /// `{recipient_user_id, sealed_hint}`; the server derives route tokens.
+  Future<void> uploadNotificationHints(
+    String convID,
+    List<Map<String, String>> hints,
+  ) async {
+    if (hints.isEmpty) return;
+    await _post('/api/v1/conversations/$convID/notification-hints', {
+      'hints': hints,
+    });
+  }
+
   Future<Message> postToChannel({
     required String chanID,
     required String encryptedPayload,
@@ -1094,10 +1144,15 @@ class ApiService {
     bool silent = false,
     String? clientNonce,
     String? frankCom,
+    // Blinded post token (#53): present ⇒ postToken is the base64 raw token.
+    String? postTokenSignature,
+    String? postTokenKeyId,
   }) async {
     final resp = await _post('/api/v1/conversations/$convID/sealed-messages', {
       'encrypted_payload': encryptedPayload,
       'post_token': postToken,
+      'post_token_signature': ?postTokenSignature,
+      'post_token_key_id': ?postTokenKeyId,
       'reply_to': ?replyTo,
       'attachment_id': ?attachmentId,
       'topic_id': ?topicId,
@@ -1120,10 +1175,14 @@ class ApiService {
     String? attachmentId,
     String? topicId,
     bool silent = false,
+    String? postTokenSignature,
+    String? postTokenKeyId,
   }) async {
     final resp = await _post('/api/v1/conversations/$convID/sealed-messages', {
       'encrypted_payload': encryptedPayload,
       'post_token': postToken,
+      'post_token_signature': ?postTokenSignature,
+      'post_token_key_id': ?postTokenKeyId,
       'reply_to': ?replyTo,
       'attachment_id': ?attachmentId,
       'topic_id': ?topicId,
@@ -1186,6 +1245,43 @@ class ApiService {
   Future<String> getEncryptedSealedPostToken(String convID) async =>
       (await getSealedPostTokenBundle(convID)).encryptedPostToken;
 
+  /// The conversation's blind-signing public key (#53): raw big-endian modulus
+  /// `n` and exponent `e` (base64), the current `key_id`, and whether the blind
+  /// path is enabled (false ⇒ slow-mode/cooldown forces the bearer fallback).
+  Future<({Uint8List n, Uint8List e, String keyId, bool blindEnabled})>
+  getSealedPostSigningKey(String convID) async {
+    final resp = await _get(
+      '/api/v1/conversations/$convID/sealed-post-signing-key',
+    );
+    final data = resp['data'] as Map<String, dynamic>;
+    return (
+      n: base64Decode(data['n'] as String),
+      e: base64Decode(data['e'] as String),
+      keyId: data['key_id'] as String,
+      blindEnabled: data['blind_enabled'] as bool? ?? false,
+    );
+  }
+
+  /// Submits a client-blinded value for blind-signing (#53). Returns the blind
+  /// signature (base64), the signing key id, and an AMF franking token (the
+  /// server mints one here too, since franking is orthogonal to the entitlement
+  /// token).
+  Future<
+    ({String blindSignature, String keyId, Map<String, dynamic>? amfToken})
+  >
+  blindSignPostToken(String convID, String blindedB64, String keyId) async {
+    final resp = await _post(
+      '/api/v1/conversations/$convID/sealed-post-token/sign',
+      {'blinded': blindedB64, 'key_id': keyId},
+    );
+    final data = resp['data'] as Map<String, dynamic>;
+    return (
+      blindSignature: data['blind_signature'] as String,
+      keyId: data['key_id'] as String,
+      amfToken: data['amf_token'] as Map<String, dynamic>?,
+    );
+  }
+
   Future<String> getEncryptedPgpPostToken(String convID) =>
       getEncryptedSealedPostToken(convID);
 
@@ -1202,9 +1298,10 @@ class ApiService {
     String status = 'open',
     int limit = 100,
   }) async {
-    final resp = await _get('/api/v1/admin/csam-reports?status=$status&limit=$limit');
-    return ((resp['data'] as List?) ?? const [])
-        .cast<Map<String, dynamic>>();
+    final resp = await _get(
+      '/api/v1/admin/csam-reports?status=$status&limit=$limit',
+    );
+    return ((resp['data'] as List?) ?? const []).cast<Map<String, dynamic>>();
   }
 
   /// System-admin: Inspect one report — runs Hecate Inspect server-side and
@@ -1646,17 +1743,23 @@ class ApiService {
     bool silent = false,
     bool quiz = false,
     bool meeting = false,
+    bool sealedTally = false,
     int? correctOptionId,
     String? explanation,
+    String? postTokenSignature,
+    String? postTokenKeyId,
   }) async {
     final resp = await _post('/api/v1/conversations/$convID/polls', {
       'poll_id': pollID,
       'option_ids': optionIDs,
       'encrypted_payload': encryptedPayload,
       'post_token': postToken,
+      'post_token_signature': ?postTokenSignature,
+      'post_token_key_id': ?postTokenKeyId,
       'is_anonymous': isAnonymous,
       'allows_multiple_answers': allowsMultipleAnswers,
       'allows_revoting': allowsRevoting,
+      if (sealedTally) 'sealed_tally': true,
       if (quiz) 'type': 'quiz' else if (meeting) 'type': 'meeting',
       if (quiz && correctOptionId != null)
         'correct_option_ids': [correctOptionId],
@@ -1695,6 +1798,27 @@ class ApiService {
       'option_ids': optionIDs,
     });
     return Poll.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  /// Submit an opaque sealed-tally ballot (#57) — the server never decrypts it.
+  Future<void> submitPollBallot(
+    String pollID,
+    String token,
+    String encryptedPayload,
+  ) async {
+    await _post('/api/v1/polls/$pollID/ballot', {
+      'token': token,
+      'encrypted_payload': encryptedPayload,
+    });
+  }
+
+  /// Fetch all opaque sealed-tally ballots for on-device tally (#57). Each entry
+  /// is `{token_hash, encrypted_payload, updated_at}`.
+  Future<List<Map<String, dynamic>>> fetchPollBallots(String pollID) async {
+    final resp = await _get('/api/v1/polls/$pollID/ballots');
+    final data = resp['data'];
+    final list = (data is Map ? data['ballots'] : data) as List? ?? [];
+    return list.cast<Map<String, dynamic>>();
   }
 
   Future<Poll> stopPoll(
@@ -1789,6 +1913,14 @@ class ApiService {
   Future<void> setMessageTtl(String convID, int seconds) async {
     await _put('/api/v1/conversations/$convID/message-ttl', {
       'seconds': seconds,
+    });
+  }
+
+  /// Toggle ring-all: whether starting a group/channel call rings every member
+  /// like an incoming 1:1 call instead of only showing a "Join" banner (#9).
+  Future<void> setRingAllOnCall(String convID, bool enabled) async {
+    await _put('/api/v1/conversations/$convID/ring-all-on-call', {
+      'enabled': enabled,
     });
   }
 
@@ -3360,7 +3492,10 @@ class ApiService {
     });
   }
 
-  Future<void> _deleteJson(String path, Map<String, dynamic> body) async {
+  Future<Map<String, dynamic>> _deleteJson(
+    String path,
+    Map<String, dynamic> body,
+  ) async {
     final response = await _requestWithRetry(() async {
       final token = await _storage.getAccessToken();
       return _httpClient.delete(
@@ -3369,7 +3504,18 @@ class ApiService {
         body: jsonEncode(body),
       );
     });
-    _parse(response);
+    return _parse(response);
+  }
+
+  /// Selectively delete a set of messages (#1 multi-select). Returns the count
+  /// the server actually deleted (it skips ids the caller may not delete).
+  Future<int> deleteMessagesByIds(String convID, List<String> ids) async {
+    final resp = await _deleteJson('/api/v1/conversations/$convID/messages', {
+      'message_ids': ids,
+    });
+    final data = resp['data'];
+    if (data is Map && data['deleted'] is int) return data['deleted'] as int;
+    return ids.length;
   }
 
   Map<String, String> _headers(String? token) => {

@@ -243,6 +243,8 @@ class _FakeApi extends ApiService {
     bool silent = false,
     String? clientNonce,
     String? frankCom,
+    String? postTokenSignature,
+    String? postTokenKeyId,
   }) async {
     throw const SocketException('offline');
   }

@@ -105,8 +105,10 @@ class _StickerPackScreenState extends State<StickerPackScreen> {
                 _loadPacks();
               } catch (e) {
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Failed to create pack: $e')),
+                  showAppToast(
+                    context,
+                    'Failed to create pack: $e',
+                    isError: true,
                   );
                 }
               }
@@ -357,21 +359,18 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
     if (confirmed != true || !mounted) return;
     final api = context.read<ApiService>();
     final navigator = Navigator.of(context);
-    final messenger = ScaffoldMessenger.of(context);
     try {
       await api.removeStickerPackFromLibrary(_pack['id'] as String);
       if (mounted) navigator.pop();
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Failed to remove: $e')));
+      if (mounted) showAppToast(context, 'Failed to remove: $e', isError: true);
     }
   }
 
   Future<void> _addSticker() async {
     final stickers = (_pack['stickers'] as List? ?? []);
     if (stickers.length >= 50) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('This pack is full (50 sticker maximum)')),
-      );
+      showAppToast(context, 'This pack is full (50 sticker maximum)');
       return;
     }
 
@@ -428,9 +427,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+        showAppToast(context, 'Upload failed: $e', isError: true);
       }
     }
   }
@@ -463,9 +460,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
       await _reload();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
+        showAppToast(context, 'Failed to delete: $e', isError: true);
       }
     }
   }
@@ -486,9 +481,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to set cover: $e')));
+        showAppToast(context, 'Failed to set cover: $e', isError: true);
       }
     }
   }
@@ -543,9 +536,7 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                 await _reload();
               } catch (e) {
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Failed to update: $e')),
-                  );
+                  showAppToast(context, 'Failed to update: $e', isError: true);
                 }
               }
             },
@@ -689,7 +680,6 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                         value: _pack['is_discoverable'] == true,
                         onChanged: (v) async {
                           final api = context.read<ApiService>();
-                          final messenger = ScaffoldMessenger.of(context);
                           try {
                             await api.updateStickerPack(
                               _pack['id'] as String,
@@ -697,9 +687,13 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                             );
                             await _reload();
                           } catch (e) {
-                            messenger.showSnackBar(
-                              SnackBar(content: Text('Failed: $e')),
-                            );
+                            if (context.mounted) {
+                              showAppToast(
+                                context,
+                                'Failed: $e',
+                                isError: true,
+                              );
+                            }
                           }
                         },
                       ),

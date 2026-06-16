@@ -475,6 +475,67 @@ class CallService {
     _ws.sendCallOfferPayload(offerData);
   }
 
+  /// Add an existing conversation member to a connected GROUP call by dialing a
+  /// fresh outgoing peer to them, reusing the offer/answer + caller-relay star
+  /// topology. v1 is group-only: 1:1→group escalation needs a server-side group
+  /// conversation (the backend `IsMember` gate at router.go:1084 drops an offer
+  /// to a non-member), and SFU "ring them in" needs net-new incoming-ring infra
+  /// — both are deferred (TODO #11). No backend change is needed: the relay
+  /// already forwards a `call_offer` to any conversation member.
+  Future<void> addParticipant({required String userId}) async {
+    final s = _session;
+    final target = userId.trim();
+    if (s == null ||
+        !s.isGroupCall ||
+        s.state != CallState.connected ||
+        s.conversationId == null ||
+        target.isEmpty ||
+        target == (_selfUserId?.trim() ?? '')) {
+      return;
+    }
+    // Dedup against connected peers AND the roster (pending/declined members).
+    if (_peers.containsKey(target) || s.participantUserIds.contains(target)) {
+      return;
+    }
+    if (_iceServers.isEmpty) {
+      _iceServers = await _api.getIceServers();
+    }
+
+    // participantUserIds is List.unmodifiable, so rebuild the session with the
+    // new member BEFORE creating the peer — _createOutgoingPeer reads the full
+    // roster off `_session` when it encodes the offer. Carry the mutable
+    // post-construction fields (wasConnected/connectedAt/reconnecting) over.
+    _session =
+        CallSession(
+            callId: s.callId,
+            remoteUserId: s.remoteUserId,
+            remoteUsername: s.remoteUsername,
+            remoteAvatarUrl: s.remoteAvatarUrl,
+            conversationId: s.conversationId,
+            participantUserIds: [...s.participantUserIds, target],
+            isVideo: s.isVideo,
+            isIncoming: s.isIncoming,
+            sealed: s.sealed,
+            state: s.state,
+          )
+          ..wasConnected = s.wasConnected
+          ..reconnecting = s.reconnecting
+          ..connectedAt = s.connectedAt;
+    _sessionController.add(_session);
+
+    try {
+      await _createOutgoingPeer(
+        userId: target,
+        callId: s.callId,
+        conversationId: s.conversationId!,
+        isVideo: s.isVideo,
+      );
+    } catch (_) {
+      _removePeer(target);
+      rethrow;
+    }
+  }
+
   // ── Incoming call actions ───────────────────────────────────────────────────
 
   Future<void> acceptIncomingCall(CallSession session) async {

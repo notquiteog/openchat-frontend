@@ -14,6 +14,8 @@ import 'package:provider/provider.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../config/api_config.dart';
+import '../../models/bot_command.dart';
+import '../../models/channel_pinned_message.dart';
 import '../../models/conversation.dart';
 import '../../models/key_trust_pin.dart';
 import '../../models/message.dart';
@@ -135,6 +137,11 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _highlightedMessageId;
   AttachmentUploadProgress? _attachmentUploadProgress;
   ActiveMentionQuery? _activeMentionQuery;
+  ActiveCommandQuery? _activeCommandQuery;
+  List<BotCommand> _botCommands = const [];
+  // Multi-select mode (#1).
+  bool _selectionMode = false;
+  final Set<String> _selectedIds = {};
   List<CustomEmojiEntity> _customEmojiEntities = [];
   String _lastInputText = '';
   bool _suppressInputEntityShift = false;
@@ -186,6 +193,8 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       }
       unawaited(chat.loadConversationMembers(conv.id));
+      unawaited(_syncConversationPins());
+      if (conv.isDM) unawaited(_loadBotCommands());
       if (mounted && conv.isGroup) {
         unawaited(context.read<GroupCallPresenceProvider>().refresh(conv.id));
       }
@@ -241,20 +250,84 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _updateMentionQuery(TextEditingValue value) {
-    final next = value.selection.isValid && value.selection.isCollapsed
+    final collapsed = value.selection.isValid && value.selection.isCollapsed;
+    final nextMention = collapsed
         ? findActiveMentionQuery(value.text, value.selection.baseOffset)
         : null;
-    final current = _activeMentionQuery;
-    if (current?.start == next?.start &&
-        current?.end == next?.end &&
-        current?.query == next?.query) {
-      return;
-    }
+    // `/command` only autocompletes in a bot DM with a known command list.
+    final nextCommand = collapsed && _botCommands.isNotEmpty
+        ? findActiveCommandQuery(value.text, value.selection.baseOffset)
+        : null;
+    final m = _activeMentionQuery;
+    final c = _activeCommandQuery;
+    final mentionSame =
+        m?.start == nextMention?.start &&
+        m?.end == nextMention?.end &&
+        m?.query == nextMention?.query;
+    final commandSame =
+        c?.start == nextCommand?.start &&
+        c?.end == nextCommand?.end &&
+        c?.query == nextCommand?.query;
+    if (mentionSame && commandSame) return;
     if (mounted) {
-      setState(() => _activeMentionQuery = next);
+      setState(() {
+        _activeMentionQuery = nextMention;
+        _activeCommandQuery = nextCommand;
+      });
     } else {
-      _activeMentionQuery = next;
+      _activeMentionQuery = nextMention;
+      _activeCommandQuery = nextCommand;
     }
+  }
+
+  Future<void> _loadBotCommands() async {
+    final chat = context.read<ChatProvider>();
+    if (conv.members.isEmpty) {
+      await chat.loadConversationMembers(conv.id);
+    }
+    if (!mounted) return;
+    final uid = context.read<AuthProvider>().currentUser?.id ?? '';
+    if (!conv.isBotDM(uid)) return;
+    final botUserId = _dmPeerId();
+    if (botUserId == null || botUserId.isEmpty) return;
+    try {
+      final cmds = await context.read<ApiService>().getBotCommands(botUserId);
+      if (mounted) setState(() => _botCommands = cmds);
+    } catch (_) {
+      // Commands are an optional affordance; ignore fetch failures.
+    }
+  }
+
+  void _insertCommand(BotCommand command) {
+    final value = _inputCtrl.value;
+    final active = value.selection.isValid && value.selection.isCollapsed
+        ? findActiveCommandQuery(value.text, value.selection.baseOffset)
+        : _activeCommandQuery;
+    if (active == null) return;
+    final oldText = value.text;
+    final start = active.start.clamp(0, oldText.length).toInt();
+    final end = active.end.clamp(start, oldText.length).toInt();
+    final replacement = '/${command.command} ';
+    final newText = oldText.replaceRange(start, end, replacement);
+    final shifted = shiftCustomEmojiEntitiesForTextEdit(
+      oldText: oldText,
+      newText: newText,
+      entities: _customEmojiEntities,
+    );
+    setState(() {
+      _activeCommandQuery = null;
+      _showStickers = false;
+      _showCustomEmojis = false;
+      _syncCustomEmojiEntities(shifted);
+    });
+    _setComposerValue(
+      TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: start + replacement.length),
+      ),
+    );
+    _scheduleDraftSave(newText);
+    _onTyping();
   }
 
   void _onScroll() {
@@ -2166,7 +2239,12 @@ class _ChatScreenState extends State<ChatScreen> {
     var anonymous = true;
     var multiple = false;
     var quiz = false;
+    var sealedTally = false;
     var correctOption = 0;
+    // Server-blind tallies (#57) only work where ballots can be sealed to every
+    // member and counted on-device without revealing the voter: PGP chats only
+    // (MLS leaks the sender to the group).
+    final canSealTally = conv.usesPgp && !conv.usesMls;
 
     try {
       await showDialog<void>(
@@ -2193,10 +2271,11 @@ class _ChatScreenState extends State<ChatScreen> {
                   convID: conv.id,
                   question: question,
                   options: options,
-                  isAnonymous: anonymous,
+                  isAnonymous: sealedTally ? true : anonymous,
                   allowsMultipleAnswers: multiple,
                   silent: _sendSilent,
                   quiz: quiz,
+                  sealedTally: sealedTally,
                   correctOptionId: quiz
                       ? correctOption.clamp(0, options.length - 1)
                       : null,
@@ -2316,14 +2395,20 @@ class _ChatScreenState extends State<ChatScreen> {
                         value: quiz,
                         onChanged: (v) => setDialog(() {
                           quiz = v;
-                          if (v) multiple = false;
+                          if (v) {
+                            multiple = false;
+                            sealedTally = false;
+                          }
                         }),
                         activeColor: Theme.of(context).colorScheme.primary,
                         enableHaptics: true,
                       ),
                       onTap: () => setDialog(() {
                         quiz = !quiz;
-                        if (quiz) multiple = false;
+                        if (quiz) {
+                          multiple = false;
+                          sealedTally = false;
+                        }
                       }),
                     ),
                     if (quiz) ...[
@@ -2336,6 +2421,30 @@ class _ChatScreenState extends State<ChatScreen> {
                         maxLines: 2,
                       ),
                     ],
+                    if (canSealTally && !quiz)
+                      GlassListTile(
+                        title: const Text(
+                          'Sealed tally',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        subtitle: const Text(
+                          'Votes are counted only on members’ devices — '
+                          'the server never sees the result. Always anonymous.',
+                        ),
+                        trailing: GlassSwitch(
+                          value: sealedTally,
+                          onChanged: (v) => setDialog(() {
+                            sealedTally = v;
+                            if (v) anonymous = true;
+                          }),
+                          activeColor: Theme.of(context).colorScheme.primary,
+                          enableHaptics: true,
+                        ),
+                        onTap: () => setDialog(() {
+                          sealedTally = !sealedTally;
+                          if (sealedTally) anonymous = true;
+                        }),
+                      ),
                   ],
                 ),
               ),
@@ -2613,6 +2722,10 @@ class _ChatScreenState extends State<ChatScreen> {
                     currentUserId: currentUserID,
                   ),
                   _GroupCallBanner(conversation: conv),
+                  _ConversationPinnedBar(
+                    conversationId: conv.id,
+                    onShowAll: () => _showConversationPinsSheet(currentUserID),
+                  ),
                   Expanded(
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
@@ -2753,7 +2866,12 @@ class _ChatScreenState extends State<ChatScreen> {
                                             ),
                                             curve: Curves.easeOutCubic,
                                             decoration: BoxDecoration(
-                                              color: highlighted
+                                              color:
+                                                  (highlighted ||
+                                                      (_selectionMode &&
+                                                          _selectedIds.contains(
+                                                            msg.id,
+                                                          )))
                                                   ? Theme.of(context)
                                                         .colorScheme
                                                         .primary
@@ -2780,12 +2898,16 @@ class _ChatScreenState extends State<ChatScreen> {
                                               meBubbleColor: meBubbleColor,
                                               bubbleRadius:
                                                   chatStyle.bubbleRadius,
-                                              onTap: isLocationMessage
+                                              onTap: _selectionMode
+                                                  ? () => _toggleSelection(msg)
+                                                  : isLocationMessage
                                                   ? () => _openLocationMessage(
                                                       msg,
                                                     )
                                                   : null,
-                                              onTapUp: isLocationMessage
+                                              onTapUp:
+                                                  _selectionMode ||
+                                                      isLocationMessage
                                                   ? null
                                                   : (
                                                       details,
@@ -2811,13 +2933,15 @@ class _ChatScreenState extends State<ChatScreen> {
                                                   context
                                                       .read<ChatProvider>()
                                                       .stopLiveLocation(msg.id),
-                                              onLongPress: (pos) =>
-                                                  _showMessageMenu(
-                                                    context,
-                                                    msg,
-                                                    isMe,
-                                                    anchor: pos,
-                                                  ),
+                                              onLongPress: _selectionMode
+                                                  ? (pos) =>
+                                                        _toggleSelection(msg)
+                                                  : (pos) => _showMessageMenu(
+                                                      context,
+                                                      msg,
+                                                      isMe,
+                                                      anchor: pos,
+                                                    ),
                                               onSecondaryTapUp: (details) =>
                                                   _showMessageMenu(
                                                     context,
@@ -3205,6 +3329,7 @@ class _ChatScreenState extends State<ChatScreen> {
     Set<String> typingUsers,
     String currentUserID,
   ) {
+    if (_selectionMode) return _buildSelectionAppBar();
     final name = conv.displayName(currentUserID);
 
     // Live mesh presence: this DM's partner currently holds a verified
@@ -3533,6 +3658,10 @@ class _ChatScreenState extends State<ChatScreen> {
     final scheme = Theme.of(context).colorScheme;
     final mentionSuggestions = _mentionSuggestions(currentUserID);
     final specialMentions = _specialMentionSuggestions();
+    final commandSuggestionList = commandSuggestions(
+      commands: _botCommands,
+      active: _activeCommandQuery,
+    );
     // The composer is an active control, so it lives in the Liquid Glass layer:
     // a free-floating capsule hovering above the bottom boundary with the chat
     // canvas peeking around it.
@@ -3553,6 +3682,11 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (commandSuggestionList.isNotEmpty)
+                    CommandAutocompletePanel(
+                      commands: commandSuggestionList,
+                      onSelected: _insertCommand,
+                    ),
                   if (mentionSuggestions.isNotEmpty ||
                       specialMentions.isNotEmpty)
                     MentionAutocompletePanel(
@@ -3737,6 +3871,124 @@ class _ChatScreenState extends State<ChatScreen> {
     _toggleReaction(msg, key);
   }
 
+  // ── Multi-select (#1) ───────────────────────────────────────────────────────
+
+  void _enterSelection(Message msg) {
+    setState(() {
+      _selectionMode = true;
+      _selectedIds
+        ..clear()
+        ..add(msg.id);
+      _showStickers = false;
+      _showCustomEmojis = false;
+    });
+  }
+
+  void _toggleSelection(Message msg) {
+    setState(() {
+      if (!_selectedIds.add(msg.id)) _selectedIds.remove(msg.id);
+      if (_selectedIds.isEmpty) _selectionMode = false;
+    });
+  }
+
+  void _exitSelection() {
+    if (!_selectionMode && _selectedIds.isEmpty) return;
+    setState(() {
+      _selectionMode = false;
+      _selectedIds.clear();
+    });
+  }
+
+  List<Message> _selectedMessages() {
+    final byId = {
+      for (final m in context.read<ChatProvider>().messagesFor(conv.id))
+        m.id: m,
+    };
+    return [
+      for (final id in _selectedIds)
+        if (byId[id] != null) byId[id]!,
+    ]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+  }
+
+  Future<void> _copySelected() async {
+    final msgs = _selectedMessages()
+        .where(
+          (m) =>
+              m.type == MessageType.text &&
+              (m.decryptedContent ?? '').isNotEmpty,
+        )
+        .toList();
+    if (msgs.isEmpty) return;
+    final text = msgs.map((m) => m.decryptedContent ?? '').join('\n\n');
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    showAppToast(
+      context,
+      msgs.length == 1 ? 'Copied' : 'Copied ${msgs.length} messages',
+    );
+    _exitSelection();
+  }
+
+  Future<void> _deleteSelected() async {
+    final ids = _selectedIds.toList();
+    if (ids.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => GlassAlertDialog(
+        title: Text(
+          ids.length == 1
+              ? 'Delete message?'
+              : 'Delete ${ids.length} messages?',
+        ),
+        content: const Text('This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await context.read<ChatProvider>().deleteMessages(conv.id, ids);
+    _exitSelection();
+  }
+
+  PreferredSizeWidget _buildSelectionAppBar() {
+    final count = _selectedIds.length;
+    final canCopy = _selectedMessages().any(
+      (m) =>
+          m.type == MessageType.text && (m.decryptedContent ?? '').isNotEmpty,
+    );
+    return GlassAppBar(
+      automaticallyImplyLeading: false,
+      leading: IconButton(
+        icon: const Icon(Icons.close_rounded),
+        tooltip: 'Cancel',
+        onPressed: _exitSelection,
+      ),
+      title: Text('$count selected'),
+      actions: [
+        if (canCopy)
+          IconButton(
+            icon: const Icon(Icons.copy_rounded),
+            tooltip: 'Copy',
+            onPressed: _copySelected,
+          ),
+        IconButton(
+          icon: const Icon(Icons.delete_outline_rounded),
+          tooltip: 'Delete',
+          onPressed: _deleteSelected,
+        ),
+      ],
+    );
+  }
+
   Future<void> _showMessageMenu(
     BuildContext context,
     Message msg,
@@ -3753,6 +4005,11 @@ class _ChatScreenState extends State<ChatScreen> {
         context.read<ChatProvider>().isLiveLocationActive(msg.id) &&
         msg.location != null &&
         msg.location!.isLive;
+    final currentUserID = context.read<AuthProvider>().currentUser?.id ?? '';
+    final canPin = !isSystem && _canPinMessages(currentUserID);
+    final isPinned = context
+        .read<SettingsProvider>()
+        .isConversationMessagePinned(conv.id, msg.id);
     final actions = <MessageActionSheetItem<String>>[
       if (!isSystem)
         const MessageActionSheetItem(
@@ -3815,6 +4072,18 @@ class _ChatScreenState extends State<ChatScreen> {
           value: 'remind',
           icon: Icons.alarm_add_outlined,
           label: 'Remind me',
+        ),
+      if (!isSystem)
+        const MessageActionSheetItem(
+          value: 'select',
+          icon: Icons.checklist_rounded,
+          label: 'Select',
+        ),
+      if (canPin)
+        MessageActionSheetItem(
+          value: isPinned ? 'unpin' : 'pin',
+          icon: isPinned ? Icons.push_pin : Icons.push_pin_outlined,
+          label: isPinned ? 'Unpin' : 'Pin',
         ),
       // Channels route unattributed posts' tips to the owner, so any
       // non-self post qualifies there; elsewhere we need a visible sender.
@@ -3926,9 +4195,214 @@ class _ChatScreenState extends State<ChatScreen> {
         this.context.read<ChatProvider>().stopLiveLocation(msg.id);
       case 'report':
         await _reportMessage(msg);
+      case 'select':
+        _enterSelection(msg);
+      case 'pin':
+        await _setConversationMessagePinned(msg, true);
+      case 'unpin':
+        await _setConversationMessagePinned(msg, false);
       case 'delete':
         this.context.read<ChatProvider>().deleteMessage(conv.id, msg.id);
     }
+  }
+
+  /// Pin/unpin gating (#2): channels keep their own /posts route; DM/self allow
+  /// either member; groups require the manage_pins permission.
+  bool _canPinMessages(String currentUserID) {
+    if (conv.isChannel) return false;
+    if (!conv.isGroup) return true;
+    for (final m in conv.members) {
+      if (m.userId == currentUserID) {
+        return m.hasPermission(AdminPermission.managePins);
+      }
+    }
+    return false;
+  }
+
+  Future<void> _setConversationMessagePinned(Message msg, bool pinned) async {
+    final api = context.read<ApiService>();
+    final settings = context.read<SettingsProvider>();
+    try {
+      if (pinned) {
+        await api.pinConversationMessage(conv.id, msg.id);
+        await settings.setConversationMessagePinned(
+          conv.id,
+          ChannelPinnedMessage(
+            conversationId: conv.id,
+            messageId: msg.id,
+            preview: _pinnedMessagePreview(msg),
+            messageCreatedAt: msg.createdAt,
+            pinnedAt: DateTime.now(),
+            senderUsername: msg.sender?.username,
+            message: msg,
+          ),
+          true,
+        );
+      } else {
+        await api.unpinConversationMessage(conv.id, msg.id);
+        await settings.unpinConversationMessage(conv.id, msg.id);
+      }
+    } catch (e) {
+      if (mounted) {
+        showAppToast(
+          context,
+          pinned ? 'Pin failed: $e' : 'Unpin failed: $e',
+          isError: true,
+        );
+      }
+    }
+  }
+
+  /// Server-safe preview: never shows ciphertext — falls back to a type label
+  /// for an undecrypted message (the table stores only message_id).
+  String _pinnedMessagePreview(Message msg) {
+    final preview = msg.listPreview.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (preview.isNotEmpty) return preview;
+    return switch (msg.type) {
+      MessageType.image => 'Photo',
+      MessageType.video => 'Video',
+      MessageType.voice => 'Voice message',
+      MessageType.audio => 'Audio',
+      MessageType.file => 'File',
+      MessageType.sticker => 'Sticker',
+      MessageType.poll => 'Poll',
+      MessageType.location => 'Location',
+      _ => 'Message',
+    };
+  }
+
+  /// Hydrate this device's pin cache from the server on open and refresh.
+  /// Previews are recomputed from locally-decrypted messages so the banner
+  /// never renders ciphertext (mirrors the channel sync).
+  Future<void> _syncConversationPins() async {
+    if (conv.isChannel) return;
+    final api = context.read<ApiService>();
+    final settings = context.read<SettingsProvider>();
+    final chat = context.read<ChatProvider>();
+    try {
+      final serverPins = await api.getConversationPinnedMessages(conv.id);
+      if (!mounted) return;
+      final loaded = {for (final m in chat.messagesFor(conv.id)) m.id: m};
+      final mapped = [
+        for (final p in serverPins)
+          ChannelPinnedMessage(
+            conversationId: conv.id,
+            messageId: p.messageId,
+            preview: loaded[p.messageId] != null
+                ? _pinnedMessagePreview(loaded[p.messageId]!)
+                : p.preview,
+            messageCreatedAt: p.messageCreatedAt,
+            pinnedAt: p.pinnedAt,
+            senderUsername:
+                loaded[p.messageId]?.sender?.username ?? p.senderUsername,
+            message: loaded[p.messageId] ?? p.message,
+          ),
+      ];
+      await settings.replaceConversationPinnedMessages(conv.id, mapped);
+    } catch (_) {
+      // Best-effort: a freshly-opened chat still works without server pins.
+    }
+  }
+
+  Future<void> _unpinConversationMessageById(String messageId) async {
+    final api = context.read<ApiService>();
+    final settings = context.read<SettingsProvider>();
+    try {
+      await api.unpinConversationMessage(conv.id, messageId);
+      await settings.unpinConversationMessage(conv.id, messageId);
+    } catch (e) {
+      if (mounted) showAppToast(context, 'Unpin failed: $e', isError: true);
+    }
+  }
+
+  void _showConversationPinsSheet(String currentUserID) {
+    final canManage = _canPinMessages(currentUserID);
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) {
+        final pins = sheetCtx
+            .watch<SettingsProvider>()
+            .pinnedMessagesForConversation(conv.id);
+        if (pins.isEmpty) {
+          return const GlassBottomSheetFrame(
+            padding: EdgeInsets.fromLTRB(8, 10, 8, 20),
+            child: SafeArea(
+              top: false,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  GlassSheetGrabber(),
+                  Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text('No pinned messages'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+        return GlassBottomSheetFrame(
+          padding: const EdgeInsets.fromLTRB(8, 10, 8, 12),
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const GlassSheetGrabber(),
+                const Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Text(
+                    'Pinned messages',
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                  ),
+                ),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final p in pins)
+                        GlassListTile(
+                          leading: const Icon(Icons.push_pin_rounded),
+                          title: Text(
+                            p.preview,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: p.senderUsername != null
+                              ? Text('@${p.senderUsername}')
+                              : null,
+                          trailing: canManage
+                              ? GestureDetector(
+                                  onTap: () {
+                                    Navigator.pop(sheetCtx);
+                                    unawaited(
+                                      _unpinConversationMessageById(
+                                        p.messageId,
+                                      ),
+                                    );
+                                  },
+                                  child: const Icon(
+                                    Icons.close_rounded,
+                                    size: 20,
+                                  ),
+                                )
+                              : null,
+                          onTap: () {
+                            Navigator.pop(sheetCtx);
+                            unawaited(_jumpToMessage(p.messageId));
+                          },
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   /// On-device translate-toggle for a message. Detection + translation run
@@ -4251,11 +4725,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final hasGroupAdmins = conv.isGroup || conv.isChannel;
 
     if (!canCsam && !hasGroupAdmins) {
-      showAppToast(
-        context,
-        'This message can’t be reported.',
-        isError: true,
-      );
+      showAppToast(context, 'This message can’t be reported.', isError: true);
       return;
     }
 
@@ -4294,10 +4764,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   _ReportDestinationTile(
                     icon: Icons.groups_outlined,
-                    title: conv.isChannel
-                        ? 'Channel admins'
-                        : 'Group admins',
-                    subtitle: 'A general report to this chat’s admins. Your '
+                    title: conv.isChannel ? 'Channel admins' : 'Group admins',
+                    subtitle:
+                        'A general report to this chat’s admins. Your '
                         'identity is visible to them.',
                     value: toGroup,
                     enabled: true,
@@ -5847,6 +6316,75 @@ class _BurnerExpiredBar extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact pinned-messages banner (#2) above the message list. Tapping opens
+/// the full pinned-messages sheet. Renders nothing when no pins exist, so it
+/// adds no layout when absent (keeps existing chat goldens byte-identical).
+class _ConversationPinnedBar extends StatelessWidget {
+  const _ConversationPinnedBar({
+    required this.conversationId,
+    required this.onShowAll,
+  });
+
+  final String conversationId;
+  final VoidCallback onShowAll;
+
+  @override
+  Widget build(BuildContext context) {
+    final pins = context
+        .watch<SettingsProvider>()
+        .pinnedMessagesForConversation(conversationId);
+    if (pins.isEmpty) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+    final first = pins.first;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onShowAll,
+        child: GlassContainer(
+          shape: const LiquidRoundedSuperellipse(borderRadius: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              Icon(Icons.push_pin_rounded, size: 18, color: scheme.primary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      pins.length == 1
+                          ? 'Pinned message'
+                          : '${pins.length} pinned messages',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                        color: scheme.primary,
+                      ),
+                    ),
+                    Text(
+                      first.preview,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right_rounded,
+                size: 20,
+                color: scheme.onSurface.withValues(alpha: 0.4),
+              ),
+            ],
           ),
         ),
       ),

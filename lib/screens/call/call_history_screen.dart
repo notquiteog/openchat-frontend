@@ -51,11 +51,7 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
         isVideo: video,
       );
     } catch (err) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Call failed: $err')));
-      }
+      if (mounted) showAppToast(context, 'Call failed: $err', isError: true);
     }
   }
 

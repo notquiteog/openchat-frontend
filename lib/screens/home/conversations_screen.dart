@@ -732,7 +732,6 @@ class ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   Future<void> _confirmDelete(BuildContext context, Conversation conv) async {
-    final messenger = ScaffoldMessenger.of(context);
     final chat = context.read<ChatProvider>();
     final currentUserId = context.read<AuthProvider>().currentUser?.id;
     final isOwner = conv.createdBy == currentUserId;
@@ -789,11 +788,13 @@ class ConversationsScreenState extends State<ConversationsScreen> {
           deleteOwnMessages: chosenAction == 'leave_delete',
         );
       } catch (_) {
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text('Could not complete — you may not have permission.'),
-          ),
-        );
+        if (context.mounted) {
+          showAppToast(
+            context,
+            'Could not complete — you may not have permission.',
+            isError: true,
+          );
+        }
       }
       return;
     }
@@ -820,11 +821,13 @@ class ConversationsScreenState extends State<ConversationsScreen> {
     try {
       await chat.deleteConversation(conv.id);
     } catch (_) {
-      messenger.showSnackBar(
-        const SnackBar(
-          content: Text('Could not complete — you may not have permission.'),
-        ),
-      );
+      if (context.mounted) {
+        showAppToast(
+          context,
+          'Could not complete — you may not have permission.',
+          isError: true,
+        );
+      }
     }
   }
 
@@ -1139,7 +1142,6 @@ class ConversationsScreenState extends State<ConversationsScreen> {
   }
 
   Future<void> _openSavedMessages(BuildContext context) async {
-    final messenger = ScaffoldMessenger.of(context);
     try {
       final conv = await context.read<ApiService>().getSavedMessages();
       if (!context.mounted) return;
@@ -1150,7 +1152,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
         MaterialPageRoute(builder: (_) => ChatScreen(conversation: conv)),
       );
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+      if (context.mounted) showAppToast(context, 'Failed: $e', isError: true);
     }
   }
 
@@ -1740,7 +1742,6 @@ class ConversationsScreenState extends State<ConversationsScreen> {
 
     nameCtrl.dispose();
     if (draft == null || !context.mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
     try {
       final saved = await chat.saveChatFolder(
         ChatFolder(
@@ -1757,7 +1758,9 @@ class ConversationsScreenState extends State<ConversationsScreen> {
       );
       if (mounted) _selectFolder(saved.id);
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Folder failed: $e')));
+      if (context.mounted) {
+        showAppToast(context, 'Folder failed: $e', isError: true);
+      }
     }
   }
 
@@ -1785,14 +1788,15 @@ class ConversationsScreenState extends State<ConversationsScreen> {
       ),
     );
     if (confirmed != true || !context.mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
     try {
       await context.read<ChatProvider>().removeChatFolder(folder.id);
       if (mounted && _selectedFolderId == folder.id) {
         _selectFolder(null);
       }
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+      if (context.mounted) {
+        showAppToast(context, 'Delete failed: $e', isError: true);
+      }
     }
   }
 }

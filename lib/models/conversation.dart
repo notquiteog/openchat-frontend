@@ -57,6 +57,10 @@ class Conversation {
   final bool topicsEnabled;
   final bool businessSuiteEnabled;
 
+  /// When true, starting a group/channel call rings every member like an
+  /// incoming 1:1 call instead of only showing a "Join" banner (#9).
+  final bool ringAllOnCallStart;
+
   /// Join policy: 'open' or 'web_of_trust' (a current member must vouch for the
   /// candidate's key before they can join).
   final String membershipPolicy;
@@ -94,6 +98,7 @@ class Conversation {
     this.joinApprovalRequired = false,
     this.topicsEnabled = false,
     this.businessSuiteEnabled = false,
+    this.ringAllOnCallStart = false,
     this.membershipPolicy = 'open',
     this.expiresAt,
     this.locked = false,
@@ -132,6 +137,7 @@ class Conversation {
     joinApprovalRequired: json['join_approval_required'] as bool? ?? false,
     topicsEnabled: json['topics_enabled'] as bool? ?? false,
     businessSuiteEnabled: json['business_suite_enabled'] as bool? ?? false,
+    ringAllOnCallStart: json['ring_all_on_call_start'] as bool? ?? false,
     membershipPolicy: json['membership_policy'] as String? ?? 'open',
     expiresAt: json['expires_at'] != null
         ? DateTime.parse(json['expires_at'] as String)
@@ -234,6 +240,7 @@ class Conversation {
     bool? joinApprovalRequired,
     bool? topicsEnabled,
     bool? businessSuiteEnabled,
+    bool? ringAllOnCallStart,
     String? backgroundUrl,
     DateTime? expiresAt,
     bool? locked,
@@ -260,6 +267,7 @@ class Conversation {
     joinApprovalRequired: joinApprovalRequired ?? this.joinApprovalRequired,
     topicsEnabled: topicsEnabled ?? this.topicsEnabled,
     businessSuiteEnabled: businessSuiteEnabled ?? this.businessSuiteEnabled,
+    ringAllOnCallStart: ringAllOnCallStart ?? this.ringAllOnCallStart,
     membershipPolicy: membershipPolicy ?? this.membershipPolicy,
     expiresAt: expiresAt ?? this.expiresAt,
     locked: locked ?? this.locked,

@@ -1154,6 +1154,9 @@ class Poll {
   final String? description;
   final String type;
   final bool isAnonymous;
+  // #57 — sealed-tally poll: counts are computed on-device from opaque ballots;
+  // the server reports only the opaque ballot count.
+  final bool sealedTally;
   final bool allowsMultipleAnswers;
   final bool allowsRevoting;
   final bool isClosed;
@@ -1172,6 +1175,7 @@ class Poll {
     this.description,
     required this.type,
     required this.isAnonymous,
+    this.sealedTally = false,
     required this.allowsMultipleAnswers,
     required this.allowsRevoting,
     required this.isClosed,
@@ -1189,6 +1193,7 @@ class Poll {
     description: json['description'] as String?,
     type: json['type'] as String? ?? 'regular',
     isAnonymous: json['is_anonymous'] as bool? ?? true,
+    sealedTally: json['sealed_tally'] as bool? ?? false,
     allowsMultipleAnswers: json['allows_multiple_answers'] as bool? ?? false,
     allowsRevoting: json['allows_revoting'] as bool? ?? false,
     // The server sends a derived is_closed (explicit stop OR close_date
@@ -1241,6 +1246,7 @@ class Poll {
     description: description ?? this.description,
     type: type,
     isAnonymous: isAnonymous,
+    sealedTally: sealedTally,
     allowsMultipleAnswers: allowsMultipleAnswers,
     allowsRevoting: allowsRevoting,
     isClosed: isClosed ?? this.isClosed,

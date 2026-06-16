@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../config/api_config.dart';
+import '../models/bot_command.dart';
 import '../models/conversation.dart';
 import '../utils/mention_utils.dart';
 import 'glass.dart';
@@ -75,6 +76,124 @@ class MentionAutocompletePanel extends StatelessWidget {
   }
 }
 
+/// `/command` autocomplete panel for bot DMs (#31) — same glass styling as
+/// [MentionAutocompletePanel], listing command + description rows.
+class CommandAutocompletePanel extends StatelessWidget {
+  final List<BotCommand> commands;
+  final ValueChanged<BotCommand> onSelected;
+
+  const CommandAutocompletePanel({
+    super.key,
+    required this.commands,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (commands.isEmpty) return const SizedBox.shrink();
+    final height = math.min(218.0, 10.0 + commands.length * 52.0);
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 160),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, child) => Opacity(
+        opacity: value,
+        child: Transform.translate(
+          offset: Offset(0, 8 * (1 - value)),
+          child: child,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(4, 2, 4, 6),
+        child: GlassContainer(
+          shape: const LiquidRoundedSuperellipse(borderRadius: 24),
+          allowElevation: true,
+          glowIntensity: 0.05,
+          padding: const EdgeInsets.symmetric(vertical: 5),
+          child: SizedBox(
+            height: height,
+            child: ListView.separated(
+              physics: const BouncingScrollPhysics(),
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              itemCount: commands.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 2),
+              itemBuilder: (context, index) => _CommandSuggestionTile(
+                command: commands[index],
+                onTap: () => onSelected(commands[index]),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CommandSuggestionTile extends StatelessWidget {
+  final BotCommand command;
+  final VoidCallback onTap;
+
+  const _CommandSuggestionTile({required this.command, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 48),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.18),
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 16,
+              backgroundColor: scheme.primary.withValues(alpha: 0.18),
+              child: Icon(
+                Icons.terminal_rounded,
+                size: 18,
+                color: scheme.primary,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '/${command.command}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  if (command.description.isNotEmpty)
+                    Text(
+                      command.description,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: scheme.onSurface.withValues(alpha: 0.55),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SpecialMentionTile extends StatelessWidget {
   final SpecialMention special;
   final VoidCallback onTap;
@@ -99,8 +218,11 @@ class _SpecialMentionTile extends StatelessWidget {
             CircleAvatar(
               radius: 16,
               backgroundColor: scheme.primary.withValues(alpha: 0.18),
-              child: Icon(Icons.campaign_rounded,
-                  size: 18, color: scheme.primary),
+              child: Icon(
+                Icons.campaign_rounded,
+                size: 18,
+                color: scheme.primary,
+              ),
             ),
             const SizedBox(width: 10),
             Expanded(

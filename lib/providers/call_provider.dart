@@ -584,6 +584,21 @@ class CallProvider extends ChangeNotifier {
 
   Future<void> escalateToSfu() => _callService.escalateToSfu();
 
+  /// Whether the connected GROUP call can take an "Add people" invite. v1 is
+  /// group-only — a 1:1 call stays false (escalation is deferred, see TODO #11).
+  bool get canAddParticipant =>
+      session?.isGroupCall == true && session?.state == CallState.connected;
+
+  /// Dial an existing conversation member into the active group call. Errors are
+  /// logged (the UI fires this unawaited and shows a "Ringing…" toast).
+  Future<void> addParticipant(String userId) async {
+    try {
+      await _callService.addParticipant(userId: userId);
+    } catch (e) {
+      debugPrint('CallProvider.addParticipant failed: $e');
+    }
+  }
+
   // SFU media E2EE keys (see CallService for the distribution model).
   String? sfuKeyFor(String conversationId) =>
       _callService.sfuKeyFor(conversationId);

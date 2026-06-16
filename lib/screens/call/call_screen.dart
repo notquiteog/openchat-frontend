@@ -5,8 +5,10 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
+import '../../models/conversation.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/call_provider.dart';
+import '../../services/api_service.dart';
 import '../../services/app_lock_state.dart';
 import '../../services/call_service.dart';
 import '../../widgets/glass.dart';
@@ -49,6 +51,8 @@ class CallScreen extends StatefulWidget {
 
 class _CallScreenState extends State<CallScreen> {
   bool _audioPickerOpen = false;
+  bool _addPeoplePickerOpen = false;
+  Future<List<ConversationMember>>? _addPeopleMembers;
   // FaceTime-style: during a live video call, tapping the stage hides the
   // chrome (top bar + controls) for an unobstructed view; tap again to restore.
   bool _chromeVisible = true;
@@ -94,9 +98,7 @@ class _CallScreenState extends State<CallScreen> {
       await cp.startScreenShare();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Screen share failed: $e')));
+      showAppToast(context, 'Screen share failed: $e', isError: true);
     }
   }
 
@@ -108,9 +110,7 @@ class _CallScreenState extends State<CallScreen> {
     await cp.refreshAudioOutputs();
     if (!mounted) return;
     if (cp.audioOutputs.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No audio outputs are available')),
-      );
+      showAppToast(context, 'No audio outputs are available');
       return;
     }
     // CallScreen lives in CallOverlay, mounted in MaterialApp.builder ABOVE the
@@ -124,6 +124,23 @@ class _CallScreenState extends State<CallScreen> {
   void _closeAudioPicker() {
     if (!_audioPickerOpen) return;
     setState(() => _audioPickerOpen = false);
+  }
+
+  void _openAddPeople(CallSession session) {
+    final convId = session.conversationId;
+    if (convId == null) return;
+    final api = context.read<ApiService>();
+    // Fetch once per open; the sheet filters out self + everyone already in the
+    // call. Rendered inline in the Stack (CallScreen sits above the Navigator).
+    setState(() {
+      _addPeopleMembers = api.getConversationMembers(convId);
+      _addPeoplePickerOpen = true;
+    });
+  }
+
+  void _closeAddPeople() {
+    if (!_addPeoplePickerOpen) return;
+    setState(() => _addPeoplePickerOpen = false);
   }
 
   @override
@@ -229,6 +246,16 @@ class _CallScreenState extends State<CallScreen> {
           icon: Icons.hub_outlined,
           label: 'To SFU',
           onTap: () => unawaited(cp.escalateToSfu()),
+          size: buttonSize,
+        ),
+      // Add an existing conversation member to a connected group call (v1
+      // group-only — see CallProvider.canAddParticipant / TODO #11).
+      if (cp.canAddParticipant)
+        CallControlButton(
+          key: const Key('call-control-add-people'),
+          icon: Icons.person_add_alt_1_rounded,
+          label: 'Add',
+          onTap: () => _openAddPeople(session),
           size: buttonSize,
         ),
     ];
@@ -369,16 +396,10 @@ class _CallScreenState extends State<CallScreen> {
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   if (reconnecting) ...[
-                                    SizedBox(
-                                      width: 12,
-                                      height: 12,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 1.6,
-                                        valueColor:
-                                            AlwaysStoppedAnimation<Color>(
-                                              Colors.amberAccent.shade100,
-                                            ),
-                                      ),
+                                    GlassProgressIndicator.circular(
+                                      size: 12,
+                                      strokeWidth: 1.6,
+                                      color: Colors.amberAccent.shade100,
                                     ),
                                     const SizedBox(width: 7),
                                   ],
@@ -488,6 +509,30 @@ class _CallScreenState extends State<CallScreen> {
                   _closeAudioPicker();
                 },
                 onDismiss: _closeAudioPicker,
+              ),
+            ),
+
+          // ── Add-people picker (group calls) ─────────────────────────────────
+          if (_addPeoplePickerOpen)
+            Positioned.fill(
+              child: _AddPeopleSheet(
+                membersFuture: _addPeopleMembers,
+                excludedUserIds: {
+                  session.remoteUserId,
+                  ...session.participantUserIds,
+                  if (context.read<AuthProvider>().currentUser?.id != null)
+                    context.read<AuthProvider>().currentUser!.id,
+                },
+                onSelected: (member) {
+                  unawaited(cp.addParticipant(member.userId));
+                  _closeAddPeople();
+                  final label =
+                      member.user?.displayName ??
+                      member.user?.username ??
+                      _shortUserId(member.userId);
+                  showAppToast(context, 'Ringing $label…');
+                },
+                onDismiss: _closeAddPeople,
               ),
             ),
         ],
@@ -612,6 +657,172 @@ class _AudioOutputRow extends StatelessWidget {
             ),
             if (selected)
               const Icon(Icons.check_rounded, color: Colors.white, size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Inline "Add people" picker for a connected group call — lists conversation
+/// members not already in the call and dials a fresh outgoing peer to the
+/// chosen one. Rendered inside CallScreen's own Stack like [_AudioOutputSheet]
+/// because CallScreen sits above the app Navigator.
+class _AddPeopleSheet extends StatelessWidget {
+  const _AddPeopleSheet({
+    required this.membersFuture,
+    required this.excludedUserIds,
+    required this.onSelected,
+    required this.onDismiss,
+  });
+
+  final Future<List<ConversationMember>>? membersFuture;
+  final Set<String> excludedUserIds;
+  final ValueChanged<ConversationMember> onSelected;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onDismiss,
+            child: const ColoredBox(color: Color(0x99000000)),
+          ),
+        ),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  child: GlassContainer(
+                    shape: const LiquidRoundedSuperellipse(borderRadius: 28),
+                    useOwnLayer: true,
+                    quality: GlassQuality.standard,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(20, 12, 20, 8),
+                          child: Text(
+                            'Add people',
+                            style: TextStyle(
+                              color: Color(0x8CFFFFFF),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: -0.1,
+                              decoration: TextDecoration.none,
+                            ),
+                          ),
+                        ),
+                        FutureBuilder<List<ConversationMember>>(
+                          future: membersFuture,
+                          builder: (context, snap) {
+                            if (snap.connectionState != ConnectionState.done) {
+                              return const Padding(
+                                padding: EdgeInsets.all(24),
+                                child: Center(
+                                  child: GlassProgressIndicator.circular(
+                                    size: 22,
+                                    strokeWidth: 2,
+                                  ),
+                                ),
+                              );
+                            }
+                            final candidates =
+                                (snap.data ?? const <ConversationMember>[])
+                                    .where(
+                                      (m) =>
+                                          !excludedUserIds.contains(m.userId),
+                                    )
+                                    .toList();
+                            if (candidates.isEmpty) {
+                              return const Padding(
+                                padding: EdgeInsets.fromLTRB(20, 8, 20, 20),
+                                child: Text(
+                                  'Everyone in this chat is already in the call.',
+                                  style: TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 14,
+                                    decoration: TextDecoration.none,
+                                  ),
+                                ),
+                              );
+                            }
+                            return ConstrainedBox(
+                              constraints: const BoxConstraints(maxHeight: 320),
+                              child: ListView(
+                                shrinkWrap: true,
+                                children: [
+                                  for (final m in candidates)
+                                    _AddPeopleRow(
+                                      label:
+                                          m.user?.displayName ??
+                                          m.user?.username ??
+                                          _shortUserId(m.userId),
+                                      onTap: () => onSelected(m),
+                                    ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AddPeopleRow extends StatelessWidget {
+  const _AddPeopleRow({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                  decoration: TextDecoration.none,
+                ),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+              ),
+            ),
+            const Icon(
+              Icons.add_circle_outline_rounded,
+              color: Colors.white,
+              size: 20,
+            ),
           ],
         ),
       ),
@@ -1323,9 +1534,7 @@ class _IncomingCallModalState extends State<IncomingCallModal>
         await cp.acceptIncomingCall();
       } catch (error) {
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not answer call: $error')),
-        );
+        showAppToast(context, 'Could not answer call: $error', isError: true);
       }
     }
 

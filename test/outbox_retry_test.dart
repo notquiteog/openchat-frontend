@@ -150,6 +150,8 @@ class _CountingApi extends ApiService {
     bool silent = false,
     String? clientNonce,
     String? frankCom,
+    String? postTokenSignature,
+    String? postTokenKeyId,
   }) async {
     sealedSendCount++;
     throw const SocketException('offline'); // retryable
@@ -171,6 +173,8 @@ class _FlakyApi extends ApiService {
     bool silent = false,
     String? clientNonce,
     String? frankCom,
+    String? postTokenSignature,
+    String? postTokenKeyId,
   }) async {
     sealedSendCount++;
     if (failures-- > 0) {

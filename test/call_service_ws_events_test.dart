@@ -17,9 +17,14 @@ class _FakeWebSocketService extends WebSocketService {
   final _controller = StreamController<WsEvent>.broadcast();
   final hangups = <Map<String, String>>[];
   final rejects = <Map<String, String>>[];
+  final offers = <Map<String, dynamic>>[];
 
   @override
   Stream<WsEvent> get events => _controller.stream;
+
+  @override
+  void sendCallOfferPayload(Map<String, dynamic> payload) =>
+      offers.add(payload);
 
   @override
   void sendCallHangup({
@@ -127,6 +132,56 @@ void main() {
     });
   });
 
+  group('addParticipant guards (#11)', () {
+    // The happy path dials a real peer (WebRTC) so it can't run headless; these
+    // assert the early-return guards that fire before any peer/offer is built.
+    test('is a no-op on a 1:1 connected call (not a group)', () async {
+      service.debugSelfUserId = 'me';
+      service.debugSession = _session(
+        callId: 'call-1',
+        state: CallState.connected,
+        participantUserIds: ['remote-user'],
+      );
+      await service.addParticipant(userId: 'u3');
+      expect(ws.offers, isEmpty);
+      expect(service.currentSession?.participantUserIds, ['remote-user']);
+    });
+
+    test('is a no-op when the group call is not connected', () async {
+      service.debugSelfUserId = 'me';
+      service.debugSession = _session(
+        callId: 'call-1',
+        state: CallState.calling,
+        participantUserIds: ['remote-user', 'u2'],
+      );
+      await service.addParticipant(userId: 'u3');
+      expect(ws.offers, isEmpty);
+    });
+
+    test('is a no-op for self', () async {
+      service.debugSelfUserId = 'me';
+      service.debugSession = _session(
+        callId: 'call-1',
+        state: CallState.connected,
+        participantUserIds: ['remote-user', 'u2'],
+      );
+      await service.addParticipant(userId: 'me');
+      expect(ws.offers, isEmpty);
+    });
+
+    test('is a no-op for an already-present participant', () async {
+      service.debugSelfUserId = 'me';
+      service.debugSession = _session(
+        callId: 'call-1',
+        state: CallState.connected,
+        participantUserIds: ['remote-user', 'u2'],
+      );
+      await service.addParticipant(userId: 'u2');
+      expect(ws.offers, isEmpty);
+      expect(service.currentSession?.participantUserIds, ['remote-user', 'u2']);
+    });
+  });
+
   group('call_hangup routing', () {
     test('ignores a stale hangup carrying a different call id', () {
       service.debugSession = _session(
@@ -206,10 +261,10 @@ void main() {
 
       service.hangup();
 
-      expect(
-        ws.hangups.map((h) => h['target']).toSet(),
-        {'caller-1', 'invitee-2'},
-      );
+      expect(ws.hangups.map((h) => h['target']).toSet(), {
+        'caller-1',
+        'invitee-2',
+      });
       expect(ws.hangups.every((h) => h['call_id'] == 'c-group'), isTrue);
     });
 
@@ -485,10 +540,7 @@ void main() {
         // ...and a legacy bare cancel from an older server (no reason) must be
         // treated just as conservatively.
         service.debugHandleWsEvent(
-          WsEvent(
-            type: WsEventType.callCancel,
-            data: {'call_id': 'c-we-won'},
-          ),
+          WsEvent(type: WsEventType.callCancel, data: {'call_id': 'c-we-won'}),
         );
         await Future<void>.delayed(Duration.zero);
 
@@ -520,13 +572,16 @@ void main() {
     test(
       'remote hangup of an answered incoming call emits an ended event',
       () async {
-        service.debugSession = _session(
-          callId: 'call-1',
-          isIncoming: true,
-          state: CallState.connected,
-        )
-          ..wasConnected = true
-          ..connectedAt = DateTime.now().subtract(const Duration(seconds: 42));
+        service.debugSession =
+            _session(
+                callId: 'call-1',
+                isIncoming: true,
+                state: CallState.connected,
+              )
+              ..wasConnected = true
+              ..connectedAt = DateTime.now().subtract(
+                const Duration(seconds: 42),
+              );
 
         final ended = <CallEndedEvent>[];
         final sub = service.callEnded.listen(ended.add);
@@ -550,12 +605,10 @@ void main() {
     );
 
     test('an outgoing ending still reports isIncoming false', () async {
-      service.debugSession = _session(
-        callId: 'call-out',
-        state: CallState.connected,
-      )
-        ..wasConnected = true
-        ..connectedAt = DateTime.now();
+      service.debugSession =
+          _session(callId: 'call-out', state: CallState.connected)
+            ..wasConnected = true
+            ..connectedAt = DateTime.now();
 
       final ended = <CallEndedEvent>[];
       final sub = service.callEnded.listen(ended.add);
@@ -626,59 +679,63 @@ void main() {
   });
 
   group('ring timer independence', () {
-    test('dialing out does not cancel a pending incoming missed-call timer',
-        () {
-      fakeAsync((async) {
-        final missed = <CallSession>[];
-        final sub = service.missedCalls.listen(missed.add);
+    test(
+      'dialing out does not cancel a pending incoming missed-call timer',
+      () {
+        fakeAsync((async) {
+          final missed = <CallSession>[];
+          final sub = service.missedCalls.listen(missed.add);
 
-        service.handleIncomingCallPayload({
-          'call_id': 'c-ring',
-          'caller_id': 'caller-1',
-          'conversation_id': 'conv-1',
+          service.handleIncomingCallPayload({
+            'call_id': 'c-ring',
+            'caller_id': 'caller-1',
+            'conversation_id': 'conv-1',
+          });
+          expect(service.debugPendingIncoming, isNotNull);
+
+          // Starting an outgoing dial used to clobber the shared timer field,
+          // so the pending ring never timed out into a missed call.
+          service.debugStartOutgoingRingTimer();
+
+          async.elapse(CallService.ringTimeout + const Duration(seconds: 1));
+          async.flushMicrotasks();
+
+          expect(missed.map((m) => m.callId), ['c-ring']);
+          expect(service.debugPendingIncoming, isNull);
+          sub.cancel();
+          async.flushMicrotasks();
         });
-        expect(service.debugPendingIncoming, isNotNull);
-
-        // Starting an outgoing dial used to clobber the shared timer field,
-        // so the pending ring never timed out into a missed call.
-        service.debugStartOutgoingRingTimer();
-
-        async.elapse(CallService.ringTimeout + const Duration(seconds: 1));
-        async.flushMicrotasks();
-
-        expect(missed.map((m) => m.callId), ['c-ring']);
-        expect(service.debugPendingIncoming, isNull);
-        sub.cancel();
-        async.flushMicrotasks();
-      });
-    });
+      },
+    );
   });
 
   group('call_escalate routing', () {
-    test('matching escalate tears down the mesh and reports the room',
-        () async {
-      service.debugSession = _session(
-        callId: 'mesh-call',
-        state: CallState.connected,
-      )..wasConnected = true;
+    test(
+      'matching escalate tears down the mesh and reports the room',
+      () async {
+        service.debugSession = _session(
+          callId: 'mesh-call',
+          state: CallState.connected,
+        )..wasConnected = true;
 
-      final escalations = <EscalatedCall>[];
-      final sub = service.escalatedCalls.listen(escalations.add);
+        final escalations = <EscalatedCall>[];
+        final sub = service.escalatedCalls.listen(escalations.add);
 
-      service.debugHandleWsEvent(
-        WsEvent(
-          type: WsEventType.callEscalate,
-          data: {'call_id': 'mesh-call', 'conversation_id': 'conv-1'},
-        ),
-      );
-      await Future<void>.delayed(Duration.zero);
+        service.debugHandleWsEvent(
+          WsEvent(
+            type: WsEventType.callEscalate,
+            data: {'call_id': 'mesh-call', 'conversation_id': 'conv-1'},
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
 
-      expect(escalations, hasLength(1));
-      expect(escalations.single.conversationId, 'conv-1');
-      // Mesh side is gone — the listener joins the LiveKit room instead.
-      expect(service.currentSession, isNull);
-      await sub.cancel();
-    });
+        expect(escalations, hasLength(1));
+        expect(escalations.single.conversationId, 'conv-1');
+        // Mesh side is gone — the listener joins the LiveKit room instead.
+        expect(service.currentSession, isNull);
+        await sub.cancel();
+      },
+    );
 
     test('escalate for an unknown call id is ignored', () async {
       service.debugSession = _session(
@@ -702,33 +759,35 @@ void main() {
       await sub.cancel();
     });
 
-    test('an escalate carrying a frame key caches it and hands it on',
-        () async {
-      service.debugSession = _session(
-        callId: 'mesh-call',
-        state: CallState.connected,
-      )..wasConnected = true;
+    test(
+      'an escalate carrying a frame key caches it and hands it on',
+      () async {
+        service.debugSession = _session(
+          callId: 'mesh-call',
+          state: CallState.connected,
+        )..wasConnected = true;
 
-      final escalations = <EscalatedCall>[];
-      final sub = service.escalatedCalls.listen(escalations.add);
+        final escalations = <EscalatedCall>[];
+        final sub = service.escalatedCalls.listen(escalations.add);
 
-      service.debugHandleWsEvent(
-        WsEvent(
-          type: WsEventType.callEscalate,
-          data: {
-            'call_id': 'mesh-call',
-            'conversation_id': 'conv-1',
-            'e2ee_key': 'a-shared-frame-key',
-          },
-        ),
-      );
-      await Future<void>.delayed(Duration.zero);
+        service.debugHandleWsEvent(
+          WsEvent(
+            type: WsEventType.callEscalate,
+            data: {
+              'call_id': 'mesh-call',
+              'conversation_id': 'conv-1',
+              'e2ee_key': 'a-shared-frame-key',
+            },
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
 
-      expect(escalations.single.e2eeKeyB64, 'a-shared-frame-key');
-      // Cached so a later banner join (or key request from a peer) has it.
-      expect(service.sfuKeyFor('conv-1'), 'a-shared-frame-key');
-      await sub.cancel();
-    });
+        expect(escalations.single.e2eeKeyB64, 'a-shared-frame-key');
+        // Cached so a later banner join (or key request from a peer) has it.
+        expect(service.sfuKeyFor('conv-1'), 'a-shared-frame-key');
+        await sub.cancel();
+      },
+    );
   });
 
   group('SFU media E2EE keys', () {
@@ -837,10 +896,7 @@ void main() {
 
       // Clear the pending ring so its timer doesn't outlive the test.
       service.debugHandleWsEvent(
-        WsEvent(
-          type: WsEventType.callCancel,
-          data: {'call_id': 'sealed-call'},
-        ),
+        WsEvent(type: WsEventType.callCancel, data: {'call_id': 'sealed-call'}),
       );
       expect(service.debugPendingIncoming, isNull);
     });
@@ -878,7 +934,8 @@ void main() {
             'call_id': 'call-1',
             'caller_id': 'remote-user',
             'conversation_id': 'conv-1',
-            'sdp': 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF\r\nm=video 9 '
+            'sdp':
+                'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF\r\nm=video 9 '
                 'UDP/TLS/RTP/SAVPF\r\n',
             'video_upgrade': true,
           },

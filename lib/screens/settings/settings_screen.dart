@@ -915,6 +915,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
     Color(0xFF546E7A), Color(0xFF37474F),
   ];
 
+  // #46 — supported app languages. Grows as translations are contributed
+  // (copy app_en.arb → app_<tag>.arb, add the tag here, run `flutter gen-l10n`).
+  static const _supportedLanguages = {'en': 'English'};
+
+  String _languageLabel(String? tag) {
+    if (tag == null || tag.isEmpty) return 'System default';
+    return _supportedLanguages[tag] ?? tag;
+  }
+
+  Future<void> _pickLanguage(SettingsProvider settings) async {
+    String? tag;
+    var picked = false;
+    await showGlassActionSheet<void>(
+      context: context,
+      title: 'Language',
+      actions: [
+        GlassActionSheetAction(
+          label: 'System default',
+          onPressed: () {
+            tag = null;
+            picked = true;
+          },
+        ),
+        for (final entry in _supportedLanguages.entries)
+          GlassActionSheetAction(
+            label: entry.value,
+            onPressed: () {
+              tag = entry.key;
+              picked = true;
+            },
+          ),
+      ],
+    );
+    if (picked) await settings.setLocale(tag);
+  }
+
   Future<void> _pickAccentColor(
     BuildContext context,
     SettingsProvider settings,
@@ -1110,14 +1146,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _manageTwoFactorPassword() async {
     final api = context.read<ApiService>();
-    final messenger = ScaffoldMessenger.of(context);
     final twoFactorCtrl = TextEditingController();
     final Map<String, dynamic> settings;
     try {
       settings = await api.getSecuritySettings();
     } catch (e) {
       if (!mounted) return;
-      messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+      showAppToast(context, 'Failed: $e', isError: true);
       twoFactorCtrl.dispose();
       return;
     }
@@ -1156,14 +1191,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               disableTwoFactor: true,
                             );
                             if (ctx.mounted) Navigator.pop(ctx);
-                            messenger.showSnackBar(
-                              const SnackBar(content: Text('2FA disabled')),
-                            );
+                            if (mounted) showAppToast(context, '2FA disabled');
                           } catch (e) {
                             if (ctx.mounted) setDlg(() => submitting = false);
-                            messenger.showSnackBar(
-                              SnackBar(content: Text('Failed: $e')),
-                            );
+                            if (mounted) {
+                              showAppToast(
+                                context,
+                                'Failed: $e',
+                                isError: true,
+                              );
+                            }
                           }
                         },
                   child: const Text('Disable 2FA'),
@@ -1178,11 +1215,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     : () async {
                         final password = twoFactorCtrl.text.trim();
                         if (password.isEmpty) {
-                          messenger.showSnackBar(
-                            const SnackBar(
-                              content: Text('Enter a 2FA password'),
-                            ),
-                          );
+                          showAppToast(context, 'Enter a 2FA password');
                           return;
                         }
                         setDlg(() => submitting = true);
@@ -1191,20 +1224,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             twoFactorPassword: password,
                           );
                           if (ctx.mounted) Navigator.pop(ctx);
-                          messenger.showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                twoFactorEnabled
-                                    ? '2FA password updated'
-                                    : '2FA enabled',
-                              ),
-                            ),
-                          );
+                          if (mounted) {
+                            showAppToast(
+                              context,
+                              twoFactorEnabled
+                                  ? '2FA password updated'
+                                  : '2FA enabled',
+                            );
+                          }
                         } catch (e) {
                           if (ctx.mounted) setDlg(() => submitting = false);
-                          messenger.showSnackBar(
-                            SnackBar(content: Text('Failed: $e')),
-                          );
+                          if (mounted) {
+                            showAppToast(context, 'Failed: $e', isError: true);
+                          }
                         }
                       },
                 child: submitting
@@ -2101,10 +2133,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         }
                       },
                 child: submitting
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                    ? const GlassProgressIndicator.circular(
+                        size: 16,
+                        strokeWidth: 2,
                       )
                     : const Text('Delete'),
               ),
@@ -2739,6 +2770,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 _GlassDivider(),
                 _GlassSwitchTile(
+                  icon: Icons.notifications_active_outlined,
+                  title: 'Rich notification previews',
+                  subtitle:
+                      'Send an end-to-end encrypted preview so your messages '
+                      'show a snippet in the recipient’s push (off by default)',
+                  value: settings.notificationHintsEnabled,
+                  onChanged: settings.setNotificationHintsEnabled,
+                ),
+                _GlassDivider(),
+                _GlassSwitchTile(
                   icon: Icons.link_rounded,
                   title: 'Link Previews',
                   subtitle: settings.strictPrivacyMode
@@ -2799,6 +2840,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 24),
 
+          // ── Accessibility ─────────────────────────────────────────────────
+          const _SectionHeader('Accessibility'),
+          GlassCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                _UiTextScaleTile(settings: settings),
+                _GlassDivider(),
+                _GlassSwitchTile(
+                  icon: Icons.format_bold_rounded,
+                  title: 'Bold text',
+                  subtitle: 'Use heavier font weights across the app',
+                  value: settings.boldText,
+                  onChanged: settings.setBoldText,
+                ),
+                _GlassDivider(),
+                _GlassSwitchTile(
+                  icon: Icons.motion_photos_off_outlined,
+                  title: 'Reduce motion',
+                  subtitle:
+                      'Shorten or disable screen transitions and glass effects',
+                  value: settings.reduceMotion,
+                  onChanged: settings.setReduceMotion,
+                  isLast: true,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
           // ── Appearance ───────────────────────────────────────────────────
           const _SectionHeader('Appearance'),
           GlassCard(
@@ -2827,6 +2898,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                   onTap: () => _pickAccentColor(context, settings),
+                ),
+                _GlassDivider(),
+                _GlassTile(
+                  icon: Icons.translate_rounded,
+                  title: 'Language',
+                  subtitle: _languageLabel(settings.localeTag),
+                  onTap: () => _pickLanguage(settings),
                 ),
                 _GlassDivider(),
                 _MessageFontSizeTile(settings: settings),
@@ -3250,6 +3328,57 @@ class _MessageFontSizeTile extends StatelessWidget {
             max: SettingsProvider.maxMessageFontScale,
             divisions: 14,
             onChanged: settings.setMessageFontScale,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// App-wide UI text scale slider. The whole app (this screen included) is
+/// already under the combined MediaQuery.textScaler, so dragging rescales
+/// everything live — that *is* the preview; no explicit textScaler here (which
+/// would double-apply on top of the ambient scaler).
+class _UiTextScaleTile extends StatelessWidget {
+  final SettingsProvider settings;
+  const _UiTextScaleTile({required this.settings});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final scale = settings.uiTextScale;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.format_size_rounded, color: scheme.primary, size: 22),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'App text size',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+              Text('${(scale * 100).round()}%'),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Scales text across the whole app, combined with your device size.',
+            style: TextStyle(
+              fontSize: 12.5,
+              color: scheme.onSurface.withValues(alpha: 0.6),
+            ),
+          ),
+          GlassSlider(
+            value: scale,
+            min: SettingsProvider.minUiTextScale,
+            max: SettingsProvider.maxUiTextScale,
+            divisions: 6,
+            onChanged: settings.setUiTextScale,
           ),
         ],
       ),

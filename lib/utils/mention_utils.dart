@@ -1,3 +1,4 @@
+import '../models/bot_command.dart';
 import '../models/conversation.dart';
 
 class MentionRange {
@@ -151,6 +152,54 @@ ActiveMentionQuery? findActiveMentionQuery(String text, int cursorOffset) {
   final query = text.substring(trigger + 1, cursorOffset);
   if (query.length > 32 || end - trigger > 33) return null;
   return ActiveMentionQuery(start: trigger, end: end, query: query);
+}
+
+// ── Bot slash-commands (#31) ─────────────────────────────────────────────────
+
+final _whitespacePattern = RegExp(r'\s');
+
+class ActiveCommandQuery {
+  final int start;
+  final int end;
+  final String query;
+
+  const ActiveCommandQuery({
+    required this.start,
+    required this.end,
+    required this.query,
+  });
+}
+
+/// Matches a leading `/command` token, active ONLY when it is the first token of
+/// the composer and the cursor sits within it (Telegram only autocompletes
+/// commands at message start, unlike `@` mentions which match anywhere).
+ActiveCommandQuery? findActiveCommandQuery(String text, int cursorOffset) {
+  if (cursorOffset < 0 || cursorOffset > text.length) return null;
+  if (text.isEmpty || text[0] != '/') return null;
+  var end = 1;
+  while (end < text.length && !_whitespacePattern.hasMatch(text[end])) {
+    end++;
+  }
+  // Only while the cursor is inside the leading command token.
+  if (cursorOffset > end) return null;
+  final query = text.substring(1, end);
+  if (query.length > 32) return null;
+  return ActiveCommandQuery(start: 0, end: end, query: query);
+}
+
+List<BotCommand> commandSuggestions({
+  required Iterable<BotCommand> commands,
+  required ActiveCommandQuery? active,
+  int limit = 8,
+}) {
+  if (active == null) return const [];
+  final q = active.query.toLowerCase();
+  final list = commands.where((c) => c.command.isNotEmpty).toList();
+  final filtered = q.isEmpty
+      ? list
+      : list.where((c) => c.command.toLowerCase().startsWith(q)).toList();
+  filtered.sort((a, b) => a.command.compareTo(b.command));
+  return filtered.take(limit).toList();
 }
 
 List<ConversationMember> mentionSuggestionsForMembers({

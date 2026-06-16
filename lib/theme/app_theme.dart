@@ -7,7 +7,11 @@ import 'package:flutter/material.dart';
 /// while the exiting page fades and very slightly scales down, creating a
 /// perceptual depth-of-field through the glass surface layers.
 class _GlassPageTransitionsBuilder extends PageTransitionsBuilder {
-  const _GlassPageTransitionsBuilder();
+  const _GlassPageTransitionsBuilder({this.reduceMotion = false});
+
+  /// When true, the slide/scale/fade is skipped for an instant page swap
+  /// (honours the in-app Reduce Motion toggle and the OS setting).
+  final bool reduceMotion;
 
   @override
   Widget buildTransitions<T>(
@@ -17,6 +21,7 @@ class _GlassPageTransitionsBuilder extends PageTransitionsBuilder {
     Animation<double> secondaryAnimation,
     Widget child,
   ) {
+    if (reduceMotion) return child;
     final curved = CurvedAnimation(
       parent: animation,
       curve: const Cubic(0.25, 0.46, 0.45, 0.94),
@@ -74,15 +79,24 @@ class AppTheme {
 
   static const Color _seed = Color(0xFF3D5AFE);
 
-  static ThemeData light({Color? seed, bool reduceTransparency = false}) =>
-      _build(Brightness.light, seed ?? _seed, reduceTransparency);
-  static ThemeData dark({Color? seed, bool reduceTransparency = false}) =>
-      _build(Brightness.dark, seed ?? _seed, reduceTransparency);
+  static ThemeData light({
+    Color? seed,
+    bool reduceTransparency = false,
+    bool reduceMotion = false,
+  }) =>
+      _build(Brightness.light, seed ?? _seed, reduceTransparency, reduceMotion);
+  static ThemeData dark({
+    Color? seed,
+    bool reduceTransparency = false,
+    bool reduceMotion = false,
+  }) =>
+      _build(Brightness.dark, seed ?? _seed, reduceTransparency, reduceMotion);
 
   static ThemeData _build(
     Brightness brightness,
     Color seed,
     bool reduceTransparency,
+    bool reduceMotion,
   ) {
     final isDark = brightness == Brightness.dark;
 
@@ -109,15 +123,12 @@ class AppTheme {
       scaffoldBackgroundColor: scaffoldBg,
       splashFactory: InkSparkle.splashFactory,
       visualDensity: VisualDensity.standard,
-      // Apply the depth-of-glass transition on every platform.
-      pageTransitionsTheme: const PageTransitionsTheme(
+      // Apply the depth-of-glass transition on every platform (or an instant
+      // swap when Reduce Motion is on).
+      pageTransitionsTheme: PageTransitionsTheme(
         builders: {
-          TargetPlatform.iOS: _GlassPageTransitionsBuilder(),
-          TargetPlatform.android: _GlassPageTransitionsBuilder(),
-          TargetPlatform.macOS: _GlassPageTransitionsBuilder(),
-          TargetPlatform.windows: _GlassPageTransitionsBuilder(),
-          TargetPlatform.linux: _GlassPageTransitionsBuilder(),
-          TargetPlatform.fuchsia: _GlassPageTransitionsBuilder(),
+          for (final p in TargetPlatform.values)
+            p: _GlassPageTransitionsBuilder(reduceMotion: reduceMotion),
         },
       ),
     );
