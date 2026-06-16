@@ -120,8 +120,9 @@ void main() {
           'created_at': createdAt.toUtc().toIso8601String(),
         });
 
-    testWidgets('a fresh roll tumbles, then LANDS on the server value',
-        (tester) async {
+    testWidgets('a fresh roll tumbles, then LANDS on the server value', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -134,8 +135,11 @@ void main() {
       );
       await tester.pump();
 
-      expect(find.text('Rolling…'), findsOneWidget,
-          reason: 'the roll must visibly animate');
+      expect(
+        find.text('Rolling…'),
+        findsOneWidget,
+        reason: 'the roll must visibly animate',
+      );
       expect(find.text('4 / 6'), findsNothing);
 
       await tester.pump(const Duration(milliseconds: 1700));
@@ -143,8 +147,11 @@ void main() {
       expect(find.text('Rolling…'), findsNothing);
       expect(find.text('4 / 6'), findsOneWidget);
       final die = tester.widget<Die3D>(find.byType(Die3D));
-      expect(frontFaceValue(die), 4,
-          reason: 'the 3D die must land on the server-decided result');
+      expect(
+        frontFaceValue(die),
+        4,
+        reason: 'the 3D die must land on the server-decided result',
+      );
     });
 
     testWidgets('scrollback rolls render settled, no replay', (tester) async {

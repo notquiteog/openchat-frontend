@@ -112,10 +112,7 @@ class _GamePlaySheetState extends State<_GamePlaySheet>
               const GlassSheetGrabber(),
               Row(
                 children: [
-                  Text(
-                    widget.gameType,
-                    style: const TextStyle(fontSize: 26),
-                  ),
+                  Text(widget.gameType, style: const TextStyle(fontSize: 26)),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
@@ -173,9 +170,7 @@ class _GamePlaySheetState extends State<_GamePlaySheet>
                                   fontWeight: FontWeight.w800,
                                   color: _lastScore! >= 60
                                       ? scheme.primary
-                                      : scheme.onSurface.withValues(
-                                          alpha: 0.7,
-                                        ),
+                                      : scheme.onSurface.withValues(alpha: 0.7),
                                 ),
                               )
                             : const SizedBox.shrink(),

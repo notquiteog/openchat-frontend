@@ -31,8 +31,7 @@ void main() {
   late _FakeWs ws;
   late ChatProvider provider;
 
-  Message pollMessage({required bool anonymous, bool multi = false}) =>
-      Message(
+  Message pollMessage({required bool anonymous, bool multi = false}) => Message(
     id: 'msg-1',
     conversationId: 'conv-1',
     senderId: 'creator-1',
@@ -126,8 +125,9 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('revote after restart moves the refetch-echoed mark',
-      (tester) async {
+  testWidgets('revote after restart moves the refetch-echoed mark', (
+    tester,
+  ) async {
     // Post-restart state for a non-anonymous poll: the refetched payload
     // echoes the old vote, and so does the device-local memory.
     await storage.savePollVoteSelections('poll-1', ['opt-a']);
@@ -150,39 +150,45 @@ void main() {
     await tester.tap(find.text('Hills'));
     await tester.pumpAndSettle();
     expect(selectedIconIn('Hills'), findsOneWidget);
-    expect(selectedIconIn('Beach'), findsNothing,
-        reason: 'old selection must be unmarked after revoting');
+    expect(
+      selectedIconIn('Beach'),
+      findsNothing,
+      reason: 'old selection must be unmarked after revoting',
+    );
     expect(await storage.getPollVoteSelections('poll-1'), ['opt-b']);
   });
 
   for (final anonymous in [false, true]) {
-    testWidgets(
-      'revote moves the mark (anonymous: $anonymous)',
-      (tester) async {
-        if (anonymous) {
-          await storage.savePollVoteToken('poll-1', 'blind-token');
-        }
-        provider.debugSeedMessages('conv-1', [
-          pollMessage(anonymous: anonymous),
-        ]);
-        await pumpPoll(tester);
+    testWidgets('revote moves the mark (anonymous: $anonymous)', (
+      tester,
+    ) async {
+      if (anonymous) {
+        await storage.savePollVoteToken('poll-1', 'blind-token');
+      }
+      provider.debugSeedMessages('conv-1', [pollMessage(anonymous: anonymous)]);
+      await pumpPoll(tester);
 
-        await tester.tap(find.text('Beach'));
-        await tester.pumpAndSettle();
-        expect(selectedIconIn('Beach'), findsOneWidget);
-        expect(selectedIconIn('Hills'), findsNothing);
+      await tester.tap(find.text('Beach'));
+      await tester.pumpAndSettle();
+      expect(selectedIconIn('Beach'), findsOneWidget);
+      expect(selectedIconIn('Hills'), findsNothing);
 
-        await tester.tap(find.text('Hills'));
-        await tester.pumpAndSettle();
-        expect(selectedIconIn('Hills'), findsOneWidget,
-            reason: 'new selection must be marked');
-        expect(selectedIconIn('Beach'), findsNothing,
-            reason: 'old selection must be unmarked after revoting');
+      await tester.tap(find.text('Hills'));
+      await tester.pumpAndSettle();
+      expect(
+        selectedIconIn('Hills'),
+        findsOneWidget,
+        reason: 'new selection must be marked',
+      );
+      expect(
+        selectedIconIn('Beach'),
+        findsNothing,
+        reason: 'old selection must be unmarked after revoting',
+      );
 
-        // The marked state the next session would restore from storage.
-        expect(await storage.getPollVoteSelections('poll-1'), ['opt-b']);
-      },
-    );
+      // The marked state the next session would restore from storage.
+      expect(await storage.getPollVoteSelections('poll-1'), ['opt-b']);
+    });
   }
 
   testWidgets('tapping the selected option retracts the vote', (tester) async {
@@ -195,15 +201,19 @@ void main() {
 
     await tester.tap(find.text('Beach'));
     await tester.pumpAndSettle();
-    expect(selectedIconIn('Beach'), findsNothing,
-        reason: 'tapping the selected option again must retract the vote');
+    expect(
+      selectedIconIn('Beach'),
+      findsNothing,
+      reason: 'tapping the selected option again must retract the vote',
+    );
     expect(selectedIconIn('Hills'), findsNothing);
     expect(api.serverVotes, isEmpty);
     expect(await storage.getPollVoteSelections('poll-1'), isEmpty);
   });
 
-  testWidgets('retraction wins over a stale refetch-echoed mark',
-      (tester) async {
+  testWidgets('retraction wins over a stale refetch-echoed mark', (
+    tester,
+  ) async {
     // Channel-shaped: the host message still echoes the vote being retracted.
     await storage.savePollVoteSelections('poll-1', ['opt-a']);
     api.serverVotes = ['opt-a'];
@@ -224,13 +234,17 @@ void main() {
 
     await tester.tap(find.text('Beach'));
     await tester.pumpAndSettle();
-    expect(selectedIconIn('Beach'), findsNothing,
-        reason: 'an authoritative empty vote state must beat the stale echo');
+    expect(
+      selectedIconIn('Beach'),
+      findsNothing,
+      reason: 'an authoritative empty vote state must beat the stale echo',
+    );
     expect(api.serverVotes, isEmpty);
   });
 
-  testWidgets('multi-answer poll: hint shown, taps toggle options',
-      (tester) async {
+  testWidgets('multi-answer poll: hint shown, taps toggle options', (
+    tester,
+  ) async {
     api.multiAnswerPoll = true;
     provider.debugSeedMessages('conv-1', [
       pollMessage(anonymous: false, multi: true),
@@ -252,8 +266,11 @@ void main() {
 
     await tester.tap(find.text('Hills'));
     await tester.pumpAndSettle();
-    expect(selectedIconIn('Hills'), findsNothing,
-        reason: 'removing the last option retracts the whole vote');
+    expect(
+      selectedIconIn('Hills'),
+      findsNothing,
+      reason: 'removing the last option retracts the whole vote',
+    );
     expect(api.serverVotes, isEmpty);
     expect(await storage.getPollVoteSelections('poll-1'), isEmpty);
   });
@@ -269,8 +286,9 @@ void main() {
   // once and never refreshed from ChatProvider — the bubble must still show
   // votes correctly via the provider's poll state.
 
-  testWidgets('channel: revote moves the stale refetch-echoed mark',
-      (tester) async {
+  testWidgets('channel: revote moves the stale refetch-echoed mark', (
+    tester,
+  ) async {
     // The post was fetched with the old vote echoed; the message is NOT in
     // ChatProvider._messages (channels keep their own post list).
     await storage.savePollVoteSelections('poll-1', ['opt-a']);
@@ -292,14 +310,21 @@ void main() {
 
     await tester.tap(find.text('Hills'));
     await tester.pumpAndSettle();
-    expect(selectedIconIn('Hills'), findsOneWidget,
-        reason: 'new selection must be marked');
-    expect(selectedIconIn('Beach'), findsNothing,
-        reason: 'old selection must be unmarked after revoting');
+    expect(
+      selectedIconIn('Hills'),
+      findsOneWidget,
+      reason: 'new selection must be marked',
+    );
+    expect(
+      selectedIconIn('Beach'),
+      findsNothing,
+      reason: 'old selection must be unmarked after revoting',
+    );
   });
 
-  testWidgets('channel: anonymous poll votes through the blind-token path',
-      (tester) async {
+  testWidgets('channel: anonymous poll votes through the blind-token path', (
+    tester,
+  ) async {
     api.anonymousPoll = true;
     await storage.savePollVoteToken('poll-1', 'blind-token');
     await pumpStaleHost(tester, pollMessage(anonymous: true));
@@ -313,8 +338,9 @@ void main() {
     expect(selectedIconIn('Beach'), findsOneWidget);
   });
 
-  testWidgets('channel: poll_updated broadcast refreshes tallies',
-      (tester) async {
+  testWidgets('channel: poll_updated broadcast refreshes tallies', (
+    tester,
+  ) async {
     await pumpStaleHost(tester, pollMessage(anonymous: false));
     expect(find.text('0%'), findsNWidgets(2));
 
@@ -393,9 +419,7 @@ class _FakeApi extends ApiService {
         },
       }),
     );
-    return Poll.fromJson(
-      pollJson(voter: echoVoter ? optionIDs : const []),
-    );
+    return Poll.fromJson(pollJson(voter: echoVoter ? optionIDs : const []));
   }
 
   @override
@@ -450,8 +474,7 @@ class _NoopCache extends MessageCacheService {
     String encryptedPayload,
     String plaintext,
     String? senderId,
-  ) =>
-      Future.value();
+  ) => Future.value();
 }
 
 class _NoopOutbox extends OfflineOutboxService {

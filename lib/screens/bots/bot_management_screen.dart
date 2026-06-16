@@ -68,13 +68,18 @@ class _BotManagementScreenState extends State<BotManagementScreen> {
               const Text(
                 'Save these credentials — the private key will never be shown again.',
                 style: TextStyle(
-                    color: Colors.orange, fontWeight: FontWeight.w600),
+                  color: Colors.orange,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
               const SizedBox(height: 16),
               _CredentialField(label: 'Username', value: '@$username'),
               const SizedBox(height: 12),
               _CredentialField(
-                  label: 'API Token', value: token, monospace: true),
+                label: 'API Token',
+                value: token,
+                monospace: true,
+              ),
               const SizedBox(height: 12),
               _CredentialField(
                 label: 'Private Key (for bot SDK)',
@@ -88,12 +93,15 @@ class _BotManagementScreenState extends State<BotManagementScreen> {
         actions: [
           FilledButton(
             onPressed: () {
-              Clipboard.setData(ClipboardData(
-                text: 'Token: $token\n\nPrivate Key:\n$privateKey',
-              ));
+              Clipboard.setData(
+                ClipboardData(
+                  text: 'Token: $token\n\nPrivate Key:\n$privateKey',
+                ),
+              );
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
-                    content: Text('Credentials copied to clipboard')),
+                  content: Text('Credentials copied to clipboard'),
+                ),
               );
             },
             child: const Text('Copy All'),
@@ -131,133 +139,148 @@ class _BotManagementScreenState extends State<BotManagementScreen> {
       body: _loading
           ? const Center(child: GlassProgressIndicator.circular())
           : _bots.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.smart_toy_outlined,
-                          size: 72,
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onSurface
-                              .withValues(alpha: 0.35)),
-                      const SizedBox(height: 16),
-                      Text('No bots yet',
-                          style: TextStyle(
-                            fontSize: 16,
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurface
-                                .withValues(alpha: 0.55),
-                          )),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Create a bot to automate messages\nusing the OpenChat Bot API',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onSurface
-                              .withValues(alpha: 0.45),
-                          fontSize: 13,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      GlassButtonWidget.icon(
-                        icon: const Icon(Icons.add),
-                        label: const Text('Create a bot'),
-                        onPressed: _createBot,
-                      ),
-                    ],
+          ? Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.smart_toy_outlined,
+                    size: 72,
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.35),
                   ),
-                )
-              : ListView.builder(
-                  padding: EdgeInsets.fromLTRB(16, MediaQuery.paddingOf(context).top + kToolbarHeight + 8, 16, MediaQuery.paddingOf(context).bottom + 32),
-                  itemCount: _bots.length,
-                  itemBuilder: (context, i) {
-                    final bot = _bots[i];
-                    final username = bot['username'] as String? ?? '';
-                    final avatarUrl = bot['avatar_url'] as String?;
-                    final description =
-                        (bot['bio'] ?? bot['description']) as String?;
-                    final scheme = Theme.of(context).colorScheme;
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: GlassCard(
-                        padding: EdgeInsets.zero,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(22),
-                          child: Material(
-                            color: Colors.transparent,
-                            child: InkWell(
-                              onTap: () => _openBot(bot),
-                              child: Padding(
-                                padding: const EdgeInsets.all(14),
-                                child: Row(
-                                  children: [
-                                    CircleAvatar(
-                                      radius: 22,
-                                      backgroundImage: avatarUrl != null
-                                          ? CachedNetworkImageProvider(
-                                              ApiConfig.resolveMedia(avatarUrl))
-                                          : null,
-                                      child: avatarUrl == null
-                                          ? Text(
-                                              username.isNotEmpty
-                                                  ? username[0].toUpperCase()
-                                                  : 'B',
-                                              style: const TextStyle(
-                                                  fontWeight: FontWeight.w600),
-                                            )
-                                          : null,
-                                    ),
-                                    const SizedBox(width: 14),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Text('@$username',
-                                              style: const TextStyle(
-                                                  fontWeight: FontWeight.w600)),
-                                          Text(
-                                            description != null &&
-                                                    description.isNotEmpty
-                                                ? description
-                                                : 'No description',
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(
-                                              fontSize: 13,
-                                              color: scheme.onSurface
-                                                  .withValues(alpha: 0.55),
-                                            ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'No bots yet',
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.onSurface.withValues(alpha: 0.55),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Create a bot to automate messages\nusing the OpenChat Bot API',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.onSurface.withValues(alpha: 0.45),
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  GlassButtonWidget.icon(
+                    icon: const Icon(Icons.add),
+                    label: const Text('Create a bot'),
+                    onPressed: _createBot,
+                  ),
+                ],
+              ),
+            )
+          : ListView.builder(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                MediaQuery.paddingOf(context).top + kToolbarHeight + 8,
+                16,
+                MediaQuery.paddingOf(context).bottom + 32,
+              ),
+              itemCount: _bots.length,
+              itemBuilder: (context, i) {
+                final bot = _bots[i];
+                final username = bot['username'] as String? ?? '';
+                final avatarUrl = bot['avatar_url'] as String?;
+                final description =
+                    (bot['bio'] ?? bot['description']) as String?;
+                final scheme = Theme.of(context).colorScheme;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: GlassCard(
+                    padding: EdgeInsets.zero,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(22),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () => _openBot(bot),
+                          child: Padding(
+                            padding: const EdgeInsets.all(14),
+                            child: Row(
+                              children: [
+                                CircleAvatar(
+                                  radius: 22,
+                                  backgroundImage: avatarUrl != null
+                                      ? CachedNetworkImageProvider(
+                                          ApiConfig.resolveMedia(avatarUrl),
+                                        )
+                                      : null,
+                                  child: avatarUrl == null
+                                      ? Text(
+                                          username.isNotEmpty
+                                              ? username[0].toUpperCase()
+                                              : 'B',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w600,
                                           ),
-                                        ],
-                                      ),
-                                    ),
-                                    Icon(Icons.chevron_right,
-                                        size: 18,
-                                        color: scheme.onSurface
-                                            .withValues(alpha: 0.35)),
-                                  ],
+                                        )
+                                      : null,
                                 ),
-                              ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        '@$username',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      Text(
+                                        description != null &&
+                                                description.isNotEmpty
+                                            ? description
+                                            : 'No description',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: scheme.onSurface.withValues(
+                                            alpha: 0.55,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Icon(
+                                  Icons.chevron_right,
+                                  size: 18,
+                                  color: scheme.onSurface.withValues(
+                                    alpha: 0.35,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ),
                       ),
-                    );
-                  },
-                ),
+                    ),
+                  ),
+                );
+              },
+            ),
     );
   }
 }
 
 class _CreateBotDialog extends StatefulWidget {
   final void Function(Map<String, dynamic> botData, String privateKey)
-      onCreated;
+  onCreated;
   const _CreateBotDialog({required this.onCreated});
 
   @override
@@ -285,14 +308,16 @@ class _CreateBotDialogState extends State<_CreateBotDialog> {
     try {
       final api = context.read<ApiService>();
       final bytes = await picked.readAsBytes();
-      final url =
-          await api.uploadAvatar(fileBytes: bytes, filename: picked.name);
+      final url = await api.uploadAvatar(
+        fileBytes: bytes,
+        filename: picked.name,
+      );
       if (mounted) setState(() => _avatarUrl = url);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Avatar upload failed: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Avatar upload failed: $e')));
       }
     }
   }
@@ -334,8 +359,9 @@ class _CreateBotDialogState extends State<_CreateBotDialog> {
       }
     } catch (e) {
       if (mounted) setState(() => _creating = false);
-      messenger
-          .showSnackBar(SnackBar(content: Text('Failed to create bot: $e')));
+      messenger.showSnackBar(
+        SnackBar(content: Text('Failed to create bot: $e')),
+      );
     }
   }
 
@@ -353,7 +379,8 @@ class _CreateBotDialogState extends State<_CreateBotDialog> {
                 radius: 36,
                 backgroundImage: _avatarUrl != null
                     ? CachedNetworkImageProvider(
-                        ApiConfig.resolveMedia(_avatarUrl!))
+                        ApiConfig.resolveMedia(_avatarUrl!),
+                      )
                     : null,
                 child: _avatarUrl == null
                     ? const Icon(Icons.add_a_photo, size: 28)
@@ -361,8 +388,10 @@ class _CreateBotDialogState extends State<_CreateBotDialog> {
               ),
             ),
             const SizedBox(height: 4),
-            const Text('Tap to set avatar',
-                style: TextStyle(fontSize: 11, color: Colors.grey)),
+            const Text(
+              'Tap to set avatar',
+              style: TextStyle(fontSize: 11, color: Colors.grey),
+            ),
             const SizedBox(height: 12),
             TextField(
               controller: _usernameCtrl,
@@ -384,8 +413,9 @@ class _CreateBotDialogState extends State<_CreateBotDialog> {
             const SizedBox(height: 8),
             TextField(
               controller: _descCtrl,
-              decoration:
-                  const InputDecoration(labelText: 'Description (optional)'),
+              decoration: const InputDecoration(
+                labelText: 'Description (optional)',
+              ),
               maxLines: 2,
               enabled: !_creating,
             ),
@@ -400,7 +430,11 @@ class _CreateBotDialogState extends State<_CreateBotDialog> {
         FilledButton(
           onPressed: _creating ? null : _submit,
           child: _creating
-              ? const GlassProgressIndicator.circular(size: 18, strokeWidth: 2, color: Colors.white)
+              ? const GlassProgressIndicator.circular(
+                  size: 18,
+                  strokeWidth: 2,
+                  color: Colors.white,
+                )
               : const Text('Create'),
         ),
       ],
@@ -437,15 +471,17 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
     if (_token.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text(
-                'Token is only shown once. Use “Regenerate” to issue a new one.')),
+          content: Text(
+            'Token is only shown once. Use “Regenerate” to issue a new one.',
+          ),
+        ),
       );
       return;
     }
     Clipboard.setData(ClipboardData(text: _token));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Token copied to clipboard')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Token copied to clipboard')));
   }
 
   Future<void> _regenerateToken() async {
@@ -454,15 +490,18 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
       builder: (ctx) => GlassAlertDialog(
         title: const Text('Regenerate API token?'),
         content: const Text(
-            'A new token will be issued and the current one will stop working '
-            'immediately. Update any running bot with the new token.'),
+          'A new token will be issued and the current one will stop working '
+          'immediately. Update any running bot with the new token.',
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Regenerate')),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Regenerate'),
+          ),
         ],
       ),
     );
@@ -475,8 +514,9 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
       setState(() => _bot = {..._bot, 'api_token': token});
       _showNewToken(token);
     } catch (e) {
-      messenger
-          .showSnackBar(SnackBar(content: Text('Failed to regenerate: $e')));
+      messenger.showSnackBar(
+        SnackBar(content: Text('Failed to regenerate: $e')),
+      );
     }
   }
 
@@ -493,11 +533,16 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
               const Text(
                 'Copy this now — it will not be shown again.',
                 style: TextStyle(
-                    color: Colors.orange, fontWeight: FontWeight.w600),
+                  color: Colors.orange,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
               const SizedBox(height: 16),
               _CredentialField(
-                  label: 'API Token', value: token, monospace: true),
+                label: 'API Token',
+                value: token,
+                monospace: true,
+              ),
             ],
           ),
         ),
@@ -544,7 +589,9 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () async {
               final desc = descCtrl.text.trim();
@@ -587,8 +634,10 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
     final api = context.read<ApiService>();
     try {
       final bytes = await picked.readAsBytes();
-      final url =
-          await api.uploadAvatar(fileBytes: bytes, filename: picked.name);
+      final url = await api.uploadAvatar(
+        fileBytes: bytes,
+        filename: picked.name,
+      );
       await api.updateBot(_bot['id'] as String, avatarUrl: url);
       if (mounted) {
         setState(() {
@@ -597,9 +646,9 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update avatar: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to update avatar: $e')));
       }
     }
   }
@@ -610,11 +659,13 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
       builder: (ctx) => GlassAlertDialog(
         title: const Text('Delete bot?'),
         content: Text(
-            'This will permanently delete @$_username. This cannot be undone.'),
+          'This will permanently delete @$_username. This cannot be undone.',
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () => Navigator.pop(ctx, true),
@@ -630,9 +681,9 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
       if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to delete bot: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to delete bot: $e')));
       }
     }
   }
@@ -652,7 +703,12 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
         ],
       ),
       body: ListView(
-        padding: EdgeInsets.fromLTRB(16, MediaQuery.paddingOf(context).top + kToolbarHeight, 16, MediaQuery.paddingOf(context).bottom + 32),
+        padding: EdgeInsets.fromLTRB(
+          16,
+          MediaQuery.paddingOf(context).top + kToolbarHeight,
+          16,
+          MediaQuery.paddingOf(context).bottom + 32,
+        ),
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 24),
@@ -666,7 +722,8 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
                         radius: 48,
                         backgroundImage: _avatarUrl != null
                             ? CachedNetworkImageProvider(
-                                ApiConfig.resolveMedia(_avatarUrl!))
+                                ApiConfig.resolveMedia(_avatarUrl!),
+                              )
                             : null,
                         child: _avatarUrl == null
                             ? Text(
@@ -682,19 +739,27 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
                         right: 0,
                         child: CircleAvatar(
                           radius: 14,
-                          backgroundColor:
-                              Theme.of(context).colorScheme.primary,
-                          child: const Icon(Icons.camera_alt,
-                              size: 16, color: Colors.white),
+                          backgroundColor: Theme.of(
+                            context,
+                          ).colorScheme.primary,
+                          child: const Icon(
+                            Icons.camera_alt,
+                            size: 16,
+                            color: Colors.white,
+                          ),
                         ),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 12),
-                Text('@$_username',
-                    style: const TextStyle(
-                        fontSize: 20, fontWeight: FontWeight.w600)),
+                Text(
+                  '@$_username',
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
                 if (_description != null && _description!.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(24, 6, 24, 0),
@@ -702,10 +767,9 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
                       _description!,
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurface
-                            .withValues(alpha: 0.55),
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.onSurface.withValues(alpha: 0.55),
                       ),
                     ),
                   ),
@@ -746,10 +810,9 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
                   height: 1,
                   thickness: 0.5,
                   indent: 66,
-                  color: Theme.of(context)
-                      .colorScheme
-                      .onSurface
-                      .withValues(alpha: 0.10),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.onSurface.withValues(alpha: 0.10),
                 ),
                 _BotDetailTile(
                   icon: Icons.webhook_outlined,
@@ -765,8 +828,7 @@ class _BotDetailScreenState extends State<_BotDetailScreen> {
           ),
           const SizedBox(height: 8),
           GlassCard(
-            tint:
-                Theme.of(context).colorScheme.error.withValues(alpha: 0.06),
+            tint: Theme.of(context).colorScheme.error.withValues(alpha: 0.06),
             padding: EdgeInsets.zero,
             child: _BotDetailTile(
               icon: Icons.delete_outline,
@@ -835,10 +897,14 @@ class _BotDetailTile extends StatelessWidget {
               ),
             )
           : null,
-      trailing: trailing ??
+      trailing:
+          trailing ??
           (trailingIcon != null
-              ? Icon(trailingIcon, size: 18,
-                  color: scheme.onSurface.withValues(alpha: 0.35))
+              ? Icon(
+                  trailingIcon,
+                  size: 18,
+                  color: scheme.onSurface.withValues(alpha: 0.35),
+                )
               : null),
       onTap: onTap,
     );
@@ -863,9 +929,14 @@ class _CredentialField extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label,
-            style: const TextStyle(
-                fontSize: 11, fontWeight: FontWeight.w600, color: Colors.grey)),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: Colors.grey,
+          ),
+        ),
         const SizedBox(height: 4),
         Container(
           width: double.infinity,

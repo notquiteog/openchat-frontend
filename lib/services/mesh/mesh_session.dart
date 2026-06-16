@@ -22,8 +22,12 @@ import 'mesh_frames.dart';
 /// revealed exclusively to a connected peer, never beaconed.
 
 typedef MeshSign = Future<String> Function(String data);
-typedef MeshVerify = Future<bool> Function(
-    String data, String signature, String publicKeyArmored);
+typedef MeshVerify =
+    Future<bool> Function(
+      String data,
+      String signature,
+      String publicKeyArmored,
+    );
 typedef MeshFingerprintOf = Future<String> Function(String publicKeyArmored);
 typedef MeshFrameSender = Future<void> Function(int type, Uint8List payload);
 
@@ -98,6 +102,8 @@ class MeshSession {
       StreamController.broadcast();
   final StreamController<Map<String, dynamic>> _messages =
       StreamController.broadcast();
+  final StreamController<Map<String, dynamic>> _attachments =
+      StreamController.broadcast();
   final StreamController<MeshAck> _acks = StreamController.broadcast();
 
   MeshSessionState get state => _state;
@@ -109,6 +115,10 @@ class MeshSession {
   /// Decoded `message` frame payloads, emitted only on authenticated
   /// sessions.
   Stream<Map<String, dynamic>> get messages => _messages.stream;
+
+  /// Decoded `attachment` frame payloads (#26), emitted only on authenticated
+  /// sessions. Carries the attachment ciphertext inline (base64).
+  Stream<Map<String, dynamic>> get attachments => _attachments.stream;
 
   /// Delivery receipts from the peer for envelopes we sent. Older builds
   /// never send acks, so absence of an ack only means "unconfirmed".
@@ -135,13 +145,13 @@ class MeshSession {
   }
 
   Future<void> _sendHello() => _sendJson(meshFrameHello, {
-        'session_id': sessionId,
-        'fingerprint': selfFingerprint,
-        'public_key': selfPublicKeyArmored,
-        'name': selfDisplayName,
-        'challenge': _challenge,
-        if (selfUserId.isNotEmpty) 'user_id': selfUserId,
-      });
+    'session_id': sessionId,
+    'fingerprint': selfFingerprint,
+    'public_key': selfPublicKeyArmored,
+    'name': selfDisplayName,
+    'challenge': _challenge,
+    if (selfUserId.isNotEmpty) 'user_id': selfUserId,
+  });
 
   Future<void> _sendJson(int type, Map<String, dynamic> json) =>
       _sendFrame(type, Uint8List.fromList(utf8.encode(jsonEncode(json))));
@@ -152,6 +162,16 @@ class MeshSession {
       throw StateError('mesh session is not authenticated');
     }
     await _sendJson(meshFrameMessage, envelope);
+  }
+
+  /// Sends an encrypted attachment envelope over LAN (#26). Only legal once
+  /// authenticated. The ciphertext rides inline; the transport encodes it with
+  /// the larger attachment frame ceiling.
+  Future<void> sendAttachmentEnvelope(Map<String, dynamic> envelope) async {
+    if (!authenticated) {
+      throw StateError('mesh session is not authenticated');
+    }
+    await _sendJson(meshFrameAttachment, envelope);
   }
 
   /// Acknowledges a received envelope by client nonce. Only legal once
@@ -186,6 +206,12 @@ class MeshSession {
           return;
         }
         _messages.add(json);
+      case meshFrameAttachment:
+        if (!authenticated) {
+          _fail('attachment before authentication');
+          return;
+        }
+        _attachments.add(json);
       case meshFrameAck:
         if (!authenticated) {
           _fail('ack before authentication');
@@ -193,10 +219,7 @@ class MeshSession {
         }
         final nonce = json['nonce']?.toString() ?? '';
         if (nonce.isNotEmpty) {
-          _acks.add(MeshAck(
-            nonce: nonce,
-            accepted: json['accepted'] == true,
-          ));
+          _acks.add(MeshAck(nonce: nonce, accepted: json['accepted'] == true));
         }
       default:
         _fail('unknown frame type ${frame.type}');
@@ -244,11 +267,13 @@ class MeshSession {
     if (_state == MeshSessionState.idle) {
       await _sendHello();
     }
-    final signature = await _sign(proofData(
-      signerSessionId: sessionId,
-      verifierSessionId: peerSession,
-      verifierChallenge: challenge,
-    ));
+    final signature = await _sign(
+      proofData(
+        signerSessionId: sessionId,
+        verifierSessionId: peerSession,
+        verifierChallenge: challenge,
+      ),
+    );
     await _sendJson(meshFrameProof, {'signature': signature});
     _proofSent = true;
     _setState(MeshSessionState.awaitingProof);
@@ -263,7 +288,8 @@ class MeshSession {
     }
     if (_peerProofVerified) return;
     final signature = json['signature']?.toString() ?? '';
-    final ok = signature.isNotEmpty &&
+    final ok =
+        signature.isNotEmpty &&
         await _verify(
           proofData(
             signerSessionId: peer.sessionId,
@@ -282,7 +308,8 @@ class MeshSession {
   }
 
   void _maybeAuthenticated() {
-    if (_peerProofVerified && _proofSent &&
+    if (_peerProofVerified &&
+        _proofSent &&
         _state != MeshSessionState.authenticated) {
       _setState(MeshSessionState.authenticated);
     }
@@ -310,6 +337,7 @@ class MeshSession {
   void dispose() {
     _stateController.close();
     _messages.close();
+    _attachments.close();
     _acks.close();
   }
 }

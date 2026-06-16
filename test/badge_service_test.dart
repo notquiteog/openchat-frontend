@@ -51,48 +51,52 @@ void main() {
   });
 
   group('background increment bookkeeping', () {
-    test('builds on the last foreground total across multiple pushes',
-        () async {
-      SharedPreferences.setMockInitialValues({
-        badgeLastTotalPrefsKey: 3,
-        badgeBackgroundIncrementPrefsKey: 0,
-      });
+    test(
+      'builds on the last foreground total across multiple pushes',
+      () async {
+        SharedPreferences.setMockInitialValues({
+          badgeLastTotalPrefsKey: 3,
+          badgeBackgroundIncrementPrefsKey: 0,
+        });
 
-      await BadgeService.incrementFromBackground();
-      await BadgeService.incrementFromBackground();
+        await BadgeService.incrementFromBackground();
+        await BadgeService.incrementFromBackground();
 
-      final prefs = await SharedPreferences.getInstance();
-      // Two background messages on top of 3 known unread.
-      expect(prefs.getInt(badgeBackgroundIncrementPrefsKey), 2);
-      expect(prefs.getInt(badgeLastTotalPrefsKey), 3);
-    });
+        final prefs = await SharedPreferences.getInstance();
+        // Two background messages on top of 3 known unread.
+        expect(prefs.getInt(badgeBackgroundIncrementPrefsKey), 2);
+        expect(prefs.getInt(badgeLastTotalPrefsKey), 3);
+      },
+    );
 
-    test('republish resets background bumps even when the total is unchanged',
-        () async {
-      SharedPreferences.setMockInitialValues({});
-      final applied = <int>[];
-      final service = BadgeService(
-        applyPlatformBadge: (count) async => applied.add(count),
-      );
+    test(
+      'republish resets background bumps even when the total is unchanged',
+      () async {
+        SharedPreferences.setMockInitialValues({});
+        final applied = <int>[];
+        final service = BadgeService(
+          applyPlatformBadge: (count) async => applied.add(count),
+        );
 
-      // No chat attached: authoritative total is 0.
-      await service.debugPublish();
-      expect(applied, [0]);
+        // No chat attached: authoritative total is 0.
+        await service.debugPublish();
+        expect(applied, [0]);
 
-      // Unchanged total and clean bookkeeping — the early return holds.
-      await service.debugPublish();
-      expect(applied, [0]);
+        // Unchanged total and clean bookkeeping — the early return holds.
+        await service.debugPublish();
+        expect(applied, [0]);
 
-      // FCM isolate bumps the platform badge behind the service's back; the
-      // next publish must reapply the authoritative badge and reset the
-      // bookkeeping even though the in-memory total never moved.
-      await BadgeService.incrementFromBackground();
-      await service.debugPublish();
-      expect(applied, [0, 0]);
+        // FCM isolate bumps the platform badge behind the service's back; the
+        // next publish must reapply the authoritative badge and reset the
+        // bookkeeping even though the in-memory total never moved.
+        await BadgeService.incrementFromBackground();
+        await service.debugPublish();
+        expect(applied, [0, 0]);
 
-      final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getInt(badgeBackgroundIncrementPrefsKey), 0);
-      expect(prefs.getInt(badgeLastTotalPrefsKey), 0);
-    });
+        final prefs = await SharedPreferences.getInstance();
+        expect(prefs.getInt(badgeBackgroundIncrementPrefsKey), 0);
+        expect(prefs.getInt(badgeLastTotalPrefsKey), 0);
+      },
+    );
   });
 }

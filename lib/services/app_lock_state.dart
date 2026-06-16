@@ -42,8 +42,9 @@ final ValueNotifier<bool> appPinConfiguredListenable = ValueNotifier<bool>(
 /// action (and the dead-man switch) are the answers to device seizure.
 enum VaultMode { real, decoy }
 
-final ValueNotifier<VaultMode> vaultModeListenable =
-    ValueNotifier<VaultMode>(VaultMode.real);
+final ValueNotifier<VaultMode> vaultModeListenable = ValueNotifier<VaultMode>(
+  VaultMode.real,
+);
 
 /// Handles a remote device-wipe command received over WS/push/refresh.
 /// Set by the home shell; the WS layer (ChatProvider) routes `device_wipe`

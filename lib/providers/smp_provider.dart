@@ -42,7 +42,9 @@ class SmpProvider extends ChangeNotifier {
     required ChatProvider chat,
     required SecureStorageService storage,
     // ignore: prefer_initializing_formals
-  }) : _chat = chat, _storage = storage {
+  }) : _chat = chat,
+       // ignore: prefer_initializing_formals
+       _storage = storage {
     _sub = _chat.smpMessages.listen(_onInbound);
   }
 
@@ -172,7 +174,11 @@ class SmpProvider extends ChangeNotifier {
       }
     } catch (e) {
       final s = _sessions[convID];
-      _fail(convID, s?.peerUserId ?? inbound.senderId, 'Verification failed: $e');
+      _fail(
+        convID,
+        s?.peerUserId ?? inbound.senderId,
+        'Verification failed: $e',
+      );
     }
   }
 
@@ -184,7 +190,8 @@ class SmpProvider extends ChangeNotifier {
       await _upgradePin(session.peerUserId, convID);
     } else {
       session.status = SmpStatus.failed;
-      session.error = 'The answers did not match — this contact is not verified';
+      session.error =
+          'The answers did not match — this contact is not verified';
     }
     notifyListeners();
   }

@@ -95,6 +95,7 @@ class _RecordingApiService extends ApiService {
     required String fileName,
     required int fileSize,
     required String mimeType,
+    String? attachmentId,
   }) async {
     requestedFileName = fileName;
     requestedFileSize = fileSize;

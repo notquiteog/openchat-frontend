@@ -31,8 +31,7 @@ MeshRole meshRoleFor(TargetPlatform platform, {required bool isWeb}) {
     TargetPlatform.android ||
     TargetPlatform.iOS ||
     TargetPlatform.macOS ||
-    TargetPlatform.windows =>
-      MeshRole.dualRole,
+    TargetPlatform.windows => MeshRole.dualRole,
     TargetPlatform.linux => MeshRole.centralOnly,
     _ => MeshRole.unsupported,
   };

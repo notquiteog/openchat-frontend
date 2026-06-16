@@ -236,9 +236,9 @@ class _StageRoomScreenState extends State<StageRoomScreen> {
                   ),
                 Text(
                   'On stage',
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 8),
                 Wrap(
@@ -439,10 +439,7 @@ class _StageAvatar extends StatelessWidget {
             ),
           ),
           if (isHost)
-            Text(
-              'Host',
-              style: TextStyle(fontSize: 10, color: scheme.primary),
-            ),
+            Text('Host', style: TextStyle(fontSize: 10, color: scheme.primary)),
         ],
       ),
     );

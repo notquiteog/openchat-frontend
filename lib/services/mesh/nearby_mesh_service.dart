@@ -76,6 +76,8 @@ class NearbyMeshService extends ChangeNotifier with WidgetsBindingObserver {
     required this.envelopesForPeer,
     required this.contactNameForFingerprint,
     this.onEnvelopeAcked,
+    this.onAttachment,
+    this.attachmentsForPeer,
     this._outboxSignal,
   });
 
@@ -99,6 +101,18 @@ class NearbyMeshService extends ChangeNotifier with WidgetsBindingObserver {
   /// The peer answered one of our envelopes (nonce == pending message id).
   /// Lets ChatProvider flip the pending bubble to "delivered nearby".
   final void Function(String nonce, bool accepted)? onEnvelopeAcked;
+
+  /// Hands a received attachment envelope (#26) to ChatProvider; returns false
+  /// when it had to be dropped. LAN-only.
+  final Future<bool> Function(
+    Map<String, dynamic> envelope,
+    String senderFingerprint,
+  )?
+  onAttachment;
+
+  /// Pre-sealed attachment frames addressed to the DM with this fingerprint.
+  final Future<List<Map<String, dynamic>>> Function(String fingerprint)?
+  attachmentsForPeer;
 
   /// Fires when the outbox may have grown (ChatProvider itself); listened to
   /// only while running, so a queued message re-drains live.
@@ -311,9 +325,22 @@ class NearbyMeshService extends ChangeNotifier with WidgetsBindingObserver {
         signerPublicKeyArmored: peerKey,
       ),
       fingerprintOf: PgpService.fingerprintFromPublicKey,
-      sendFrame: (type, payload) =>
-          link.sendFrame(encodeMeshFrame(type, payload)),
+      sendFrame: (type, payload) => link.sendFrame(
+        encodeMeshFrame(
+          type,
+          payload,
+          // Attachment frames (#26) carry the ciphertext inline and exceed the
+          // control-frame ceiling.
+          maxBytes: type == meshFrameAttachment
+              ? meshMaxAttachmentFrameBytes
+              : meshMaxFrameBytes,
+        ),
+      ),
     );
+    // LAN links may carry attachment frames; BLE links never do.
+    final frameCeiling = link is LanMeshLink
+        ? meshMaxAttachmentFrameBytes
+        : meshMaxFrameBytes;
     final peer = NearbyPeer(
       linkId: link.linkId,
       session: session,
@@ -322,13 +349,15 @@ class NearbyMeshService extends ChangeNotifier with WidgetsBindingObserver {
     );
     _peers[link.linkId] = peer;
 
-    final reassembler = MeshReassembler();
+    final reassembler = MeshReassembler(maxBytes: frameCeiling);
     _subs.add(
       link.inboundChunks.listen((chunk) async {
         try {
           final frameBytes = reassembler.addChunk(chunk);
           if (frameBytes == null) return;
-          await session.handleFrame(decodeMeshFrame(frameBytes));
+          await session.handleFrame(
+            decodeMeshFrame(frameBytes, maxBytes: frameCeiling),
+          );
         } on MeshFrameException {
           // Corrupt chunk stream — drop the partial frame, keep the link.
         }
@@ -388,6 +417,25 @@ class NearbyMeshService extends ChangeNotifier with WidgetsBindingObserver {
         final nonce = envelope['client_nonce']?.toString() ?? '';
         if (nonce.isNotEmpty) {
           // Receipt back to the sender; harmlessly ignored by older builds.
+          unawaited(
+            session.sendAck(nonce, accepted: accepted).catchError((_) {}),
+          );
+        }
+      }),
+    );
+
+    _subs.add(
+      session.attachments.listen((envelope) async {
+        final fp = session.peer?.fingerprint;
+        final cb = onAttachment;
+        if (fp == null || cb == null) return;
+        final accepted = await cb(envelope, fp);
+        if (accepted) {
+          peer.receivedCount++;
+          notifyListeners();
+        }
+        final nonce = envelope['client_nonce']?.toString() ?? '';
+        if (nonce.isNotEmpty) {
           unawaited(
             session.sendAck(nonce, accepted: accepted).catchError((_) {}),
           );
@@ -491,6 +539,22 @@ class NearbyMeshService extends ChangeNotifier with WidgetsBindingObserver {
             notifyListeners();
           } catch (_) {
             return; // link died mid-drain; remaining items stay queued
+          }
+        }
+        // Attachments ride LAN only (#26) — the BLE MTU makes multi-megabyte
+        // transfers impractical, so they're never offered over a BLE link.
+        final attachmentsCb = attachmentsForPeer;
+        if (peer.isLan && attachmentsCb != null) {
+          for (final frame in await attachmentsCb(fp)) {
+            final nonce = frame['client_nonce']?.toString() ?? '';
+            if (nonce.isNotEmpty && peer.ackedNonces.contains(nonce)) continue;
+            try {
+              await peer.session.sendAttachmentEnvelope(frame);
+              peer.sentCount++;
+              notifyListeners();
+            } catch (_) {
+              return; // link died mid-drain
+            }
           }
         }
       } while (peer._redrainRequested && _running);

@@ -111,84 +111,111 @@ void main() {
     expect(cache.puts, isEmpty);
   });
 
-  test('restart restore: loadMessages hydrates a sent MLS message from cache',
-      () async {
-    provider.debugSeedConversation(conv(mode: EncryptionMode.mls));
-    // Simulate the pre-restart session having cached the sent plaintext. In
-    // production the cached value is the full signed openchat_message
-    // envelope (what _signedPgpCleartextPayload built at send time) — the
-    // wrapped shape is what lets restore re-apply the verified sender.
-    final wrappedEnvelope = jsonEncode({
-      'openchat_message': 1,
-      'type': 'text',
-      'payload': 'hello world',
-      'sender': {
-        'id': selfId,
-        'key_fingerprint': 'F' * 40,
-        'signature': 'sig',
-        'created_at': DateTime.utc(2026, 6, 2).toIso8601String(),
-      },
-    });
-    await cache.put('msg-1', 'conv-1', 'mls-cipher-1', wrappedEnvelope, selfId);
-    // Sealed sender: the refetched message carries no sender id.
-    api.messages = [confirmedMessage(senderId: '')];
+  test(
+    'restart restore: loadMessages hydrates a sent MLS message from cache',
+    () async {
+      provider.debugSeedConversation(conv(mode: EncryptionMode.mls));
+      // Simulate the pre-restart session having cached the sent plaintext. In
+      // production the cached value is the full signed openchat_message
+      // envelope (what _signedPgpCleartextPayload built at send time) — the
+      // wrapped shape is what lets restore re-apply the verified sender.
+      final wrappedEnvelope = jsonEncode({
+        'openchat_message': 1,
+        'type': 'text',
+        'payload': 'hello world',
+        'sender': {
+          'id': selfId,
+          'key_fingerprint': 'F' * 40,
+          'signature': 'sig',
+          'created_at': DateTime.utc(2026, 6, 2).toIso8601String(),
+        },
+      });
+      await cache.put(
+        'msg-1',
+        'conv-1',
+        'mls-cipher-1',
+        wrappedEnvelope,
+        selfId,
+      );
+      // Sealed sender: the refetched message carries no sender id.
+      api.messages = [confirmedMessage(senderId: '')];
 
-    await provider.loadMessages('conv-1');
+      await provider.loadMessages('conv-1');
 
-    final restored = provider.messagesFor('conv-1').single;
-    expect(restored.isDecrypted, isTrue,
-        reason: 'restart must restore the sent plaintext from cache, '
-            'never re-attempt the impossible MLS self-decrypt');
-    expect(restored.decryptedContent, 'hello world');
-    expect(restored.senderId, selfId, reason: 'no "unknown sender"');
-  });
+      final restored = provider.messagesFor('conv-1').single;
+      expect(
+        restored.isDecrypted,
+        isTrue,
+        reason:
+            'restart must restore the sent plaintext from cache, '
+            'never re-attempt the impossible MLS self-decrypt',
+      );
+      expect(restored.decryptedContent, 'hello world');
+      expect(restored.senderId, selfId, reason: 'no "unknown sender"');
+    },
+  );
 
-  test('own MLS edit echoed from a sibling device re-caches kept plaintext',
-      () async {
-    provider.debugSeedConversation(conv(mode: EncryptionMode.mls));
-    provider.debugReplacePendingWithConfirmed(
-      convID: 'conv-1',
-      pendingID: 'pending-1',
-      confirmed: confirmedMessage(),
-      plaintextPayload: 'hello world',
-    );
-    cache.puts.clear();
+  test(
+    'own MLS edit echoed from a sibling device re-caches kept plaintext',
+    () async {
+      provider.debugSeedConversation(conv(mode: EncryptionMode.mls));
+      provider.debugReplacePendingWithConfirmed(
+        convID: 'conv-1',
+        pendingID: 'pending-1',
+        confirmed: confirmedMessage(),
+        plaintextPayload: 'hello world',
+      );
+      cache.puts.clear();
 
-    // The edit arrives with new ciphertext we cannot decrypt (own message).
-    await provider.debugHandleEditedMessage(
-      confirmedMessage(payload: 'mls-cipher-2'),
-    );
+      // The edit arrives with new ciphertext we cannot decrypt (own message).
+      await provider.debugHandleEditedMessage(
+        confirmedMessage(payload: 'mls-cipher-2'),
+      );
 
-    expect(cache.deletes, contains('msg-1'),
-        reason: 'stale pre-edit entry must be invalidated');
-    expect(cache.puts, hasLength(1),
-        reason: 'kept plaintext must be re-persisted under the new '
-            'fingerprint or restart loses the message');
-    final put = cache.puts.single;
-    expect(put.encryptedPayload, 'mls-cipher-2');
-    expect(put.plaintext, 'hello world');
-    expect(put.senderId, selfId);
-  });
+      expect(
+        cache.deletes,
+        contains('msg-1'),
+        reason: 'stale pre-edit entry must be invalidated',
+      );
+      expect(
+        cache.puts,
+        hasLength(1),
+        reason:
+            'kept plaintext must be re-persisted under the new '
+            'fingerprint or restart loses the message',
+      );
+      final put = cache.puts.single;
+      expect(put.encryptedPayload, 'mls-cipher-2');
+      expect(put.plaintext, 'hello world');
+      expect(put.senderId, selfId);
+    },
+  );
 
-  test("another member's undecryptable edit is NOT cached with stale text",
-      () async {
-    provider.debugSeedConversation(conv(mode: EncryptionMode.mls));
-    provider.debugReplacePendingWithConfirmed(
-      convID: 'conv-1',
-      pendingID: 'pending-1',
-      confirmed: confirmedMessage(senderId: 'other-user'),
-      plaintextPayload: 'their original',
-    );
-    cache.puts.clear();
+  test(
+    "another member's undecryptable edit is NOT cached with stale text",
+    () async {
+      provider.debugSeedConversation(conv(mode: EncryptionMode.mls));
+      provider.debugReplacePendingWithConfirmed(
+        convID: 'conv-1',
+        pendingID: 'pending-1',
+        confirmed: confirmedMessage(senderId: 'other-user'),
+        plaintextPayload: 'their original',
+      );
+      cache.puts.clear();
 
-    await provider.debugHandleEditedMessage(
-      confirmedMessage(payload: 'mls-cipher-2', senderId: 'other-user'),
-    );
+      await provider.debugHandleEditedMessage(
+        confirmedMessage(payload: 'mls-cipher-2', senderId: 'other-user'),
+      );
 
-    expect(cache.puts, isEmpty,
-        reason: 'a transient decrypt failure of someone else\'s edit must '
-            'not freeze stale plaintext into the durable cache');
-  });
+      expect(
+        cache.puts,
+        isEmpty,
+        reason:
+            'a transient decrypt failure of someone else\'s edit must '
+            'not freeze stale plaintext into the durable cache',
+      );
+    },
+  );
 }
 
 // ── Fakes ────────────────────────────────────────────────────────────────────
@@ -236,8 +263,13 @@ class _RecordingCache extends MessageCacheService {
     String plaintext,
     String? senderId,
   ) {
-    final call =
-        _PutCall(messageId, conversationId, encryptedPayload, plaintext, senderId);
+    final call = _PutCall(
+      messageId,
+      conversationId,
+      encryptedPayload,
+      plaintext,
+      senderId,
+    );
     puts.add(call);
     _entries[messageId] = call;
     return Future.value();

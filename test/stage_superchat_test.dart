@@ -57,44 +57,49 @@ void main() {
     expect(stage.superchats.first.message, 'hi');
   });
 
-  test('join backlog is silent; later arrivals announce exactly once', () async {
-    final announced = <StageSuperchat>[];
-    stage.superchatAnnouncements.listen(announced.add);
+  test(
+    'join backlog is silent; later arrivals announce exactly once',
+    () async {
+      final announced = <StageSuperchat>[];
+      stage.superchatAnnouncements.listen(announced.add);
 
-    // First state after joining: existing super-chats predate us — no banner.
-    stage.debugApplyState(state([entry('old')]));
-    await Future<void>.delayed(Duration.zero);
-    expect(announced, isEmpty);
+      // First state after joining: existing super-chats predate us — no banner.
+      stage.debugApplyState(state([entry('old')]));
+      await Future<void>.delayed(Duration.zero);
+      expect(announced, isEmpty);
 
-    // A new entry lands at the head: announced.
-    stage.debugApplyState(state([entry('new'), entry('old')]));
-    await Future<void>.delayed(Duration.zero);
-    expect(announced.map((s) => s.id), ['new']);
+      // A new entry lands at the head: announced.
+      stage.debugApplyState(state([entry('new'), entry('old')]));
+      await Future<void>.delayed(Duration.zero);
+      expect(announced.map((s) => s.id), ['new']);
 
-    // The next heartbeat repeats the same list: nothing re-announced.
-    stage.debugApplyState(state([entry('new'), entry('old')]));
-    await Future<void>.delayed(Duration.zero);
-    expect(announced, hasLength(1));
+      // The next heartbeat repeats the same list: nothing re-announced.
+      stage.debugApplyState(state([entry('new'), entry('old')]));
+      await Future<void>.delayed(Duration.zero);
+      expect(announced, hasLength(1));
 
-    // Two arrive between states: both announced, oldest-first.
-    stage.debugApplyState(
-      state([entry('n3'), entry('n2'), entry('new'), entry('old')]),
-    );
-    await Future<void>.delayed(Duration.zero);
-    expect(announced.map((s) => s.id), ['new', 'n2', 'n3']);
-  });
+      // Two arrive between states: both announced, oldest-first.
+      stage.debugApplyState(
+        state([entry('n3'), entry('n2'), entry('new'), entry('old')]),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(announced.map((s) => s.id), ['new', 'n2', 'n3']);
+    },
+  );
 
-  test('an empty first backlog still primes — the first real one announces',
-      () async {
-    final announced = <StageSuperchat>[];
-    stage.superchatAnnouncements.listen(announced.add);
+  test(
+    'an empty first backlog still primes — the first real one announces',
+    () async {
+      final announced = <StageSuperchat>[];
+      stage.superchatAnnouncements.listen(announced.add);
 
-    stage.debugApplyState(state(const []));
-    stage.debugApplyState(state([entry('first')]));
-    await Future<void>.delayed(Duration.zero);
+      stage.debugApplyState(state(const []));
+      stage.debugApplyState(state([entry('first')]));
+      await Future<void>.delayed(Duration.zero);
 
-    expect(announced.map((s) => s.id), ['first']);
-  });
+      expect(announced.map((s) => s.id), ['first']);
+    },
+  );
 
   test('malformed entries are dropped, not crashed on', () {
     stage.debugApplyState(

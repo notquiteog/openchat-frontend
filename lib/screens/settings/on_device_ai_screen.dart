@@ -105,8 +105,9 @@ class _OnDeviceAiScreenState extends State<OnDeviceAiScreen> {
     } finally {
       if (mounted) {
         setState(() => _packBusy.remove(lang));
-        final nowDownloaded =
-            await TranslationService.isLanguageDownloaded(lang);
+        final nowDownloaded = await TranslationService.isLanguageDownloaded(
+          lang,
+        );
         if (mounted) setState(() => _packState[lang] = nowDownloaded);
       }
     }
@@ -153,24 +154,24 @@ class _OnDeviceAiScreenState extends State<OnDeviceAiScreen> {
               !TranscriptionService.isSupported
                   ? 'Not supported on this platform'
                   : _asrBusy
-                      ? 'Downloading ${((_asrProgress ?? 0) * 100).round()}%'
-                      : _asrCached
-                          ? 'Downloaded · ${_mb(_asrBytes)}'
-                          : 'Not downloaded · ~90 MB',
+                  ? 'Downloading ${((_asrProgress ?? 0) * 100).round()}%'
+                  : _asrCached
+                  ? 'Downloaded · ${_mb(_asrBytes)}'
+                  : 'Not downloaded · ~90 MB',
             ),
             trailing: !TranscriptionService.isSupported
                 ? null
                 : _asrBusy
-                    ? GlassProgressIndicator.circular(size: 18)
-                    : _asrCached
-                        ? IconButton(
-                            icon: const Icon(Icons.delete_outline_rounded),
-                            onPressed: _deleteAsr,
-                          )
-                        : IconButton(
-                            icon: const Icon(Icons.download_rounded),
-                            onPressed: _downloadAsr,
-                          ),
+                ? GlassProgressIndicator.circular(size: 18)
+                : _asrCached
+                ? IconButton(
+                    icon: const Icon(Icons.delete_outline_rounded),
+                    onPressed: _deleteAsr,
+                  )
+                : IconButton(
+                    icon: const Icon(Icons.download_rounded),
+                    onPressed: _downloadAsr,
+                  ),
           ),
           const SizedBox(height: 20),
           Text('Sticker background removal', style: titleStyle),
@@ -182,8 +183,8 @@ class _OnDeviceAiScreenState extends State<OnDeviceAiScreen> {
               !SegmentationService.isSupported
                   ? 'Not supported on this platform'
                   : _segCached
-                      ? 'Downloaded · ${_mb(_segBytes)}'
-                      : 'Not downloaded · ~5 MB (fetched when first used)',
+                  ? 'Downloaded · ${_mb(_segBytes)}'
+                  : 'Not downloaded · ~5 MB (fetched when first used)',
             ),
             trailing: _segCached
                 ? IconButton(

@@ -41,8 +41,10 @@ class GroupCallPresenceProvider extends ChangeNotifier {
         .map((e) => e.toString())
         .toList();
     if (active && ids.isNotEmpty) {
-      _byConversation[conversationId] =
-          GroupCallInfo(active: true, participantIds: ids);
+      _byConversation[conversationId] = GroupCallInfo(
+        active: true,
+        participantIds: ids,
+      );
     } else {
       _byConversation.remove(conversationId);
     }

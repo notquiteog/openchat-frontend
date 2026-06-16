@@ -30,41 +30,40 @@ void main() {
     required String convId,
     required String peerId,
     required String fingerprint,
-  }) =>
-      Conversation(
-        id: convId,
-        type: ConversationType.dm,
-        createdAt: DateTime.utc(2026, 6, 1),
-        createdBy: selfId,
-        members: [
-          ConversationMember(
-            conversationId: convId,
-            userId: selfId,
-            role: MemberRole.member,
-            joinedAt: DateTime.utc(2026, 6, 1),
-            user: User(
-              id: selfId,
-              username: 'me',
-              publicKey: 'KEY:me',
-              keyFingerprint: 'SELF0000',
-              createdAt: DateTime.utc(2026),
-            ),
-          ),
-          ConversationMember(
-            conversationId: convId,
-            userId: peerId,
-            role: MemberRole.member,
-            joinedAt: DateTime.utc(2026, 6, 1),
-            user: User(
-              id: peerId,
-              username: 'peer',
-              publicKey: 'KEY:peer',
-              keyFingerprint: fingerprint,
-              createdAt: DateTime.utc(2026),
-            ),
-          ),
-        ],
-      );
+  }) => Conversation(
+    id: convId,
+    type: ConversationType.dm,
+    createdAt: DateTime.utc(2026, 6, 1),
+    createdBy: selfId,
+    members: [
+      ConversationMember(
+        conversationId: convId,
+        userId: selfId,
+        role: MemberRole.member,
+        joinedAt: DateTime.utc(2026, 6, 1),
+        user: User(
+          id: selfId,
+          username: 'me',
+          publicKey: 'KEY:me',
+          keyFingerprint: 'SELF0000',
+          createdAt: DateTime.utc(2026),
+        ),
+      ),
+      ConversationMember(
+        conversationId: convId,
+        userId: peerId,
+        role: MemberRole.member,
+        joinedAt: DateTime.utc(2026, 6, 1),
+        user: User(
+          id: peerId,
+          username: 'peer',
+          publicKey: 'KEY:peer',
+          keyFingerprint: fingerprint,
+          createdAt: DateTime.utc(2026),
+        ),
+      ),
+    ],
+  );
 
   Map<String, dynamic> envelope({String nonce = 'n1', String conv = 'dm-1'}) =>
       {
@@ -105,8 +104,7 @@ void main() {
     expect(provider.dmConversationIdForFingerprint('UNKNOWN'), isNull);
   });
 
-  test('accepts an envelope into the verified peer DM exactly once',
-      () async {
+  test('accepts an envelope into the verified peer DM exactly once', () async {
     expect(await provider.ingestMeshMessage(envelope(), peerFp), isTrue);
     var msgs = provider.messagesFor('dm-1');
     expect(msgs, hasLength(1));
@@ -118,8 +116,7 @@ void main() {
     expect(msgs, hasLength(1));
   });
 
-  test('rejects envelopes aimed at conversations the peer is not in',
-      () async {
+  test('rejects envelopes aimed at conversations the peer is not in', () async {
     provider.debugSeedConversation(
       dmWith(convId: 'dm-2', peerId: 'peer-2', fingerprint: 'OTHERFP9'),
     );
@@ -202,8 +199,7 @@ class _NoopCache extends MessageCacheService {
     String encryptedPayload,
     String plaintext,
     String? senderId,
-  ) =>
-      Future.value();
+  ) => Future.value();
 }
 
 class _NoopOutbox extends OfflineOutboxService {

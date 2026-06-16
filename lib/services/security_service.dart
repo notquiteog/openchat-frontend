@@ -26,8 +26,7 @@ class SecurityService {
   bool _detecting = false;
   bool _handlerInstalled = false;
 
-  bool get _supported =>
-      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+  bool get _supported => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
   /// Fires whenever the OS reports the user captured a screenshot while
   /// detection is active. Listen only while a view-once item is on screen.

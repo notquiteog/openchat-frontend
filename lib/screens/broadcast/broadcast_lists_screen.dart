@@ -88,9 +88,9 @@ class BroadcastListsScreen extends StatelessWidget {
                         onSelected: (v) {
                           if (v == 'edit') _editList(context, list);
                           if (v == 'delete') {
-                            context.read<SettingsProvider>().removeBroadcastList(
-                              list.id,
-                            );
+                            context
+                                .read<SettingsProvider>()
+                                .removeBroadcastList(list.id);
                           }
                         },
                         itemBuilder: (_) => const [

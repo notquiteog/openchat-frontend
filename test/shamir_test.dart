@@ -67,8 +67,10 @@ void main() {
     expect(shares[0].last, 1);
     expect(shares[1].last, 2);
     expect(shares[2].last, 3);
-    expect(Shamir.combine([shares[0], shares[2]]),
-        equals(Uint8List.fromList([1, 2, 3, 4])));
+    expect(
+      Shamir.combine([shares[0], shares[2]]),
+      equals(Uint8List.fromList([1, 2, 3, 4])),
+    );
     // Same seed → identical shares (the algorithm has no hidden entropy).
     final again = Shamir.split(
       Uint8List.fromList([1, 2, 3, 4]),
@@ -82,12 +84,18 @@ void main() {
   });
 
   test('rejects invalid parameters and malformed shares', () {
-    expect(() => Shamir.split(secret, shares: 1, threshold: 1),
-        throwsArgumentError);
-    expect(() => Shamir.split(secret, shares: 2, threshold: 3),
-        throwsArgumentError);
-    expect(() => Shamir.split(<int>[], shares: 3, threshold: 2),
-        throwsArgumentError);
+    expect(
+      () => Shamir.split(secret, shares: 1, threshold: 1),
+      throwsArgumentError,
+    );
+    expect(
+      () => Shamir.split(secret, shares: 2, threshold: 3),
+      throwsArgumentError,
+    );
+    expect(
+      () => Shamir.split(<int>[], shares: 3, threshold: 2),
+      throwsArgumentError,
+    );
 
     final shares = Shamir.split(secret, shares: 3, threshold: 2);
     expect(() => Shamir.combine([shares[0]]), throwsArgumentError);

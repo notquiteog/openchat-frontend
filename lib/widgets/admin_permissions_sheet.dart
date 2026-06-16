@@ -148,13 +148,17 @@ class _AdminPermissionsSheetState extends State<_AdminPermissionsSheet> {
                       for (final permission in AdminPermission.values)
                         GlassListTile(
                           leading: Icon(_iconFor(permission)),
-                          title: Text(_permissionLabels[permission]!,
-                              style: const TextStyle(fontWeight: FontWeight.w600)),
+                          title: Text(
+                            _permissionLabels[permission]!,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
                           trailing: GlassSwitch(
                             value: _permissions[permission] ?? false,
                             onChanged: (value) {
                               if (!_saving && _role != MemberRole.member) {
-                                setState(() => _permissions[permission] = value);
+                                setState(
+                                  () => _permissions[permission] = value,
+                                );
                               }
                             },
                             activeColor: Theme.of(context).colorScheme.primary,
@@ -162,9 +166,10 @@ class _AdminPermissionsSheetState extends State<_AdminPermissionsSheet> {
                           ),
                           onTap: _saving || _role == MemberRole.member
                               ? null
-                              : () => setState(() =>
-                                  _permissions[permission] =
-                                      !(_permissions[permission] ?? false)),
+                              : () => setState(
+                                  () => _permissions[permission] =
+                                      !(_permissions[permission] ?? false),
+                                ),
                         ),
                     ],
                   ),
@@ -183,7 +188,10 @@ class _AdminPermissionsSheetState extends State<_AdminPermissionsSheet> {
                       FilledButton.icon(
                         onPressed: _saving ? null : _save,
                         icon: _saving
-                            ? const GlassProgressIndicator.circular(size: 16, strokeWidth: 2)
+                            ? const GlassProgressIndicator.circular(
+                                size: 16,
+                                strokeWidth: 2,
+                              )
                             : const Icon(Icons.check_rounded),
                         label: const Text('Save'),
                       ),

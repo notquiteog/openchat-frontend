@@ -53,7 +53,9 @@ Future<void> _pumpBubble(
 }) {
   return tester.pumpWidget(
     MaterialApp(
-      home: Scaffold(body: MessageBubble(message: message, isMe: isMe)),
+      home: Scaffold(
+        body: MessageBubble(message: message, isMe: isMe),
+      ),
     ),
   );
 }
@@ -69,9 +71,7 @@ void main() {
     expect(find.text('Add to calendar'), findsOneWidget);
   });
 
-  testWidgets('shown and legible on the creator\'s own bubble', (
-    tester,
-  ) async {
+  testWidgets('shown and legible on the creator\'s own bubble', (tester) async {
     await _pumpBubble(tester, _meetingMessage(votes: 2), isMe: true);
     final label = find.text('Add to calendar');
     expect(label, findsOneWidget);

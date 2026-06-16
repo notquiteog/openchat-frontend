@@ -132,7 +132,8 @@ class BadgeService {
     // isolate may have bumped the platform badge (and its prefs bookkeeping)
     // since the last publish, in which case the authoritative count must be
     // reapplied and the bookkeeping reset — or the drift compounds.
-    if (total == _lastPublished && !await _backgroundBadgeStateDiverged(total)) {
+    if (total == _lastPublished &&
+        !await _backgroundBadgeStateDiverged(total)) {
       return;
     }
     _lastPublished = total;
@@ -175,7 +176,8 @@ class BadgeService {
       // The isolate may hold a stale cache of values written by the app.
       await prefs.reload();
       final base = prefs.getInt(badgeLastTotalPrefsKey) ?? 0;
-      final increment = (prefs.getInt(badgeBackgroundIncrementPrefsKey) ?? 0) + 1;
+      final increment =
+          (prefs.getInt(badgeBackgroundIncrementPrefsKey) ?? 0) + 1;
       await prefs.setInt(badgeBackgroundIncrementPrefsKey, increment);
       await _defaultPlatformBadge(base + increment);
     } catch (_) {}

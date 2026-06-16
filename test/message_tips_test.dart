@@ -174,8 +174,7 @@ class _NoopCache extends MessageCacheService {
     String encryptedPayload,
     String plaintext,
     String? senderId,
-  ) =>
-      Future.value();
+  ) => Future.value();
 }
 
 class _NoopOutbox extends OfflineOutboxService {

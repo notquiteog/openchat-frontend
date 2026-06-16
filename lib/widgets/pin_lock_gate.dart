@@ -98,7 +98,10 @@ class _PinLockGateState extends State<PinLockGate> {
               const SizedBox(height: 16),
               Text(
                 widget.title,
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               const SizedBox(height: 4),
               Text(

@@ -26,10 +26,7 @@ void main() {
     ws.dispose();
   });
 
-  Future<void> pump(
-    WidgetTester tester, {
-    VoidCallback? onConfirmed,
-  }) {
+  Future<void> pump(WidgetTester tester, {VoidCallback? onConfirmed}) {
     return tester.pumpWidget(
       ChangeNotifierProvider<WebSocketService>.value(
         value: ws,

@@ -838,6 +838,80 @@ class ChatProvider extends ChangeNotifier {
     return true;
   }
 
+  /// Pre-sealed attachment frames (#26) deliverable to a verified nearby peer,
+  /// with the ciphertext read off disk and inlined.
+  Future<List<Map<String, dynamic>>> meshAttachmentsForFingerprint(
+    String fingerprint,
+  ) async {
+    final convID = dmConversationIdForFingerprint(fingerprint);
+    if (convID == null) return const [];
+    await _ensureOutboxLoaded();
+    final frames = <Map<String, dynamic>>[];
+    for (final item in meshDeliverableAttachments(_outboxItems, convID)) {
+      final path = item.data['ciphertext_path'] as String? ?? '';
+      if (path.isEmpty) continue;
+      try {
+        final ciphertext = await _outbox.readAttachmentCiphertext(path);
+        frames.add(meshAttachmentFrameForItem(item, ciphertext));
+      } catch (_) {
+        // Ciphertext file gone (user cleared it) — skip; the server path covers it.
+      }
+    }
+    return frames;
+  }
+
+  /// Ingests an attachment relayed over the mesh from a verified peer (#26).
+  /// Persists the ciphertext under its stable id (the sender may never upload
+  /// it to the server) and runs the sealed envelope through the same
+  /// decrypt/dedup path as any message — the eventual server copy is
+  /// byte-identical and supersedes this one.
+  Future<bool> ingestMeshAttachment(
+    Map<String, dynamic> envelope,
+    String senderFingerprint,
+  ) async {
+    final convID = envelope['conversation_id']?.toString() ?? '';
+    final payload = envelope['encrypted_payload']?.toString() ?? '';
+    final nonce = envelope['client_nonce']?.toString() ?? '';
+    final attachmentId = envelope['attachment_id']?.toString() ?? '';
+    final ciphertextB64 = envelope['ciphertext_b64']?.toString() ?? '';
+    if (convID.isEmpty ||
+        payload.isEmpty ||
+        nonce.isEmpty ||
+        attachmentId.isEmpty ||
+        ciphertextB64.isEmpty) {
+      return false;
+    }
+    if (dmConversationIdForFingerprint(senderFingerprint) != convID) {
+      return false;
+    }
+    final existing = _messages[convID] ?? const <Message>[];
+    final meshId = 'mesh-$nonce';
+    if (existing.any((m) => m.id == meshId || m.encryptedPayload == payload)) {
+      return true; // duplicate retransmit
+    }
+    try {
+      await AttachmentService(
+        _api,
+      ).saveLocalAttachment(attachmentId, base64Decode(ciphertextB64));
+    } catch (_) {
+      return false; // corrupt ciphertext — don't ingest a message we can't open
+    }
+    final msg = Message(
+      id: meshId,
+      conversationId: convID,
+      senderId: '',
+      type: Message.parseType(envelope['message_type']?.toString() ?? 'file'),
+      encryptedPayload: payload,
+      signature: envelope['signature']?.toString() ?? '',
+      isEncrypted: true,
+      createdAt:
+          DateTime.tryParse(envelope['created_at']?.toString() ?? '') ??
+          DateTime.now(),
+    );
+    await _handleIncomingMessage(msg);
+    return true;
+  }
+
   /// Client nonces a verified nearby peer has confirmed ingesting over BLE.
   /// Deliberately NOT persisted: the outbox item stays queued for the server
   /// drain (the durable record) — this is a UX signal for the pending bubble.
@@ -1446,6 +1520,15 @@ class ChatProvider extends ChangeNotifier {
     if (ciphertextPath == null || ciphertextPath.isEmpty) {
       throw const ChatSendException('Queued attachment file is missing.');
     }
+
+    // Seal-once path (#26): the envelope was already sealed at queue time under
+    // a stable client-chosen id. Upload the ciphertext UNDER THAT id and send
+    // the pre-sealed envelope verbatim (no re-seal) so it stays byte-identical
+    // to any mesh-relayed copy and the recipient dedupes them.
+    if (data['sealed_attachment'] == true) {
+      await _deliverSealedAttachment(item, ciphertextPath);
+      return;
+    }
     // A prior drain attempt may have uploaded the ciphertext and then failed
     // on the message send — reuse that upload instead of minting a second
     // server-side attachment on every retry.
@@ -1497,6 +1580,75 @@ class ChatProvider extends ChangeNotifier {
     if (sent) {
       await _outbox.deleteAttachmentCiphertext(ciphertextPath);
     }
+  }
+
+  // Drains a #26 seal-once attachment: upload the ciphertext under the stable
+  // client id, then send the pre-sealed envelope verbatim with a fresh post
+  // token. No re-seal — that keeps the bytes identical to any mesh-relayed copy.
+  Future<void> _deliverSealedAttachment(
+    OfflineOutboxItem item,
+    String ciphertextPath,
+  ) async {
+    final data = item.data;
+    final convID = item.conversationId;
+    final clientAttachmentID = data['client_attachment_id'] as String? ?? '';
+    final sealedEnvelope = data['sealed_encrypted_payload'] as String? ?? '';
+    final sealedPayload = data['sealed_payload'] as String? ?? '';
+    final pendingMessageID = data['pending_message_id'] as String?;
+    if (clientAttachmentID.isEmpty || sealedEnvelope.isEmpty) {
+      throw const ChatSendException('Queued sealed attachment is incomplete.');
+    }
+
+    // Upload the ciphertext once, under the client id (idempotent on retry).
+    if (data['sealed_uploaded'] != true) {
+      final ciphertext = await _outbox.readAttachmentCiphertext(ciphertextPath);
+      final encryptedAttachment = EncryptedAttachmentUpload.fromMetadataJson(
+        Map<String, dynamic>.from(data['attachment'] as Map? ?? const {}),
+        ciphertext: ciphertext,
+      );
+      try {
+        await AttachmentService(_api).uploadEncryptedAttachment(
+          encryptedAttachment,
+          attachmentId: clientAttachmentID,
+        );
+      } catch (e) {
+        // A prior drain already uploaded under this id (409 ATTACHMENT_ID_TAKEN)
+        // — proceed to send. Anything else is retryable.
+        if (!_isAttachmentAlreadyUploaded(e)) rethrow;
+      }
+      await _upsertOutboxItem(
+        item.copyWith(data: {...data, 'sealed_uploaded': true}),
+      );
+    }
+
+    // The envelope is fixed; only the (sibling) post token must be fresh.
+    final privateKey = await _storage.getPrivateKeyIfUnlocked() ?? '';
+    final tokenBundle = await _sealedPostToken(convID, privateKey);
+    final confirmed = await _api.sendSealedMessage(
+      convID: convID,
+      encryptedPayload: sealedEnvelope,
+      postToken: tokenBundle.token,
+      postTokenSignature: tokenBundle.signature,
+      postTokenKeyId: tokenBundle.keyId,
+      attachmentId: clientAttachmentID,
+      silent: data['silent'] as bool? ?? false,
+      clientNonce: pendingMessageID ?? item.id,
+    );
+    if (sealedPayload.isNotEmpty) {
+      confirmed.setDecryptedContent(sealedPayload);
+    }
+    _replacePendingWithConfirmed(
+      convID: convID,
+      pendingID: pendingMessageID,
+      confirmed: confirmed,
+      plaintextPayload: sealedPayload,
+    );
+    await _outbox.deleteAttachmentCiphertext(ciphertextPath);
+  }
+
+  bool _isAttachmentAlreadyUploaded(Object e) {
+    final s = e.toString().toLowerCase();
+    return s.contains('attachment_id_taken') || s.contains('409');
   }
 
   Future<void> _deliverQueuedEdit(OfflineOutboxItem item) async {
@@ -1728,6 +1880,45 @@ class ChatProvider extends ChangeNotifier {
         hasSpoiler: hasSpoiler,
       ),
     );
+
+    // Seal the attachment ONCE under a stable, client-chosen id (#26): this
+    // exact envelope is what both the mesh relay and the eventual server send
+    // carry, byte-identically, so the recipient dedupes the two copies via the
+    // existing payload-equality check. Best-effort — if we can't seal here
+    // (plaintext conversation, or offline with no cached recipient keys) the
+    // item just drains the legacy way (re-seal at upload) and isn't
+    // mesh-relayable. Unfranked by design: franking needs a fresh token the
+    // offline path may not have, and the tri-state verify treats it as
+    // display-only anyway.
+    final clientAttachmentID = const Uuid().v4();
+    String? sealedEnvelope;
+    String? sealedSignature;
+    String? sealedPayload;
+    if (conv.isEncrypted) {
+      try {
+        sealedPayload = jsonEncode(
+          attachment.toPayloadJson(
+            attachmentId: clientAttachmentID,
+            caption: caption,
+            viewOnce: viewOnce,
+            hasSpoiler: hasSpoiler,
+          ),
+        );
+        final prepared = await _prepareEncryptedPayload(
+          convID: convID,
+          plaintextPayload: sealedPayload,
+          messageType: attachment.messageType.name,
+          includePostToken: false,
+        );
+        sealedEnvelope = prepared.encryptedPayload;
+        sealedSignature = prepared.signature;
+      } catch (_) {
+        sealedEnvelope = null;
+        sealedSignature = null;
+        sealedPayload = null;
+      }
+    }
+
     final now = DateTime.now();
     final pending = PendingMessage(
       id: pendingMessageID,
@@ -1767,6 +1958,13 @@ class ChatProvider extends ChangeNotifier {
           'caption': caption,
           if (viewOnce) 'view_once': true,
           if (hasSpoiler) 'has_spoiler': true,
+          // #26 seal-once fields (present only when pre-sealing succeeded).
+          if (sealedEnvelope != null) 'sealed_attachment': true,
+          if (sealedEnvelope != null)
+            'client_attachment_id': clientAttachmentID,
+          'sealed_encrypted_payload': ?sealedEnvelope,
+          'sealed_signature': ?sealedSignature,
+          'sealed_payload': ?sealedPayload,
           'is_encrypted': conv.isEncrypted,
           'auto_delete_seconds': conv.messageTtlSeconds,
           if (pending.autoDeleteExpiresAt != null)

@@ -71,7 +71,13 @@ abstract class MeshLink {
 /// Central role: we scanned, we connected, we write into the peer's inbox
 /// and subscribe to its outbox.
 class CentralMeshLink extends MeshLink {
-  CentralMeshLink._(this._device, this._inbox, this._outbox, this._mtu, this.rssi);
+  CentralMeshLink._(
+    this._device,
+    this._inbox,
+    this._outbox,
+    this._mtu,
+    this.rssi,
+  );
 
   final fbp.BluetoothDevice _device;
   final fbp.BluetoothCharacteristic _inbox;

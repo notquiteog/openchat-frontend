@@ -117,9 +117,7 @@ class MessageCacheService {
     if (kIsWeb) return;
     try {
       final db = await _open();
-      final stmt = db.prepare(
-        'DELETE FROM message_cache WHERE message_id = ?',
-      );
+      final stmt = db.prepare('DELETE FROM message_cache WHERE message_id = ?');
       try {
         stmt.execute([messageId]);
       } finally {
@@ -227,8 +225,8 @@ class MessageCacheService {
   /// entries must keep matching rather than be invalidated wholesale.
   static String _legacyPayloadPrefix(String encryptedPayload) =>
       encryptedPayload.length > 48
-          ? encryptedPayload.substring(0, 48)
-          : encryptedPayload;
+      ? encryptedPayload.substring(0, 48)
+      : encryptedPayload;
 
   Future<String> _encrypt(Map<String, Object?> json) async {
     final key = await _secret();

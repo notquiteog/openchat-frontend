@@ -9,6 +9,7 @@ import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:mime/mime.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import '../models/message.dart';
 import '../services/api_service.dart';
 
@@ -225,7 +226,98 @@ class AttachmentService {
   static final Map<String, Uint8List> _decryptedCache = {};
   static const int _maxCacheEntries = 60;
 
+  // Disk-backed store for attachment ciphertext received over the mesh (#26).
+  // A mesh attachment may never be uploaded to the server (the sender stayed
+  // offline), so its ciphertext must survive here for downloadAndDecrypt to
+  // resolve it locally. Keyed by the (stable, client-chosen) attachment id.
+  static const String _localAttachmentDirName = 'mesh_attachments';
+  static const int _localStoreMaxBytes = 512 * 1024 * 1024; // 512 MB
+  static const Duration _localStoreMaxAge = Duration(days: 7);
+
   AttachmentService(this._api);
+
+  Future<Directory> _localAttachmentDir() async {
+    final base = await getApplicationSupportDirectory();
+    final dir = Directory(p.join(base.path, _localAttachmentDirName));
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    return dir;
+  }
+
+  /// Persist a mesh-received attachment ciphertext under its stable id (#26) so
+  /// the bubble's [downloadAndDecrypt] can resolve it without the server.
+  /// Best-effort: a failure just means a later server fetch.
+  Future<void> saveLocalAttachment(
+    String attachmentId,
+    Uint8List ciphertext,
+  ) async {
+    if (attachmentId.isEmpty) return;
+    try {
+      final dir = await _localAttachmentDir();
+      await File(
+        p.join(dir.path, '$attachmentId.bin'),
+      ).writeAsBytes(ciphertext, flush: true);
+      await _pruneLocalStore(dir);
+    } catch (_) {}
+  }
+
+  Future<Uint8List?> _lookupLocalCiphertext(String attachmentId) async {
+    if (attachmentId.isEmpty) return null;
+    try {
+      final file = File(
+        p.join((await _localAttachmentDir()).path, '$attachmentId.bin'),
+      );
+      if (await file.exists()) return await file.readAsBytes();
+    } catch (_) {}
+    return null;
+  }
+
+  // Keep the local mesh store bounded: drop anything past the age cap, then the
+  // oldest files until under the size cap. Best-effort.
+  Future<void> _pruneLocalStore(Directory dir) async {
+    try {
+      final files = <(File, FileStat)>[];
+      await for (final e in dir.list()) {
+        if (e is File) files.add((e, await e.stat()));
+      }
+      final now = DateTime.now();
+      var total = files.fold<int>(0, (sum, e) => sum + e.$2.size);
+      final survivors = <(File, FileStat)>[];
+      for (final e in files) {
+        if (now.difference(e.$2.modified) > _localStoreMaxAge) {
+          total -= e.$2.size;
+          try {
+            await e.$1.delete();
+          } catch (_) {}
+        } else {
+          survivors.add(e);
+        }
+      }
+      survivors.sort((a, b) => a.$2.modified.compareTo(b.$2.modified));
+      for (final e in survivors) {
+        if (total <= _localStoreMaxBytes) break;
+        total -= e.$2.size;
+        try {
+          await e.$1.delete();
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
+  Future<Uint8List> _decryptAttachmentCiphertext(
+    Uint8List ciphertext,
+    String fileKeyB64,
+  ) async {
+    final secretKey = SecretKey(base64Decode(fileKeyB64));
+    final secretBox = SecretBox.fromConcatenation(
+      ciphertext,
+      nonceLength: _cipher.nonceLength,
+      macLength: _cipher.macAlgorithm.macLength,
+    );
+    final plaintext = await _cipher.decrypt(secretBox, secretKey: secretKey);
+    return stripAttachmentPadding(Uint8List.fromList(plaintext));
+  }
 
   // ---- Pickers ----
 
@@ -629,12 +721,16 @@ class AttachmentService {
   Future<PendingAttachment> uploadEncryptedAttachment(
     EncryptedAttachmentUpload encrypted, {
     AttachmentUploadProgressCallback? onProgress,
+    // Pin the attachment id (#26) so a mesh-relayed copy and this upload share
+    // one identity. Null ⇒ server-assigned (the normal online path).
+    String? attachmentId,
   }) async {
     // 4. Request a presigned upload URL.
     final uploadReq = await _api.requestUpload(
       fileName: _serverOpaqueFileName,
       fileSize: encrypted.ciphertext.length,
       mimeType: _serverOpaqueMimeType,
+      attachmentId: attachmentId,
     );
 
     // 5. Upload the ciphertext directly to object storage.
@@ -737,6 +833,21 @@ class AttachmentService {
       return cached;
     }
 
+    // Mesh-delivered attachments (#26) live in a local ciphertext store and may
+    // never have reached the server — try it before any network call.
+    final localCiphertext = await _lookupLocalCiphertext(attachmentId);
+    if (localCiphertext != null) {
+      final bytes = await _decryptAttachmentCiphertext(
+        localCiphertext,
+        fileKeyB64,
+      );
+      _decryptedCache[attachmentId] = bytes;
+      if (_decryptedCache.length > _maxCacheEntries) {
+        _decryptedCache.remove(_decryptedCache.keys.first);
+      }
+      return bytes;
+    }
+
     final info = await _api.getDownloadUrl(attachmentId);
 
     // Download the encrypted bytes from the presigned URL.
@@ -746,15 +857,7 @@ class AttachmentService {
     final ciphertext = await _readResponse(response);
 
     // Decrypt with AES-256-GCM (nonce is embedded in the concatenated ciphertext).
-    final keyBytes = base64Decode(fileKeyB64);
-    final secretKey = SecretKey(keyBytes);
-    final secretBox = SecretBox.fromConcatenation(
-      ciphertext,
-      nonceLength: _cipher.nonceLength,
-      macLength: _cipher.macAlgorithm.macLength,
-    );
-    final plaintext = await _cipher.decrypt(secretBox, secretKey: secretKey);
-    final bytes = stripAttachmentPadding(Uint8List.fromList(plaintext));
+    final bytes = await _decryptAttachmentCiphertext(ciphertext, fileKeyB64);
 
     _decryptedCache[attachmentId] = bytes;
     if (_decryptedCache.length > _maxCacheEntries) {
@@ -837,6 +940,16 @@ class AttachmentService {
       _decryptedCache.remove(attachmentId);
       _decryptedCache[attachmentId] = cached;
       return cached;
+    }
+
+    // Mesh-delivered ciphertext (#26), local-first like downloadAndDecrypt.
+    final localCiphertext = await _lookupLocalCiphertext(attachmentId);
+    if (localCiphertext != null) {
+      _decryptedCache[attachmentId] = localCiphertext;
+      if (_decryptedCache.length > _maxCacheEntries) {
+        _decryptedCache.remove(_decryptedCache.keys.first);
+      }
+      return localCiphertext;
     }
 
     final info = await _api.getDownloadUrl(attachmentId);

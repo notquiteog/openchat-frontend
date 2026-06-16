@@ -16,11 +16,12 @@ class TranscriptionService {
   static Stream<double> get downloadProgress => const Stream.empty();
   static Future<bool> isModelCached() async => false;
   static Future<int> cachedModelSizeBytes() async => 0;
-  static Future<void> ensureModel() async =>
-      throw const TranscriptionException(
-          'transcription is not supported on this platform');
+  static Future<void> ensureModel() async => throw const TranscriptionException(
+    'transcription is not supported on this platform',
+  );
   static Future<void> deleteModel() async {}
   static Future<String> transcribeM4a(Uint8List bytes) async =>
       throw const TranscriptionException(
-          'transcription is not supported on this platform');
+        'transcription is not supported on this platform',
+      );
 }

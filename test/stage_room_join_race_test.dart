@@ -54,44 +54,46 @@ void main() {
 
   tearDown(() => stage.dispose());
 
-  test('leave() during an in-flight join wins; join does not resurrect state',
-      () async {
-    api.joinGate = Completer<Map<String, dynamic>>();
+  test(
+    'leave() during an in-flight join wins; join does not resurrect state',
+    () async {
+      api.joinGate = Completer<Map<String, dynamic>>();
 
-    final joinFuture = stage.join('conv-1');
-    // Let join reach the awaited joinStage call.
-    await Future<void>.delayed(Duration.zero);
-    expect(stage.connecting, isTrue);
-    expect(api.joinCalls, 1);
+      final joinFuture = stage.join('conv-1');
+      // Let join reach the awaited joinStage call.
+      await Future<void>.delayed(Duration.zero);
+      expect(stage.connecting, isTrue);
+      expect(api.joinCalls, 1);
 
-    // User backs out while the join API call is still in flight.
-    await stage.leave();
-    expect(stage.connecting, isFalse);
-    expect(stage.isActive, isFalse);
+      // User backs out while the join API call is still in flight.
+      await stage.leave();
+      expect(stage.connecting, isFalse);
+      expect(stage.isActive, isFalse);
 
-    // The server now answers the original join with a perfectly good room —
-    // but the continuation lost the generation race and must stand down.
-    api.joinGate!.complete(<String, dynamic>{
-      'url': 'wss://example.test',
-      'token': 'tok',
-      'role': 'host',
-      'state': <String, dynamic>{
-        'conversation_id': 'conv-1',
-        'host_id': 'self-user',
-        'speaker_ids': <String>[],
-        'raised_hands': <String>[],
-        'listener_count': 1,
-      },
-    });
-    await joinFuture;
+      // The server now answers the original join with a perfectly good room —
+      // but the continuation lost the generation race and must stand down.
+      api.joinGate!.complete(<String, dynamic>{
+        'url': 'wss://example.test',
+        'token': 'tok',
+        'role': 'host',
+        'state': <String, dynamic>{
+          'conversation_id': 'conv-1',
+          'host_id': 'self-user',
+          'speaker_ids': <String>[],
+          'raised_hands': <String>[],
+          'listener_count': 1,
+        },
+      });
+      await joinFuture;
 
-    expect(stage.isActive, isFalse, reason: 'no room may be kept');
-    expect(stage.connecting, isFalse);
-    expect(stage.conversationId, isNull);
-    expect(stage.micEnabled, isFalse);
-    // The orphaned server-side registration was undone.
-    expect(api.leaveCalls, greaterThanOrEqualTo(1));
-  });
+      expect(stage.isActive, isFalse, reason: 'no room may be kept');
+      expect(stage.connecting, isFalse);
+      expect(stage.conversationId, isNull);
+      expect(stage.micEnabled, isFalse);
+      // The orphaned server-side registration was undone.
+      expect(api.leaveCalls, greaterThanOrEqualTo(1));
+    },
+  );
 
   test('dispose() during an in-flight join wins the same way', () async {
     api.joinGate = Completer<Map<String, dynamic>>();

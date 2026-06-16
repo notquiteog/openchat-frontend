@@ -298,6 +298,13 @@ class _Providers extends StatelessWidget {
             envelopesForPeer: (fingerprint) => ctx
                 .read<ChatProvider>()
                 .meshEnvelopesForFingerprint(fingerprint),
+            // #26: encrypted attachment transfer over LAN.
+            onAttachment: (envelope, fingerprint) => ctx
+                .read<ChatProvider>()
+                .ingestMeshAttachment(envelope, fingerprint),
+            attachmentsForPeer: (fingerprint) => ctx
+                .read<ChatProvider>()
+                .meshAttachmentsForFingerprint(fingerprint),
             contactNameForFingerprint: (fingerprint) {
               final chat = ctx.read<ChatProvider>();
               final convID = chat.dmConversationIdForFingerprint(fingerprint);

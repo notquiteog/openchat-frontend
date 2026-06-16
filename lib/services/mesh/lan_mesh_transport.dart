@@ -89,7 +89,9 @@ class LanMeshLink extends MeshLink {
   Timer? _idleTimer;
   final Completer<void> _closedCompleter = Completer<void>();
 
-  static const int _maxRecordBytes = meshMaxFrameBytes + 64;
+  // LAN records must accommodate the larger attachment frame (#26); BLE keeps
+  // its own small MTU. Bounded so a hostile length field can't exhaust memory.
+  static const int _maxRecordBytes = meshMaxAttachmentFrameBytes + 64;
   static void _noop() {}
 
   @override

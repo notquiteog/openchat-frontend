@@ -52,7 +52,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('CSAM Reports'), findsOneWidget);
-    expect(find.text('AMF inspection queue'), findsOneWidget);
+    // The CSAM queue loaded (empty, per the fake) — confirms the section's
+    // FutureBuilder resolved rather than hanging on its spinner.
+    expect(find.text('No open CSAM reports.'), findsOneWidget);
+    expect(api.csamCalls, 1);
 
     await tester.tap(find.text('Moderation'));
     await tester.pumpAndSettle();
@@ -82,6 +85,19 @@ class _FakeAdminApiService extends ApiService {
   int reportCalls = 0;
   int auditCalls = 0;
   int metricsCalls = 0;
+  int csamCalls = 0;
+
+  // The CSAM section loads on first render; without a fake it falls through to
+  // the real network path and its loading spinner never settles, hanging
+  // pumpAndSettle. Resolve it immediately with an empty queue.
+  @override
+  Future<List<Map<String, dynamic>>> listCsamReports({
+    String status = 'open',
+    int limit = 100,
+  }) async {
+    csamCalls++;
+    return const [];
+  }
 
   @override
   Future<List<ModerationReport>> listAdminReportsGlobal({

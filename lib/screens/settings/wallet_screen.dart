@@ -17,10 +17,9 @@ List<Map<String, dynamic>> pendingDeposits(List<Map<String, dynamic>> all) {
     return status != 'confirmed' && status != 'expired';
   }).toList();
   out.sort(
-    (a, b) =>
-        (b['created_at'] ?? '').toString().compareTo(
-          (a['created_at'] ?? '').toString(),
-        ),
+    (a, b) => (b['created_at'] ?? '').toString().compareTo(
+      (a['created_at'] ?? '').toString(),
+    ),
   );
   return out;
 }
@@ -357,9 +356,7 @@ class _WalletScreenState extends State<WalletScreen> {
       out.add(
         _WalletHistoryItem(
           date: _parseDate(dep['updated_at'] ?? dep['created_at']),
-          icon: isSub
-              ? Icons.workspace_premium_outlined
-              : Icons.arrow_downward,
+          icon: isSub ? Icons.workspace_premium_outlined : Icons.arrow_downward,
           title: isSub
               ? 'Channel subscription ${provider.toUpperCase()}'
               : 'Deposit ${provider.toUpperCase()}',
@@ -420,9 +417,7 @@ class _WalletScreenState extends State<WalletScreen> {
           subtitle: parts.join(' · '),
           category: isSub
               ? _WalletCategory.subscriptions
-              : (incoming
-                    ? _WalletCategory.received
-                    : _WalletCategory.sent),
+              : (incoming ? _WalletCategory.received : _WalletCategory.sent),
         ),
       );
     }
@@ -541,8 +536,7 @@ class _WalletScreenState extends State<WalletScreen> {
                               ),
                               const SizedBox(width: 8),
                               GlassButtonWidget.icon(
-                                onPressed:
-                                    !isDecoy && _balanceFor(provider) > 0
+                                onPressed: !isDecoy && _balanceFor(provider) > 0
                                     ? () => _withdraw(provider)
                                     : null,
                                 icon: const Icon(Icons.arrow_upward, size: 16),

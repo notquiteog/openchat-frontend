@@ -23,7 +23,10 @@ void main() {
         Uint8List.fromList('hello mesh'.codeUnits),
       );
       encoded[10] ^= 0x40;
-      expect(() => decodeMeshFrame(encoded), throwsA(isA<MeshFrameException>()));
+      expect(
+        () => decodeMeshFrame(encoded),
+        throwsA(isA<MeshFrameException>()),
+      );
     });
 
     test('rejects truncation and garbage', () {
@@ -103,7 +106,8 @@ void main() {
         selfPublicKeyArmored: 'KEY:$fp',
         selfDisplayName: 'user-$fp',
         sign: (data) async => 'SIG|$data|$fp',
-        verify: verify ??
+        verify:
+            verify ??
             (data, signature, publicKey) async =>
                 signature == 'SIG|$data|${publicKey.substring(4)}',
         fingerprintOf: (publicKey) async {
@@ -148,10 +152,7 @@ void main() {
 
     test('messages flow only after authentication', () async {
       final (a, b) = wiredPair();
-      expect(
-        () => a.sendMessageEnvelope({'x': 1}),
-        throwsStateError,
-      );
+      expect(() => a.sendMessageEnvelope({'x': 1}), throwsStateError);
       await a.start();
       final received = <Map<String, dynamic>>[];
       b.messages.listen(received.add);
@@ -176,19 +177,18 @@ void main() {
     test('claiming a fingerprint that does not match the key fails', () async {
       late MeshSession victim;
       final liarFrames = StreamController<MeshFrame>();
-      victim = buildSession(
-        fp: 'AAAA',
-        sendFrame: (type, payload) async {},
-      );
+      victim = buildSession(fp: 'AAAA', sendFrame: (type, payload) async {});
       liarFrames.stream.listen((f) => victim.handleFrame(f));
       // Liar presents key BBBB but claims fingerprint CCCC (a real contact's).
-      await victim.handleFrame(MeshFrame(
-        type: meshFrameHello,
-        payload: Uint8List.fromList(
-          '{"session_id":"liar","fingerprint":"CCCC","public_key":"KEY:BBBB","challenge":"deadbeef","name":"liar"}'
-              .codeUnits,
+      await victim.handleFrame(
+        MeshFrame(
+          type: meshFrameHello,
+          payload: Uint8List.fromList(
+            '{"session_id":"liar","fingerprint":"CCCC","public_key":"KEY:BBBB","challenge":"deadbeef","name":"liar"}'
+                .codeUnits,
+          ),
         ),
-      ));
+      );
       expect(victim.state, MeshSessionState.failed);
       expect(victim.failure, contains('fingerprint'));
     });
@@ -201,10 +201,7 @@ void main() {
 
       // sendAck is illegal pre-auth on a fresh session…
       final lonely = buildSession(fp: 'CCCC', sendFrame: (t, p) async {});
-      expect(
-        () => lonely.sendAck('n-1', accepted: true),
-        throwsStateError,
-      );
+      expect(() => lonely.sendAck('n-1', accepted: true), throwsStateError);
 
       // …and round-trips on an authenticated one.
       await b.sendAck('nonce-1', accepted: true);
@@ -219,61 +216,71 @@ void main() {
 
     test('an ack before authentication fails the session', () async {
       final victim = buildSession(fp: 'AAAA', sendFrame: (t, p) async {});
-      await victim.handleFrame(MeshFrame(
-        type: meshFrameAck,
-        payload: Uint8List.fromList('{"nonce":"x","accepted":true}'.codeUnits),
-      ));
+      await victim.handleFrame(
+        MeshFrame(
+          type: meshFrameAck,
+          payload: Uint8List.fromList(
+            '{"nonce":"x","accepted":true}'.codeUnits,
+          ),
+        ),
+      );
       expect(victim.state, MeshSessionState.failed);
       expect(victim.failure, contains('ack before authentication'));
     });
 
-    test('a replayed proof from another session fails (challenge binding)',
-        () async {
-      // First, a legitimate exchange to capture A's proof signature.
-      String? capturedProof;
-      late MeshSession a1, b1;
-      a1 = buildSession(
-        fp: 'AAAA',
-        seed: 1,
-        sendFrame: (type, payload) async {
-          if (type == meshFrameProof) {
-            capturedProof = String.fromCharCodes(payload);
-          }
-          await b1.handleFrame(MeshFrame(type: type, payload: payload));
-        },
-      );
-      b1 = buildSession(
-        fp: 'BBBB',
-        seed: 2,
-        sendFrame: (type, payload) async {
-          await a1.handleFrame(MeshFrame(type: type, payload: payload));
-        },
-      );
-      await a1.start();
-      expect(b1.authenticated, isTrue);
-      expect(capturedProof, isNotNull);
+    test(
+      'a replayed proof from another session fails (challenge binding)',
+      () async {
+        // First, a legitimate exchange to capture A's proof signature.
+        String? capturedProof;
+        late MeshSession a1, b1;
+        a1 = buildSession(
+          fp: 'AAAA',
+          seed: 1,
+          sendFrame: (type, payload) async {
+            if (type == meshFrameProof) {
+              capturedProof = String.fromCharCodes(payload);
+            }
+            await b1.handleFrame(MeshFrame(type: type, payload: payload));
+          },
+        );
+        b1 = buildSession(
+          fp: 'BBBB',
+          seed: 2,
+          sendFrame: (type, payload) async {
+            await a1.handleFrame(MeshFrame(type: type, payload: payload));
+          },
+        );
+        await a1.start();
+        expect(b1.authenticated, isTrue);
+        expect(capturedProof, isNotNull);
 
-      // New victim session (fresh ids + challenge): replay A's old hello +
-      // proof. The proof was bound to the old session pair, so it must fail.
-      final victim = buildSession(
-        fp: 'BBBB',
-        seed: 9,
-        sendFrame: (type, payload) async {},
-      );
-      await victim.handleFrame(MeshFrame(
-        type: meshFrameHello,
-        payload: Uint8List.fromList(
-          '{"session_id":"${a1.sessionId}","fingerprint":"AAAA","public_key":"KEY:AAAA","challenge":"ff","name":"a"}'
-              .codeUnits,
-        ),
-      ));
-      await victim.handleFrame(MeshFrame(
-        type: meshFrameProof,
-        payload: Uint8List.fromList(capturedProof!.codeUnits),
-      ));
-      expect(victim.authenticated, isFalse);
-      expect(victim.state, MeshSessionState.failed);
-    });
+        // New victim session (fresh ids + challenge): replay A's old hello +
+        // proof. The proof was bound to the old session pair, so it must fail.
+        final victim = buildSession(
+          fp: 'BBBB',
+          seed: 9,
+          sendFrame: (type, payload) async {},
+        );
+        await victim.handleFrame(
+          MeshFrame(
+            type: meshFrameHello,
+            payload: Uint8List.fromList(
+              '{"session_id":"${a1.sessionId}","fingerprint":"AAAA","public_key":"KEY:AAAA","challenge":"ff","name":"a"}'
+                  .codeUnits,
+            ),
+          ),
+        );
+        await victim.handleFrame(
+          MeshFrame(
+            type: meshFrameProof,
+            payload: Uint8List.fromList(capturedProof!.codeUnits),
+          ),
+        );
+        expect(victim.authenticated, isFalse);
+        expect(victim.state, MeshSessionState.failed);
+      },
+    );
   });
 
   group('outbox drain selection', () {
@@ -285,40 +292,42 @@ void main() {
       bool encrypted = true,
       String payload = 'cipher',
       int minute = 0,
-    }) =>
-        OfflineOutboxItem(
-          id: id,
-          action: action,
-          conversationId: conv,
-          createdAt: DateTime.utc(2026, 6, 11, 10, minute),
-          status: status,
-          data: {
-            'pending_message_id': 'nonce-$id',
-            'encrypted_payload': payload,
-            'signature': 'sig-$id',
-            'message_type': 'text',
-            'is_encrypted': encrypted,
-            'created_at': DateTime.utc(2026, 6, 11, 10, minute)
-                .toIso8601String(),
-          },
-        );
+    }) => OfflineOutboxItem(
+      id: id,
+      action: action,
+      conversationId: conv,
+      createdAt: DateTime.utc(2026, 6, 11, 10, minute),
+      status: status,
+      data: {
+        'pending_message_id': 'nonce-$id',
+        'encrypted_payload': payload,
+        'signature': 'sig-$id',
+        'message_type': 'text',
+        'is_encrypted': encrypted,
+        'created_at': DateTime.utc(2026, 6, 11, 10, minute).toIso8601String(),
+      },
+    );
 
-    test('selects only queued encrypted sends for the peer DM, oldest first',
-        () {
-      final items = [
-        item(id: 'b', conv: 'dm-1', minute: 5),
-        item(id: 'a', conv: 'dm-1', minute: 1),
-        item(id: 'other-conv', conv: 'dm-2'),
-        item(id: 'failed', conv: 'dm-1',
-            status: OfflineOutboxStatus.failed),
-        item(id: 'plaintext', conv: 'dm-1', encrypted: false),
-        item(id: 'reaction', conv: 'dm-1',
-            action: OfflineOutboxAction.reaction),
-        item(id: 'empty', conv: 'dm-1', payload: ''),
-      ];
-      final selected = meshDeliverableItems(items, 'dm-1');
-      expect(selected.map((i) => i.id), ['a', 'b']);
-    });
+    test(
+      'selects only queued encrypted sends for the peer DM, oldest first',
+      () {
+        final items = [
+          item(id: 'b', conv: 'dm-1', minute: 5),
+          item(id: 'a', conv: 'dm-1', minute: 1),
+          item(id: 'other-conv', conv: 'dm-2'),
+          item(id: 'failed', conv: 'dm-1', status: OfflineOutboxStatus.failed),
+          item(id: 'plaintext', conv: 'dm-1', encrypted: false),
+          item(
+            id: 'reaction',
+            conv: 'dm-1',
+            action: OfflineOutboxAction.reaction,
+          ),
+          item(id: 'empty', conv: 'dm-1', payload: ''),
+        ];
+        final selected = meshDeliverableItems(items, 'dm-1');
+        expect(selected.map((i) => i.id), ['a', 'b']);
+      },
+    );
 
     test('envelope carries exactly the receiver-side ingest fields', () {
       final envelope = meshEnvelopeForItem(item(id: 'x', conv: 'dm-1'));

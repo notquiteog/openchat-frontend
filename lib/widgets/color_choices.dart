@@ -15,12 +15,24 @@ class ColorChoices extends StatelessWidget {
   });
 
   static const List<Color> _palette = [
-    Color(0xFFEF5350), Color(0xFFEC407A), Color(0xFFAB47BC),
-    Color(0xFF7E57C2), Color(0xFF5C6BC0), Color(0xFF3D5AFE),
-    Color(0xFF42A5F5), Color(0xFF26C6DA), Color(0xFF26A69A),
-    Color(0xFF66BB6A), Color(0xFFD4E157), Color(0xFFFFCA28),
-    Color(0xFFFFA726), Color(0xFFFF7043), Color(0xFF8D6E63),
-    Color(0xFF546E7A), Color(0xFF26323A), Color(0xFFECEFF1),
+    Color(0xFFEF5350),
+    Color(0xFFEC407A),
+    Color(0xFFAB47BC),
+    Color(0xFF7E57C2),
+    Color(0xFF5C6BC0),
+    Color(0xFF3D5AFE),
+    Color(0xFF42A5F5),
+    Color(0xFF26C6DA),
+    Color(0xFF26A69A),
+    Color(0xFF66BB6A),
+    Color(0xFFD4E157),
+    Color(0xFFFFCA28),
+    Color(0xFFFFA726),
+    Color(0xFFFF7043),
+    Color(0xFF8D6E63),
+    Color(0xFF546E7A),
+    Color(0xFF26323A),
+    Color(0xFFECEFF1),
   ];
 
   @override
@@ -162,8 +174,7 @@ class _CustomColorDialogState extends State<_CustomColorDialog> {
     _val = hsv.value;
   }
 
-  Color get _current =>
-      HSVColor.fromAHSV(1, _hue, _sat, _val).toColor();
+  Color get _current => HSVColor.fromAHSV(1, _hue, _sat, _val).toColor();
 
   @override
   Widget build(BuildContext context) {
@@ -189,10 +200,7 @@ class _CustomColorDialogState extends State<_CustomColorDialog> {
           ),
           const SizedBox(height: 20),
           // Hue wheel bar
-          _HueBar(
-            hue: _hue,
-            onChanged: (v) => setState(() => _hue = v),
-          ),
+          _HueBar(hue: _hue, onChanged: (v) => setState(() => _hue = v)),
           const SizedBox(height: 12),
           _SatValSlider(
             label: 'Saturation',
@@ -216,7 +224,12 @@ class _CustomColorDialogState extends State<_CustomColorDialog> {
               const Icon(CupertinoIcons.number, size: 16),
               const SizedBox(width: 4),
               Text(
-                _current.toARGB32().toRadixString(16).toUpperCase().padLeft(8, '0').substring(2),
+                _current
+                    .toARGB32()
+                    .toRadixString(16)
+                    .toUpperCase()
+                    .padLeft(8, '0')
+                    .substring(2),
                 style: const TextStyle(
                   fontFamily: 'monospace',
                   fontSize: 14,
@@ -269,7 +282,9 @@ class _HueBar extends StatelessWidget {
           'Hue',
           style: TextStyle(
             fontSize: 12,
-            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+            color: Theme.of(
+              context,
+            ).colorScheme.onSurface.withValues(alpha: 0.6),
           ),
         ),
         const SizedBox(height: 4),
@@ -280,12 +295,7 @@ class _HueBar extends StatelessWidget {
             overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
             trackShape: _HueTrackShape(),
           ),
-          child: Slider(
-            value: hue,
-            min: 0,
-            max: 360,
-            onChanged: onChanged,
-          ),
+          child: Slider(value: hue, min: 0, max: 360, onChanged: onChanged),
         ),
       ],
     );
@@ -357,7 +367,9 @@ class _SatValSlider extends StatelessWidget {
           label,
           style: TextStyle(
             fontSize: 12,
-            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+            color: Theme.of(
+              context,
+            ).colorScheme.onSurface.withValues(alpha: 0.6),
           ),
         ),
         const SizedBox(height: 4),
@@ -402,9 +414,7 @@ class _GradientTrackShape extends RoundedRectSliderTrackShape {
       isDiscrete: isDiscrete,
     );
     final paint = Paint()
-      ..shader = LinearGradient(
-        colors: [left, right],
-      ).createShader(trackRect);
+      ..shader = LinearGradient(colors: [left, right]).createShader(trackRect);
     context.canvas.drawRRect(
       RRect.fromRectAndRadius(trackRect, const Radius.circular(7)),
       paint,

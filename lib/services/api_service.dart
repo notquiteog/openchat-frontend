@@ -2281,11 +2281,16 @@ class ApiService {
     required String fileName,
     required int fileSize,
     required String mimeType,
+    // Client-chosen attachment id (#26): pins the row id so an offline
+    // attachment sealed under this id stays byte-identical between the mesh
+    // relay and the server send. Server picks one when absent.
+    String? attachmentId,
   }) async {
     final resp = await _post('/api/v1/attachments', {
       'file_name': fileName,
       'file_size': fileSize,
       'mime_type': mimeType,
+      'attachment_id': ?attachmentId,
     });
     return UploadRequest.fromJson(resp['data'] as Map<String, dynamic>);
   }

@@ -10,7 +10,11 @@ import 'package:openchat/widgets/message_bubble.dart';
 // TextPainter; before the fix it called layout() without supplying placeholder
 // dimensions, which throws on the first WidgetSpan and replaces the whole
 // bubble body with a gray ErrorWidget ("giant white/grey square").
-Message _emojiMessage(String text, {required String emoji, required int offset}) {
+Message _emojiMessage(
+  String text, {
+  required String emoji,
+  required int offset,
+}) {
   final msg = Message(
     id: 'msg-emoji',
     conversationId: 'conv-1',

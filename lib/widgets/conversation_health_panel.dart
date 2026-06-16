@@ -46,9 +46,7 @@ class _ConversationHealthSheet extends StatelessWidget {
         .where((m) => m.userId != currentUserId)
         .toList();
     final verified = others.where((m) => pins.containsKey(m.userId)).length;
-    final expired = others
-        .where((m) => m.user?.isKeyExpired ?? false)
-        .length;
+    final expired = others.where((m) => m.user?.isKeyExpired ?? false).length;
 
     final (fsLabel, fsColor) = switch (mode) {
       EncryptionMode.mls => ('Full — MLS ratchet', Colors.green),
@@ -146,9 +144,7 @@ class _ConversationHealthSheet extends StatelessWidget {
         children: [
           Icon(icon, size: 20, color: color),
           const SizedBox(width: 12),
-          Expanded(
-            child: Text(label, style: const TextStyle(fontSize: 14)),
-          ),
+          Expanded(child: Text(label, style: const TextStyle(fontSize: 14))),
           Text(
             value,
             style: TextStyle(fontWeight: FontWeight.w600, color: color),

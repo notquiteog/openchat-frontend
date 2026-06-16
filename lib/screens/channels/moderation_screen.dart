@@ -488,8 +488,9 @@ class _ModerationScreenState extends State<ModerationScreen> {
                     trailing: GlassSwitch(
                       value: _blockMedia,
                       onChanged: (value) {
-                        if (!_savingAntiSpam)
+                        if (!_savingAntiSpam) {
                           _saveAntiSpamControls(blockMedia: value);
+                        }
                       },
                       activeColor: Theme.of(context).colorScheme.primary,
                       enableHaptics: true,
@@ -507,8 +508,9 @@ class _ModerationScreenState extends State<ModerationScreen> {
                     trailing: GlassSwitch(
                       value: _blockLinks,
                       onChanged: (value) {
-                        if (!_savingAntiSpam)
+                        if (!_savingAntiSpam) {
                           _saveAntiSpamControls(blockLinks: value);
+                        }
                       },
                       activeColor: Theme.of(context).colorScheme.primary,
                       enableHaptics: true,

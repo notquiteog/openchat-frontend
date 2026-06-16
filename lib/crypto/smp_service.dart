@@ -103,9 +103,7 @@ BigInt _hash(int version, List<BigInt> values) {
       ..add(len & 0xff)
       ..addAll(bytes);
   }
-  return _bytesToBigInt(
-    Uint8List.fromList(crypto.sha256.convert(buf).bytes),
-  );
+  return _bytesToBigInt(Uint8List.fromList(crypto.sha256.convert(buf).bytes));
 }
 
 bool _inRange(BigInt v) => v > _one && v < (_p - _one);
@@ -138,10 +136,7 @@ Map<String, String> _proveCoords(
 ) {
   final r5 = _randExp();
   final r6 = _randExp();
-  final c = _hash(version, [
-    _pow(g3, r5),
-    _mul(_pow(_g, r5), _pow(g2, r6)),
-  ]);
+  final c = _hash(version, [_pow(g3, r5), _mul(_pow(_g, r5), _pow(g2, r6))]);
   final d5 = ((r5 - r * c) % _q + _q) % _q;
   final d6 = ((r6 - secret * c) % _q + _q) % _q;
   return {'c': _toHex(c % _q), 'd5': _toHex(d5), 'd6': _toHex(d6)};
@@ -166,11 +161,7 @@ bool _verifyCoords(
 }
 
 /// Proof that R = (Qa/Qb)^x and the prover knows x = log_g(g3owner). (c, d).
-Map<String, String> _proveEqualLogs(
-  int version,
-  BigInt qaqb,
-  BigInt x,
-) {
+Map<String, String> _proveEqualLogs(int version, BigInt qaqb, BigInt x) {
   final r = _randExp();
   final c = _hash(version, [_pow(_g, r), _pow(qaqb, r)]);
   final d = ((r - x * c) % _q + _q) % _q;

@@ -13,18 +13,17 @@ void main() {
     required String fp,
     required MeshFrameSender sendFrame,
     int seed = 1,
-  }) =>
-      MeshSession(
-        selfFingerprint: fp,
-        selfPublicKeyArmored: 'KEY:$fp',
-        selfDisplayName: 'user-$fp',
-        sign: (data) async => 'SIG|$data|$fp',
-        verify: (data, signature, publicKey) async =>
-            signature == 'SIG|$data|${publicKey.substring(4)}',
-        fingerprintOf: (publicKey) async => publicKey.substring(4),
-        sendFrame: sendFrame,
-        random: Random(seed),
-      );
+  }) => MeshSession(
+    selfFingerprint: fp,
+    selfPublicKeyArmored: 'KEY:$fp',
+    selfDisplayName: 'user-$fp',
+    sign: (data) async => 'SIG|$data|$fp',
+    verify: (data, signature, publicKey) async =>
+        signature == 'SIG|$data|${publicKey.substring(4)}',
+    fingerprintOf: (publicKey) async => publicKey.substring(4),
+    sendFrame: sendFrame,
+    random: Random(seed),
+  );
 
   test('drain skips acked nonces and counts only what was sent', () async {
     late MeshSession a, b;
@@ -49,19 +48,22 @@ void main() {
     b.messages.listen(received.add);
 
     Map<String, dynamic> envelope(String nonce) => {
-          'conversation_id': 'dm-1',
-          'encrypted_payload': 'cipher-$nonce',
-          'signature': 'sig',
-          'message_type': 'text',
-          'client_nonce': nonce,
-          'created_at': '2026-06-11T10:00:00.000Z',
-        };
+      'conversation_id': 'dm-1',
+      'encrypted_payload': 'cipher-$nonce',
+      'signature': 'sig',
+      'message_type': 'text',
+      'client_nonce': nonce,
+      'created_at': '2026-06-11T10:00:00.000Z',
+    };
 
     final service = NearbyMeshService(
       storage: SecureStorageService(),
       onEnvelope: (e, fp) async => true,
-      envelopesForPeer: (fp) async =>
-          [envelope('n1'), envelope('n2'), envelope('n3')],
+      envelopesForPeer: (fp) async => [
+        envelope('n1'),
+        envelope('n2'),
+        envelope('n3'),
+      ],
       contactNameForFingerprint: (fp) => 'Bee',
     );
     final peer = NearbyPeer(linkId: 'link-1', session: a)

@@ -67,8 +67,9 @@ class AttachmentUploadProgressChip extends StatelessWidget {
                   GlassProgressIndicator.linear(
                     value: fraction,
                     height: 5,
-                    backgroundColor: scheme.surfaceContainerHighest
-                        .withValues(alpha: 0.42),
+                    backgroundColor: scheme.surfaceContainerHighest.withValues(
+                      alpha: 0.42,
+                    ),
                     color: scheme.primary,
                   ),
                 ],

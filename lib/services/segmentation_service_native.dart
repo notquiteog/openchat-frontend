@@ -90,7 +90,8 @@ class SegmentationService {
     final prep = await Isolate.run(() => decodeAndPreprocess(image));
     if (prep == null) {
       throw SegmentationException(
-          'inference failed: the image could not be decoded');
+        'inference failed: the image could not be decoded',
+      );
     }
     final mask = await _runModel(session, prep.tensor);
     return Isolate.run(() => postprocessToPng(prep, mask));
@@ -126,8 +127,9 @@ class SegmentationService {
     if (await _looksLikeOnnxModel(file)) return file;
     // Corrupt or missing → (re)download. Concurrent callers share one
     // download instead of racing on the same file.
-    return _inflightDownload ??=
-        _downloadModel(file).whenComplete(() => _inflightDownload = null);
+    return _inflightDownload ??= _downloadModel(
+      file,
+    ).whenComplete(() => _inflightDownload = null);
   }
 
   static Future<File> _downloadModel(File dest) async {
@@ -137,11 +139,13 @@ class SegmentationService {
     final tmp = File('${dest.path}.part');
     try {
       await dest.parent.create(recursive: true);
-      final response =
-          await client.send(http.Request('GET', Uri.parse(modelUrl)));
+      final response = await client.send(
+        http.Request('GET', Uri.parse(modelUrl)),
+      );
       if (response.statusCode != 200) {
         throw SegmentationException(
-            'model download failed: HTTP ${response.statusCode} from $modelUrl');
+          'model download failed: HTTP ${response.statusCode} from $modelUrl',
+        );
       }
       final total = response.contentLength ?? 0;
       var received = 0;
@@ -160,7 +164,8 @@ class SegmentationService {
       if (!await _looksLikeOnnxModel(dest)) {
         await dest.delete();
         throw SegmentationException(
-            'model download failed: server did not return a valid ONNX model');
+          'model download failed: server did not return a valid ONNX model',
+        );
       }
       _progress.add(1.0);
       return dest;
@@ -199,7 +204,8 @@ class SegmentationService {
         // Best effort.
       }
       throw SegmentationException(
-          'inference failed: could not load the segmentation model: $e');
+        'inference failed: could not load the segmentation model: $e',
+      );
     } finally {
       // ORT copies the options into the session at creation, so releasing
       // here is safe even on the success path.
@@ -208,36 +214,43 @@ class SegmentationService {
   }
 
   static Future<Float32List> _runModel(
-      OrtSession session, Float32List tensor) async {
+    OrtSession session,
+    Float32List tensor,
+  ) async {
     OrtValueTensor? input;
     OrtRunOptions? runOptions;
     List<OrtValue?>? outputs;
     try {
-      input = OrtValueTensor.createTensorWithDataList(
-        tensor,
-        [1, 3, kSegmentationModelSide, kSegmentationModelSide],
-      );
+      input = OrtValueTensor.createTensorWithDataList(tensor, [
+        1,
+        3,
+        kSegmentationModelSide,
+        kSegmentationModelSide,
+      ]);
       runOptions = OrtRunOptions();
       // Introspect IO names instead of hardcoding: u2netp uses 'input.1' and
       // 'd0'…'d6' (d0 = the fused mask), but other exports rename them.
-      final inputName =
-          session.inputNames.isNotEmpty ? session.inputNames.first : 'input.1';
+      final inputName = session.inputNames.isNotEmpty
+          ? session.inputNames.first
+          : 'input.1';
       final outputNames = session.outputNames.isNotEmpty
           ? <String>[session.outputNames.first]
           : null;
       outputs =
           await session.runAsync(runOptions, {inputName: input}, outputNames) ??
-              const [];
+          const [];
       final first = outputs.isNotEmpty ? outputs.first : null;
       if (first is! OrtValueTensor) {
         throw SegmentationException(
-            'inference failed: the model produced no tensor output');
+          'inference failed: the model produced no tensor output',
+        );
       }
       final mask = flattenTensorValue(first.value);
       const expected = kSegmentationModelSide * kSegmentationModelSide;
       if (mask.length != expected) {
         throw SegmentationException(
-            'inference failed: unexpected mask size ${mask.length} (expected $expected)');
+          'inference failed: unexpected mask size ${mask.length} (expected $expected)',
+        );
       }
       return mask;
     } on SegmentationException {

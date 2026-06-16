@@ -89,8 +89,9 @@ class TranscriptionService {
   /// download. Progress is by bytes across all three files.
   static Future<void> ensureModel() async {
     if (await isModelCached()) return;
-    return _inflightDownload ??=
-        _downloadAll().whenComplete(() => _inflightDownload = null);
+    return _inflightDownload ??= _downloadAll().whenComplete(
+      () => _inflightDownload = null,
+    );
   }
 
   static Future<void> _downloadAll() async {
@@ -102,8 +103,7 @@ class TranscriptionService {
       final sizes = <String, int>{};
       var totalBytes = 0;
       for (final f in _files) {
-        final head =
-            await client.head(Uri.parse('$_baseUrl/${f.name}'));
+        final head = await client.head(Uri.parse('$_baseUrl/${f.name}'));
         final len = int.tryParse(head.headers['content-length'] ?? '') ?? 0;
         sizes[f.name] = len;
         totalBytes += len;
@@ -119,11 +119,13 @@ class TranscriptionService {
         // Stream into a temp file, then rename — a crash mid-download never
         // leaves a half-written file where isModelCached trusts it.
         final tmp = File('${dest.path}.part');
-        final response = await client
-            .send(http.Request('GET', Uri.parse('$_baseUrl/${f.name}')));
+        final response = await client.send(
+          http.Request('GET', Uri.parse('$_baseUrl/${f.name}')),
+        );
         if (response.statusCode != 200) {
           throw TranscriptionException(
-              'model download failed: HTTP ${response.statusCode} for ${f.name}');
+            'model download failed: HTTP ${response.statusCode} for ${f.name}',
+          );
         }
         final sink = tmp.openWrite();
         try {
@@ -139,7 +141,8 @@ class TranscriptionService {
         if (await tmp.length() < f.minBytes) {
           await tmp.delete();
           throw TranscriptionException(
-              'model download failed: ${f.name} is truncated');
+            'model download failed: ${f.name} is truncated',
+          );
         }
         await tmp.rename(dest.path);
       }
@@ -177,8 +180,16 @@ class TranscriptionService {
 
   static Future<void> _decodeToWav(File input, File output) async {
     final args = [
-      '-y', '-i', input.path,
-      '-ar', '16000', '-ac', '1', '-f', 'wav', output.path,
+      '-y',
+      '-i',
+      input.path,
+      '-ar',
+      '16000',
+      '-ac',
+      '1',
+      '-f',
+      'wav',
+      output.path,
     ];
     if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
       final session = await FFmpegKit.executeWithArguments(args);
@@ -194,11 +205,13 @@ class TranscriptionService {
       final res = await Process.run('ffmpeg', args);
       if (res.exitCode != 0) {
         throw TranscriptionException(
-            'audio decode failed (ffmpeg exit ${res.exitCode})');
+          'audio decode failed (ffmpeg exit ${res.exitCode})',
+        );
       }
     } on ProcessException {
       throw const TranscriptionException(
-          'ffmpeg not found — install ffmpeg to transcribe voice notes on desktop');
+        'ffmpeg not found — install ffmpeg to transcribe voice notes on desktop',
+      );
     }
   }
 

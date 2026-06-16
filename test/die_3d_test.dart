@@ -41,8 +41,9 @@ void main() {
     });
   });
 
-  testWidgets('Die3D renders and culls to at most 3 visible faces',
-      (tester) async {
+  testWidgets('Die3D renders and culls to at most 3 visible faces', (
+    tester,
+  ) async {
     final (rx, ry) = Die3D.targetRotationFor(5);
     await tester.pumpWidget(
       MaterialApp(

@@ -227,8 +227,12 @@ class _RegisterScreenState extends State<RegisterScreen>
                                   ),
                                   const SizedBox(height: 12),
                                   GlassListTile(
-                                    title: const Text('Public discovery',
-                                        style: TextStyle(fontWeight: FontWeight.w600)),
+                                    title: const Text(
+                                      'Public discovery',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
                                     subtitle: const Text(
                                       'Allow username search for this account',
                                     ),
@@ -237,11 +241,14 @@ class _RegisterScreenState extends State<RegisterScreen>
                                       onChanged: (value) => setState(
                                         () => _publicDiscovery = value,
                                       ),
-                                      activeColor: Theme.of(context).colorScheme.primary,
+                                      activeColor: Theme.of(
+                                        context,
+                                      ).colorScheme.primary,
                                       enableHaptics: true,
                                     ),
                                     onTap: () => setState(
-                                      () => _publicDiscovery = !_publicDiscovery,
+                                      () =>
+                                          _publicDiscovery = !_publicDiscovery,
                                     ),
                                   ),
                                   const SizedBox(height: 12),
@@ -349,16 +356,25 @@ class _RegisterScreenState extends State<RegisterScreen>
                                             leading: Icon(
                                               keyType == _keyType
                                                   ? Icons.radio_button_checked
-                                                  : Icons.radio_button_unchecked,
+                                                  : Icons
+                                                        .radio_button_unchecked,
                                               color: keyType == _keyType
-                                                  ? Theme.of(context).colorScheme.primary
+                                                  ? Theme.of(
+                                                      context,
+                                                    ).colorScheme.primary
                                                   : null,
                                               size: 20,
                                             ),
-                                            title: Text(keyType.title,
-                                                style: const TextStyle(fontWeight: FontWeight.w600)),
+                                            title: Text(
+                                              keyType.title,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
                                             subtitle: Text(keyType.subtitle),
-                                            onTap: () => setState(() => _keyType = keyType),
+                                            onTap: () => setState(
+                                              () => _keyType = keyType,
+                                            ),
                                           ),
                                       ],
                                     ),
@@ -397,7 +413,10 @@ class _RegisterScreenState extends State<RegisterScreen>
                                             vertical: 16,
                                           ),
                                           child: auth.isLoading
-                                              ? const GlassProgressIndicator.circular(size: 20, strokeWidth: 2)
+                                              ? const GlassProgressIndicator.circular(
+                                                  size: 20,
+                                                  strokeWidth: 2,
+                                                )
                                               : const Text('Create account'),
                                         ),
                                       ),

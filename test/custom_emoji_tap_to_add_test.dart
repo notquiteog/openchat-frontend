@@ -13,7 +13,11 @@ import 'package:provider/provider.dart';
 // span opens a bottom sheet for its pack with an "Add to library" button.
 // Must work even when the pack is NOT discoverable — the fetch endpoints
 // don't gate on is_discoverable (by design).
-Message _emojiMessage(String text, {required String emoji, required int offset}) {
+Message _emojiMessage(
+  String text, {
+  required String emoji,
+  required int offset,
+}) {
   final msg = Message(
     id: 'msg-emoji',
     conversationId: 'conv-1',
@@ -121,8 +125,9 @@ void main() {
     expect(find.text('🎉'), findsOneWidget);
   });
 
-  testWidgets('Add to library adds the resolved pack and dismisses the sheet',
-      (tester) async {
+  testWidgets('Add to library adds the resolved pack and dismisses the sheet', (
+    tester,
+  ) async {
     final msg = _emojiMessage('hi 🙂', emoji: '🙂', offset: 3);
     await pumpBubble(tester, msg);
 

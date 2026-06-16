@@ -597,8 +597,7 @@ class _ProviderPickerSheet extends StatelessWidget {
             // would stack a second backdrop pass.
             Container(
               decoration: BoxDecoration(
-                color:
-                    scheme.surfaceContainerHighest.withValues(alpha: 0.35),
+                color: scheme.surfaceContainerHighest.withValues(alpha: 0.35),
                 borderRadius: BorderRadius.circular(20),
               ),
               clipBehavior: Clip.antiAlias,
@@ -728,7 +727,8 @@ class _ProviderTile extends StatelessWidget {
               ),
             )
           : null,
-      trailing: trailing ??
+      trailing:
+          trailing ??
           Icon(
             Icons.chevron_right,
             size: 18,

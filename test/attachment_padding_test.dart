@@ -23,8 +23,11 @@ void main() {
   test('padded sizes land on shared buckets, hiding exact length', () {
     final a = AttachmentService.padAttachmentPlaintext(bytesOf(100_000));
     final b = AttachmentService.padAttachmentPlaintext(bytesOf(101_500));
-    expect(a.length, b.length,
-        reason: 'nearby sizes must collapse into the same bucket');
+    expect(
+      a.length,
+      b.length,
+      reason: 'nearby sizes must collapse into the same bucket',
+    );
   });
 
   test('small files pad to at least the 4KB floor', () {

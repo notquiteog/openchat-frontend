@@ -73,9 +73,7 @@ class _StickerEditorScreenState extends State<StickerEditorScreen> {
     if (!mounted) return;
     if (SegmentationService.isSupported && !modelCached) {
       messenger.showSnackBar(
-        const SnackBar(
-          content: Text('Downloading AI model (one-time, ~5MB)…'),
-        ),
+        const SnackBar(content: Text('Downloading AI model (one-time, ~5MB)…')),
       );
       _modelDownloadSub = SegmentationService.downloadProgress.listen((p) {
         if (mounted) setState(() => _modelDownloadProgress = p);
@@ -198,8 +196,8 @@ class _StickerEditorScreenState extends State<StickerEditorScreen> {
                     _bgRemoved
                         ? 'Background removed'
                         : _modelDownloadProgress != null
-                            ? 'Downloading model… ${(_modelDownloadProgress! * 100).round()}%'
-                            : 'Remove background',
+                        ? 'Downloading model… ${(_modelDownloadProgress! * 100).round()}%'
+                        : 'Remove background',
                   ),
                   onPressed: _busy || _bgRemoved ? null : _removeBackground,
                 ),

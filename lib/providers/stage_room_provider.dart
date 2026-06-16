@@ -124,9 +124,7 @@ class StageRoomProvider extends ChangeNotifier {
       if (url == null || token == null || url.isEmpty || token.isEmpty) {
         throw Exception('Stage room is unavailable');
       }
-      room = Room(
-        roomOptions: const RoomOptions(adaptiveStream: true),
-      );
+      room = Room(roomOptions: const RoomOptions(adaptiveStream: true));
       _room = room;
       _conversationId = conversationId;
       await room.connect(url, token);

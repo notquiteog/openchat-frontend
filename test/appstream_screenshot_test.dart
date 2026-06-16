@@ -15,9 +15,7 @@ Widget _authHarness(Widget child) {
       ChangeNotifierProvider<AuthProvider>(
         create: (_) => AuthProvider(api, storage),
       ),
-      ChangeNotifierProvider<KeyProvider>(
-        create: (_) => KeyProvider(storage),
-      ),
+      ChangeNotifierProvider<KeyProvider>(create: (_) => KeyProvider(storage)),
     ],
     child: MaterialApp(home: child),
   );

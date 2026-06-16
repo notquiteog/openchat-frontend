@@ -20,14 +20,14 @@ class Die3D extends StatelessWidget {
 
   /// Rotation (rx, ry) that brings [value]'s face toward the viewer.
   static (double, double) targetRotationFor(int value) => switch (value) {
-        1 => (0, 0),
-        2 => (0, math.pi / 2),
-        3 => (math.pi / 2, 0),
-        4 => (-math.pi / 2, 0),
-        5 => (0, -math.pi / 2),
-        6 => (0, math.pi),
-        _ => (0, 0),
-      };
+    1 => (0, 0),
+    2 => (0, math.pi / 2),
+    3 => (math.pi / 2, 0),
+    4 => (-math.pi / 2, 0),
+    5 => (0, -math.pi / 2),
+    6 => (0, math.pi),
+    _ => (0, 0),
+  };
 
   static ({
     int value,
@@ -35,7 +35,8 @@ class Die3D extends StatelessWidget {
     vm.Vector3 u,
     vm.Vector3 v,
     Matrix4 place,
-  }) _face(int value, Matrix4 orient) {
+  })
+  _face(int value, Matrix4 orient) {
     final rot = orient.getRotation();
     return (
       value: value,
@@ -49,13 +50,9 @@ class Die3D extends StatelessWidget {
   }
 
   static final List<
-      ({
-        int value,
-        vm.Vector3 normal,
-        vm.Vector3 u,
-        vm.Vector3 v,
-        Matrix4 place,
-      })> _faces = [
+    ({int value, vm.Vector3 normal, vm.Vector3 u, vm.Vector3 v, Matrix4 place})
+  >
+  _faces = [
     _face(1, Matrix4.identity()),
     _face(6, Matrix4.identity()..rotateY(math.pi)),
     _face(2, Matrix4.identity()..rotateY(-math.pi / 2)),
@@ -69,8 +66,7 @@ class Die3D extends StatelessWidget {
 
   /// Blinn-Phong half-vector between the light and the viewer (view direction
   /// is -z: screen z grows away from the camera).
-  static final vm.Vector3 _half =
-      (_light + vm.Vector3(0, 0, -1)).normalized();
+  static final vm.Vector3 _half = (_light + vm.Vector3(0, 0, -1)).normalized();
 
   @override
   Widget build(BuildContext context) {
@@ -86,8 +82,9 @@ class Die3D extends StatelessWidget {
       // Specular: sharp Blinn-Phong lobe. The hotspot drifts across the face
       // toward the half-vector's tangential component, as if the face were
       // slightly domed — that moving glint is what sells the material.
-      final spec =
-          math.pow(worldNormal.dot(_half).clamp(0.0, 1.0), 30).toDouble();
+      final spec = math
+          .pow(worldNormal.dot(_half).clamp(0.0, 1.0), 30)
+          .toDouble();
       final specCenter = Offset(_half.dot(worldU), _half.dot(worldV));
       final lightDir = Offset(_light.dot(worldU), _light.dot(worldV));
       // Scale the unit-cube placement to pixels: translation happens in
@@ -263,16 +260,17 @@ class _DieFacePainter extends CustomPainter {
       canvas.drawRRect(
         rrect,
         Paint()
-          ..shader = RadialGradient(
-            colors: [
-              Colors.white.withValues(alpha: 0.50 * spec),
-              Colors.white.withValues(alpha: 0.12 * spec),
-              Colors.transparent,
-            ],
-            stops: const [0.0, 0.35, 1.0],
-          ).createShader(
-            Rect.fromCircle(center: hotspot, radius: size.width * 0.55),
-          ),
+          ..shader =
+              RadialGradient(
+                colors: [
+                  Colors.white.withValues(alpha: 0.50 * spec),
+                  Colors.white.withValues(alpha: 0.12 * spec),
+                  Colors.transparent,
+                ],
+                stops: const [0.0, 0.35, 1.0],
+              ).createShader(
+                Rect.fromCircle(center: hotspot, radius: size.width * 0.55),
+              ),
       );
     }
 
@@ -341,15 +339,16 @@ class _DieFacePainter extends CustomPainter {
         c + toLight * (pipRadius * 0.06),
         pipRadius * 0.96,
         Paint()
-          ..shader = RadialGradient(
-            colors: [pitLitWall, pitDark],
-            stops: const [0.0, 1.0],
-          ).createShader(
-            Rect.fromCircle(
-              center: c - toLight * (pipRadius * 0.45),
-              radius: pipRadius * 1.5,
-            ),
-          ),
+          ..shader =
+              RadialGradient(
+                colors: [pitLitWall, pitDark],
+                stops: const [0.0, 1.0],
+              ).createShader(
+                Rect.fromCircle(
+                  center: c - toLight * (pipRadius * 0.45),
+                  radius: pipRadius * 1.5,
+                ),
+              ),
       );
     }
   }

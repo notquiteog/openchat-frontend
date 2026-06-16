@@ -68,9 +68,7 @@ class _BotChatsScreenState extends State<BotChatsScreen> {
       appBar: const GlassAppBar(title: Text('Bots')),
       body: Column(
         children: [
-          SizedBox(
-            height: MediaQuery.paddingOf(context).top + kToolbarHeight,
-          ),
+          SizedBox(height: MediaQuery.paddingOf(context).top + kToolbarHeight),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
             child: TextField(

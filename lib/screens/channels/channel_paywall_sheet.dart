@@ -21,10 +21,8 @@ Future<bool> showChannelPaywall(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (_) => _ChannelPaywallSheet(
-      channelId: channelId,
-      channelName: channelName,
-    ),
+    builder: (_) =>
+        _ChannelPaywallSheet(channelId: channelId, channelName: channelName),
   );
   return result ?? false;
 }
@@ -40,10 +38,8 @@ Future<void> showGiftSubscriptionSheet(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (_) => _GiftSubscriptionSheet(
-      channelId: channelId,
-      channelName: channelName,
-    ),
+    builder: (_) =>
+        _GiftSubscriptionSheet(channelId: channelId, channelName: channelName),
   );
 }
 
@@ -152,8 +148,10 @@ class _GiftSubscriptionSheetState extends State<_GiftSubscriptionSheet> {
           const SizedBox(height: 8),
           Row(
             children: [
-              Icon(Icons.card_giftcard_rounded,
-                  color: theme.colorScheme.primary),
+              Icon(
+                Icons.card_giftcard_rounded,
+                color: theme.colorScheme.primary,
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -173,8 +171,10 @@ class _GiftSubscriptionSheetState extends State<_GiftSubscriptionSheet> {
               child: Center(child: GlassProgressIndicator.circular()),
             )
           else if (_error != null)
-            Text('Could not load plans: $_error',
-                style: TextStyle(color: theme.colorScheme.error))
+            Text(
+              'Could not load plans: $_error',
+              style: TextStyle(color: theme.colorScheme.error),
+            )
           else if (_plans.isEmpty)
             const Text('This channel has no subscription plan.')
           else ...[
@@ -334,8 +334,10 @@ class _ChannelPaywallSheetState extends State<_ChannelPaywallSheet> {
           const SizedBox(height: 8),
           Row(
             children: [
-              Icon(Icons.workspace_premium_outlined,
-                  color: theme.colorScheme.primary),
+              Icon(
+                Icons.workspace_premium_outlined,
+                color: theme.colorScheme.primary,
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -355,8 +357,10 @@ class _ChannelPaywallSheetState extends State<_ChannelPaywallSheet> {
               child: Center(child: GlassProgressIndicator.circular()),
             )
           else if (_error != null)
-            Text('Could not load plans: $_error',
-                style: TextStyle(color: theme.colorScheme.error))
+            Text(
+              'Could not load plans: $_error',
+              style: TextStyle(color: theme.colorScheme.error),
+            )
           else if (_deposit != null)
             _depositInstructions(theme)
           else if (_plans.isEmpty)
@@ -367,10 +371,10 @@ class _ChannelPaywallSheetState extends State<_ChannelPaywallSheet> {
               onPressed: _busy
                   ? null
                   : () => showGiftSubscriptionSheet(
-                        context,
-                        channelId: widget.channelId,
-                        channelName: widget.channelName,
-                      ),
+                      context,
+                      channelId: widget.channelId,
+                      channelName: widget.channelName,
+                    ),
               icon: const Icon(Icons.card_giftcard_rounded),
               label: const Text('Gift this subscription to someone'),
             ),
@@ -390,7 +394,9 @@ class _ChannelPaywallSheetState extends State<_ChannelPaywallSheet> {
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+        color: theme.colorScheme.surfaceContainerHighest.withValues(
+          alpha: 0.35,
+        ),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Column(
@@ -435,14 +441,17 @@ class _ChannelPaywallSheetState extends State<_ChannelPaywallSheet> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Send $amount $provider to:',
-            style: const TextStyle(fontWeight: FontWeight.w600)),
+        Text(
+          'Send $amount $provider to:',
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
         const SizedBox(height: 8),
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHighest
-                .withValues(alpha: 0.35),
+            color: theme.colorScheme.surfaceContainerHighest.withValues(
+              alpha: 0.35,
+            ),
             borderRadius: BorderRadius.circular(16),
           ),
           child: Row(
@@ -470,8 +479,7 @@ class _ChannelPaywallSheetState extends State<_ChannelPaywallSheet> {
         if ((dep['id'] ?? '').toString().isNotEmpty)
           DepositProgressView(
             depositId: dep['id'].toString(),
-            initialConfirmations:
-                (dep['confirmations'] as num?)?.toInt() ?? 0,
+            initialConfirmations: (dep['confirmations'] as num?)?.toInt() ?? 0,
             requiredConfirmations:
                 (dep['required_confirmations'] as num?)?.toInt() ?? 0,
             initialStatus: dep['status']?.toString() ?? 'nothing_sent',

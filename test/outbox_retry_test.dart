@@ -42,8 +42,11 @@ void main() {
     },
   );
 
-  ChatProvider build(NetworkService net, OfflineOutboxService outbox,
-      ApiService api) {
+  ChatProvider build(
+    NetworkService net,
+    OfflineOutboxService outbox,
+    ApiService api,
+  ) {
     return ChatProvider(
       api,
       storage,
@@ -65,16 +68,25 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 10)); // _loadOutbox
 
     expect(provider.pendingOutboxCount, 1);
-    expect(api.sealedSendCount, 0,
-        reason: 'nothing should drain while offline with no trigger');
+    expect(
+      api.sealedSendCount,
+      0,
+      reason: 'nothing should drain while offline with no trigger',
+    );
 
     net.set(NetworkClass.wifi); // regain
     await Future<void>.delayed(const Duration(milliseconds: 20));
 
-    expect(api.sealedSendCount, greaterThanOrEqualTo(1),
-        reason: 'a none->online transition must kick a drain');
-    expect(provider.pendingOutboxCount, 1,
-        reason: 'a retryable failure must keep the item queued for retry');
+    expect(
+      api.sealedSendCount,
+      greaterThanOrEqualTo(1),
+      reason: 'a none->online transition must kick a drain',
+    );
+    expect(
+      provider.pendingOutboxCount,
+      1,
+      reason: 'a retryable failure must keep the item queued for retry',
+    );
   });
 
   test('a successful retry delivers and clears the queued item', () async {
@@ -93,8 +105,11 @@ void main() {
     // A subsequent drain (what the retry timer / regain kick triggers) succeeds.
     await provider.drainOutbox();
     expect(api.sealedSendCount, 2);
-    expect(provider.pendingOutboxCount, 0,
-        reason: 'the item must be removed once it finally delivers');
+    expect(
+      provider.pendingOutboxCount,
+      0,
+      reason: 'the item must be removed once it finally delivers',
+    );
   });
 }
 
@@ -130,6 +145,7 @@ class _MemOutbox extends OfflineOutboxService {
   Future<void> replaceAll(List<OfflineOutboxItem> items) async {
     _items = List.of(items);
   }
+
   @override
   Future<void> remove(String id) async {
     _items = _items.where((i) => i.id != id).toList();
@@ -212,6 +228,5 @@ class _NoopCache extends MessageCacheService {
     String encryptedPayload,
     String plaintext,
     String? senderId,
-  ) =>
-      Future.value();
+  ) => Future.value();
 }

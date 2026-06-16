@@ -151,8 +151,9 @@ img.Image applyMaskAlpha(
   int maskHeight, {
   double alphaCutoff = 0.05,
 }) {
-  final out =
-      original.numChannels == 4 ? original : original.convert(numChannels: 4);
+  final out = original.numChannels == 4
+      ? original
+      : original.convert(numChannels: 4);
   final resized = resizeMaskBilinear(
     minMaxNormalizeMask(mask),
     maskWidth,

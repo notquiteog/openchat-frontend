@@ -211,10 +211,8 @@ class AmfService {
   /// The canonical bytes the platform key signs over the published key bundle,
   /// byte-identical to Go `AMFKeysSignedData`. Lets a client confirm the
   /// moderator key it pins is vouched for by the (pinned) platform key.
-  static List<int> keyBundleSignedData(
-    List<int> modPub,
-    List<int> platPub,
-  ) => <int>[...utf8.encode('openchat-amf-keys:v1:'), ...modPub, ...platPub];
+  static List<int> keyBundleSignedData(List<int> modPub, List<int> platPub) =>
+      <int>[...utf8.encode('openchat-amf-keys:v1:'), ...modPub, ...platPub];
 
   /// Verifies the `/.well-known/amf-keys` bundle signature under [platformPub].
   static Future<bool> verifyKeyBundle({

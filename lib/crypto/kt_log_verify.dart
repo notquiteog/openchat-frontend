@@ -18,9 +18,7 @@ class KtLogVerify {
 
   /// Domain-separated leaf hash: SHA-256(0x00 || payload).
   static Uint8List leafHash(List<int> payload) {
-    return Uint8List.fromList(
-      crypto.sha256.convert([0x00, ...payload]).bytes,
-    );
+    return Uint8List.fromList(crypto.sha256.convert([0x00, ...payload]).bytes);
   }
 
   static Uint8List _nodeHash(List<int> left, List<int> right) {

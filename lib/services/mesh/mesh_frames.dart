@@ -16,15 +16,26 @@ const int meshFrameHello = 1;
 const int meshFrameProof = 2;
 const int meshFrameMessage = 3;
 const int meshFrameAck = 4;
+// Encrypted attachment transfer over LAN (#26). Carries a JSON envelope with
+// the attachment ciphertext base64-encoded inline. Only sent over LAN links —
+// the BLE MTU makes multi-megabyte transfers impractical.
+const int meshFrameAttachment = 5;
 
 const int _magic0 = 0x4F; // 'O'
 const int _magic1 = 0x4D; // 'M'
 const int _version = 1;
 const int _headerLength = 8;
 
-/// Max payload accepted by the decoder — a corrupt length field must not ask
-/// the reassembler to buffer gigabytes. Generous: envelopes are < 64 KiB.
+/// Max payload accepted by the decoder for control/message frames — a corrupt
+/// length field must not ask the reassembler to buffer gigabytes. Generous:
+/// envelopes are < 64 KiB.
 const int meshMaxFrameBytes = 256 * 1024;
+
+/// Max payload for attachment frames (#26). Larger than [meshMaxFrameBytes]
+/// because the ciphertext rides inline, but still bounded so a corrupt length
+/// can't exhaust memory. Sized comfortably above a base64-expanded ~10 MiB
+/// attachment; mesh attachment transfer is LAN-only.
+const int meshMaxAttachmentFrameBytes = 16 * 1024 * 1024;
 
 class MeshFrame {
   final int type;
@@ -39,8 +50,12 @@ class MeshFrameException implements Exception {
   String toString() => message;
 }
 
-Uint8List encodeMeshFrame(int type, Uint8List payload) {
-  if (payload.length > meshMaxFrameBytes) {
+Uint8List encodeMeshFrame(
+  int type,
+  Uint8List payload, {
+  int maxBytes = meshMaxFrameBytes,
+}) {
+  if (payload.length > maxBytes) {
     throw const MeshFrameException('frame payload too large');
   }
   final out = Uint8List(_headerLength + payload.length + 4);
@@ -56,7 +71,7 @@ Uint8List encodeMeshFrame(int type, Uint8List payload) {
   return out;
 }
 
-MeshFrame decodeMeshFrame(Uint8List bytes) {
+MeshFrame decodeMeshFrame(Uint8List bytes, {int maxBytes = meshMaxFrameBytes}) {
   if (bytes.length < _headerLength + 4 ||
       bytes[0] != _magic0 ||
       bytes[1] != _magic1) {
@@ -67,8 +82,7 @@ MeshFrame decodeMeshFrame(Uint8List bytes) {
   }
   final view = ByteData.sublistView(bytes);
   final length = view.getUint32(4, Endian.little);
-  if (length > meshMaxFrameBytes ||
-      bytes.length != _headerLength + length + 4) {
+  if (length > maxBytes || bytes.length != _headerLength + length + 4) {
     throw const MeshFrameException('mesh frame length mismatch');
   }
   final expected = view.getUint32(bytes.length - 4, Endian.little);
@@ -116,6 +130,12 @@ List<Uint8List> splitMeshFrame(Uint8List frame, int maxChunkBytes) {
 /// restart (seq 0 mid-frame) drops the partial frame — the CRC layer above
 /// would reject it anyway; this just fails earlier and cheaper.
 class MeshReassembler {
+  /// Upper bound on a reassembled frame — pass [meshMaxAttachmentFrameBytes]
+  /// for LAN links that may carry attachment frames (#26), the default
+  /// [meshMaxFrameBytes] for BLE/control-only links.
+  MeshReassembler({this.maxBytes = meshMaxFrameBytes});
+
+  final int maxBytes;
   final BytesBuilder _buffer = BytesBuilder();
   int _expectedSeq = 0;
 
@@ -133,7 +153,7 @@ class MeshReassembler {
       throw MeshFrameException('chunk gap (got $seq)');
     }
     _buffer.add(Uint8List.sublistView(chunk, 3));
-    if (_buffer.length > meshMaxFrameBytes + 64) {
+    if (_buffer.length > maxBytes + 64) {
       _buffer.clear();
       _expectedSeq = 0;
       throw const MeshFrameException('reassembly overflow');

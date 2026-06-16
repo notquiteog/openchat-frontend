@@ -48,15 +48,17 @@ void main() {
     expect(ws.lastSeq, 7);
   });
 
-  test('accepts out-of-order live events (seq below lastSeq, unseen)',
-      () async {
-    ws.handleRawFrame(frame(10));
-    ws.handleRawFrame(frame(9)); // cross-instance reordering — not a dupe
-    await Future<void>.delayed(Duration.zero);
+  test(
+    'accepts out-of-order live events (seq below lastSeq, unseen)',
+    () async {
+      ws.handleRawFrame(frame(10));
+      ws.handleRawFrame(frame(9)); // cross-instance reordering — not a dupe
+      await Future<void>.delayed(Duration.zero);
 
-    expect(received, hasLength(2));
-    expect(ws.lastSeq, 10);
-  });
+      expect(received, hasLength(2));
+      expect(ws.lastSeq, 10);
+    },
+  );
 
   test('ephemeral events (no seq) always pass through', () async {
     ws.handleRawFrame(frame(0, type: 'typing'));
@@ -100,11 +102,11 @@ void main() {
   // ── Broadcast-conversation (cid/cseq) stream ──────────────────────────────
 
   String convFrame(String cid, int cseq, {int n = 0}) => jsonEncode({
-        'type': 'new_message',
-        'data': {'n': n},
-        'cid': cid,
-        'cseq': cseq,
-      });
+    'type': 'new_message',
+    'data': {'n': n},
+    'cid': cid,
+    'cseq': cseq,
+  });
 
   test('cseq events never advance the per-user lastSeq', () async {
     ws.handleRawFrame(frame(3));
@@ -145,10 +147,12 @@ void main() {
   });
 
   test('conv_resync_required parses into its own event type', () async {
-    ws.handleRawFrame(jsonEncode({
-      'type': 'conv_resync_required',
-      'data': {'conversation_id': 'conv-a'},
-    }));
+    ws.handleRawFrame(
+      jsonEncode({
+        'type': 'conv_resync_required',
+        'data': {'conversation_id': 'conv-a'},
+      }),
+    );
     await Future<void>.delayed(Duration.zero);
 
     expect(received.single.type, WsEventType.convResyncRequired);
@@ -168,15 +172,17 @@ void main() {
     expect(received, hasLength(2), reason: 'same cseq deliverable post-reset');
   });
 
-  test('a malformed line does not discard the rest of a batched frame',
-      () async {
-    // Earlier lines advance lastSeq, so a dropped tail would never be
-    // replayed by the resume protocol — each line must be parsed under its
-    // own guard.
-    ws.handleRawFrame('${frame(1)}\nnot json{\n${frame(2)}\n${frame(3)}');
-    await Future<void>.delayed(Duration.zero);
+  test(
+    'a malformed line does not discard the rest of a batched frame',
+    () async {
+      // Earlier lines advance lastSeq, so a dropped tail would never be
+      // replayed by the resume protocol — each line must be parsed under its
+      // own guard.
+      ws.handleRawFrame('${frame(1)}\nnot json{\n${frame(2)}\n${frame(3)}');
+      await Future<void>.delayed(Duration.zero);
 
-    expect(received, hasLength(3));
-    expect(ws.lastSeq, 3);
-  });
+      expect(received, hasLength(3));
+      expect(ws.lastSeq, 3);
+    },
+  );
 }

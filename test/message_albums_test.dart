@@ -7,17 +7,16 @@ Message msg(
   String? group,
   String sender = 'alice',
   String type = 'image',
-}) =>
-    Message.fromJson({
-      'id': id,
-      'conversation_id': 'c1',
-      'sender_id': sender,
-      'message_type': type,
-      'encrypted_payload': '{}',
-      'is_encrypted': false,
-      'created_at': '2026-06-11T10:00:00Z',
-      'media_group_id': ?group,
-    });
+}) => Message.fromJson({
+  'id': id,
+  'conversation_id': 'c1',
+  'sender_id': sender,
+  'message_type': type,
+  'encrypted_payload': '{}',
+  'is_encrypted': false,
+  'created_at': '2026-06-11T10:00:00Z',
+  'media_group_id': ?group,
+});
 
 void main() {
   group('albumRunAt', () {
@@ -51,8 +50,11 @@ void main() {
         msg('b3', group: 'g2', sender: 'bob'),
       ];
       expect(albumRunAt(list, 0)!.map((m) => m.id), ['a1', 'a2']);
-      expect(albumRunAt(list, 2), isNull,
-          reason: 'g2 from alice is a lone member — bob\'s g2 is separate');
+      expect(
+        albumRunAt(list, 2),
+        isNull,
+        reason: 'g2 from alice is a lone member — bob\'s g2 is separate',
+      );
       expect(albumRunAt(list, 3)!.map((m) => m.id), ['b2', 'b3']);
     });
 
