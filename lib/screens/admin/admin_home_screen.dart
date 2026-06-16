@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../models/message.dart';
 import '../../models/moderation_report.dart';
 import '../../models/operator_metrics.dart';
 import '../../models/system_admin_audit_event.dart';
@@ -368,7 +369,8 @@ class _ModerationSection extends StatelessWidget {
                 subtitle: 'Conversation and channel reports appear here.',
               )
             else
-              for (final report in data.reports) _ReportCard(report: report),
+              for (final report in data.reports)
+                _ReportCard(report: report, onResolved: onRetry),
             const SizedBox(height: 18),
             const _AdminSectionHeader('System-admin audit'),
             if (data.auditEvents.isEmpty)
@@ -445,8 +447,63 @@ class _ModerationAdminData {
 
 class _ReportCard extends StatelessWidget {
   final ModerationReport report;
+  final VoidCallback? onResolved;
 
-  const _ReportCard({required this.report});
+  const _ReportCard({required this.report, this.onResolved});
+
+  Future<void> _resolve(BuildContext context, String status) async {
+    final api = context.read<ApiService>();
+    try {
+      await api.resolveAdminReportGlobal(report.id, status: status);
+      if (!context.mounted) return;
+      showAppToast(
+        context,
+        status == 'dismissed' ? 'Report dismissed' : 'Report resolved',
+      );
+      onResolved?.call();
+    } catch (e) {
+      if (!context.mounted) return;
+      showAppToast(context, 'Could not update report: $e', isError: true);
+    }
+  }
+
+  Future<void> _viewMessage(BuildContext context) async {
+    final api = context.read<ApiService>();
+    Message msg;
+    try {
+      msg = await api.getReportedMessage(report.id);
+    } catch (e) {
+      if (!context.mounted) return;
+      showAppToast(context, 'Could not load message: $e', isError: true);
+      return;
+    }
+    if (!context.mounted) return;
+    final content = msg.decryptedContent?.trim().isNotEmpty == true
+        ? msg.decryptedContent!.trim()
+        : (msg.encryptedPayload.trim().isNotEmpty
+              ? msg.encryptedPayload.trim()
+              : '(this ${msg.type.name} message has no text content)');
+    final body = msg.isEncrypted
+        ? '🔒 This message is end-to-end encrypted — the server can’t read its '
+              'content, so it can’t be shown here.'
+        : content;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => GlassAlertDialog(
+        title: const Text('Reported message'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 320),
+          child: SingleChildScrollView(child: SelectableText(body)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -487,12 +544,45 @@ class _ReportCard extends StatelessWidget {
                     fontWeight: FontWeight.w600,
                   ),
                 ),
+                if (report.target == 'system') ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: _StatusPill(
+                      label: 'Platform-only',
+                      color: Colors.purple,
+                    ),
+                  ),
+                ],
                 if (report.reason.trim().isNotEmpty) ...[
                   const SizedBox(height: 8),
                   Text(
                     report.reason.trim(),
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+                if (report.messageId != null || report.status == 'open') ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      if (report.messageId != null)
+                        TextButton(
+                          onPressed: () => _viewMessage(context),
+                          child: const Text('View message'),
+                        ),
+                      if (report.status == 'open') ...[
+                        TextButton(
+                          onPressed: () => _resolve(context, 'resolved'),
+                          child: const Text('Resolve'),
+                        ),
+                        TextButton(
+                          onPressed: () => _resolve(context, 'dismissed'),
+                          child: const Text('Dismiss'),
+                        ),
+                      ],
+                    ],
                   ),
                 ],
               ],

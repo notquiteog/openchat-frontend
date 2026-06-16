@@ -26,6 +26,7 @@ import '../../services/mls_service.dart';
 import '../../services/offline_outbox_service.dart';
 import '../../services/secure_storage_service.dart';
 import '../../services/websocket_service.dart';
+import '../../crypto/amf_service.dart';
 import '../../crypto/pgp_service.dart';
 import '../../utils/custom_emoji_payload.dart';
 import '../../utils/disappearing_message_duration.dart';
@@ -46,6 +47,7 @@ import '../../widgets/attachment_variant_sheet.dart';
 import '../../widgets/message_action_sheet.dart';
 import '../../widgets/reaction_emoji_picker.dart';
 import '../../widgets/reaction_menu.dart';
+import '../../widgets/report_message_dialog.dart';
 import '../../widgets/mention_autocomplete_panel.dart';
 import '../../widgets/message_bubble.dart';
 import '../../widgets/scheduled_messages_sheet.dart';
@@ -429,6 +431,10 @@ class _PreparedChannelPostPayload {
   final String senderId;
   final bool isEncrypted;
   final String? postToken;
+  // Base64 AMF (Hecate) commitment the server stamps so a subscriber can later
+  // file a provable CSAM report. Null for unfranked posts (plaintext channels,
+  // scheduled/offline posts).
+  final String? frankCom;
 
   const _PreparedChannelPostPayload({
     required this.encryptedPayload,
@@ -438,6 +444,7 @@ class _PreparedChannelPostPayload {
     required this.senderId,
     required this.isEncrypted,
     this.postToken,
+    this.frankCom,
   });
 }
 
@@ -485,6 +492,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   late Conversation _channel;
   Conversation get channel => _channel;
 
+  // The central message store. ChannelScreen loads posts into its own _posts
+  // list, but new posts arrive over the WebSocket into ChatProvider — we listen
+  // so the feed updates live instead of only on a manual refresh.
+  late ChatProvider _chat;
+
   @override
   void initState() {
     super.initState();
@@ -497,6 +509,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     );
     _ws = context.read<WebSocketService>();
     _ws.addListener(_onWsConnectionChanged);
+    _chat = context.read<ChatProvider>();
+    _chat.addListener(_onChatLiveUpdate);
     _restoreLocalDraft();
     _inputCtrl.addListener(_onInputTextChanged);
     unawaited(_loadOutbox());
@@ -546,6 +560,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     _highlightTimer?.cancel();
     _inputCtrl.removeListener(_onInputTextChanged);
     _ws.removeListener(_onWsConnectionChanged);
+    _chat.removeListener(_onChatLiveUpdate);
     _draftSaveTimer?.cancel();
     _flushDraftSave();
     _inputCtrl.dispose();
@@ -616,6 +631,30 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     if (_ws.isMonitoring) {
       unawaited(_drainOutbox());
     }
+  }
+
+  // New channel posts arrive over the WebSocket and land in ChatProvider's live
+  // message store (already decrypted, with their AMF franking validity
+  // recorded). Mirror any we haven't shown yet into _posts so the feed updates
+  // without a manual refresh — this also covers channels the user has just
+  // subscribed to or been approved into. Posts ChatProvider couldn't decrypt
+  // are skipped here; the next _load() re-fetches and decrypts them.
+  void _onChatLiveUpdate() {
+    if (!mounted) return;
+    final live = _chat.messagesFor(channel.id);
+    if (live.isEmpty) return;
+    final known = {for (final p in _posts) p.id};
+    final additions = [
+      for (final m in live)
+        if (!known.contains(m.id) && (m.isDecrypted || !m.isEncrypted)) m,
+    ];
+    if (additions.isEmpty) return;
+    setState(() {
+      for (final m in additions) {
+        ChatProvider.hydrateMessageSenderFromConversation(m, channel);
+        _posts.add(m);
+      }
+    });
   }
 
   Future<void> _loadOutbox() {
@@ -960,6 +999,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     final prepared = await _prepareChannelPostPayload(
       plaintextPayload: plaintextPayload,
       messageType: messageType,
+      frank: channel.isEncrypted && _ws.isMonitoring,
     );
     final confirmed = channel.isEncrypted
         ? await api.sendSealedMessage(
@@ -968,6 +1008,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             postToken: prepared.postToken ?? '',
             attachmentId: attachmentId,
             silent: silent,
+            frankCom: prepared.frankCom,
           )
         : await api.postToChannel(
             chanID: channel.id,
@@ -1092,6 +1133,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         }
         msg.setDecryptedContent(raw, verifiedSenderId: verifiedSenderId);
         ChatProvider.hydrateMessageSenderFromConversation(msg, channel);
+        _recordChannelFranking(msg, raw);
         if (notify && mounted) setState(() {});
       } else {
         msg.markDecryptionFailed();
@@ -1111,10 +1153,22 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       }
       msg.setDecryptedContent(raw, verifiedSenderId: verifiedSenderId);
       ChatProvider.hydrateMessageSenderFromConversation(msg, channel);
+      _recordChannelFranking(msg, raw);
       if (notify && mounted) setState(() {});
     } catch (_) {
       msg.markDecryptionFailed();
     }
+  }
+
+  // Records this channel post's AMF (Hecate) franking validity in ChatProvider
+  // so a verifiable post becomes CSAM-reportable via the report dialog. Channel
+  // posts are decrypted here, outside the provider's incoming pipeline, so the
+  // provider would otherwise never see their franking. Best-effort and
+  // display-neutral — a missing/invalid franking just leaves the post
+  // non-reportable.
+  void _recordChannelFranking(Message msg, String raw) {
+    if (!mounted) return;
+    unawaited(_chat.recordFrankingIfValid(msg, raw));
   }
 
   Future<String?> _verifiedPgpSenderId(String raw) async {
@@ -2279,6 +2333,11 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   Future<_PreparedChannelPostPayload> _prepareChannelPostPayload({
     required String plaintextPayload,
     required String messageType,
+    // When true, attach AMF (Hecate) franking so a subscriber can later file a
+    // provable CSAM report. Only set for immediate, online, encrypted posts;
+    // plaintext channels have nothing to hide the franking material in, and
+    // scheduled/offline posts aren't stamped at create time.
+    bool frank = false,
   }) async {
     final api = context.read<ApiService>();
     final storage = context.read<SecureStorageService>();
@@ -2313,25 +2372,30 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
         messageType,
         plaintextPayload,
       );
-      final cleartextPayload = await _signedPgpCleartextPayload(
+      // Fetch the token bundle first so its AMF token can be franked into the
+      // envelope before encryption (com is sent server-visible).
+      final token = await _sealedPostToken(privateKey);
+      final signed = await _signedPgpCleartextPayload(
         plaintextPayload: artifactPayload,
         messageType: messageType,
         senderId: userID,
         privateKey: privateKey,
+        amfToken: frank ? token.amf : null,
       );
       final encrypted = await mls.encryptPayload(
         api: api,
         conversation: channel,
-        plaintextPayload: cleartextPayload,
+        plaintextPayload: signed.cleartext,
       );
       return _PreparedChannelPostPayload(
         encryptedPayload: encrypted,
         signature: '',
-        cleartextPayload: cleartextPayload,
+        cleartextPayload: signed.cleartext,
         serverMessageType: 'text',
         senderId: userID,
         isEncrypted: true,
-        postToken: await _sealedPostToken(privateKey),
+        postToken: token.token,
+        frankCom: signed.frankComB64,
       );
     }
 
@@ -2400,27 +2464,31 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       );
     }
     final artifactPayload = _chatArtifactPayload(messageType, plaintextPayload);
-    final cleartextPayload = await _signedPgpCleartextPayload(
+    // Fetch the token bundle first so its AMF token can be franked into the
+    // envelope before encryption (com is sent server-visible).
+    final token = await _sealedPostToken(privateKey);
+    final signed = await _signedPgpCleartextPayload(
       plaintextPayload: artifactPayload,
       messageType: messageType,
       senderId: userID,
       privateKey: privateKey,
+      amfToken: frank ? token.amf : null,
     );
 
     final encrypted = await PgpService.encrypt(
-      plaintext: cleartextPayload,
+      plaintext: signed.cleartext,
       recipients: recipients,
       signingPrivateKeyArmored: privateKey,
     ).timeout(const Duration(seconds: 30));
-    final postToken = await _sealedPostToken(privateKey);
     return _PreparedChannelPostPayload(
       encryptedPayload: encrypted,
       signature: '',
-      cleartextPayload: cleartextPayload,
+      cleartextPayload: signed.cleartext,
       serverMessageType: 'text',
       senderId: userID,
       isEncrypted: true,
-      postToken: postToken,
+      postToken: token.token,
+      frankCom: signed.frankComB64,
     );
   }
 
@@ -2589,6 +2657,8 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       prepared = await _prepareChannelPostPayload(
         plaintextPayload: draft.payload,
         messageType: messageType,
+        frank:
+            channel.isEncrypted && scheduledFor == null && _ws.isMonitoring,
       );
     } catch (e) {
       if (plaintextOverride == null) {
@@ -2629,6 +2699,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             postToken: prepared.postToken ?? '',
             attachmentId: attachmentId,
             silent: silent,
+            frankCom: prepared.frankCom,
           );
         } else {
           await api.scheduleSealedMessage(
@@ -2725,11 +2796,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     };
   }
 
-  Future<String> _signedPgpCleartextPayload({
+  Future<({String cleartext, String? frankComB64})> _signedPgpCleartextPayload({
     required String plaintextPayload,
     required String messageType,
     required String senderId,
     required String privateKey,
+    AmfToken? amfToken,
   }) async {
     final fingerprint =
         await context.read<SecureStorageService>().getFingerprint() ?? '';
@@ -2741,16 +2813,35 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       ),
       privateKeyArmored: privateKey,
     ).timeout(const Duration(seconds: 30));
-    return jsonEncode({
+    // AMF (Hecate) Frank: when a franking token accompanies this post, compute
+    // x2/σ2/r/com over the SAME (channelID, type, payload) the receiver sees,
+    // embed {x1,x2,r,t1,σ1,σ2,pk_e} in the encrypted envelope, and surface only
+    // com to the server (returned separately for the send request). The token's
+    // sk_e is used here once and dropped (it is single-use).
+    Map<String, dynamic>? frankingJson;
+    String? frankComB64;
+    if (amfToken != null) {
+      final franking = await AmfService.frank(
+        amfToken,
+        conversationId: channel.id,
+        messageType: messageType,
+        payload: plaintextPayload,
+      );
+      frankingJson = franking.toPayloadJson();
+      frankComB64 = base64Encode(franking.com);
+    }
+    final cleartext = jsonEncode({
       'openchat_message': 1,
       'type': messageType,
       'payload': plaintextPayload,
+      'franking': ?frankingJson,
       'sender': {
         'id': senderId,
         'key_fingerprint': fingerprint,
         'signature': signature,
       },
     });
+    return (cleartext: cleartext, frankComB64: frankComB64);
   }
 
   String _chatArtifactPayload(String kind, String plaintextPayload) {
@@ -2765,16 +2856,25 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     return ChatArtifact.encodePayload(kind: kind, payload: payload);
   }
 
-  Future<String> _sealedPostToken(String privateKey) async {
+  // Fetches a single-use sealed post token plus the AMF (Hecate) franking token
+  // the server mints alongside it. The franking token is only needed when the
+  // post will be franked; callers pass it to [_signedPgpCleartextPayload].
+  Future<({String token, AmfToken? amf})> _sealedPostToken(
+    String privateKey,
+  ) async {
     final api = context.read<ApiService>();
     final storage = context.read<SecureStorageService>();
-    final encrypted = await api.getEncryptedSealedPostToken(channel.id);
+    final bundle = await api.getSealedPostTokenBundle(channel.id);
     final token = await PgpService.decrypt(
-      encryptedArmor: encrypted,
+      encryptedArmor: bundle.encryptedPostToken,
       privateKeyArmored: privateKey,
     );
     await storage.savePgpPostToken(channel.id, token);
-    return token;
+    final amfJson = bundle.amfToken;
+    return (
+      token: token,
+      amf: amfJson != null ? AmfToken.fromJson(amfJson) : null,
+    );
   }
 
   String _formatSchedule(DateTime? when) {
@@ -3099,46 +3199,19 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   }
 
   Future<void> _reportPost(Message msg) async {
-    final reasonCtrl = TextEditingController();
-    final reason = await showDialog<String>(
+    // Same chooser as group/DM messages: a general report to the channel admins
+    // and — when this post's AMF franking verified as valid — an anonymous,
+    // provable CSAM report to the platform's system admins.
+    await showReportMessageDialog(
       context: context,
-      builder: (ctx) => GlassAlertDialog(
-        title: const Text('Report post'),
-        content: TextField(
-          controller: reasonCtrl,
-          autofocus: true,
-          maxLength: 500,
-          maxLines: 3,
-          decoration: const InputDecoration(labelText: 'Reason'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, reasonCtrl.text.trim()),
-            child: const Text('Report'),
-          ),
-        ],
-      ),
+      conversationId: channel.id,
+      messageId: msg.id,
+      reportedUserId: msg.senderId,
+      isChannel: true,
+      hasAdmins: true,
+      messageEncrypted: msg.isEncrypted,
+      csamBlob: _chat.frankingReportFor(msg.id),
     );
-    reasonCtrl.dispose();
-    if (reason == null || !mounted) return;
-    try {
-      await context.read<ApiService>().createModerationReport(
-        channel.id,
-        channel: true,
-        messageID: msg.id,
-        reportedUserID: msg.senderId,
-        reason: reason,
-      );
-      if (!mounted) return;
-      showAppToast(context, 'Report sent');
-    } catch (e) {
-      if (!mounted) return;
-      showAppToast(context, 'Failed to report: $e', isError: true);
-    }
   }
 
   Future<void> _copyPostText(Message msg) async {

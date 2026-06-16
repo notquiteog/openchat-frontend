@@ -3774,6 +3774,15 @@ class ChatProvider extends ChangeNotifier {
   Map<String, dynamic>? frankingReportFor(String messageId) =>
       _frankingReports[messageId];
 
+  /// Public entry point for screens that decrypt their own messages outside the
+  /// provider's incoming pipeline (e.g. ChannelScreen loads channel posts and
+  /// decrypts them itself). Records the AMF (Hecate) franking validity for
+  /// [msg] from its decrypted envelope [raw], so a verifiable channel post
+  /// becomes CSAM-reportable via [frankingReportFor]. Best-effort and
+  /// display-neutral — see [_recordFrankingIfValid].
+  Future<void> recordFrankingIfValid(Message msg, String raw) =>
+      _recordFrankingIfValid(msg, raw);
+
   /// AMF (Hecate) Verify on receipt: if this message carries a server stamp and
   /// the embedded franking verifies as VALID, stash the assembled report blob so
   /// the message becomes CSAM-reportable. Best-effort and display-neutral — a

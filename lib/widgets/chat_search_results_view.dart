@@ -31,6 +31,11 @@ class ChannelSearchSelection extends ChatSearchSelection {
   const ChannelSearchSelection(this.channel);
 }
 
+class GroupSearchSelection extends ChatSearchSelection {
+  final Conversation group;
+  const GroupSearchSelection(this.group);
+}
+
 class MessageSearchSelection extends ChatSearchSelection {
   final MessageSearchResult result;
   const MessageSearchSelection(this.result);
@@ -65,10 +70,25 @@ Future<void> handleChatSearchSelection(
         ).showSnackBar(SnackBar(content: Text(openDmErrorMessage(error))));
       }
     case ChannelSearchSelection(:final channel):
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => ChannelFeedScreen(channel: channel)),
-      );
+      if (openConversation != null) {
+        openConversation(channel, null);
+      } else {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ChannelFeedScreen(channel: channel),
+          ),
+        );
+      }
+    case GroupSearchSelection(:final group):
+      if (openConversation != null) {
+        openConversation(group, null);
+      } else {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => ChatScreen(conversation: group)),
+        );
+      }
     case MessageSearchSelection(:final result):
       var conv = chat.conversations
           .where((conversation) => conversation.id == result.conversationId)
@@ -154,6 +174,7 @@ class _ChatSearchResultsViewState extends State<ChatSearchResultsView> {
         final results = snapshot.data;
         if (results == null ||
             (results.users.isEmpty &&
+                results.groups.isEmpty &&
                 results.channels.isEmpty &&
                 results.messages.isEmpty)) {
           return const Center(child: Text('No results'));
@@ -161,7 +182,7 @@ class _ChatSearchResultsViewState extends State<ChatSearchResultsView> {
         return ListView(
           keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           children: [
-            // People lead the results; the on-device message section (with its
+            // Entity results lead; the on-device message section (with its
             // category filter chips) follows.
             if (results.users.isNotEmpty)
               const _SearchSectionHeader(label: 'People and bots'),
@@ -204,6 +225,48 @@ class _ChatSearchResultsViewState extends State<ChatSearchResultsView> {
                 ),
                 onTap: () => widget.onSelect(UserSearchSelection(u.id)),
               ),
+            if (results.groups.isNotEmpty)
+              const _SearchSectionHeader(label: 'Groups'),
+            for (final group in results.groups)
+              GlassListTile(
+                leading: CircleAvatar(
+                  backgroundImage: group.avatarUrl != null
+                      ? CachedNetworkImageProvider(
+                          ApiConfig.resolveMedia(group.avatarUrl!),
+                        )
+                      : null,
+                  child: group.avatarUrl == null
+                      ? const Icon(Icons.group_rounded)
+                      : null,
+                ),
+                title: Text(group.name ?? 'Group'),
+                subtitle: Text(group.description ?? 'Group chat'),
+                trailing: const Icon(Icons.forum_outlined),
+                onTap: () => widget.onSelect(GroupSearchSelection(group)),
+              ),
+            if (results.channels.isNotEmpty)
+              const _SearchSectionHeader(label: 'Channels'),
+            for (final ch in results.channels)
+              GlassListTile(
+                leading: CircleAvatar(
+                  backgroundImage: ch.avatarUrl != null
+                      ? CachedNetworkImageProvider(
+                          ApiConfig.resolveMedia(ch.avatarUrl!),
+                        )
+                      : null,
+                  child: ch.avatarUrl == null
+                      ? const Icon(Icons.campaign)
+                      : null,
+                ),
+                title: Text(ch.name ?? 'Channel'),
+                subtitle: Text(
+                  ch.handle != null
+                      ? '@${ch.handle}'
+                      : (ch.description ?? 'Public channel'),
+                ),
+                trailing: const Icon(Icons.campaign_outlined),
+                onTap: () => widget.onSelect(ChannelSearchSelection(ch)),
+              ),
             _MessageSearchFilters(
               selected: _messageCategory,
               fromUser: _fromUser,
@@ -243,29 +306,6 @@ class _ChatSearchResultsViewState extends State<ChatSearchResultsView> {
                   onTap: () => widget.onSelect(MessageSearchSelection(message)),
                 ),
             ],
-            if (results.channels.isNotEmpty)
-              const _SearchSectionHeader(label: 'Channels'),
-            for (final ch in results.channels)
-              GlassListTile(
-                leading: CircleAvatar(
-                  backgroundImage: ch.avatarUrl != null
-                      ? CachedNetworkImageProvider(
-                          ApiConfig.resolveMedia(ch.avatarUrl!),
-                        )
-                      : null,
-                  child: ch.avatarUrl == null
-                      ? const Icon(Icons.campaign)
-                      : null,
-                ),
-                title: Text(ch.name ?? 'Channel'),
-                subtitle: Text(
-                  ch.handle != null
-                      ? '@${ch.handle}'
-                      : (ch.description ?? 'Public channel'),
-                ),
-                trailing: const Icon(Icons.campaign_outlined),
-                onTap: () => widget.onSelect(ChannelSearchSelection(ch)),
-              ),
           ],
         );
       },
@@ -286,6 +326,14 @@ class _ChatSearchResultsViewState extends State<ChatSearchResultsView> {
     // senderId filter remains available in MessageSearchService for future
     // per-conversation search surfaces with known member ids.
     final messageTerm = fromUser == null ? term : '$term $fromUser';
+    final localGroups = _matchingLocalConversations(
+      chat.conversations.where((conversation) => conversation.isGroup),
+      term,
+    );
+    final localChannels = _matchingLocalConversations(
+      chat.conversations.where((conversation) => conversation.isChannel),
+      term,
+    );
     final results = await Future.wait([
       api.searchUsers(term).catchError((_) => <User>[]),
       api.searchChannels(term).catchError((_) => <Conversation>[]),
@@ -299,9 +347,11 @@ class _ChatSearchResultsViewState extends State<ChatSearchResultsView> {
           )
           .catchError((_) => <MessageSearchResult>[]),
     ]);
+    final remoteChannels = results[1] as List<Conversation>;
     return _SearchResults(
       users: results[0] as List<User>,
-      channels: results[1] as List<Conversation>,
+      groups: localGroups,
+      channels: _dedupeConversations(localChannels, remoteChannels),
       messages: results[2] as List<MessageSearchResult>,
     );
   }
@@ -323,6 +373,38 @@ class _ChatSearchResultsViewState extends State<ChatSearchResultsView> {
     final normalized = value?.trim().replaceFirst(RegExp(r'^@+'), '');
     if (normalized == null || normalized.isEmpty) return null;
     return normalized;
+  }
+
+  List<Conversation> _matchingLocalConversations(
+    Iterable<Conversation> conversations,
+    String term,
+  ) {
+    final needle = term.trim().toLowerCase();
+    if (needle.isEmpty) return const [];
+    return conversations.where((conversation) {
+      final haystacks = [
+        conversation.name,
+        conversation.handle,
+        conversation.description,
+      ].whereType<String>().map((value) => value.toLowerCase());
+      return haystacks.any((value) => value.contains(needle));
+    }).toList()..sort((a, b) {
+      final aName = (a.name ?? a.handle ?? '').toLowerCase();
+      final bName = (b.name ?? b.handle ?? '').toLowerCase();
+      return aName.compareTo(bName);
+    });
+  }
+
+  List<Conversation> _dedupeConversations(
+    List<Conversation> preferred,
+    List<Conversation> fallback,
+  ) {
+    final seen = <String>{};
+    final out = <Conversation>[];
+    for (final conversation in [...preferred, ...fallback]) {
+      if (seen.add(conversation.id)) out.add(conversation);
+    }
+    return out;
   }
 
   Future<void> _editFromUser() async {
@@ -377,10 +459,12 @@ class _ChatSearchResultsViewState extends State<ChatSearchResultsView> {
 
 class _SearchResults {
   final List<User> users;
+  final List<Conversation> groups;
   final List<Conversation> channels;
   final List<MessageSearchResult> messages;
   _SearchResults({
     required this.users,
+    required this.groups,
     required this.channels,
     required this.messages,
   });

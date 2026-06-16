@@ -3330,14 +3330,35 @@ class ApiService {
     String? messageID,
     String? reportedUserID,
     String reason = '',
+    // 'admins' (the chat's own admins) or 'system' (platform admins only).
+    String target = 'admins',
   }) async {
     final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
     final resp = await _post('$base/$convID/reports', {
       'message_id': ?messageID,
       'reported_user_id': ?reportedUserID,
       'reason': reason,
+      'target': target,
     });
     return ModerationReport.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  /// System-admin: resolve/dismiss any moderation report from the global queue
+  /// (including platform-targeted reports the chat's own admins never see).
+  Future<void> resolveAdminReportGlobal(
+    String reportID, {
+    required String status,
+  }) async {
+    await _post('/api/v1/admin/reports/$reportID/resolve', {'status': status});
+  }
+
+  /// System-admin: fetch the message a report points at, to review the reported
+  /// content. Non-encrypted messages (e.g. public channel posts) carry their
+  /// plaintext; end-to-end-encrypted messages come back with isEncrypted=true
+  /// and an opaque payload the server can't read.
+  Future<Message> getReportedMessage(String reportID) async {
+    final resp = await _get('/api/v1/admin/reports/$reportID/message');
+    return Message.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
   Future<void> resolveModerationReport(

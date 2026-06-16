@@ -5,6 +5,8 @@ class ModerationReport {
   final String reporterUserId;
   final String? reportedUserId;
   final String reason;
+  // 'admins' (the chat's own admins) or 'system' (platform admins only).
+  final String target;
   final String status;
   final String? resolvedBy;
   final DateTime? resolvedAt;
@@ -20,6 +22,7 @@ class ModerationReport {
     required this.reporterUserId,
     this.reportedUserId,
     this.reason = '',
+    this.target = 'admins',
     this.status = 'open',
     this.resolvedBy,
     this.resolvedAt,
@@ -37,6 +40,7 @@ class ModerationReport {
         reporterUserId: json['reporter_user_id'] as String,
         reportedUserId: json['reported_user_id'] as String?,
         reason: json['reason'] as String? ?? '',
+        target: json['target'] as String? ?? 'admins',
         status: json['status'] as String? ?? 'open',
         resolvedBy: json['resolved_by'] as String?,
         resolvedAt: json['resolved_at'] != null
