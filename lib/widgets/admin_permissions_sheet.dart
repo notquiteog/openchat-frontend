@@ -86,15 +86,22 @@ class _AdminPermissionsSheetState extends State<_AdminPermissionsSheet> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final roles = <ButtonSegment<MemberRole>>[
-      const ButtonSegment(value: MemberRole.admin, label: Text('Admin')),
-      if (widget.allowModerator)
-        const ButtonSegment(
-          value: MemberRole.moderator,
-          label: Text('Moderator'),
-        ),
-      const ButtonSegment(value: MemberRole.member, label: Text('Member')),
+    final roleValues = <MemberRole>[
+      MemberRole.admin,
+      if (widget.allowModerator) MemberRole.moderator,
+      MemberRole.member,
     ];
+    final roleLabels = [
+      for (final role in roleValues)
+        switch (role) {
+          MemberRole.admin => 'Admin',
+          MemberRole.moderator => 'Moderator',
+          MemberRole.member => 'Member',
+        },
+    ];
+    final selectedRoleIndex = roleValues
+        .indexOf(_role)
+        .clamp(0, roleValues.length - 1);
 
     return GlassBottomSheetFrame(
       child: SafeArea(
@@ -108,36 +115,22 @@ class _AdminPermissionsSheetState extends State<_AdminPermissionsSheet> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.admin_panel_settings_outlined,
-                        color: scheme.primary,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          '@${widget.member.user?.username ?? widget.member.userId}',
-                          style: Theme.of(context).textTheme.titleMedium,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
+                const GlassSheetGrabber(),
+                GlassSheetHeader(
+                  icon: Icons.admin_panel_settings_outlined,
+                  title:
+                      '@${widget.member.user?.username ?? widget.member.userId}',
+                  subtitle: 'Role & permissions',
+                  onClose: _saving ? null : () => Navigator.pop(context),
                 ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: SegmentedButton<MemberRole>(
-                      segments: roles,
-                      selected: {_role},
-                      onSelectionChanged: _saving
-                          ? null
-                          : (selection) => _setRole(selection.single),
-                    ),
+                  child: GlassSegmentedControl(
+                    segments: roleLabels,
+                    selectedIndex: selectedRoleIndex,
+                    onSegmentSelected: _saving
+                        ? (_) {}
+                        : (index) => _setRole(roleValues[index]),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -178,15 +171,16 @@ class _AdminPermissionsSheetState extends State<_AdminPermissionsSheet> {
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                   child: Row(
                     children: [
-                      TextButton(
+                      GlassButtonWidget(
                         onPressed: _saving
                             ? null
                             : () => Navigator.pop(context),
                         child: const Text('Cancel'),
                       ),
                       const Spacer(),
-                      FilledButton.icon(
+                      GlassButtonWidget.icon(
                         onPressed: _saving ? null : _save,
+                        color: scheme.primary,
                         icon: _saving
                             ? const GlassProgressIndicator.circular(
                                 size: 16,

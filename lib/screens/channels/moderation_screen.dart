@@ -1,25 +1,49 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import '../../models/conversation.dart';
 import '../../models/moderation_report.dart';
-import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
-import '../../widgets/admin_permissions_sheet.dart';
 import '../../widgets/glass.dart';
 import 'admin_audit_log_screen.dart';
+import 'channel_members_screen.dart';
 
-/// Owner-side moderation for a channel or group. Two controls:
+/// What changed to a channel/group's lifecycle while the moderation screen was
+/// open, handed back to the channel screen so it can reflect the new state.
+enum ChannelModerationResult { archived, unarchived, deleted }
+
+/// Owner/admin-side moderation for a channel or group, redesigned as an iOS-26
+/// "liquid glass" grouped settings screen.
 ///
-///   1. Broadcast toggle — flips `owner_only_post`. When on, only admins can
-///      post; everyone else gets `OWNER_ONLY_POST` back from the server.
-///   2. Muted members list — admins can silence a specific member with an
-///      optional duration. Muted members get `MUTED` back.
+/// The caller's own permissions are passed in (the channel screen already knows
+/// them) rather than re-derived from the member list — so this screen never
+/// downloads the membership just to render. Member management itself lives in a
+/// dedicated searchable, paginated [ChannelMembersScreen] reached from the
+/// "Members & roles" row, which is what makes muting / banning / promoting a
+/// specific person tractable in a channel with thousands of members. The bounded
+/// surfaces (open reports, currently-muted members) stay inline here.
 ///
-/// All actions hit the same endpoints whether you opened them from a channel
-/// or a group, since the server treats both uniformly.
+/// Channel lifecycle — archive / unarchive / delete — also lives here now,
+/// reached from the shield rather than a separate menu.
 class ModerationScreen extends StatefulWidget {
   final Conversation conversation;
-  const ModerationScreen({super.key, required this.conversation});
+  final bool canManageModeration;
+  final bool canManageRoles;
+  final bool canManageSettings;
+
+  /// Owner / system admin: may archive, unarchive, and delete the channel.
+  final bool canManageLifecycle;
+  final bool isArchived;
+
+  const ModerationScreen({
+    super.key,
+    required this.conversation,
+    required this.canManageModeration,
+    required this.canManageRoles,
+    required this.canManageSettings,
+    this.canManageLifecycle = false,
+    this.isArchived = false,
+  });
 
   @override
   State<ModerationScreen> createState() => _ModerationScreenState();
@@ -32,78 +56,73 @@ class _ModerationScreenState extends State<ModerationScreen> {
   late bool _blockLinks;
   late bool _blockMedia;
   late int _mentionLimit;
+  late bool _archived;
+
   List<Map<String, dynamic>> _mutes = [];
   List<ModerationReport> _reports = [];
-  List<ConversationMember> _members = [];
-  bool _canManageModeration = false;
-  bool _canManageRoles = false;
-  bool _canManageSettings = false;
+  int _memberCount = 0;
   bool _loading = true;
   bool _savingAntiSpam = false;
+
+  /// The lifecycle change to report back to the channel screen on pop.
+  ChannelModerationResult? _pendingResult;
+
+  Conversation get _conv => widget.conversation;
+  bool get _canMod => widget.canManageModeration;
+  bool get _canRoles => widget.canManageRoles;
+  bool get _canManageMembers => _canMod || (_canRoles && _conv.isChannel);
 
   @override
   void initState() {
     super.initState();
-    _ownerOnly = widget.conversation.ownerOnlyPost;
-    _ringAll = widget.conversation.ringAllOnCallStart;
-    _newMemberCooldownSeconds = widget.conversation.newMemberCooldownSeconds;
-    _blockLinks = widget.conversation.antiSpamBlockLinks;
-    _blockMedia = widget.conversation.antiSpamBlockMedia;
-    _mentionLimit = widget.conversation.antiSpamMentionLimit;
+    _ownerOnly = _conv.ownerOnlyPost;
+    _ringAll = _conv.ringAllOnCallStart;
+    _newMemberCooldownSeconds = _conv.newMemberCooldownSeconds;
+    _blockLinks = _conv.antiSpamBlockLinks;
+    _blockMedia = _conv.antiSpamBlockMedia;
+    _mentionLimit = _conv.antiSpamMentionLimit;
+    _archived = widget.isArchived;
     _load();
   }
 
   Future<void> _load() async {
     final api = context.read<ApiService>();
-    final currentUserId = context.read<AuthProvider>().currentUser?.id;
     try {
-      final members = await api.getConversationMembers(widget.conversation.id);
-      final me = members.where((m) => m.userId == currentUserId).firstOrNull;
-      final canManageModeration =
-          me?.hasPermission(AdminPermission.manageModeration) ?? false;
-      final canManageRoles =
-          me?.hasPermission(AdminPermission.manageRoles) ?? false;
-      final canManageSettings =
-          me?.hasPermission(AdminPermission.manageSettings) ?? false;
-      final mutes = canManageModeration
-          ? await api.listMutes(widget.conversation.id)
-          : <dynamic>[];
-      final reports = canManageModeration
-          ? await api.listModerationReports(
-              widget.conversation.id,
-              channel: widget.conversation.isChannel,
-            )
+      final mutes = _canMod ? await api.listMutes(_conv.id) : <dynamic>[];
+      final reports = _canMod
+          ? await api.listModerationReports(_conv.id, channel: _conv.isChannel)
           : <ModerationReport>[];
+      // One cheap count instead of pulling the whole membership.
+      var memberCount = _memberCount;
+      if (_canManageMembers) {
+        final page = await api.searchConversationMembers(_conv.id, limit: 1);
+        memberCount = page.total;
+      }
       if (!mounted) return;
       setState(() {
         _mutes = mutes.cast<Map<String, dynamic>>();
         _reports = reports;
-        _members = members;
-        _canManageModeration = canManageModeration;
-        _canManageRoles = canManageRoles;
-        _canManageSettings = canManageSettings;
+        _memberCount = memberCount;
         _loading = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to load: $e')));
+      showAppToast(context, 'Failed to load: $e', isError: true);
     }
   }
+
+  // ---- Toggles & anti-spam --------------------------------------------------
 
   Future<void> _toggleOwnerOnly(bool value) async {
     final api = context.read<ApiService>();
     setState(() => _ownerOnly = value);
     try {
-      await api.setOwnerOnlyPost(widget.conversation.id, value);
+      await api.setOwnerOnlyPost(_conv.id, value);
     } catch (e) {
       if (!mounted) return;
       setState(() => _ownerOnly = !value);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed: $e')));
+      showAppToast(context, 'Failed: $e', isError: true);
     }
   }
 
@@ -111,13 +130,11 @@ class _ModerationScreenState extends State<ModerationScreen> {
     final api = context.read<ApiService>();
     setState(() => _ringAll = value);
     try {
-      await api.setRingAllOnCall(widget.conversation.id, value);
+      await api.setRingAllOnCall(_conv.id, value);
     } catch (e) {
       if (!mounted) return;
       setState(() => _ringAll = !value);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed: $e')));
+      showAppToast(context, 'Failed: $e', isError: true);
     }
   }
 
@@ -183,8 +200,8 @@ class _ModerationScreenState extends State<ModerationScreen> {
     });
     try {
       await context.read<ApiService>().setAntiSpamControls(
-        widget.conversation.id,
-        channel: widget.conversation.isChannel,
+        _conv.id,
+        channel: _conv.isChannel,
         newMemberCooldownSeconds: _newMemberCooldownSeconds,
         blockLinks: _blockLinks,
         blockMedia: _blockMedia,
@@ -198,34 +215,29 @@ class _ModerationScreenState extends State<ModerationScreen> {
         _blockMedia = previousBlockMedia;
         _mentionLimit = previousMentionLimit;
       });
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed: $e')));
+      showAppToast(context, 'Failed: $e', isError: true);
     } finally {
-      if (mounted) {
-        setState(() => _savingAntiSpam = false);
-      }
+      if (mounted) setState(() => _savingAntiSpam = false);
     }
   }
+
+  // ---- Reports & mutes ------------------------------------------------------
 
   Future<void> _showReportActions(ModerationReport report) async {
     await showGlassActionSheet<void>(
       context: context,
+      title: _reportTitle(report),
       actions: [
         GlassActionSheetAction(
           icon: const Icon(Icons.check_circle_outline),
           label: 'Resolve',
-          onPressed: () {
-            _resolveReport(report, 'resolved');
-          },
+          onPressed: () => _resolveReport(report, 'resolved'),
         ),
         GlassActionSheetAction(
           icon: const Icon(Icons.cancel_outlined),
           label: 'Dismiss',
           style: GlassActionSheetStyle.destructive,
-          onPressed: () {
-            _resolveReport(report, 'dismissed');
-          },
+          onPressed: () => _resolveReport(report, 'dismissed'),
         ),
       ],
     );
@@ -234,114 +246,67 @@ class _ModerationScreenState extends State<ModerationScreen> {
   Future<void> _resolveReport(ModerationReport report, String status) async {
     try {
       await context.read<ApiService>().resolveModerationReport(
-        widget.conversation.id,
+        _conv.id,
         report.id,
-        channel: widget.conversation.isChannel,
+        channel: _conv.isChannel,
         status: status,
       );
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed: $e')));
-    }
-  }
-
-  Future<void> _muteMember(ConversationMember m) async {
-    final api = context.read<ApiService>();
-    final dur = await showDialog<int?>(
-      context: context,
-      builder: (ctx) => GlassSimpleDialog(
-        title: Text('Mute @${m.user?.username ?? "user"}?'),
-        children: [
-          for (final opt in const [
-            (0, 'Indefinitely'),
-            (60, '1 hour'),
-            (60 * 24, '1 day'),
-            (60 * 24 * 7, '1 week'),
-          ])
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(ctx, opt.$1),
-              child: Text(opt.$2),
-            ),
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(ctx, null),
-            child: const Text('Cancel'),
-          ),
-        ],
-      ),
-    );
-    if (dur == null) return;
-    try {
-      await api.muteUser(
-        convID: widget.conversation.id,
-        userID: m.userId,
-        durationMinutes: dur,
-      );
-      await _load();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to mute: $e')));
+      showAppToast(context, 'Failed: $e', isError: true);
     }
   }
 
   Future<void> _unmute(String userID) async {
-    final api = context.read<ApiService>();
     try {
-      await api.unmuteUser(convID: widget.conversation.id, userID: userID);
+      await context.read<ApiService>().unmuteUser(
+        convID: _conv.id,
+        userID: userID,
+      );
       await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to unmute: $e')));
+      showAppToast(context, 'Failed to unmute: $e', isError: true);
     }
   }
 
-  Future<void> _editPermissions(ConversationMember m) async {
-    final api = context.read<ApiService>();
-    final messenger = ScaffoldMessenger.of(context);
-    final username = m.user?.username ?? m.userId;
-    await showAdminPermissionsSheet(
-      context: context,
-      member: m,
-      onSave: (role, permissions) async {
-        await api.setChannelMemberRole(
-          widget.conversation.id,
-          m.userId,
-          role.apiValue,
-          adminPermissions: permissions,
-        );
-        await _load();
-        if (!mounted) return;
-        messenger.showSnackBar(
-          SnackBar(content: Text('@$username permissions updated')),
-        );
-      },
+  Future<void> _openMembers() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ChannelMembersScreen(
+          conversation: _conv,
+          canManageRoles: _canRoles,
+          canManageModeration: _canMod,
+          initiallyMutedUserIds: _mutes
+              .map((m) => m['user_id'] as String)
+              .toSet(),
+        ),
+      ),
     );
+    // Mutes / roles / member count may have changed in there.
+    if (mounted) await _load();
   }
 
   Future<void> _showAuditHistory() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => AdminAuditLogScreen(conversation: widget.conversation),
+        builder: (_) => AdminAuditLogScreen(conversation: _conv),
       ),
     );
   }
 
-  Future<void> _ban(ConversationMember m) async {
+  // ---- Lifecycle (archive / unarchive / delete) -----------------------------
+
+  Future<void> _archive() async {
     final api = context.read<ApiService>();
-    final messenger = ScaffoldMessenger.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => GlassAlertDialog(
-        title: Text('Ban @${m.user?.username ?? "user"}?'),
-        content: const Text(
-          'They will be removed from the channel and blocked from rejoining '
-          'until you unban them.',
+        title: const Text('Archive channel?'),
+        content: Text(
+          'Archive ${_conv.name ?? 'this channel'}? Subscribers will no longer '
+          'be able to post or receive new messages until you unarchive it.',
         ),
         actions: [
           TextButton(
@@ -349,358 +314,494 @@ class _ModerationScreenState extends State<ModerationScreen> {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: Colors.orange),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Ban'),
+            child: const Text('Archive'),
           ),
         ],
       ),
     );
     if (confirmed != true) return;
     try {
-      await api.banChannelUser(widget.conversation.id, m.userId);
-      await _load();
+      await api.archiveChannel(_conv.id);
+      if (!mounted) return;
+      setState(() {
+        _archived = true;
+        _pendingResult = ChannelModerationResult.archived;
+      });
+      showAppToast(context, 'Channel archived');
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Failed to ban: $e')));
+      if (mounted) {
+        showAppToast(context, 'Failed to archive: $e', isError: true);
+      }
     }
   }
 
-  String _roleLabel(MemberRole role) => switch (role) {
-    MemberRole.admin => 'Admin',
-    MemberRole.moderator => 'Moderator',
-    MemberRole.member => 'Member',
-  };
+  Future<void> _unarchive() async {
+    final api = context.read<ApiService>();
+    try {
+      await api.unarchiveChannel(_conv.id);
+      if (!mounted) return;
+      setState(() {
+        _archived = false;
+        _pendingResult = ChannelModerationResult.unarchived;
+      });
+      showAppToast(context, 'Channel unarchived');
+    } catch (e) {
+      if (mounted) {
+        showAppToast(context, 'Failed to unarchive: $e', isError: true);
+      }
+    }
+  }
+
+  Future<void> _delete() async {
+    final api = context.read<ApiService>();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => GlassAlertDialog(
+        title: const Text('Delete channel?'),
+        content: Text(
+          'Permanently delete ${_conv.name ?? 'this channel'} and all its posts '
+          'for everyone. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await api.deleteConversation(_conv.id);
+      if (!mounted) return;
+      Navigator.pop(context, ChannelModerationResult.deleted);
+    } catch (e) {
+      if (mounted) showAppToast(context, 'Failed to delete: $e', isError: true);
+    }
+  }
+
+  // ---- Build ----------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
-    final mutedIDs = _mutes.map((m) => m['user_id'] as String).toSet();
-    final mutableMembers = _canManageModeration
-        ? _members
-              .where((m) => !m.isAdmin && !mutedIDs.contains(m.userId))
-              .toList()
-        : <ConversationMember>[];
-    final currentUserId = context.read<AuthProvider>().currentUser?.id;
-    // Role/ban management applies to channels only (the endpoints are channel-
-    // scoped); exclude yourself from the actionable list.
-    final manageableMembers =
-        widget.conversation.isChannel &&
-            (_canManageRoles || _canManageModeration)
-        ? _members.where((m) => m.userId != currentUserId).toList()
-        : <ConversationMember>[];
+    final scheme = Theme.of(context).colorScheme;
+    return PopScope<ChannelModerationResult>(
+      // We intercept the pop so the lifecycle change (if any) rides back to the
+      // channel screen on either the app-bar button or a system/swipe back.
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        Navigator.pop(context, _pendingResult);
+      },
+      child: Scaffold(
+        extendBodyBehindAppBar: true,
+        appBar: GlassAppBar(
+          title: const Text('Moderation'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_rounded),
+            onPressed: () => Navigator.pop(context, _pendingResult),
+          ),
+        ),
+        body: _loading
+            ? const Center(child: GlassProgressIndicator.circular())
+            : ListView(
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
+                  16,
+                  MediaQuery.paddingOf(context).bottom + 32,
+                ),
+                children: [
+                  _ModHero(
+                    conversation: _conv,
+                    memberCount: _memberCount,
+                    showMemberCount: _canManageMembers,
+                    archived: _archived,
+                  ),
+                  if (_archived) ...[
+                    const SizedBox(height: 14),
+                    _ArchivedBanner(),
+                  ],
 
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: const GlassAppBar(title: Text('Moderation')),
-      body: _loading
-          ? const Center(child: GlassProgressIndicator.circular())
-          : ListView(
-              padding: EdgeInsets.fromLTRB(
-                0,
-                MediaQuery.paddingOf(context).top + kToolbarHeight,
-                0,
-                MediaQuery.paddingOf(context).bottom + 16,
-              ),
-              children: [
-                if (_canManageModeration || _canManageRoles)
-                  GlassListTile(
-                    leading: const Icon(Icons.history_rounded),
-                    title: const Text('Audit log'),
-                    trailing: const Icon(Icons.chevron_right_rounded),
-                    onTap: _showAuditHistory,
-                  ),
-                if (_canManageModeration)
-                  GlassListTile(
-                    leading: const Icon(Icons.campaign_outlined),
-                    title: const Text(
-                      'Admins-only posting',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    subtitle: const Text(
-                      'When on, regular members can\'t send messages.',
-                    ),
-                    trailing: GlassSwitch(
-                      value: _ownerOnly,
-                      onChanged: _toggleOwnerOnly,
-                      activeColor: Theme.of(context).colorScheme.primary,
-                      enableHaptics: true,
-                    ),
-                    onTap: () => _toggleOwnerOnly(!_ownerOnly),
-                  ),
-                if (_canManageSettings && widget.conversation.isGroup)
-                  GlassListTile(
-                    leading: const Icon(Icons.notifications_active_outlined),
-                    title: const Text(
-                      'Ring everyone on call start',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    subtitle: const Text(
-                      'Starting a group call rings every member like an '
-                      'incoming call, not just a banner.',
-                    ),
-                    trailing: GlassSwitch(
-                      value: _ringAll,
-                      onChanged: _toggleRingAll,
-                      activeColor: Theme.of(context).colorScheme.primary,
-                      enableHaptics: true,
-                    ),
-                    onTap: () => _toggleRingAll(!_ringAll),
-                  ),
-                if (_canManageModeration) ...[
-                  const Divider(),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                    child: Text(
-                      'Anti-spam controls',
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                  ),
-                  GlassListTile(
-                    leading: const Icon(Icons.hourglass_bottom_rounded),
-                    title: const Text('New-user cooldown'),
-                    trailing: GlassPicker(
-                      value: _optionLabel(
-                        _cooldownOptions,
-                        _newMemberCooldownSeconds,
-                      ),
-                      width: 112,
-                      height: 38,
-                      textStyle: TextStyle(
-                        fontSize: 15,
-                        color: Theme.of(context).colorScheme.onSurface,
-                      ),
-                      onTap: _savingAntiSpam
-                          ? null
-                          : () => _pickAntiSpamOption(
-                              title: 'New-user cooldown',
-                              options: _cooldownOptions,
-                              onSelected: (value) => _saveAntiSpamControls(
-                                newMemberCooldownSeconds: value,
-                              ),
-                            ),
-                    ),
-                  ),
-                  GlassListTile(
-                    leading: const Icon(Icons.perm_media_outlined),
-                    title: const Text(
-                      'Block media',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    trailing: GlassSwitch(
-                      value: _blockMedia,
-                      onChanged: (value) {
-                        if (!_savingAntiSpam) {
-                          _saveAntiSpamControls(blockMedia: value);
-                        }
-                      },
-                      activeColor: Theme.of(context).colorScheme.primary,
-                      enableHaptics: true,
-                    ),
-                    onTap: _savingAntiSpam
-                        ? null
-                        : () => _saveAntiSpamControls(blockMedia: !_blockMedia),
-                  ),
-                  GlassListTile(
-                    leading: const Icon(Icons.link_off_rounded),
-                    title: const Text(
-                      'Block links',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    trailing: GlassSwitch(
-                      value: _blockLinks,
-                      onChanged: (value) {
-                        if (!_savingAntiSpam) {
-                          _saveAntiSpamControls(blockLinks: value);
-                        }
-                      },
-                      activeColor: Theme.of(context).colorScheme.primary,
-                      enableHaptics: true,
-                    ),
-                    onTap: _savingAntiSpam
-                        ? null
-                        : () => _saveAntiSpamControls(blockLinks: !_blockLinks),
-                  ),
-                  GlassListTile(
-                    leading: const Icon(Icons.alternate_email_rounded),
-                    title: const Text('Mention limit'),
-                    trailing: GlassPicker(
-                      value: _optionLabel(_mentionLimitOptions, _mentionLimit),
-                      width: 92,
-                      height: 38,
-                      textStyle: TextStyle(
-                        fontSize: 15,
-                        color: Theme.of(context).colorScheme.onSurface,
-                      ),
-                      onTap: _savingAntiSpam
-                          ? null
-                          : () => _pickAntiSpamOption(
-                              title: 'Mention limit',
-                              options: _mentionLimitOptions,
-                              onSelected: (value) =>
-                                  _saveAntiSpamControls(mentionLimit: value),
-                            ),
-                    ),
-                  ),
-                  const Divider(),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                    child: Text(
-                      'Reports (${_reports.length})',
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                  ),
-                  if (_reports.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
-                      child: Text(
-                        'No open reports.',
-                        style: TextStyle(color: Colors.grey),
-                      ),
-                    ),
-                  for (final report in _reports)
-                    GlassListTile(
-                      leading: const Icon(Icons.report_problem_outlined),
-                      title: Text(_reportTitle(report)),
-                      subtitle: Text(_reportSubtitle(report)),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.more_vert),
-                        onPressed: () => _showReportActions(report),
-                      ),
-                    ),
-                  const Divider(),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                    child: Text(
-                      'Muted members (${_mutes.length})',
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                  ),
-                  if (_mutes.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
-                      child: Text(
-                        'No one is muted.',
-                        style: TextStyle(color: Colors.grey),
-                      ),
-                    ),
-                  for (final mute in _mutes)
-                    GlassListTile(
-                      leading: const Icon(Icons.volume_off_outlined),
-                      title: Text(_displayNameFor(mute['user_id'] as String)),
-                      subtitle: Text(_muteSubtitle(mute)),
-                      trailing: TextButton(
-                        onPressed: () => _unmute(mute['user_id'] as String),
-                        child: const Text('Unmute'),
-                      ),
-                    ),
-                  const Divider(),
-                  if (mutableMembers.isNotEmpty) ...[
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                      child: Text(
-                        'Mute a member',
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                    ),
-                    for (final m in mutableMembers)
+                  // People ------------------------------------------------
+                  if (_canManageMembers) ...[
+                    const SizedBox(height: 20),
+                    _SectionHeader(_conv.isChannel ? 'People' : 'Members'),
+                    _Card([
                       GlassListTile(
-                        leading: const Icon(Icons.person_outline),
-                        title: Text('@${m.user?.username ?? "user"}'),
-                        trailing: const Icon(Icons.volume_off),
-                        onTap: () => _muteMember(m),
+                        showDivider: false,
+                        leading: _LeadingIcon(
+                          Icons.groups_rounded,
+                          color: scheme.primary,
+                        ),
+                        title: Text(
+                          _canRoles && _conv.isChannel
+                              ? 'Members & roles'
+                              : 'Members',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        subtitle: Text(_membersSubtitle()),
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        onTap: _openMembers,
                       ),
+                    ]),
+                  ],
+
+                  // Posting -----------------------------------------------
+                  if (_canMod ||
+                      (widget.canManageSettings && _conv.isGroup)) ...[
+                    const SizedBox(height: 20),
+                    _SectionHeader('Posting'),
+                    _Card([
+                      if (_canMod)
+                        GlassListTile(
+                          showDivider:
+                              widget.canManageSettings && _conv.isGroup,
+                          leading: _LeadingIcon(
+                            Icons.campaign_outlined,
+                            color: scheme.primary,
+                          ),
+                          title: const Text(
+                            'Admins-only posting',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          subtitle: const Text(
+                            'When on, regular members can\'t send messages.',
+                          ),
+                          trailing: GlassSwitch(
+                            value: _ownerOnly,
+                            onChanged: _toggleOwnerOnly,
+                            activeColor: scheme.primary,
+                            enableHaptics: true,
+                          ),
+                          onTap: () => _toggleOwnerOnly(!_ownerOnly),
+                        ),
+                      if (widget.canManageSettings && _conv.isGroup)
+                        GlassListTile(
+                          showDivider: false,
+                          leading: _LeadingIcon(
+                            Icons.notifications_active_outlined,
+                            color: scheme.primary,
+                          ),
+                          title: const Text(
+                            'Ring everyone on call start',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          subtitle: const Text(
+                            'Starting a group call rings every member like an '
+                            'incoming call, not just a banner.',
+                          ),
+                          trailing: GlassSwitch(
+                            value: _ringAll,
+                            onChanged: _toggleRingAll,
+                            activeColor: scheme.primary,
+                            enableHaptics: true,
+                          ),
+                          onTap: () => _toggleRingAll(!_ringAll),
+                        ),
+                    ]),
+                  ],
+
+                  // Anti-spam ---------------------------------------------
+                  if (_canMod) ...[
+                    const SizedBox(height: 20),
+                    _SectionHeader('Anti-spam'),
+                    _Card([
+                      GlassListTile(
+                        leading: _LeadingIcon(
+                          Icons.hourglass_bottom_rounded,
+                          color: scheme.primary,
+                        ),
+                        title: const Text('New-member cooldown'),
+                        subtitle: const Text(
+                          'How long new members must wait before posting.',
+                        ),
+                        trailing: GlassPicker(
+                          value: _optionLabel(
+                            _cooldownOptions,
+                            _newMemberCooldownSeconds,
+                          ),
+                          width: 112,
+                          height: 38,
+                          textStyle: TextStyle(
+                            fontSize: 15,
+                            color: scheme.onSurface,
+                          ),
+                          onTap: _savingAntiSpam
+                              ? null
+                              : () => _pickAntiSpamOption(
+                                  title: 'New-member cooldown',
+                                  options: _cooldownOptions,
+                                  onSelected: (v) => _saveAntiSpamControls(
+                                    newMemberCooldownSeconds: v,
+                                  ),
+                                ),
+                        ),
+                      ),
+                      GlassListTile(
+                        leading: _LeadingIcon(
+                          Icons.perm_media_outlined,
+                          color: scheme.primary,
+                        ),
+                        title: const Text(
+                          'Block media',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        trailing: GlassSwitch(
+                          value: _blockMedia,
+                          onChanged: (v) {
+                            if (!_savingAntiSpam) {
+                              _saveAntiSpamControls(blockMedia: v);
+                            }
+                          },
+                          activeColor: scheme.primary,
+                          enableHaptics: true,
+                        ),
+                        onTap: _savingAntiSpam
+                            ? null
+                            : () => _saveAntiSpamControls(
+                                blockMedia: !_blockMedia,
+                              ),
+                      ),
+                      GlassListTile(
+                        leading: _LeadingIcon(
+                          Icons.link_off_rounded,
+                          color: scheme.primary,
+                        ),
+                        title: const Text(
+                          'Block links',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        trailing: GlassSwitch(
+                          value: _blockLinks,
+                          onChanged: (v) {
+                            if (!_savingAntiSpam) {
+                              _saveAntiSpamControls(blockLinks: v);
+                            }
+                          },
+                          activeColor: scheme.primary,
+                          enableHaptics: true,
+                        ),
+                        onTap: _savingAntiSpam
+                            ? null
+                            : () => _saveAntiSpamControls(
+                                blockLinks: !_blockLinks,
+                              ),
+                      ),
+                      GlassListTile(
+                        showDivider: false,
+                        leading: _LeadingIcon(
+                          Icons.alternate_email_rounded,
+                          color: scheme.primary,
+                        ),
+                        title: const Text('Mention limit'),
+                        subtitle: const Text(
+                          'Max @mentions allowed in a single message.',
+                        ),
+                        trailing: GlassPicker(
+                          value: _optionLabel(
+                            _mentionLimitOptions,
+                            _mentionLimit,
+                          ),
+                          width: 92,
+                          height: 38,
+                          textStyle: TextStyle(
+                            fontSize: 15,
+                            color: scheme.onSurface,
+                          ),
+                          onTap: _savingAntiSpam
+                              ? null
+                              : () => _pickAntiSpamOption(
+                                  title: 'Mention limit',
+                                  options: _mentionLimitOptions,
+                                  onSelected: (v) =>
+                                      _saveAntiSpamControls(mentionLimit: v),
+                                ),
+                        ),
+                      ),
+                    ]),
+                  ],
+
+                  // Reports -----------------------------------------------
+                  if (_canMod) ...[
+                    const SizedBox(height: 20),
+                    _SectionHeader('Reports (${_reports.length})'),
+                    _Card([
+                      if (_reports.isEmpty)
+                        const _EmptyRow(
+                          icon: Icons.verified_outlined,
+                          text: 'No open reports',
+                        )
+                      else
+                        for (var i = 0; i < _reports.length; i++)
+                          GlassListTile(
+                            showDivider: i != _reports.length - 1,
+                            leading: _LeadingIcon(
+                              Icons.report_problem_outlined,
+                              color: scheme.error,
+                            ),
+                            title: Text(_reportTitle(_reports[i])),
+                            subtitle: Text(_reportSubtitle(_reports[i])),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.more_horiz_rounded),
+                              onPressed: () => _showReportActions(_reports[i]),
+                            ),
+                            onTap: () => _showReportActions(_reports[i]),
+                          ),
+                    ]),
+                  ],
+
+                  // Muted -------------------------------------------------
+                  if (_canMod) ...[
+                    const SizedBox(height: 20),
+                    _SectionHeader('Muted members (${_mutes.length})'),
+                    _Card([
+                      if (_mutes.isEmpty)
+                        const _EmptyRow(
+                          icon: Icons.volume_up_outlined,
+                          text: 'No one is muted',
+                        )
+                      else
+                        for (var i = 0; i < _mutes.length; i++)
+                          GlassListTile(
+                            showDivider: i != _mutes.length - 1,
+                            leading: _LeadingIcon(
+                              Icons.volume_off_rounded,
+                              color: scheme.error,
+                            ),
+                            title: Text(_muteName(_mutes[i])),
+                            subtitle: Text(_muteSubtitle(_mutes[i])),
+                            trailing: TextButton(
+                              onPressed: () =>
+                                  _unmute(_mutes[i]['user_id'] as String),
+                              child: const Text('Unmute'),
+                            ),
+                          ),
+                    ]),
+                  ],
+
+                  // Audit log ---------------------------------------------
+                  if (_canMod || _canRoles) ...[
+                    const SizedBox(height: 20),
+                    _SectionHeader('Records'),
+                    _Card([
+                      GlassListTile(
+                        showDivider: false,
+                        leading: _LeadingIcon(
+                          Icons.history_rounded,
+                          color: scheme.primary,
+                        ),
+                        title: const Text('Audit log'),
+                        subtitle: const Text(
+                          'Every admin action, newest first.',
+                        ),
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        onTap: _showAuditHistory,
+                      ),
+                    ]),
+                  ],
+
+                  // Lifecycle ---------------------------------------------
+                  if (widget.canManageLifecycle) ...[
+                    const SizedBox(height: 20),
+                    _SectionHeader('Channel'),
+                    _Card([
+                      if (!_archived)
+                        GlassListTile(
+                          showDivider: false,
+                          leading: _LeadingIcon(
+                            Icons.archive_outlined,
+                            color: Colors.orange,
+                          ),
+                          title: const Text(
+                            'Archive channel',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          subtitle: const Text('Make read-only for everyone.'),
+                          trailing: const Icon(Icons.chevron_right_rounded),
+                          onTap: _archive,
+                        )
+                      else ...[
+                        GlassListTile(
+                          leading: _LeadingIcon(
+                            Icons.unarchive_outlined,
+                            color: scheme.primary,
+                          ),
+                          title: const Text(
+                            'Unarchive channel',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          subtitle: const Text('Let members post again.'),
+                          trailing: const Icon(Icons.chevron_right_rounded),
+                          onTap: _unarchive,
+                        ),
+                        GlassListTile(
+                          showDivider: false,
+                          leading: _LeadingIcon(
+                            Icons.delete_outline_rounded,
+                            color: scheme.error,
+                          ),
+                          title: Text(
+                            'Delete channel',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: scheme.error,
+                            ),
+                          ),
+                          subtitle: const Text('Permanent — cannot be undone.'),
+                          trailing: Icon(
+                            Icons.chevron_right_rounded,
+                            color: scheme.error,
+                          ),
+                          onTap: _delete,
+                        ),
+                      ],
+                    ]),
                   ],
                 ],
-                if (manageableMembers.isNotEmpty) ...[
-                  const Divider(),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                    child: Text(
-                      'Members & roles',
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                  ),
-                  for (final m in manageableMembers)
-                    GlassListTile(
-                      leading: const Icon(Icons.person_outline),
-                      title: Text('@${m.user?.username ?? "user"}'),
-                      subtitle: Text(_roleLabel(m.role)),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.more_vert),
-                        onPressed: () => _showMemberMenu(context, m),
-                      ),
-                    ),
-                ],
-              ],
-            ),
-    );
-  }
-
-  void _showMemberMenu(BuildContext context, ConversationMember m) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => GlassBottomSheetFrame(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            if (_canManageRoles)
-              _ModTile(
-                icon: Icons.admin_panel_settings_outlined,
-                label: 'Permissions',
-                onTap: () {
-                  Navigator.pop(context);
-                  _editPermissions(m);
-                },
               ),
-            if (_canManageModeration)
-              _ModTile(
-                icon: Icons.block_rounded,
-                label: 'Ban',
-                color: Colors.red,
-                onTap: () {
-                  Navigator.pop(context);
-                  _ban(m);
-                },
-              ),
-            const SizedBox(height: 8),
-          ],
-        ),
       ),
     );
   }
 
-  String _displayNameFor(String userID) {
-    final m = _members.firstWhere(
-      (m) => m.userId == userID,
-      orElse: () => ConversationMember(
-        conversationId: widget.conversation.id,
-        userId: userID,
-        role: MemberRole.member,
-        joinedAt: DateTime.now(),
-      ),
-    );
-    return '@${m.user?.username ?? userID.substring(0, 8)}';
+  String _membersSubtitle() {
+    final count = _memberCount == 1 ? '1 member' : '$_memberCount members';
+    if (_canRoles && _conv.isChannel) {
+      return '$count · search to mute, ban or set roles';
+    }
+    return '$count · search to mute or remove';
+  }
+
+  // ---- Formatting helpers ---------------------------------------------------
+
+  String _muteName(Map<String, dynamic> mute) {
+    final username = mute['username'] as String?;
+    if (username != null && username.isNotEmpty) return '@$username';
+    final display = mute['display_name'] as String?;
+    if (display != null && display.isNotEmpty) return display;
+    final id = mute['user_id'] as String? ?? '';
+    return id.length >= 8 ? id.substring(0, 8) : id;
   }
 
   String _muteSubtitle(Map<String, dynamic> mute) {
     final until = mute['muted_until'] as String?;
     final reason = mute['reason'] as String?;
-    final parts = <String>[];
-    parts.add(
+    final parts = <String>[
       until == null
-          ? 'Indefinitely'
+          ? 'Muted indefinitely'
           : 'Until ${DateTime.parse(until).toLocal().toString().split(".").first}',
-    );
-    if (reason != null && reason.isNotEmpty) parts.add('· $reason');
-    return parts.join(' ');
+    ];
+    if (reason != null && reason.isNotEmpty) parts.add(reason);
+    return parts.join(' · ');
   }
 
   String _reportTitle(ModerationReport report) {
@@ -716,9 +817,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
       reporter == null || reporter.isEmpty ? 'Report' : 'By @$reporter',
       _formatLocal(report.createdAt),
     ];
-    if (report.reason.trim().isNotEmpty) {
-      parts.add(report.reason.trim());
-    }
+    if (report.reason.trim().isNotEmpty) parts.add(report.reason.trim());
     return parts.join(' · ');
   }
 
@@ -726,42 +825,179 @@ class _ModerationScreenState extends State<ModerationScreen> {
       value.toLocal().toString().split('.').first;
 }
 
-class _ModTile extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  final Color? color;
+// ── Presentational pieces ────────────────────────────────────────────────────
 
-  const _ModTile({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    this.color,
+class _ModHero extends StatelessWidget {
+  final Conversation conversation;
+  final int memberCount;
+  final bool showMemberCount;
+  final bool archived;
+
+  const _ModHero({
+    required this.conversation,
+    required this.memberCount,
+    required this.showMemberCount,
+    required this.archived,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final tint = color ?? scheme.primary;
-    return GlassListTile(
-      leading: Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: tint.withValues(alpha: 0.12),
-        ),
-        child: Icon(icon, size: 18, color: tint),
+    final subtitleParts = <String>[
+      conversation.isChannel ? 'Channel' : 'Group',
+      if (showMemberCount)
+        memberCount == 1 ? '1 member' : '$memberCount members',
+      if (archived) 'Archived',
+    ];
+    return GlassCard(
+      child: Row(
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: scheme.primary.withValues(alpha: 0.14),
+              border: Border.all(
+                color: scheme.primary.withValues(alpha: 0.20),
+                width: 0.5,
+              ),
+            ),
+            child: Icon(Icons.shield_rounded, color: scheme.primary),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  conversation.name ?? 'Moderation',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 18,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitleParts.join(' · '),
+                  style: TextStyle(
+                    color: scheme.onSurface.withValues(alpha: 0.6),
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
-      title: Text(
-        label,
+    );
+  }
+}
+
+class _ArchivedBanner extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.orange.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: Colors.orange.withValues(alpha: 0.30),
+          width: 0.5,
+        ),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.archive_rounded, color: Colors.orange, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'This channel is archived and read-only. Unarchive it below to let '
+              'members post again.',
+              style: TextStyle(
+                color: scheme.onSurface.withValues(alpha: 0.8),
+                fontSize: 13,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  const _SectionHeader(this.title);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+      child: Text(
+        title.toUpperCase(),
         style: TextStyle(
-          fontWeight: FontWeight.w600,
-          fontSize: 15,
-          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 1.2,
+          color: Theme.of(context).colorScheme.primary,
         ),
       ),
-      onTap: onTap,
+    );
+  }
+}
+
+class _Card extends StatelessWidget {
+  final List<Widget> children;
+  const _Card(this.children);
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      padding: EdgeInsets.zero,
+      child: Column(children: children),
+    );
+  }
+}
+
+class _LeadingIcon extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  const _LeadingIcon(this.icon, {required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 34,
+      height: 34,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: color.withValues(alpha: 0.13),
+        border: Border.all(color: color.withValues(alpha: 0.10), width: 0.5),
+      ),
+      child: Icon(icon, size: 19, color: color),
+    );
+  }
+}
+
+class _EmptyRow extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _EmptyRow({required this.icon, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = Theme.of(
+      context,
+    ).colorScheme.onSurface.withValues(alpha: 0.5);
+    return GlassListTile(
+      showDivider: false,
+      leading: _LeadingIcon(icon, color: muted),
+      title: Text(text, style: TextStyle(color: muted)),
     );
   }
 }

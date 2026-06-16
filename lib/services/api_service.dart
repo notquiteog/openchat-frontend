@@ -563,6 +563,33 @@ class ApiService {
     await _post('/api/v1/conversations/$convID/members', {'user_id': userID});
   }
 
+  /// Searchable, paginated member roster for the moderation tools. Unlike
+  /// [getConversationMembers] (which downloads the whole membership for mention
+  /// suggestions on small chats), this pages through with a search term so the
+  /// moderation UI scales to large channels — a 1000-member channel is browsed
+  /// and searched a page at a time, never loaded all at once. Works for
+  /// channels too (a channel is a conversation). Requires the caller to have
+  /// moderation or role-management permission. Returns the page plus the total
+  /// number of matches so the UI can show progress and know when to stop.
+  Future<({List<ConversationMember> members, int total})>
+  searchConversationMembers(
+    String convID, {
+    String query = '',
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final q = Uri.encodeQueryComponent(query.trim());
+    final resp = await _get(
+      '/api/v1/conversations/$convID/members/search?q=$q&limit=$limit&offset=$offset',
+    );
+    final data = resp['data'] as Map<String, dynamic>;
+    final members = ((data['members'] as List?) ?? const [])
+        .map((e) => ConversationMember.fromJson(e as Map<String, dynamic>))
+        .toList();
+    final total = (data['total'] as num?)?.toInt() ?? members.length;
+    return (members: members, total: total);
+  }
+
   /// Web-of-trust: set a group's join policy ('open' or 'web_of_trust').
   Future<void> setMembershipPolicy(String convID, String policy) async {
     await _put('/api/v1/conversations/$convID/membership-policy', {

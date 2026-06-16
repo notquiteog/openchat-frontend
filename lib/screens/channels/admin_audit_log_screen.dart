@@ -56,9 +56,7 @@ class _AdminAuditLogScreenState extends State<AdminAuditLogScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to load audit log: $e')));
+      showAppToast(context, 'Failed to load audit log: $e', isError: true);
     }
   }
 
@@ -110,21 +108,23 @@ class _AdminAuditLogScreenState extends State<AdminAuditLogScreen> {
                     itemCount: _AuditFilter.values.length,
                   ),
                 ),
-                const Divider(height: 1),
+                const GlassDivider(),
                 Expanded(
                   child: visibleEvents.isEmpty
-                      ? const Center(child: Text('No audit events.'))
+                      ? const _AuditEmptyState()
                       : RefreshIndicator(
                           onRefresh: _load,
-                          child: ListView.separated(
+                          child: ListView.builder(
                             physics: const AlwaysScrollableScrollPhysics(),
+                            padding: EdgeInsets.only(
+                              bottom: MediaQuery.paddingOf(context).bottom + 16,
+                            ),
                             itemCount: visibleEvents.length,
-                            separatorBuilder: (_, _) =>
-                                const Divider(height: 1),
                             itemBuilder: (context, index) {
                               final event = visibleEvents[index];
                               return _AuditLogTile(
                                 event: event,
+                                isLast: index == visibleEvents.length - 1,
                                 onTap: () => _showDetails(event),
                               );
                             },
@@ -146,11 +146,44 @@ class _AdminAuditLogScreenState extends State<AdminAuditLogScreen> {
   }
 }
 
+class _AuditEmptyState extends StatelessWidget {
+  const _AuditEmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = Theme.of(
+      context,
+    ).colorScheme.onSurface.withValues(alpha: 0.4);
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.history_toggle_off_rounded, size: 44, color: muted),
+          const SizedBox(height: 12),
+          Text(
+            'No audit events',
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 16,
+              color: muted,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _AuditLogTile extends StatelessWidget {
   final AdminAuditEvent event;
+  final bool isLast;
   final VoidCallback onTap;
 
-  const _AuditLogTile({required this.event, required this.onTap});
+  const _AuditLogTile({
+    required this.event,
+    required this.onTap,
+    this.isLast = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -158,6 +191,7 @@ class _AuditLogTile extends StatelessWidget {
     final filter = _filterForAction(event.action);
     final tint = _auditColor(scheme, filter);
     return GlassListTile(
+      showDivider: !isLast,
       leading: Container(
         width: 40,
         height: 40,
@@ -199,54 +233,52 @@ class _AuditDetailsSheet extends StatelessWidget {
           constraints: BoxConstraints(
             maxHeight: MediaQuery.sizeOf(context).height * 0.72,
           ),
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    Icon(_auditIcon(event.action), size: 22),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        _auditTitle(event),
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w700),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const GlassSheetGrabber(),
+              GlassSheetHeader(
+                icon: _auditIcon(event.action),
+                title: _auditTitle(event),
+                subtitle: _formatAuditTime(event.createdAt),
+                onClose: () => Navigator.pop(context),
+              ),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _AuditDetailRow(label: 'Actor', value: event.actorLabel),
+                      _AuditDetailRow(
+                        label: 'Target',
+                        value: event.targetLabel,
                       ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close_rounded),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                _AuditDetailRow(label: 'Actor', value: event.actorLabel),
-                _AuditDetailRow(label: 'Target', value: event.targetLabel),
-                _AuditDetailRow(label: 'Action', value: event.action),
-                _AuditDetailRow(
-                  label: 'Time',
-                  value: _formatAuditTime(event.createdAt),
-                ),
-                if (metadataRows.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  Text(
-                    'Metadata',
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
+                      _AuditDetailRow(label: 'Action', value: event.action),
+                      _AuditDetailRow(
+                        label: 'Time',
+                        value: _formatAuditTime(event.createdAt),
+                      ),
+                      if (metadataRows.isNotEmpty) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          'Metadata',
+                          style: Theme.of(context).textTheme.titleSmall
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 6),
+                        for (final entry in metadataRows)
+                          _AuditDetailRow(
+                            label: _titleCase(entry.key.replaceAll('_', ' ')),
+                            value: _formatMetadataValue(entry.value),
+                          ),
+                      ],
+                    ],
                   ),
-                  const SizedBox(height: 6),
-                  for (final entry in metadataRows)
-                    _AuditDetailRow(
-                      label: _titleCase(entry.key.replaceAll('_', ' ')),
-                      value: _formatMetadataValue(entry.value),
-                    ),
-                ],
-              ],
-            ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

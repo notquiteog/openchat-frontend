@@ -1441,97 +1441,6 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     }
   }
 
-  Future<void> _archiveChannel() async {
-    final api = context.read<ApiService>();
-    final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (_) => GlassAlertDialog(
-        title: const Text('Archive Channel?'),
-        content: Text(
-          'Archive ${channel.name ?? 'this channel'}? '
-          'Subscribers will no longer be able to post or receive new messages.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.orange),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Archive'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    try {
-      await api.archiveChannel(channel.id);
-      if (!mounted) return;
-      setState(() => _archived = true);
-      messenger.showSnackBar(const SnackBar(content: Text('Channel archived')));
-      navigator.pop();
-    } catch (e) {
-      if (mounted) {
-        messenger.showSnackBar(
-          SnackBar(content: Text('Failed to archive: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _unarchiveChannel() async {
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      await context.read<ApiService>().unarchiveChannel(channel.id);
-      if (!mounted) return;
-      setState(() => _archived = false);
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Channel unarchived')),
-      );
-    } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('Failed to unarchive: $e')),
-      );
-    }
-  }
-
-  Future<void> _deleteChannel() async {
-    final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
-    final api = context.read<ApiService>();
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => GlassAlertDialog(
-        title: const Text('Delete Channel?'),
-        content: Text(
-          'Permanently delete ${channel.name ?? 'this channel'} and all its '
-          'posts for everyone. This cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    try {
-      await api.deleteConversation(channel.id);
-      navigator.pop();
-    } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
-    }
-  }
-
   void _showChannelInfo() {
     showDialog<void>(
       context: context,
@@ -2018,74 +1927,35 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     );
   }
 
-  Future<void> _showChannelModerationMenu() async {
+  /// The shield button now opens moderation directly (no intermediate menu).
+  /// Channel lifecycle (archive / unarchive / delete) lives inside that screen;
+  /// it hands back a [ChannelModerationResult] so we can reflect the new state.
+  Future<void> _openModeration() async {
     final auth = context.read<AuthProvider>();
     final currentUserId = auth.currentUser?.id ?? '';
     final canManageLifecycle =
         channel.createdBy == currentUserId ||
         (auth.currentUser?.isSystemAdmin ?? false);
-    final placement = ChannelActionPolicy.actionsFor(
-      channel: channel,
-      isAdmin: _isAdmin,
-      isPremium: auth.currentUser?.isPremium ?? false,
-      canManageLifecycle: canManageLifecycle,
-      isSubscribed: _isSubscribed,
-      canOpenModeration: _canManageChannelModeration || _canManageChannelRoles,
-      canManageInfo: _canManageChannelInfo,
-      canManageInvites: _canManageChannelInvites,
-      canManageSettings: _canManageChannelSettings,
-      canManageEncryption: _canManageChannelEncryption,
-      canViewAnalytics: _isAdmin,
-    );
-    final action = await showModalBottomSheet<ChannelModerationAction>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => GlassBottomSheetFrame(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            for (final item in placement.moderationMenu)
-              _ChanTile(
-                icon: switch (item) {
-                  ChannelModerationAction.openModeration =>
-                    Icons.shield_outlined,
-                  ChannelModerationAction.archive => Icons.archive_outlined,
-                  ChannelModerationAction.unarchive => Icons.unarchive_outlined,
-                  ChannelModerationAction.delete => Icons.delete_outline,
-                },
-                label: switch (item) {
-                  ChannelModerationAction.openModeration => 'Moderation',
-                  ChannelModerationAction.archive => 'Archive channel',
-                  ChannelModerationAction.unarchive => 'Unarchive channel',
-                  ChannelModerationAction.delete => 'Delete channel',
-                },
-                color: item == ChannelModerationAction.delete
-                    ? Colors.red
-                    : null,
-                onTap: () => Navigator.pop(context, item),
-              ),
-            const SizedBox(height: 8),
-          ],
+    final result = await Navigator.of(context).push<ChannelModerationResult>(
+      MaterialPageRoute(
+        builder: (_) => ModerationScreen(
+          conversation: channel,
+          canManageModeration: _canManageChannelModeration,
+          canManageRoles: _canManageChannelRoles,
+          canManageSettings: _canManageChannelSettings,
+          canManageLifecycle: canManageLifecycle,
+          isArchived: _archived || channel.isArchived,
         ),
       ),
     );
-    if (!mounted || action == null) return;
-    switch (action) {
-      case ChannelModerationAction.openModeration:
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => ModerationScreen(conversation: channel),
-          ),
-        );
-      case ChannelModerationAction.archive:
-        _archiveChannel();
-      case ChannelModerationAction.unarchive:
-        _unarchiveChannel();
-      case ChannelModerationAction.delete:
-        _deleteChannel();
+    if (!mounted || result == null) return;
+    switch (result) {
+      case ChannelModerationResult.archived:
+        setState(() => _archived = true);
+      case ChannelModerationResult.unarchived:
+        setState(() => _archived = false);
+      case ChannelModerationResult.deleted:
+        Navigator.of(context).pop();
     }
   }
 
@@ -2657,8 +2527,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
       prepared = await _prepareChannelPostPayload(
         plaintextPayload: draft.payload,
         messageType: messageType,
-        frank:
-            channel.isEncrypted && scheduledFor == null && _ws.isMonitoring,
+        frank: channel.isEncrypted && scheduledFor == null && _ws.isMonitoring,
       );
     } catch (e) {
       if (plaintextOverride == null) {
@@ -4455,7 +4324,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
             IconButton(
               icon: const Icon(Icons.shield_outlined),
               tooltip: 'Channel moderation',
-              onPressed: _showChannelModerationMenu,
+              onPressed: _openModeration,
             ),
           if (actionPlacement.topBar.contains(ChannelTopBarAction.settings))
             IconButton(
