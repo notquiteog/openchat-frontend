@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.5.81+135
+version: 0.5.82+136
 publish_to: 'none'
 
 environment:

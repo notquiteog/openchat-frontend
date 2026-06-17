@@ -46,6 +46,16 @@ function(APPLY_STANDARD_SETTINGS TARGET)
   target_compile_definitions(${TARGET} PRIVATE "$<$<NOT:$<CONFIG:Debug>>:NDEBUG>")
 endfunction()
 
+# GCC 16 / recent libstdc++ no longer transitively include <cstdint>, so some
+# third-party native headers — notably flutter_webrtc's bundled libwebrtc
+# headers, which use uint32_t/int32_t without including it — fail to compile
+# ("unknown type name 'uint32_t'"). Force <cstdint> into every C++ translation
+# unit. Set before the Flutter library, runner, and plugins are added below so
+# it applies to all of them. Harmless on older toolchains and on Clang; does
+# not affect C sources. (Linux desktop only — Windows uses MSVC, and Apple /
+# Android link their own precompiled WebRTC.)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -include cstdint")
+
 # Flutter library and tool build rules.
 set(FLUTTER_MANAGED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/flutter")
 add_subdirectory(${FLUTTER_MANAGED_DIR})

@@ -126,7 +126,18 @@ jobs:
       - name: Build Windows
         run: |
           flutter pub get
-          flutter build windows --release ${{ env.DART_DEFINES }}
+
+          plugin_link="windows/flutter/ephemeral/.plugin_symlinks/flutter_webrtc"
+          plugin_copy="${plugin_link}.materialized"
+
+          if [ -d "$plugin_link" ]; then
+            rm -rf "$plugin_copy"
+            cp -R -L "$plugin_link" "$plugin_copy"
+            rm -rf "$plugin_link"
+            mv "$plugin_copy" "$plugin_link"
+          fi
+
+          flutter build windows --release --no-pub ${{ env.DART_DEFINES }}
 
       - name: Sign Windows executables
         shell: pwsh
