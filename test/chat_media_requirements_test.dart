@@ -490,6 +490,18 @@ void main() {
     expect(find.text('Read'), findsOneWidget);
   });
 
+  testWidgets('message bubbles expose a screen-reader summary', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBubble(message: _textMessage(), isMe: true),
+        ),
+      ),
+    );
+
+    expect(find.bySemanticsLabel(RegExp(r'You, hello')), findsOneWidget);
+  });
+
   testWidgets('strict privacy warns before opening message links', (
     tester,
   ) async {

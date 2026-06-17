@@ -2,6 +2,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../l10n/app_localizations.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
@@ -26,10 +27,10 @@ class AppearanceSettingsScreen extends StatelessWidget {
 
   // #46 — supported app languages. Grows as translations are contributed
   // (copy app_en.arb → app_<tag>.arb, add the tag here, run `flutter gen-l10n`).
-  static const _supportedLanguages = {'en': 'English'};
+  static const _supportedLanguages = {'en': 'English', 'es': 'Español'};
 
-  String _languageLabel(String? tag) {
-    if (tag == null || tag.isEmpty) return 'System default';
+  String _languageLabel(String? tag, AppLocalizations l10n) {
+    if (tag == null || tag.isEmpty) return l10n.languageSystemDefault;
     return _supportedLanguages[tag] ?? tag;
   }
 
@@ -37,14 +38,15 @@ class AppearanceSettingsScreen extends StatelessWidget {
     BuildContext context,
     SettingsProvider settings,
   ) async {
+    final l10n = AppLocalizations.of(context);
     String? tag;
     var picked = false;
     await showGlassActionSheet<void>(
       context: context,
-      title: 'Language',
+      title: l10n.language,
       actions: [
         GlassActionSheetAction(
-          label: 'System default',
+          label: l10n.languageSystemDefault,
           onPressed: () {
             tag = null;
             picked = true;
@@ -222,13 +224,14 @@ class AppearanceSettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final settings = context.watch<SettingsProvider>();
     final user = context.watch<AuthProvider>().currentUser;
+    final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final bubbleColor = user?.bubbleColor != null
         ? Color(user!.bubbleColor!)
         : scheme.primary;
 
     return SettingsScaffold(
-      title: 'Appearance',
+      title: l10n.appearance,
       children: [
         const SettingsSectionHeader('Theme'),
         SettingsGroup(
@@ -236,8 +239,8 @@ class AppearanceSettingsScreen extends StatelessWidget {
             _ThemeModeTile(settings: settings),
             SettingsTile(
               icon: Icons.palette_outlined,
-              title: 'Accent color',
-              subtitle: 'Theme color used across the app',
+              title: l10n.accentColor,
+              subtitle: l10n.accentColorSubtitle,
               trailing: Container(
                 width: 28,
                 height: 28,
@@ -278,7 +281,7 @@ class AppearanceSettingsScreen extends StatelessWidget {
             ),
             SettingsSwitchTile(
               icon: Icons.water_drop_outlined,
-              title: 'Reduce transparency',
+              title: l10n.reduceTransparency,
               subtitle: 'Use more opaque surfaces throughout the app',
               value: settings.reduceTransparency,
               onChanged: settings.setReduceTransparency,
@@ -294,7 +297,7 @@ class AppearanceSettingsScreen extends StatelessWidget {
             _MessageFontSizeTile(settings: settings),
             SettingsSwitchTile(
               icon: Icons.format_bold_rounded,
-              title: 'Bold text',
+              title: l10n.boldText,
               subtitle: 'Use heavier font weights across the app',
               value: settings.boldText,
               onChanged: settings.setBoldText,
@@ -308,7 +311,7 @@ class AppearanceSettingsScreen extends StatelessWidget {
           children: [
             SettingsSwitchTile(
               icon: Icons.motion_photos_off_outlined,
-              title: 'Reduce motion',
+              title: l10n.reduceMotion,
               subtitle:
                   'Shorten or disable screen transitions and glass effects',
               value: settings.reduceMotion,
@@ -339,13 +342,13 @@ class AppearanceSettingsScreen extends StatelessWidget {
         ),
         const SizedBox(height: 20),
 
-        const SettingsSectionHeader('Language'),
+        SettingsSectionHeader(l10n.language),
         SettingsGroup(
           children: [
             SettingsTile(
               icon: Icons.translate_rounded,
-              title: 'Language',
-              subtitle: _languageLabel(settings.localeTag),
+              title: l10n.language,
+              subtitle: _languageLabel(settings.localeTag, l10n),
               onTap: () => _pickLanguage(context, settings),
             ),
           ],

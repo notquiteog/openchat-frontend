@@ -13,6 +13,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:uuid/uuid.dart';
 import '../../config/api_config.dart';
 import '../../models/bot_command.dart';
 import '../../models/channel_pinned_message.dart';
@@ -34,6 +35,7 @@ import '../../services/mls_service.dart';
 import '../../services/notification_service.dart';
 import '../../services/attachment_service.dart';
 import '../../services/image_edit_service.dart';
+import '../../services/message_search_service.dart';
 import '../../services/proxy_service.dart';
 import '../../services/secure_storage_service.dart';
 import '../../services/translation_service.dart';
@@ -138,6 +140,10 @@ class _ChatScreenState extends State<ChatScreen> {
   Timer? _highlightTimer;
   final Map<String, GlobalKey> _messageKeys = {};
   String? _highlightedMessageId;
+  final _chatSearchCtrl = TextEditingController();
+  bool _chatSearchActive = false;
+  String _chatSearchQuery = '';
+  MessageSearchCategory? _chatSearchCategory;
   // Active topic ("thread") filtering the open chat; null = show all. Local to
   // the screen so it auto-clears on leave and never cross-talks between chats.
   String? _activeTopicId;
@@ -163,12 +169,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // Read the live conversation from the provider (members get loaded
   // asynchronously after the screen opens) and fall back to the one passed in.
-  // build() watches ChatProvider, so updates here trigger a rebuild.
+  // build() selects this conversation, so updates here trigger a rebuild.
   Conversation get conv {
-    for (final c in context.read<ChatProvider>().conversations) {
-      if (c.id == widget.conversation.id) return c;
-    }
-    return widget.conversation;
+    return context.read<ChatProvider>().conversationById(
+          widget.conversation.id,
+        ) ??
+        widget.conversation;
   }
 
   @override
@@ -377,6 +383,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _draftSaveTimer?.cancel();
     _flushDraftSave();
     _inputCtrl.dispose();
+    _chatSearchCtrl.dispose();
     _scrollCtrl.dispose();
     _typingTimer?.cancel();
     _highlightTimer?.cancel();
@@ -1070,10 +1077,10 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  Message? _replyPreviewFor(Message msg, List<Message> messages) {
+  Message? _replyPreviewFor(Message msg, Map<String, Message> messagesById) {
     final replyTo = msg.effectiveReplyTo;
     if (replyTo == null) return null;
-    return messages.where((message) => message.id == replyTo).firstOrNull;
+    return messagesById[replyTo];
   }
 
   Future<void> _jumpToReply(Message msg) async {
@@ -1091,6 +1098,57 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     await _jumpToMessage(replyTo);
+  }
+
+  void _openChatSearch() {
+    setState(() {
+      _chatSearchActive = true;
+      _showStickers = false;
+      _showCustomEmojis = false;
+    });
+  }
+
+  void _closeChatSearch() {
+    if (!_chatSearchActive && _chatSearchQuery.isEmpty) return;
+    setState(() {
+      _chatSearchActive = false;
+      _chatSearchQuery = '';
+      _chatSearchCategory = null;
+      _chatSearchCtrl.clear();
+    });
+  }
+
+  Future<void> _openChatSearchResult(MessageSearchResult result) async {
+    final chat = context.read<ChatProvider>();
+    final found = await chat.ensureMessageLoaded(conv.id, result.messageId);
+    if (!mounted) return;
+    if (!found) {
+      showAppToast(context, 'Message is not loaded yet', isError: true);
+      return;
+    }
+    setState(() {
+      _chatSearchActive = false;
+      _activeTopicId = null;
+      _showStickers = false;
+      _showCustomEmojis = false;
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    if (mounted) await _jumpToMessage(result.messageId);
+  }
+
+  void _showSharedMediaGallery(String currentUserID) {
+    final messages = context.read<ChatProvider>().messagesFor(conv.id);
+    unawaited(
+      showSharedContentSheet(
+        context,
+        conversation: conv,
+        currentUserId: currentUserID,
+        channel: false,
+        initialSection: SharedContentSection.media,
+        initialMessages: messages,
+        onMessageSelected: (message) => _jumpToMessage(message.id),
+      ),
+    );
   }
 
   Future<void> _showAttachmentPicker() async {
@@ -1598,6 +1656,7 @@ class _ChatScreenState extends State<ChatScreen> {
     var amountUnit = 'crypto';
     var selectedUserID = members.first.userId;
     var submitting = false;
+    var transferClientNonce = 'chat-pay-${const Uuid().v4()}';
     final amountCtrl = TextEditingController();
     final noteCtrl = TextEditingController();
 
@@ -1656,6 +1715,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       fiatCurrency: fiatCurrency,
                       conversationID: conv.id,
                       note: noteCtrl.text,
+                      clientNonce: transferClientNonce,
                     );
                     final transfer =
                         result['transfer'] as Map<String, dynamic>?;
@@ -1726,6 +1786,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 if (!mounted || !sheetCtx.mounted) return;
                 Navigator.pop(sheetCtx);
                 _scrollToBottom();
+                transferClientNonce = 'chat-pay-${const Uuid().v4()}';
               } catch (e) {
                 if (!mounted) return;
                 showAppToast(context, e.toString(), isError: true);
@@ -2694,13 +2755,51 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       );
     }
-    final auth = context.watch<AuthProvider>();
-    final chat = context.watch<ChatProvider>();
-    final messages = _activeTopicId != null
-        ? chat.messagesForTopic(conv.id, _activeTopicId!)
-        : chat.messagesFor(conv.id);
-    final currentUserID = auth.currentUser?.id ?? '';
-    final typingUsers = chat.typingUsersFor(conv.id);
+    final convID = widget.conversation.id;
+    final currentUserID = context.select<AuthProvider, String>(
+      (auth) => auth.currentUser?.id ?? '',
+    );
+    final meBubbleColorValue = context.select<AuthProvider, int?>(
+      (auth) => auth.currentUser?.bubbleColor,
+    );
+    final chatSlice = context
+        .select<
+          ChatProvider,
+          ({
+            Conversation? conversation,
+            List<Message> messages,
+            List<ConversationTopic> topics,
+            Set<String> typingUsers,
+            int typingVersion,
+            int readReceiptVersion,
+            int liveLocationVersion,
+          })
+        >((chat) {
+          final messages = _activeTopicId != null
+              ? chat.messagesForTopic(convID, _activeTopicId!)
+              : chat.messagesFor(convID);
+          return (
+            conversation: chat.conversationById(convID),
+            messages: messages,
+            topics: chat.topicsFor(convID),
+            typingUsers: chat.typingUsersFor(convID),
+            typingVersion: chat.typingVersionFor(convID),
+            readReceiptVersion: chat.readReceiptVersionFor(convID),
+            liveLocationVersion: chat.liveLocationVersion,
+          );
+        });
+    final chat = context.read<ChatProvider>();
+    final activeConv = chatSlice.conversation ?? widget.conversation;
+    final messages = chatSlice.messages;
+    final topics = chatSlice.topics;
+    final typingUsers = chatSlice.typingUsers;
+    final readByOthers = chat.messageIdsReadByOthers(
+      activeConv.id,
+      currentUserID,
+    );
+    final messagesById = <String, Message>{
+      for (final message in messages) message.id: message,
+    };
     _handleMessageListChange(messages, currentUserID);
 
     // Per-chat look. The current user's bubble color is also stored on their
@@ -2710,8 +2809,8 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     // My bubble colour is global (published to the profile); there is no
     // per-chat override.
-    final meBubbleColor = auth.currentUser?.bubbleColor != null
-        ? Color(auth.currentUser!.bubbleColor!)
+    final meBubbleColor = meBubbleColorValue != null
+        ? Color(meBubbleColorValue)
         : null;
     final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
     return GlassScreenScaffold(
@@ -2719,7 +2818,7 @@ class _ChatScreenState extends State<ChatScreen> {
       // sits BELOW the bar, not behind it. Keep that layout.
       extendBody: false,
       resizeToAvoidBottomInset: false,
-      appBar: _buildAppBar(context, typingUsers, currentUserID),
+      appBar: _buildAppBar(context, activeConv, typingUsers, currentUserID),
       body: DropTarget(
         onDragEntered: (_) => setState(() => _dropHovering = true),
         onDragExited: (_) => setState(() => _dropHovering = false),
@@ -2730,7 +2829,9 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Stack(
           children: [
             Positioned.fill(
-              child: DecoratedBox(decoration: _chatBackground(chatStyle)),
+              child: DecoratedBox(
+                decoration: _chatBackground(chatStyle, activeConv),
+              ),
             ),
             AnimatedPadding(
               padding: EdgeInsets.only(bottom: keyboardInset),
@@ -2739,15 +2840,29 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Column(
                 children: [
                   KeyChangeBanner(
-                    conversation: conv,
+                    conversation: activeConv,
                     currentUserId: currentUserID,
                   ),
-                  _GroupCallBanner(conversation: conv),
+                  _GroupCallBanner(conversation: activeConv),
                   _ConversationPinnedBar(
-                    conversationId: conv.id,
+                    conversationId: activeConv.id,
                     onShowAll: () => _showConversationPinsSheet(currentUserID),
                   ),
-                  _buildTopicBar(chat, conv, currentUserID),
+                  _buildTopicBar(topics, activeConv, currentUserID),
+                  if (_chatSearchActive)
+                    _InChatSearchPanel(
+                      controller: _chatSearchCtrl,
+                      query: _chatSearchQuery,
+                      selectedCategory: _chatSearchCategory,
+                      conversationId: activeConv.id,
+                      onQueryChanged: (value) =>
+                          setState(() => _chatSearchQuery = value),
+                      onCategoryChanged: (category) =>
+                          setState(() => _chatSearchCategory = category),
+                      onClose: _closeChatSearch,
+                      onSelect: (result) =>
+                          unawaited(_openChatSearchResult(result)),
+                    ),
                   Expanded(
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
@@ -2865,7 +2980,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                             _highlightedMessageId == msg.id;
                                         final replyPreview = _replyPreviewFor(
                                           msg,
-                                          messages,
+                                          messagesById,
                                         );
                                         // First message of a calendar day gets
                                         // a centered day chip above it.
@@ -2907,16 +3022,12 @@ class _ChatScreenState extends State<ChatScreen> {
                                             child: MessageBubble(
                                               message: msg,
                                               isMe: isMe,
-                                              isChannel: conv.isChannel,
+                                              isChannel: activeConv.isChannel,
                                               albumMessages: albumRun,
                                               showAvatar: showAvatar,
                                               readByOthers:
                                                   isMe &&
-                                                  chat.messageReadByOthers(
-                                                    conv.id,
-                                                    msg,
-                                                    currentUserID,
-                                                  ),
+                                                  readByOthers.contains(msg.id),
                                               meBubbleColor: meBubbleColor,
                                               bubbleRadius:
                                                   chatStyle.bubbleRadius,
@@ -3075,7 +3186,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     _TypingIndicator(
                       label: _typingLabel(typingUsers, currentUserID),
                     ),
-                  if (conv.locked)
+                  if (activeConv.locked)
                     const _BurnerExpiredBar()
                   else
                     _buildInputBar(context, currentUserID),
@@ -3094,8 +3205,8 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Background behind the message list. A premium conversation-wide image
   /// (set by an admin, visible to everyone) wins; otherwise the viewer's own
   /// per-DM background image or color applies.
-  Decoration _chatBackground(DmChatStyle style) {
-    final convBg = conv.backgroundUrl;
+  Decoration _chatBackground(DmChatStyle style, Conversation conversation) {
+    final convBg = conversation.backgroundUrl;
     if (convBg != null && convBg.isNotEmpty) {
       return BoxDecoration(
         image: DecorationImage(
@@ -3324,6 +3435,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   PreferredSizeWidget _buildAppBar(
     BuildContext context,
+    Conversation conv,
     Set<String> typingUsers,
     String currentUserID,
   ) {
@@ -3443,6 +3555,11 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       ),
       actions: [
+        IconButton(
+          icon: const Icon(Icons.search_rounded),
+          tooltip: 'Search in chat',
+          onPressed: _openChatSearch,
+        ),
         if (!conv.isChannel) ...[
           IconButton(
             icon: const Icon(Icons.call),
@@ -3468,12 +3585,11 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Horizontal topic ("thread") filter strip for groups/channels. Tapping a
   /// topic filters the message stream to it; "All" clears the filter.
   Widget _buildTopicBar(
-    ChatProvider chat,
+    List<ConversationTopic> topics,
     Conversation conv,
     String currentUserID,
   ) {
     if (!(conv.isGroup || conv.isChannel)) return const SizedBox.shrink();
-    final topics = chat.topicsFor(conv.id);
     if (topics.isEmpty && !conv.topicsEnabled) return const SizedBox.shrink();
     final canManageTopics =
         _currentMember(
@@ -3716,6 +3832,17 @@ class _ChatScreenState extends State<ChatScreen> {
                 onTap: () => runAfterClose(
                   () => _showConversationInfo(context, currentUserID),
                 ),
+              ),
+              _MenuTile(
+                icon: Icons.search_rounded,
+                label: 'Search in chat',
+                onTap: () => runAfterClose(_openChatSearch),
+              ),
+              _MenuTile(
+                icon: Icons.photo_library_outlined,
+                label: 'Media gallery',
+                onTap: () =>
+                    runAfterClose(() => _showSharedMediaGallery(currentUserID)),
               ),
               _MenuTile(
                 icon: _notificationPreferenceIcon(notificationPreference),
@@ -6507,6 +6634,235 @@ class _BurnerExpiredBar extends StatelessWidget {
       ),
     );
   }
+}
+
+class _InChatSearchPanel extends StatelessWidget {
+  final TextEditingController controller;
+  final String query;
+  final MessageSearchCategory? selectedCategory;
+  final String conversationId;
+  final ValueChanged<String> onQueryChanged;
+  final ValueChanged<MessageSearchCategory?> onCategoryChanged;
+  final VoidCallback onClose;
+  final ValueChanged<MessageSearchResult> onSelect;
+
+  const _InChatSearchPanel({
+    required this.controller,
+    required this.query,
+    required this.selectedCategory,
+    required this.conversationId,
+    required this.onQueryChanged,
+    required this.onCategoryChanged,
+    required this.onClose,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final term = query.trim();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: GlassContainer(
+        shape: LiquidRoundedSuperellipse(borderRadius: 20),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: controller,
+                      autofocus: true,
+                      textInputAction: TextInputAction.search,
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search_rounded),
+                        hintText: 'Search this chat',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: onQueryChanged,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: 'Close search',
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: onClose,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 34,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: [
+                    _ChatSearchFilterChip(
+                      label: 'All',
+                      selected: selectedCategory == null,
+                      onTap: () => onCategoryChanged(null),
+                    ),
+                    for (final category in MessageSearchCategory.values)
+                      _ChatSearchFilterChip(
+                        label: _chatSearchCategoryLabel(category),
+                        selected: selectedCategory == category,
+                        onTap: () => onCategoryChanged(category),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 160),
+                child: term.length < 2
+                    ? SizedBox(
+                        key: const ValueKey('hint'),
+                        height: 96,
+                        child: Center(
+                          child: Text(
+                            'Type 2 or more characters',
+                            style: TextStyle(
+                              color: scheme.onSurface.withValues(alpha: 0.56),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      )
+                    : SizedBox(
+                        key: ValueKey(
+                          '$term/${selectedCategory?.name ?? 'all'}',
+                        ),
+                        height: 220,
+                        child: FutureBuilder<List<MessageSearchResult>>(
+                          future: context.read<ChatProvider>().searchMessages(
+                            term,
+                            conversationId: conversationId,
+                            categories: selectedCategory == null
+                                ? null
+                                : {selectedCategory!},
+                            limit: 50,
+                          ),
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState ==
+                                ConnectionState.waiting) {
+                              return const Center(
+                                child: GlassProgressIndicator.circular(
+                                  size: 22,
+                                  strokeWidth: 2,
+                                ),
+                              );
+                            }
+                            final results = snapshot.data ?? const [];
+                            if (results.isEmpty) {
+                              return Center(
+                                child: Text(
+                                  'No matches in this chat',
+                                  style: TextStyle(
+                                    color: scheme.onSurface.withValues(
+                                      alpha: 0.56,
+                                    ),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              );
+                            }
+                            return ListView.separated(
+                              keyboardDismissBehavior:
+                                  ScrollViewKeyboardDismissBehavior.onDrag,
+                              itemCount: results.length,
+                              separatorBuilder: (_, _) =>
+                                  const SizedBox(height: 6),
+                              itemBuilder: (context, index) {
+                                final result = results[index];
+                                return GlassListTile(
+                                  leading: Icon(
+                                    _chatSearchCategoryIcon(result.category),
+                                  ),
+                                  title: Text(
+                                    result.snippet.isNotEmpty
+                                        ? result.snippet
+                                        : result.title,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  subtitle: Text(
+                                    '${_chatSearchCategoryLabel(result.category)} · ${_chatSearchDateLabel(result.createdAt)}',
+                                  ),
+                                  onTap: () => onSelect(result),
+                                );
+                              },
+                            );
+                          },
+                        ),
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatSearchFilterChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ChatSearchFilterChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: ChoiceChip(
+        label: Text(label),
+        selected: selected,
+        onSelected: (_) => onTap(),
+        visualDensity: VisualDensity.compact,
+      ),
+    );
+  }
+}
+
+String _chatSearchCategoryLabel(MessageSearchCategory category) {
+  return switch (category) {
+    MessageSearchCategory.messages => 'Messages',
+    MessageSearchCategory.media => 'Media',
+    MessageSearchCategory.files => 'Files',
+    MessageSearchCategory.links => 'Links',
+    MessageSearchCategory.voice => 'Voice',
+    MessageSearchCategory.polls => 'Polls',
+    MessageSearchCategory.payments => 'Payments',
+    MessageSearchCategory.checklists => 'Lists',
+  };
+}
+
+IconData _chatSearchCategoryIcon(MessageSearchCategory category) {
+  return switch (category) {
+    MessageSearchCategory.messages => Icons.chat_bubble_outline_rounded,
+    MessageSearchCategory.media => Icons.photo_library_outlined,
+    MessageSearchCategory.files => Icons.insert_drive_file_outlined,
+    MessageSearchCategory.links => Icons.link_rounded,
+    MessageSearchCategory.voice => Icons.graphic_eq_rounded,
+    MessageSearchCategory.polls => Icons.poll_outlined,
+    MessageSearchCategory.payments => Icons.payments_outlined,
+    MessageSearchCategory.checklists => Icons.checklist_rounded,
+  };
+}
+
+String _chatSearchDateLabel(DateTime date) {
+  final local = date.toLocal();
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
+  return '${local.month}/${local.day}/${local.year} $hour:$minute';
 }
 
 /// Compact pinned-messages banner (#2) above the message list. Tapping opens

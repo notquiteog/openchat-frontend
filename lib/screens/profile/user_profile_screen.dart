@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:uuid/uuid.dart';
 import '../../config/api_config.dart';
 import '../../models/conversation.dart';
 import '../../models/key_trust_pin.dart';
@@ -340,6 +341,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     var provider = providers.first;
     var amountUnit = 'crypto';
     var submitting = false;
+    var transferClientNonce = 'profile-pay-${const Uuid().v4()}';
     final amountCtrl = TextEditingController();
     final noteCtrl = TextEditingController();
 
@@ -389,6 +391,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                       fiatAmount: isCryptoAmount ? null : amount,
                       fiatCurrency: fiatCurrency,
                       note: noteCtrl.text,
+                      clientNonce: transferClientNonce,
                     );
                     final transfer =
                         result['transfer'] as Map<String, dynamic>?;
@@ -459,6 +462,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 }
                 if (!mounted || !sheetCtx.mounted) return;
                 Navigator.pop(sheetCtx);
+                transferClientNonce = 'profile-pay-${const Uuid().v4()}';
                 _snack(payMode ? 'Payment sent.' : 'Request sent.');
               } catch (e) {
                 if (!mounted) return;

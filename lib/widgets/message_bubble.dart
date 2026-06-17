@@ -211,7 +211,12 @@ class MessageBubble extends StatelessWidget {
                       ? null
                       : (d) => onLongPress!(d.globalPosition),
                   onSecondaryTapUp: onSecondaryTapUp,
-                  child: _buildBubble(context),
+                  child: Semantics(
+                    container: true,
+                    button: onTap != null || onLongPress != null,
+                    label: _semanticLabel(),
+                    child: _buildBubble(context),
+                  ),
                 ),
                 if (message.tips.isNotEmpty)
                   Padding(
@@ -401,6 +406,35 @@ class MessageBubble extends StatelessWidget {
       radii: radii,
       onReactionTap: onReactionTap,
     );
+  }
+
+  String _semanticLabel() {
+    final sender = isMe
+        ? 'You'
+        : (message.sender?.displayName ??
+              message.sender?.username ??
+              'Someone');
+    final content = message.listPreview.trim();
+    final preview = content.isEmpty
+        ? switch (message.type) {
+            MessageType.image => 'photo',
+            MessageType.video => 'video',
+            MessageType.voice => 'voice message',
+            MessageType.audio => 'audio message',
+            MessageType.file => 'file',
+            MessageType.sticker => 'sticker',
+            MessageType.poll => 'poll',
+            MessageType.location => 'location',
+            MessageType.invoice ||
+            MessageType.paymentRequest ||
+            MessageType.paymentTransfer => 'payment',
+            _ => 'message',
+          }
+        : content;
+    final local = message.createdAt.toLocal();
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '$sender, $preview, ${local.month}/${local.day} $hour:$minute';
   }
 
   Color _textColorFor(BuildContext context) {
@@ -917,8 +951,10 @@ class _GameBubbleState extends State<_GameBubble> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final chat = context.watch<ChatProvider>();
-    final round = chat.gameRound(widget.roundId);
+    final round = context.select<ChatProvider, Map<String, dynamic>?>(
+      (chat) => chat.gameRound(widget.roundId),
+    );
+    final selfId = context.select<ChatProvider, String?>((chat) => chat.selfId);
     return Align(
       alignment: widget.isMe ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
@@ -935,7 +971,7 @@ class _GameBubbleState extends State<_GameBubble> {
                 height: 40,
                 child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
               )
-            : _content(context, round, chat.selfId, scheme),
+            : _content(context, round, selfId, scheme),
       ),
     );
   }
@@ -2719,6 +2755,10 @@ class _InvitePreviewBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final avatarCacheSize = _decodeCacheDimension(
+      40,
+      MediaQuery.devicePixelRatioOf(context),
+    );
     final scheme = Theme.of(context).colorScheme;
     final accent = isMe ? Colors.white : scheme.primary;
     final borderColor = accent.withValues(alpha: isMe ? 0.38 : 0.24);
@@ -2753,6 +2793,8 @@ class _InvitePreviewBody extends StatelessWidget {
                     ? CachedNetworkImage(
                         imageUrl: ApiConfig.resolveMedia(avatarUrl),
                         fit: BoxFit.cover,
+                        memCacheWidth: avatarCacheSize,
+                        memCacheHeight: avatarCacheSize,
                         errorWidget: (_, _, _) =>
                             _InviteAvatarFallback(accent: accent, name: name),
                       )
@@ -3043,6 +3085,10 @@ class _InlineCustomEmojiState extends State<_InlineCustomEmoji> {
   @override
   Widget build(BuildContext context) {
     final fileUrl = _fileUrl;
+    final emojiCacheSize = _decodeCacheDimension(
+      22,
+      MediaQuery.devicePixelRatioOf(context),
+    );
     final Widget child;
     if (fileUrl == null || fileUrl.isEmpty) {
       child = Text(widget.entity.emoji, style: const TextStyle(fontSize: 20));
@@ -3054,6 +3100,8 @@ class _InlineCustomEmojiState extends State<_InlineCustomEmoji> {
           width: 22,
           height: 22,
           fit: BoxFit.contain,
+          memCacheWidth: emojiCacheSize,
+          memCacheHeight: emojiCacheSize,
           errorWidget: (_, _, _) =>
               Text(widget.entity.emoji, style: const TextStyle(fontSize: 20)),
         ),
@@ -4673,6 +4721,11 @@ class _ViewOnceAttachmentGateState extends State<_ViewOnceAttachmentGate> {
 
 enum _LoadState { idle, loading, done, error }
 
+int _decodeCacheDimension(double logicalPixels, double devicePixelRatio) {
+  final pixels = (logicalPixels * devicePixelRatio).round();
+  return pixels < 1 ? 1 : pixels;
+}
+
 class _ImageBubble extends StatefulWidget {
   final Message message;
   final MessageContent content;
@@ -4746,7 +4799,7 @@ class _ImageBubbleState extends State<_ImageBubble> {
           crossAxisAlignment: CrossAxisAlignment.end,
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildImageArea(layout),
+            _buildImageArea(context, layout),
             if ((c.text).isNotEmpty)
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
@@ -4765,44 +4818,59 @@ class _ImageBubbleState extends State<_ImageBubble> {
     );
   }
 
-  Widget _buildImageArea(MessageImageLayout layout) {
+  Widget _buildImageArea(BuildContext context, MessageImageLayout layout) {
+    final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+    final cacheWidth = _decodeCacheDimension(
+      layout.maxBubbleWidth,
+      devicePixelRatio,
+    );
+    final cacheHeight = _decodeCacheDimension(
+      layout.reservedImageHeight,
+      devicePixelRatio,
+    );
     return switch (_state) {
-      _LoadState.done => GestureDetector(
-        onTap: () => _showFullscreen(context),
-        child: SizedBox(
-          width: layout.maxBubbleWidth,
-          height: layout.reservedImageHeight,
-          child: Stack(
-            children: [
-              Image.memory(
-                _bytes!,
-                width: double.infinity,
-                height: double.infinity,
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
-              ),
-              Positioned(
-                top: 8,
-                right: 8,
-                child: Tooltip(
-                  message: MessageImageLayout.expandTooltip,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Padding(
-                      padding: EdgeInsets.all(4),
-                      child: Icon(
-                        Icons.open_in_full,
-                        size: 14,
-                        color: Colors.white,
+      _LoadState.done => Semantics(
+        button: true,
+        label: MessageImageLayout.expandTooltip,
+        child: GestureDetector(
+          onTap: () => _showFullscreen(context),
+          child: SizedBox(
+            width: layout.maxBubbleWidth,
+            height: layout.reservedImageHeight,
+            child: Stack(
+              children: [
+                Image.memory(
+                  _bytes!,
+                  width: double.infinity,
+                  height: double.infinity,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  cacheWidth: cacheWidth,
+                  cacheHeight: cacheHeight,
+                ),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: Tooltip(
+                    message: MessageImageLayout.expandTooltip,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Padding(
+                        padding: EdgeInsets.all(4),
+                        child: Icon(
+                          Icons.open_in_full,
+                          size: 14,
+                          color: Colors.white,
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -4900,7 +4968,7 @@ class _AlbumGridBubble extends StatelessWidget {
   Widget _tile(Message m, double width, double height) => SizedBox(
     width: width,
     height: height,
-    child: _AlbumTile(message: m),
+    child: _AlbumTile(message: m, width: width, height: height),
   );
 
   Widget _grid(double w) {
@@ -4964,8 +5032,14 @@ class _AlbumGridBubble extends StatelessWidget {
 /// opens fullscreen on tap.
 class _AlbumTile extends StatefulWidget {
   final Message message;
+  final double width;
+  final double height;
 
-  const _AlbumTile({required this.message});
+  const _AlbumTile({
+    required this.message,
+    required this.width,
+    required this.height,
+  });
 
   @override
   State<_AlbumTile> createState() => _AlbumTileState();
@@ -5012,6 +5086,9 @@ class _AlbumTileState extends State<_AlbumTile> {
 
   @override
   Widget build(BuildContext context) {
+    final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+    final cacheWidth = _decodeCacheDimension(widget.width, devicePixelRatio);
+    final cacheHeight = _decodeCacheDimension(widget.height, devicePixelRatio);
     return switch (_state) {
       _LoadState.done => GestureDetector(
         onTap: () => Navigator.push(
@@ -5030,7 +5107,13 @@ class _AlbumTileState extends State<_AlbumTile> {
             ),
           ),
         ),
-        child: Image.memory(_bytes!, fit: BoxFit.cover, gaplessPlayback: true),
+        child: Image.memory(
+          _bytes!,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          cacheWidth: cacheWidth,
+          cacheHeight: cacheHeight,
+        ),
       ),
       _LoadState.error => Container(
         color: Colors.black12,
@@ -6396,6 +6479,10 @@ class _StickerBubbleState extends State<_StickerBubble> {
   @override
   Widget build(BuildContext context) {
     final fileUrl = _sticker?['file_url'] as String?;
+    final stickerCacheSize = _decodeCacheDimension(
+      120,
+      MediaQuery.devicePixelRatioOf(context),
+    );
     return GestureDetector(
       onTap: _sticker != null ? _onTap : null,
       child: SizedBox(
@@ -6411,6 +6498,8 @@ class _StickerBubbleState extends State<_StickerBubble> {
                 child: CachedNetworkImage(
                   imageUrl: ApiConfig.resolveMedia(fileUrl),
                   fit: BoxFit.contain,
+                  memCacheWidth: stickerCacheSize,
+                  memCacheHeight: stickerCacheSize,
                   placeholder: (_, _) => const Center(
                     child: GlassProgressIndicator.circular(strokeWidth: 2),
                   ),

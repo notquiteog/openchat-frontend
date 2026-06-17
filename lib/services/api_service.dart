@@ -36,6 +36,10 @@ import '../utils/device_label.dart';
 /// emoji). Mirrors the backend `maxImageUploadBytes` so oversized files fail
 /// fast with a friendly message instead of a generic 413.
 const int kMaxImageUploadBytes = 50 * 1024 * 1024; // 50 MB
+const Duration _defaultRequestTimeout = Duration(seconds: 20);
+const Duration _uploadRequestTimeout = Duration(minutes: 3);
+const int _maxGetAttempts = 3;
+const Duration _getRetryBaseDelay = Duration(milliseconds: 250);
 
 class ApiException implements Exception {
   final int statusCode;
@@ -127,6 +131,13 @@ class SharedContentPage {
   final String? nextCursor;
 
   const SharedContentPage({required this.items, required this.nextCursor});
+}
+
+class MessagePage {
+  final List<Message> items;
+  final String? nextCursor;
+
+  const MessagePage({required this.items, required this.nextCursor});
 }
 
 class SelfStateEvent {
@@ -1141,12 +1152,30 @@ class ApiService {
     String? beforeID,
     int limit = 50,
   }) async {
+    return (await getMessagesPage(
+      convID,
+      beforeID: beforeID,
+      limit: limit,
+    )).items;
+  }
+
+  Future<MessagePage> getMessagesPage(
+    String convID, {
+    String? beforeID,
+    int limit = 50,
+  }) async {
     var path = '/api/v1/conversations/$convID/messages?limit=$limit';
     if (beforeID != null) path += '&before=$beforeID';
     final resp = await _get(path);
-    return (resp['data'] as List)
+    final items = (resp['data'] as List)
         .map((e) => Message.fromJson(e as Map<String, dynamic>))
         .toList();
+    final meta = resp['meta'] as Map<String, dynamic>?;
+    final nextCursor = meta?['next_cursor'] as String?;
+    return MessagePage(
+      items: items,
+      nextCursor: nextCursor?.isEmpty == true ? null : nextCursor,
+    );
   }
 
   Future<SharedContentPage> getSharedContent(
@@ -2339,10 +2368,12 @@ class ApiService {
   Future<Map<String, dynamic>> requestBackupUpload({
     required int size,
     required String sha256,
+    int baseRevision = 0,
   }) async {
     final resp = await _post('/api/v1/backups/request-upload', {
       'size': size,
       'sha256': sha256,
+      'base_revision': baseRevision,
     });
     return resp['data'] as Map<String, dynamic>;
   }
@@ -2418,11 +2449,13 @@ class ApiService {
       return;
     }
 
-    final response = await _httpClient.put(
-      Uri.parse(uploadUrl),
-      headers: {'Content-Type': mimeType},
-      body: bytes,
-    );
+    final response = await _httpClient
+        .put(
+          Uri.parse(uploadUrl),
+          headers: {'Content-Type': mimeType},
+          body: bytes,
+        )
+        .timeout(_uploadRequestTimeout);
     if (response.statusCode >= 400) {
       throw ApiException(
         response.statusCode,
@@ -2460,7 +2493,9 @@ class ApiService {
       unawaited(request.sink.close());
       closed = true;
 
-      final streamedResponse = await responseFuture;
+      final streamedResponse = await responseFuture.timeout(
+        _uploadRequestTimeout,
+      );
       final response = await http.Response.fromStream(streamedResponse);
       if (response.statusCode >= 400) {
         throw ApiException(
@@ -3208,6 +3243,7 @@ class ApiService {
     String? fiatCurrency,
     String? conversationID,
     String? note,
+    String? clientNonce,
   }) async {
     final resp = await _post('/api/v1/billing/transfers', {
       'to_user_id': toUserID,
@@ -3219,6 +3255,8 @@ class ApiService {
       ),
       'conversation_id': ?conversationID,
       if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
+      if (clientNonce != null && clientNonce.trim().isNotEmpty)
+        'client_nonce': clientNonce.trim(),
     });
     return resp['data'] as Map<String, dynamic>;
   }
@@ -3571,7 +3609,10 @@ class ApiService {
       return http.Response.fromStream(streamed);
     }
 
-    final response = await _requestWithRetry(send);
+    final response = await _requestWithRetry(
+      send,
+      timeout: _uploadRequestTimeout,
+    );
     return _parse(response);
   }
 
@@ -3579,13 +3620,17 @@ class ApiService {
     String path, {
     bool authenticated = true,
   }) async {
-    final response = await _requestWithRetry(() async {
-      final token = authenticated ? await _storage.getAccessToken() : null;
-      return _httpClient.get(
-        Uri.parse('${ApiConfig.baseUrl}$path'),
-        headers: _headers(token),
-      );
-    }, authenticated: authenticated);
+    final response = await _requestWithRetry(
+      () async {
+        final token = authenticated ? await _storage.getAccessToken() : null;
+        return _httpClient.get(
+          Uri.parse('${ApiConfig.baseUrl}$path'),
+          headers: _headers(token),
+        );
+      },
+      authenticated: authenticated,
+      retryOnTransient: true,
+    );
     return _parse(response);
   }
 
@@ -3666,22 +3711,53 @@ class ApiService {
   Future<http.Response> _requestWithRetry(
     Future<http.Response> Function() fn, {
     bool authenticated = true,
+    Duration timeout = _defaultRequestTimeout,
+    bool retryOnTransient = false,
   }) async {
-    var response = await fn();
-    if (response.statusCode == 401 && authenticated) {
+    for (var attempt = 0; ; attempt++) {
       try {
-        _refreshInFlight ??= refreshTokens().whenComplete(() {
-          _refreshInFlight = null;
-        });
-        await _refreshInFlight;
-      } on ApiException {
-        await _storage.clearSession();
-        onAuthFailed?.call();
-        rethrow;
+        var response = await fn().timeout(timeout);
+        if (response.statusCode == 401 && authenticated) {
+          try {
+            _refreshInFlight ??= refreshTokens().whenComplete(() {
+              _refreshInFlight = null;
+            });
+            await _refreshInFlight;
+          } on ApiException catch (error) {
+            if (error.statusCode == 401 || error.statusCode == 403) {
+              await _storage.clearSession();
+              onAuthFailed?.call();
+            }
+            rethrow;
+          }
+          response = await fn().timeout(timeout);
+        }
+        if (!retryOnTransient ||
+            !_shouldRetryStatus(response.statusCode) ||
+            attempt >= _maxGetAttempts - 1) {
+          return response;
+        }
+      } on TimeoutException {
+        if (!retryOnTransient || attempt >= _maxGetAttempts - 1) {
+          throw ApiException(
+            408,
+            'TIMEOUT',
+            'Request timed out. Check your connection and try again.',
+          );
+        }
+      } on http.ClientException {
+        if (!retryOnTransient || attempt >= _maxGetAttempts - 1) rethrow;
       }
-      response = await fn();
+      await Future<void>.delayed(_retryDelay(attempt));
     }
-    return response;
+  }
+
+  bool _shouldRetryStatus(int statusCode) =>
+      statusCode == 408 || statusCode == 429 || statusCode >= 500;
+
+  Duration _retryDelay(int attempt) {
+    final multiplier = 1 << attempt.clamp(0, 3).toInt();
+    return _getRetryBaseDelay * multiplier;
   }
 
   Map<String, dynamic> _parse(http.Response response) {

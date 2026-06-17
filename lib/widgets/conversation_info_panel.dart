@@ -634,6 +634,10 @@ class _SharedItemsList extends StatelessWidget {
       );
     }
 
+    if (section == SharedContentSection.media) {
+      return _SharedMediaGrid(items: items, onTap: onTap);
+    }
+
     return ListView.separated(
       physics: const BouncingScrollPhysics(),
       itemCount: items.length,
@@ -642,6 +646,157 @@ class _SharedItemsList extends StatelessWidget {
         final item = items[index];
         return _SharedItemTile(item: item, onTap: onTap);
       },
+    );
+  }
+}
+
+class _SharedMediaGrid extends StatelessWidget {
+  final List<_SharedItem> items;
+  final ValueChanged<Message>? onTap;
+
+  const _SharedMediaGrid({required this.items, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final columns = width >= 520
+            ? 4
+            : width >= 360
+            ? 3
+            : 2;
+        return GridView.builder(
+          physics: const BouncingScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: columns,
+            mainAxisSpacing: 8,
+            crossAxisSpacing: 8,
+            childAspectRatio: 0.86,
+          ),
+          itemCount: items.length,
+          itemBuilder: (context, index) {
+            final item = items[index];
+            return _SharedMediaTile(item: item, onTap: onTap);
+          },
+        );
+      },
+    );
+  }
+}
+
+class _SharedMediaTile extends StatelessWidget {
+  final _SharedItem item;
+  final ValueChanged<Message>? onTap;
+
+  const _SharedMediaTile({required this.item, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isVideo =
+        item.message.type == MessageType.video ||
+        item.message.type == MessageType.videoNote ||
+        item.message.type == MessageType.livePhoto;
+    return Semantics(
+      button: onTap != null,
+      label: 'Open media ${item.title}',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap == null ? null : () => onTap!(item.message),
+        child: Ink(
+          decoration: BoxDecoration(
+            color: scheme.surface.withValues(alpha: 0.30),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: scheme.outlineVariant.withValues(alpha: 0.32),
+            ),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        scheme.primary.withValues(alpha: 0.18),
+                        scheme.tertiary.withValues(alpha: 0.12),
+                      ],
+                    ),
+                  ),
+                  child: Center(
+                    child: Icon(item.icon, size: 34, color: scheme.primary),
+                  ),
+                ),
+                if (isVideo)
+                  Center(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.black45,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: const Padding(
+                        padding: EdgeInsets.all(8),
+                        child: Icon(
+                          Icons.play_arrow_rounded,
+                          color: Colors.white,
+                          size: 28,
+                        ),
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  left: 8,
+                  right: 8,
+                  bottom: 8,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.52),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 6,
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            item.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          Text(
+                            item.detail,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

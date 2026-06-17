@@ -50,16 +50,28 @@ class _FakeBackupApi extends ApiService {
   final Map<String, Uint8List> blobs = {};
   String? confirmedKey;
   String? latestSha;
+  int revision = 0;
+  bool advanceRevisionAfterLatest = false;
 
   @override
   Future<Map<String, dynamic>> requestBackupUpload({
     required int size,
     required String sha256,
+    int baseRevision = 0,
   }) async {
+    if (baseRevision != revision) {
+      throw ApiException(
+        409,
+        'BACKUP_REVISION_CONFLICT',
+        'server backup changed',
+      );
+    }
     latestSha = sha256;
+    final nextRevision = revision + 1;
     return {
       'object_key': 'backups/user/blob-${blobs.length + 1}',
       'upload_url': 'fake://upload/${blobs.length + 1}',
+      'revision': nextRevision,
       'expires_in': 900,
     };
   }
@@ -77,16 +89,23 @@ class _FakeBackupApi extends ApiService {
   @override
   Future<void> confirmBackupUpload(String objectKey) async {
     confirmedKey = objectKey;
+    revision++;
   }
 
   @override
   Future<Map<String, dynamic>?> getLatestBackup() async {
     if (blobs.isEmpty || confirmedKey == null) return null;
-    return {
+    final result = {
       'download_url': blobs.keys.last,
       'sha256': latestSha,
       'size_bytes': blobs.values.last.length,
+      'revision': revision,
     };
+    if (advanceRevisionAfterLatest) {
+      advanceRevisionAfterLatest = false;
+      revision++;
+    }
+    return result;
   }
 
   @override
@@ -201,6 +220,27 @@ void main() {
       expect(api.confirmedKey, isNull);
     },
   );
+
+  test('server upload fails on stale backup revision', () async {
+    final source = _FakeBackupStorage(secrets: {'private_key': 'SECRET'});
+    final api = _FakeBackupApi();
+    final service = EncryptedBackupService(
+      storage: source,
+      privateState: _FakePrivateState(source),
+    );
+
+    await service.uploadToServer(api: api, passphrase: passphrase);
+    expect(api.revision, 1);
+
+    api.advanceRevisionAfterLatest = true;
+    expect(
+      () => service.uploadToServer(api: api, passphrase: passphrase),
+      throwsA(
+        isA<ApiException>().having((e) => e.statusCode, 'statusCode', 409),
+      ),
+    );
+    expect(api.blobs, hasLength(1));
+  });
 
   test('restore rejects a corrupted blob (checksum mismatch)', () async {
     final source = _FakeBackupStorage(secrets: {'k': 'v'});

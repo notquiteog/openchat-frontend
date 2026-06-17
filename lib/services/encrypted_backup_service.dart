@@ -142,6 +142,10 @@ class EncryptedBackupService {
     required ApiService api,
     required String passphrase,
   }) async {
+    final latest = await api.getLatestBackup();
+    final baseRevision = (latest?['revision'] is num)
+        ? (latest!['revision'] as num).toInt()
+        : 0;
     final encoded = await exportBackup(
       passphrase: passphrase,
       requireStrong: true,
@@ -151,6 +155,7 @@ class EncryptedBackupService {
     final grant = await api.requestBackupUpload(
       size: bytes.length,
       sha256: digest,
+      baseRevision: baseRevision,
     );
     await api.uploadBytes(
       grant['upload_url'] as String,

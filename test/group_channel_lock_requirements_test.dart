@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'dart:io';
 import 'package:openchat/models/conversation.dart';
+import 'package:openchat/models/message.dart';
 import 'package:openchat/screens/chat/chat_screen.dart';
 import 'package:openchat/screens/channels/channel_action_policy.dart';
 import 'package:openchat/services/app_access_gate.dart';
@@ -37,6 +38,22 @@ Conversation _conversation({
       ),
     ],
   );
+}
+
+Message _imageMessage() {
+  final message = Message(
+    id: 'msg-image',
+    conversationId: 'conv-1',
+    senderId: 'owner-1',
+    type: MessageType.image,
+    encryptedPayload: 'cipher',
+    signature: '',
+    createdAt: DateTime.utc(2026, 6, 2),
+  );
+  message.setDecryptedContent(
+    '{"text":"Launch poster","attachment_id":"att-1","file_name":"poster.webp","file_size":2048,"mime_type":"image/webp"}',
+  );
+  return message;
 }
 
 void main() {
@@ -90,6 +107,23 @@ void main() {
       expect(find.text('Release Crew'), findsOneWidget);
       expect(find.text('Planning and release coordination'), findsOneWidget);
       expect(find.text('2 members'), findsOneWidget);
+    });
+
+    testWidgets('shared media renders as a gallery grid', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ConversationInfoPanel(
+              conversation: _conversation(),
+              currentUserId: 'owner-1',
+              messages: [_imageMessage()],
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byType(GridView), findsOneWidget);
+      expect(find.text('poster.webp'), findsOneWidget);
     });
   });
 

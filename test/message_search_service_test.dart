@@ -10,11 +10,12 @@ Message _decryptedMessage({
   required MessageType type,
   required String raw,
   String senderId = 'user-1',
+  String conversationId = 'conv-1',
   DateTime? createdAt,
 }) {
   final message = Message(
     id: id,
-    conversationId: 'conv-1',
+    conversationId: conversationId,
     senderId: senderId,
     type: type,
     encryptedPayload: 'ciphertext',
@@ -101,6 +102,32 @@ void main() {
     final results = await service.search('deploy', senderId: 'user-bob');
 
     expect(results.map((result) => result.messageId), ['msg-bob']);
+  });
+
+  test('filters search results by conversation id', () async {
+    final service = _service();
+    final planning = _decryptedMessage(
+      id: 'msg-planning',
+      type: MessageType.text,
+      raw: 'Launch window',
+      conversationId: 'conv-planning',
+    );
+    final finance = _decryptedMessage(
+      id: 'msg-finance',
+      type: MessageType.text,
+      raw: 'Launch window',
+      conversationId: 'conv-finance',
+    );
+
+    await service.indexMessage(planning, conversationTitle: 'Planning');
+    await service.indexMessage(finance, conversationTitle: 'Finance');
+
+    final results = await service.search(
+      'launch',
+      conversationId: 'conv-finance',
+    );
+
+    expect(results.map((result) => result.messageId), ['msg-finance']);
   });
 
   test('filters search results by inclusive local date range', () async {

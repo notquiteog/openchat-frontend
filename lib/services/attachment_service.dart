@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -212,6 +213,13 @@ class PreparedAttachmentInput {
   });
 }
 
+class _AttachmentCacheEntry {
+  final Uint8List bytes;
+  final int size;
+
+  _AttachmentCacheEntry(this.bytes) : size = bytes.lengthInBytes;
+}
+
 class AttachmentService {
   final ApiService _api;
   final _cipher = AesGcm.with256bits();
@@ -222,9 +230,14 @@ class AttachmentService {
   // Decrypted attachment bytes are content-immutable per attachmentId, so cache
   // them process-wide to avoid re-downloading + re-decrypting on every rebuild
   // (e.g. image bubbles scrolling in and out of view). Static because the
-  // service is constructed per use. Bounded LRU by entry count.
-  static final Map<String, Uint8List> _decryptedCache = {};
-  static const int _maxCacheEntries = 60;
+  // service is constructed per use. Bounded LRU by bytes, and large entries are
+  // intentionally not cached so videos/files do not pin process memory.
+  static final Map<String, _AttachmentCacheEntry> _decryptedCache = {};
+  static const int _maxDecryptedCacheBytes = 48 * 1024 * 1024; // 48 MB
+  static const int _maxDecryptedCacheEntryBytes = 12 * 1024 * 1024; // 12 MB
+  static int _decryptedCacheBytes = 0;
+  static const Duration _downloadConnectTimeout = Duration(seconds: 12);
+  static const Duration _downloadTimeout = Duration(minutes: 2);
 
   // Disk-backed store for attachment ciphertext received over the mesh (#26).
   // A mesh attachment may never be uploaded to the server (the sender stayed
@@ -235,6 +248,37 @@ class AttachmentService {
   static const Duration _localStoreMaxAge = Duration(days: 7);
 
   AttachmentService(this._api);
+
+  static Uint8List? _getCachedAttachment(String attachmentId) {
+    final cached = _decryptedCache.remove(attachmentId);
+    if (cached == null) return null;
+    _decryptedCache[attachmentId] = cached; // move to most-recently-used
+    return cached.bytes;
+  }
+
+  static void _putCachedAttachment(String attachmentId, Uint8List bytes) {
+    if (attachmentId.isEmpty) return;
+    final previous = _decryptedCache.remove(attachmentId);
+    if (previous != null) _decryptedCacheBytes -= previous.size;
+    if (bytes.lengthInBytes > _maxDecryptedCacheEntryBytes) {
+      _pruneDecryptedCache();
+      return;
+    }
+    final entry = _AttachmentCacheEntry(bytes);
+    _decryptedCache[attachmentId] = entry;
+    _decryptedCacheBytes += entry.size;
+    _pruneDecryptedCache();
+  }
+
+  static void _pruneDecryptedCache() {
+    while (_decryptedCacheBytes > _maxDecryptedCacheBytes &&
+        _decryptedCache.isNotEmpty) {
+      final oldestKey = _decryptedCache.keys.first;
+      final oldest = _decryptedCache.remove(oldestKey);
+      if (oldest != null) _decryptedCacheBytes -= oldest.size;
+    }
+    if (_decryptedCacheBytes < 0) _decryptedCacheBytes = 0;
+  }
 
   Future<Directory> _localAttachmentDir() async {
     final base = await getApplicationSupportDirectory();
@@ -826,12 +870,8 @@ class AttachmentService {
     required String fileNonceB64,
   }) async {
     // Serve from the process-wide cache when we've already fetched this one.
-    final cached = _decryptedCache[attachmentId];
-    if (cached != null) {
-      _decryptedCache.remove(attachmentId); // move to most-recently-used
-      _decryptedCache[attachmentId] = cached;
-      return cached;
-    }
+    final cached = _getCachedAttachment(attachmentId);
+    if (cached != null) return cached;
 
     // Mesh-delivered attachments (#26) live in a local ciphertext store and may
     // never have reached the server — try it before any network call.
@@ -841,28 +881,19 @@ class AttachmentService {
         localCiphertext,
         fileKeyB64,
       );
-      _decryptedCache[attachmentId] = bytes;
-      if (_decryptedCache.length > _maxCacheEntries) {
-        _decryptedCache.remove(_decryptedCache.keys.first);
-      }
+      _putCachedAttachment(attachmentId, bytes);
       return bytes;
     }
 
     final info = await _api.getDownloadUrl(attachmentId);
 
     // Download the encrypted bytes from the presigned URL.
-    final httpClient = HttpClient();
-    final request = await httpClient.getUrl(Uri.parse(info.downloadUrl));
-    final response = await request.close();
-    final ciphertext = await _readResponse(response);
+    final ciphertext = await _downloadBytes(info.downloadUrl);
 
     // Decrypt with AES-256-GCM (nonce is embedded in the concatenated ciphertext).
     final bytes = await _decryptAttachmentCiphertext(ciphertext, fileKeyB64);
 
-    _decryptedCache[attachmentId] = bytes;
-    if (_decryptedCache.length > _maxCacheEntries) {
-      _decryptedCache.remove(_decryptedCache.keys.first); // evict oldest
-    }
+    _putCachedAttachment(attachmentId, bytes);
     return bytes;
   }
 
@@ -927,47 +958,46 @@ class AttachmentService {
     if (trueLength < 0 || trueLength > bytes.length - _padHeaderLength) {
       return bytes;
     }
-    return Uint8List.sublistView(
-      bytes,
-      _padHeaderLength,
-      _padHeaderLength + trueLength,
+    return Uint8List.fromList(
+      bytes.sublist(_padHeaderLength, _padHeaderLength + trueLength),
     );
   }
 
   Future<Uint8List> downloadRaw({required String attachmentId}) async {
-    final cached = _decryptedCache[attachmentId];
-    if (cached != null) {
-      _decryptedCache.remove(attachmentId);
-      _decryptedCache[attachmentId] = cached;
-      return cached;
-    }
+    final cached = _getCachedAttachment(attachmentId);
+    if (cached != null) return cached;
 
     // Mesh-delivered ciphertext (#26), local-first like downloadAndDecrypt.
     final localCiphertext = await _lookupLocalCiphertext(attachmentId);
     if (localCiphertext != null) {
-      _decryptedCache[attachmentId] = localCiphertext;
-      if (_decryptedCache.length > _maxCacheEntries) {
-        _decryptedCache.remove(_decryptedCache.keys.first);
-      }
+      _putCachedAttachment(attachmentId, localCiphertext);
       return localCiphertext;
     }
 
     final info = await _api.getDownloadUrl(attachmentId);
-    final httpClient = HttpClient();
-    final request = await httpClient.getUrl(Uri.parse(info.downloadUrl));
-    final response = await request.close();
-    final bytes = await _readResponse(response);
+    final bytes = await _downloadBytes(info.downloadUrl);
 
-    _decryptedCache[attachmentId] = bytes;
-    if (_decryptedCache.length > _maxCacheEntries) {
-      _decryptedCache.remove(_decryptedCache.keys.first);
-    }
+    _putCachedAttachment(attachmentId, bytes);
     return bytes;
+  }
+
+  Future<Uint8List> _downloadBytes(String url) async {
+    final httpClient = HttpClient()
+      ..connectionTimeout = _downloadConnectTimeout;
+    try {
+      final request = await httpClient
+          .getUrl(Uri.parse(url))
+          .timeout(_downloadConnectTimeout);
+      final response = await request.close().timeout(_downloadTimeout);
+      return _readResponse(response).timeout(_downloadTimeout);
+    } finally {
+      httpClient.close(force: true);
+    }
   }
 
   Future<Uint8List> _readResponse(HttpClientResponse resp) async {
     final builder = BytesBuilder(copy: false);
-    await for (final chunk in resp) {
+    await for (final chunk in resp.timeout(_downloadTimeout)) {
       builder.add(chunk);
     }
     return builder.toBytes();

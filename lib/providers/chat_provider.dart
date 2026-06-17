@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:math';
 import 'dart:convert';
 import 'dart:io';
@@ -146,6 +147,13 @@ class _PreparedEncryptedPayload {
   });
 }
 
+class _MessageViewCache<T> {
+  final List<T> source;
+  final List<T> view;
+
+  const _MessageViewCache({required this.source, required this.view});
+}
+
 /// A poll tally computed entirely on this device from sealed ballots (#57).
 /// The server stores the ballots opaquely and never sees these counts.
 class SealedPollTally {
@@ -187,20 +195,27 @@ class ChatProvider extends ChangeNotifier {
   final OfflineOutboxService _outbox;
 
   final Map<String, List<Message>> _messages = {};
+  final Map<String, _MessageViewCache<Message>> _messageViews = {};
+  final Map<String, Map<String, _MessageViewCache<Message>>>
+  _topicMessageViews = {};
   // Per-conversation topic ("thread") lists + the topic currently filtering the
   // open chat (null = show all messages).
   final Map<String, List<ConversationTopic>> _topics = {};
+  final Map<String, _MessageViewCache<ConversationTopic>> _topicViews = {};
   String? _activeTopicId;
   final Map<String, Conversation> _conversations = {};
   final List<ChatFolder> _chatFolders = [];
   final Map<String, Set<String>> _typingUsers = {};
+  final Map<String, int> _typingVersions = {};
   // Pending typing-indicator expirations, keyed '<convID>|<userID>'.
   final Map<String, Timer> _typingExpiry = {};
   final Map<String, Map<String, String>> _readReceipts = {};
+  final Map<String, int> _readReceiptVersions = {};
   // Live provably-fair game rounds, keyed by round id (populated from the API
   // and game_updated WS events) so the in-chat game cards render reactively.
   final Map<String, Map<String, dynamic>> _gameRounds = {};
   final Map<String, _ActiveLiveLocationShare> _liveLocationShares = {};
+  int _liveLocationVersion = 0;
   final Set<String> _mlsRefreshInFlight = {};
   List<OfflineOutboxItem> _outboxItems = const [];
   String? _selfId;
@@ -284,14 +299,34 @@ class ChatProvider extends ChangeNotifier {
 
   List<ChatFolder> get chatFolders => List.unmodifiable(_chatFolders);
 
-  List<Message> messagesFor(String convID) => List.unmodifiable(
-    (_messages[convID] ?? const <Message>[]).where((m) => !m.isHiddenControl),
-  );
+  List<Message> messagesFor(String convID) {
+    final source = _messages[convID] ?? const <Message>[];
+    final cached = _messageViews[convID];
+    if (cached != null && identical(cached.source, source)) {
+      return cached.view;
+    }
+    final visible = source.any((message) => message.isHiddenControl)
+        ? source
+              .where((message) => !message.isHiddenControl)
+              .toList(growable: false)
+        : source;
+    final view = UnmodifiableListView<Message>(visible);
+    _messageViews[convID] = _MessageViewCache(source: source, view: view);
+    return view;
+  }
 
   // ── Topics / threads ──────────────────────────────────────────────────────
 
-  List<ConversationTopic> topicsFor(String convID) =>
-      List.unmodifiable(_topics[convID] ?? const <ConversationTopic>[]);
+  List<ConversationTopic> topicsFor(String convID) {
+    final source = _topics[convID] ?? const <ConversationTopic>[];
+    final cached = _topicViews[convID];
+    if (cached != null && identical(cached.source, source)) {
+      return cached.view;
+    }
+    final view = UnmodifiableListView<ConversationTopic>(source);
+    _topicViews[convID] = _MessageViewCache(source: source, view: view);
+    return view;
+  }
 
   String? get activeTopicId => _activeTopicId;
 
@@ -299,12 +334,27 @@ class ChatProvider extends ChangeNotifier {
   /// [Message.effectiveTopicId] (the plaintext column or, for E2EE chats, the
   /// encrypted artifact metadata — so thread membership never leaks server-side
   /// on encrypted conversations).
-  List<Message> messagesForTopic(String convID, String topicId) =>
-      List.unmodifiable(
-        (_messages[convID] ?? const <Message>[]).where(
-          (m) => !m.isHiddenControl && m.effectiveTopicId == topicId,
-        ),
-      );
+  List<Message> messagesForTopic(String convID, String topicId) {
+    final source = _messages[convID] ?? const <Message>[];
+    final topicCache = _topicMessageViews.putIfAbsent(
+      convID,
+      () => <String, _MessageViewCache<Message>>{},
+    );
+    final cached = topicCache[topicId];
+    if (cached != null && identical(cached.source, source)) {
+      return cached.view;
+    }
+    final view = UnmodifiableListView<Message>(
+      source
+          .where(
+            (message) =>
+                !message.isHiddenControl && message.effectiveTopicId == topicId,
+          )
+          .toList(growable: false),
+    );
+    topicCache[topicId] = _MessageViewCache(source: source, view: view);
+    return view;
+  }
 
   /// Loads the conversation's topic list from the server (best-effort).
   Future<List<ConversationTopic>> loadTopics(
@@ -448,25 +498,57 @@ class ChatProvider extends ChangeNotifier {
   int get pendingOutboxCount => _outboxItems.length;
   List<OfflineOutboxItem> get outboxItems => List.unmodifiable(_outboxItems);
 
-  Set<String> typingUsersFor(String convID) => _typingUsers[convID] ?? {};
+  Set<String> typingUsersFor(String convID) =>
+      _typingUsers[convID] ?? const <String>{};
+
+  int typingVersionFor(String convID) => _typingVersions[convID] ?? 0;
+
+  int readReceiptVersionFor(String convID) => _readReceiptVersions[convID] ?? 0;
+
+  int get liveLocationVersion => _liveLocationVersion;
+
+  Set<String> messageIdsReadByOthers(String convID, String currentUserID) {
+    final receipts = _readReceipts[convID];
+    if (receipts == null || receipts.isEmpty) return const <String>{};
+    final list = _messages[convID] ?? const <Message>[];
+    if (list.isEmpty) return const <String>{};
+
+    final indexById = <String, int>{};
+    for (var i = 0; i < list.length; i++) {
+      indexById[list[i].id] = i;
+    }
+
+    var latestReadIndex = -1;
+    final exactReadIds = <String>{};
+    for (final entry in receipts.entries) {
+      if (entry.key == currentUserID) continue;
+      exactReadIds.add(entry.value);
+      final readIndex = indexById[entry.value];
+      if (readIndex != null && readIndex > latestReadIndex) {
+        latestReadIndex = readIndex;
+      }
+    }
+
+    if (latestReadIndex < 0) {
+      return exactReadIds.isEmpty
+          ? const <String>{}
+          : Set.unmodifiable(exactReadIds);
+    }
+
+    final readIds = <String>{};
+    for (var i = 0; i <= latestReadIndex && i < list.length; i++) {
+      if (!list[i].isHiddenControl) readIds.add(list[i].id);
+    }
+    readIds.addAll(exactReadIds);
+    return Set.unmodifiable(readIds);
+  }
 
   bool messageReadByOthers(
     String convID,
     Message message,
     String currentUserID,
   ) {
-    final receipts = _readReceipts[convID];
-    if (receipts == null || receipts.isEmpty) return false;
-    final list = _messages[convID] ?? const <Message>[];
-    final messageIndex = list.indexWhere((msg) => msg.id == message.id);
-    for (final entry in receipts.entries) {
-      if (entry.key == currentUserID) continue;
-      if (entry.value == message.id) return true;
-      if (messageIndex < 0) continue;
-      final readIndex = list.indexWhere((msg) => msg.id == entry.value);
-      if (readIndex >= 0 && readIndex >= messageIndex) return true;
-    }
-    return false;
+    return messageIdsReadByOthers(convID, currentUserID).contains(message.id);
   }
 
   bool _isLoading = false;
@@ -536,10 +618,14 @@ class ChatProvider extends ChangeNotifier {
 
   void clearState() {
     _messages.clear();
+    _messageViews.clear();
+    _topicMessageViews.clear();
     _conversations.clear();
     _chatFolders.clear();
     _typingUsers.clear();
+    _typingVersions.clear();
     _readReceipts.clear();
+    _readReceiptVersions.clear();
     // Drop the in-memory vote marks on logout. The persisted entries are
     // device-local and keyed by poll id (the same model as the anonymous
     // vote tokens above them in secure storage).
@@ -559,6 +645,8 @@ class ChatProvider extends ChangeNotifier {
     _signingKeyCache.clear();
     _seenProofSignatures.clear();
     _gameRounds.clear();
+    _topicViews.clear();
+    _liveLocationVersion++;
     _messageTranslations.clear();
     _meshDeliveredNonces.clear();
     // Reset identity too — the provider outlives a logout/login cycle, and a
@@ -610,6 +698,7 @@ class ChatProvider extends ChangeNotifier {
     if (_liveLocationShares.isEmpty) return;
     final active = _liveLocationShares.entries.toList();
     _liveLocationShares.clear();
+    _liveLocationVersion++;
     for (final entry in active) {
       final share = entry.value;
       share.cancel();
@@ -1283,15 +1372,25 @@ class ChatProvider extends ChangeNotifier {
   }
 
   List<Message> _withOutboxOverlays(String convID, List<Message> base) {
-    final items = _outboxItems
-        .where((item) => item.conversationId == convID)
-        .toList(growable: false);
-    var next = base
-        .where(
-          (message) => message is! PendingMessage || message.outboxId == null,
-        )
-        .toList();
-    if (items.isEmpty) return next;
+    List<OfflineOutboxItem>? items;
+    for (final item in _outboxItems) {
+      if (item.conversationId != convID) continue;
+      (items ??= <OfflineOutboxItem>[]).add(item);
+    }
+    final hasOutboxOverlay = base.any(
+      (message) => message is PendingMessage && message.outboxId != null,
+    );
+    if ((items == null || items.isEmpty) && !hasOutboxOverlay) return base;
+
+    final next = hasOutboxOverlay
+        ? base
+              .where(
+                (message) =>
+                    message is! PendingMessage || message.outboxId == null,
+              )
+              .toList()
+        : List<Message>.from(base);
+    if (items == null || items.isEmpty) return next;
 
     for (final item in items) {
       switch (item.action) {
@@ -4235,6 +4334,7 @@ class ChatProvider extends ChangeNotifier {
       sharingWith: sharingWith,
     );
     _liveLocationShares[messageID] = share;
+    _liveLocationVersion++;
     share.expiryTimer = Timer(expiresAt.difference(DateTime.now()), () {
       unawaited(_stopLiveLocationShare(messageID, shouldNotify: true));
     });
@@ -4310,6 +4410,7 @@ class ChatProvider extends ChangeNotifier {
   }) async {
     final share = _liveLocationShares.remove(messageID);
     if (share == null) return;
+    _liveLocationVersion++;
     share.cancel();
 
     await NotificationService.cancelLiveLocationNotification(
@@ -4653,8 +4754,12 @@ class ChatProvider extends ChangeNotifier {
         final convID = event.data['conversation_id'] as String?;
         final userID = event.data['user_id'] as String?;
         if (convID != null && userID != null) {
-          _typingUsers[convID] = {...?_typingUsers[convID], userID};
-          notifyListeners();
+          final users = _typingUsers[convID] ?? const <String>{};
+          if (!users.contains(userID)) {
+            _typingUsers[convID] = {...users, userID};
+            _typingVersions[convID] = (_typingVersions[convID] ?? 0) + 1;
+            notifyListeners();
+          }
           // Resettable per-(conv,user) timer: a continuously typing user keeps
           // sending events, and an older timer firing must not flicker them
           // off 3s after their FIRST keystroke.
@@ -4664,7 +4769,10 @@ class ChatProvider extends ChangeNotifier {
             () {
               _typingExpiry.remove('$convID|$userID');
               if (_disposed) return;
-              _typingUsers[convID]?.remove(userID);
+              final users = _typingUsers[convID];
+              if (users == null || !users.remove(userID)) return;
+              if (users.isEmpty) _typingUsers.remove(convID);
+              _typingVersions[convID] = (_typingVersions[convID] ?? 0) + 1;
               notifyListeners();
             },
           );
@@ -5067,6 +5175,7 @@ class ChatProvider extends ChangeNotifier {
     final byUser = _readReceipts.putIfAbsent(convID, () => <String, String>{});
     if (byUser[userID] == messageID) return;
     byUser[userID] = messageID;
+    _readReceiptVersions[convID] = (_readReceiptVersions[convID] ?? 0) + 1;
     if (notify) notifyListeners();
   }
 
