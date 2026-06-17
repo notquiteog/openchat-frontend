@@ -11,6 +11,7 @@ import '../crypto/pgp_service.dart';
 import '../crypto/smp_service.dart';
 import '../models/chat_folder.dart';
 import '../models/conversation.dart';
+import '../models/conversation_topic.dart';
 import '../models/key_transparency_event.dart';
 import '../models/message.dart';
 import '../models/user.dart';
@@ -185,6 +186,10 @@ class ChatProvider extends ChangeNotifier {
   final OfflineOutboxService _outbox;
 
   final Map<String, List<Message>> _messages = {};
+  // Per-conversation topic ("thread") lists + the topic currently filtering the
+  // open chat (null = show all messages).
+  final Map<String, List<ConversationTopic>> _topics = {};
+  String? _activeTopicId;
   final Map<String, Conversation> _conversations = {};
   final List<ChatFolder> _chatFolders = [];
   final Map<String, Set<String>> _typingUsers = {};
@@ -281,6 +286,63 @@ class ChatProvider extends ChangeNotifier {
   List<Message> messagesFor(String convID) => List.unmodifiable(
     (_messages[convID] ?? const <Message>[]).where((m) => !m.isHiddenControl),
   );
+
+  // ── Topics / threads ──────────────────────────────────────────────────────
+
+  List<ConversationTopic> topicsFor(String convID) =>
+      List.unmodifiable(_topics[convID] ?? const <ConversationTopic>[]);
+
+  String? get activeTopicId => _activeTopicId;
+
+  /// Messages in [convID] belonging to [topicId], matched via
+  /// [Message.effectiveTopicId] (the plaintext column or, for E2EE chats, the
+  /// encrypted artifact metadata — so thread membership never leaks server-side
+  /// on encrypted conversations).
+  List<Message> messagesForTopic(String convID, String topicId) =>
+      List.unmodifiable(
+        (_messages[convID] ?? const <Message>[]).where(
+          (m) => !m.isHiddenControl && m.effectiveTopicId == topicId,
+        ),
+      );
+
+  /// Loads the conversation's topic list from the server (best-effort).
+  Future<List<ConversationTopic>> loadTopics(
+    String convID, {
+    bool channel = false,
+  }) async {
+    try {
+      final topics = await _api.getTopics(convID, channel: channel);
+      _topics[convID] = topics;
+      notifyListeners();
+      return topics;
+    } catch (_) {
+      return _topics[convID] ?? const <ConversationTopic>[];
+    }
+  }
+
+  /// Sets (or clears, with null) the topic that filters the open chat.
+  void setActiveTopic(String? topicId) {
+    if (_activeTopicId == topicId) return;
+    _activeTopicId = topicId;
+    notifyListeners();
+  }
+
+  /// Creates a topic (requires manage-topics permission server-side) and caches
+  /// it. Returns null on failure (e.g. permission denied).
+  Future<ConversationTopic?> createTopic(
+    String convID,
+    String name, {
+    bool channel = false,
+  }) async {
+    try {
+      final topic = await _api.createTopic(convID, name, channel: channel);
+      _topics[convID] = [...?_topics[convID], topic];
+      notifyListeners();
+      return topic;
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// In-band SMP control messages, routed to the SMP provider rather than shown.
   final StreamController<SmpInbound> _smpController =

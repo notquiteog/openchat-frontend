@@ -216,6 +216,91 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
     });
   }
 
+  /// Seller side of paid DMs: set (or clear) the price a non-contact must pay
+  /// from their wallet before they can send a first message.
+  Future<void> _managePaidInbox() async {
+    final api = context.read<ApiService>();
+    var provider = 'btc';
+    final amountCtrl = TextEditingController();
+    try {
+      final current = await api.getInboxPrice();
+      if (current.provider.isNotEmpty) provider = current.provider;
+      if ((double.tryParse(current.amount) ?? 0) > 0) {
+        amountCtrl.text = current.amount;
+      }
+    } catch (_) {}
+    if (!mounted) return;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => GlassAlertDialog(
+          title: const Text('Paid inbox'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Non-contacts pay this once from their wallet before they can '
+                'send you a first message. Leave empty (or 0) to turn it off.',
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  for (final p in const ['btc', 'xmr'])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(p.toUpperCase()),
+                        selected: provider == p,
+                        onSelected: (_) => setDlg(() => provider = p),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              TextField(
+                controller: amountCtrl,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: InputDecoration(
+                  labelText: 'Amount (${provider.toUpperCase()})',
+                  hintText: '0 to disable',
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final amountText = amountCtrl.text.trim();
+    amountCtrl.dispose();
+    if (saved != true || !mounted) return;
+    final amount = (double.tryParse(amountText) ?? 0) <= 0 ? '0' : amountText;
+    try {
+      await api.setInboxPrice(provider: provider, amount: amount);
+      if (mounted) {
+        showAppToast(
+          context,
+          amount == '0' ? 'Paid inbox turned off' : 'Paid inbox updated',
+        );
+      }
+    } catch (_) {
+      if (mounted) showAppToast(context, 'Could not update', isError: true);
+    }
+  }
+
   Future<void> _manageBusinessProfile() async {
     final api = context.read<ApiService>();
     final messenger = ScaffoldMessenger.of(context);
@@ -560,6 +645,12 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
               title: 'Business profile',
               subtitle: 'Greeting, away message, hours, and quick replies',
               onTap: _manageBusinessProfile,
+            ),
+            SettingsTile(
+              icon: Icons.mark_email_unread_outlined,
+              title: 'Paid inbox',
+              subtitle: 'Charge non-contacts for a first message',
+              onTap: _managePaidInbox,
             ),
           ],
         ),

@@ -8,6 +8,7 @@ import '../models/conversation.dart';
 import '../models/user.dart';
 import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
+import '../utils/inbox_payment.dart';
 import '../screens/channels/channel_screen.dart';
 import '../screens/chat/chat_screen.dart';
 import '../screens/profile/user_profile_screen.dart';
@@ -53,8 +54,8 @@ Future<void> handleChatSearchSelection(
   switch (selection) {
     case UserSearchSelection(:final userID):
       try {
-        final conv = await chat.openDM(userID);
-        if (!context.mounted) return;
+        final conv = await openDmHandlingInboxPrice(context, userID);
+        if (conv == null || !context.mounted) return;
         if (openConversation != null) {
           openConversation(conv, null);
         } else {

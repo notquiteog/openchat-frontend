@@ -6,7 +6,9 @@ import '../models/story.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import '../screens/stories/create_story_screen.dart';
+import '../screens/stories/my_stories_screen.dart';
 import '../screens/stories/story_viewer_screen.dart';
+import 'story_manage_sheet.dart';
 
 /// A compact, Instagram-style row of story circles shown at the top of the
 /// chats list. The avatars are deliberately small (much smaller than the iOS
@@ -71,6 +73,21 @@ class _StoriesStripState extends State<StoriesStrip> {
     _refresh();
   }
 
+  /// Long-press on the "Your story" tile opens the My Stories management hub.
+  Future<void> _openMyStories() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const MyStoriesScreen()),
+    );
+    _refresh();
+  }
+
+  /// Long-press on one of your own story tiles offers pin/archive/delete.
+  Future<void> _manageStory(Story story) async {
+    final outcome = await showStoryManageSheet(context, story);
+    if (outcome.result != StoryManageResult.unchanged) _refresh();
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentUserId = context.watch<AuthProvider>().currentUser?.id ?? '';
@@ -87,14 +104,20 @@ class _StoriesStripState extends State<StoriesStrip> {
             separatorBuilder: (_, _) => const SizedBox(width: 12),
             itemBuilder: (context, index) {
               if (index == 0) {
-                return _StoryAddTile(onTap: _createStory);
+                return _StoryAddTile(
+                  onTap: _createStory,
+                  onLongPress: _openMyStories,
+                );
               }
               final storyIndex = index - 1;
               final story = stories[storyIndex];
+              final isOwn =
+                  story.userId == currentUserId && story.conversationId == null;
               return _StoryTile(
                 story: story,
                 currentUserId: currentUserId,
                 onTap: () => _openStories(stories, storyIndex),
+                onLongPress: isOwn ? () => _manageStory(story) : null,
               );
             },
           );
@@ -141,8 +164,9 @@ class _StoryAvatar extends StatelessWidget {
 
 class _StoryAddTile extends StatelessWidget {
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
-  const _StoryAddTile({required this.onTap});
+  const _StoryAddTile({required this.onTap, this.onLongPress});
 
   @override
   Widget build(BuildContext context) {
@@ -152,6 +176,7 @@ class _StoryAddTile extends StatelessWidget {
       width: _kTile,
       child: GestureDetector(
         onTap: onTap,
+        onLongPress: onLongPress,
         behavior: HitTestBehavior.opaque,
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -227,11 +252,13 @@ class _StoryTile extends StatelessWidget {
   final Story story;
   final String currentUserId;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
   const _StoryTile({
     required this.story,
     required this.currentUserId,
     required this.onTap,
+    this.onLongPress,
   });
 
   @override
@@ -246,6 +273,7 @@ class _StoryTile extends StatelessWidget {
       width: _kTile,
       child: GestureDetector(
         onTap: onTap,
+        onLongPress: onLongPress,
         behavior: HitTestBehavior.opaque,
         child: Column(
           mainAxisSize: MainAxisSize.min,

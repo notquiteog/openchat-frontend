@@ -60,6 +60,7 @@ import '../../widgets/glass.dart';
 import '../../widgets/key_change_banner.dart';
 import '../../widgets/key_verification_badge.dart';
 import '../../widgets/location_map_preview.dart';
+import '../../utils/inbox_payment.dart';
 import '../../widgets/attachment_variant_sheet.dart';
 import '../../widgets/message_action_sheet.dart';
 import '../../widgets/reaction_emoji_picker.dart';
@@ -136,6 +137,9 @@ class _ChatScreenState extends State<ChatScreen> {
   Timer? _highlightTimer;
   final Map<String, GlobalKey> _messageKeys = {};
   String? _highlightedMessageId;
+  // Active topic ("thread") filtering the open chat; null = show all. Local to
+  // the screen so it auto-clears on leave and never cross-talks between chats.
+  String? _activeTopicId;
   AttachmentUploadProgress? _attachmentUploadProgress;
   ActiveMentionQuery? _activeMentionQuery;
   ActiveCommandQuery? _activeCommandQuery;
@@ -196,6 +200,9 @@ class _ChatScreenState extends State<ChatScreen> {
       unawaited(chat.loadConversationMembers(conv.id));
       unawaited(_syncConversationPins());
       if (conv.isDM) unawaited(_loadBotCommands());
+      if (conv.isGroup || conv.isChannel) {
+        unawaited(chat.loadTopics(conv.id, channel: conv.isChannel));
+      }
       if (mounted && conv.isGroup) {
         unawaited(context.read<GroupCallPresenceProvider>().refresh(conv.id));
       }
@@ -474,6 +481,7 @@ class _ChatScreenState extends State<ChatScreen> {
         replyTo: replyTo,
         silent: _sendSilent,
         scheduledFor: _scheduledFor,
+        topicId: _activeTopicId,
       );
       if (!mounted) return;
       if (sent) {
@@ -2681,7 +2689,9 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     final auth = context.watch<AuthProvider>();
     final chat = context.watch<ChatProvider>();
-    final messages = chat.messagesFor(conv.id);
+    final messages = _activeTopicId != null
+        ? chat.messagesForTopic(conv.id, _activeTopicId!)
+        : chat.messagesFor(conv.id);
     final currentUserID = auth.currentUser?.id ?? '';
     final typingUsers = chat.typingUsersFor(conv.id);
     _handleMessageListChange(messages, currentUserID);
@@ -2727,6 +2737,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     conversationId: conv.id,
                     onShowAll: () => _showConversationPinsSheet(currentUserID),
                   ),
+                  _buildTopicBar(chat, conv),
                   Expanded(
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
@@ -3444,6 +3455,82 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Horizontal topic ("thread") filter strip for groups/channels. Tapping a
+  /// topic filters the message stream to it; "All" clears the filter.
+  Widget _buildTopicBar(ChatProvider chat, Conversation conv) {
+    if (!(conv.isGroup || conv.isChannel)) return const SizedBox.shrink();
+    final topics = chat.topicsFor(conv.id);
+    if (topics.isEmpty && !conv.topicsEnabled) return const SizedBox.shrink();
+    return SizedBox(
+      height: 46,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        children: [
+          _TopicChip(
+            label: 'All',
+            selected: _activeTopicId == null,
+            onTap: () => setState(() => _activeTopicId = null),
+          ),
+          for (final t in topics)
+            _TopicChip(
+              label: t.name,
+              selected: _activeTopicId == t.id,
+              onTap: () => setState(
+                () => _activeTopicId = _activeTopicId == t.id ? null : t.id,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _createTopic(Conversation conv) async {
+    final name = await _promptTopicName();
+    if (name == null || name.trim().isEmpty || !mounted) return;
+    final topic = await context.read<ChatProvider>().createTopic(
+      conv.id,
+      name.trim(),
+      channel: conv.isChannel,
+    );
+    if (!mounted) return;
+    if (topic != null) {
+      setState(() => _activeTopicId = topic.id);
+      showAppToast(context, 'Topic created');
+    } else {
+      showAppToast(context, 'Could not create topic', isError: true);
+    }
+  }
+
+  Future<String?> _promptTopicName() async {
+    final ctrl = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (dctx) => GlassAlertDialog(
+        title: const Text('New topic'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLength: 128,
+          decoration: const InputDecoration(hintText: 'Topic name'),
+          onSubmitted: (v) => Navigator.of(dctx).pop(v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dctx).pop(ctrl.text),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    return name;
+  }
+
   void _showChatMenu(
     BuildContext context,
     Conversation conv,
@@ -3541,6 +3628,14 @@ class _ChatScreenState extends State<ChatScreen> {
                   icon: Icons.lock_outline_rounded,
                   label: 'Encryption mode',
                   onTap: () => runAfterClose(() => _setEncryption(context)),
+                ),
+              if ((conv.isGroup || conv.isChannel) &&
+                  (currentMember?.hasPermission(AdminPermission.manageTopics) ??
+                      false))
+                _MenuTile(
+                  icon: Icons.forum_outlined,
+                  label: 'New topic',
+                  onTap: () => runAfterClose(() => _createTopic(conv)),
                 ),
               if (conv.isGroup && canManageInfo)
                 _MenuTile(
@@ -4801,17 +4896,17 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _replyPrivately(Message msg) async {
     final sender = msg.sender;
     if (sender == null) return;
-    final chat = context.read<ChatProvider>();
     final settings = context.read<SettingsProvider>();
     final messenger = ScaffoldMessenger.of(context);
-    final Conversation dm;
+    final Conversation? opened;
     try {
-      dm = await chat.openDM(sender.id);
+      opened = await openDmHandlingInboxPrice(context, sender.id);
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('Could not open DM: $e')));
       return;
     }
-    if (!mounted) return;
+    if (opened == null || !mounted) return;
+    final dm = opened;
     // Pre-fill the DM composer with a quote of the group message (the original
     // isn't in the DM, so the snippet travels as text).
     final quoted = (msg.decryptedContent ?? '').trim();
@@ -6031,6 +6126,49 @@ class _BouncingDots extends AnimatedWidget {
           ),
         );
       }),
+    );
+  }
+}
+
+/// A pill chip in the topic filter strip.
+class _TopicChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _TopicChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: GlassContainer(
+          shape: const LiquidRoundedSuperellipse(borderRadius: 999),
+          allowElevation: true,
+          glowIntensity: selected ? 0.10 : 0.04,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected
+                    ? scheme.primary
+                    : scheme.onSurface.withValues(alpha: 0.72),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

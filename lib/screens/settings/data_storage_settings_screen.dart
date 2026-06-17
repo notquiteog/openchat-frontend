@@ -92,6 +92,15 @@ class DataStorageSettingsScreen extends StatelessWidget {
                 settings.setLinkPreviewsEnabled(value);
               },
             ),
+            SettingsSwitchTile(
+              icon: Icons.gpp_maybe_outlined,
+              title: 'Scam link warnings',
+              subtitle:
+                  'Flag look-alike domains and wallet-drainer links on-device — '
+                  'never contacts the link',
+              value: settings.scamCautionEnabled,
+              onChanged: settings.setScamCautionEnabled,
+            ),
           ],
         ),
         const SizedBox(height: 20),

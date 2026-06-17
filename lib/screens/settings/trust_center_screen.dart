@@ -42,6 +42,7 @@ import '../../utils/trust_center_summary.dart';
 import '../../widgets/glass.dart';
 import '../nearby/nearby_screen.dart';
 import 'device_pairing_screen.dart';
+import 'blocked_users_screen.dart';
 import 'identity_qr_scanner_screen.dart';
 import 'smp_verify_screen.dart';
 import 'pgp_keys_screen.dart';
@@ -1749,6 +1750,18 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                       context,
                       MaterialPageRoute<void>(
                         builder: (_) => const SmpVerifyScreen(),
+                      ),
+                    ),
+                  ),
+                  const _TrustDivider(),
+                  _TrustRow(
+                    icon: Icons.block_rounded,
+                    title: 'Blocked users',
+                    subtitle: 'People you have blocked',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute<void>(
+                        builder: (_) => const BlockedUsersScreen(),
                       ),
                     ),
                     isLast: true,

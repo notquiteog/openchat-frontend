@@ -89,6 +89,7 @@ class _PrivacyOnboardingScreenState extends State<PrivacyOnboardingScreen> {
     final scheme = Theme.of(context).colorScheme;
     final page = _pages[_page];
     return Scaffold(
+      key: const Key('privacy-onboarding'),
       body: GoldSandBackground(
         child: SafeArea(
           child: Column(
@@ -214,6 +215,7 @@ class _PrivacyOnboardingScreenState extends State<PrivacyOnboardingScreen> {
                         ),
                       ),
                       FilledButton.icon(
+                        key: const Key('privacy-onboarding-next'),
                         onPressed: _next,
                         icon: Icon(
                           _page == _pages.length - 1

@@ -1643,7 +1643,12 @@ class _AppRootState extends State<_AppRoot> {
           ),
         );
       }
-      if (userId.isNotEmpty && !settings.hasViewedPrivacyOnboarding(userId)) {
+      // Show the one-time privacy explainer only in the real vault: a coerced
+      // decoy/duress unlock must neither flash the tour nor persist a first-run
+      // marker (which would betray that the account is fresh).
+      if (userId.isNotEmpty &&
+          vaultModeListenable.value == VaultMode.real &&
+          !settings.hasViewedPrivacyOnboarding(userId)) {
         return PrivacyOnboardingScreen(
           onComplete: () {
             unawaited(settings.markPrivacyOnboardingViewed(userId));

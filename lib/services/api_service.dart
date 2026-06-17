@@ -23,6 +23,7 @@ import '../models/moderation_report.dart';
 import '../models/mls.dart';
 import '../models/operator_metrics.dart';
 import '../models/scheduled_message.dart';
+import '../models/conversation_topic.dart';
 import '../models/story.dart';
 import '../models/story_viewer.dart';
 import '../models/system_admin_audit_event.dart';
@@ -483,11 +484,19 @@ class ApiService {
         .toList();
   }
 
-  Future<List<User>> listBlockedUsers({int limit = 100}) async {
-    final resp = await _get('/api/v1/me/blocks?limit=$limit');
-    return (resp['data'] as List? ?? [])
+  Future<({List<User> users, int total})> listBlockedUsers({
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final resp = await _get('/api/v1/me/blocks?limit=$limit&offset=$offset');
+    final data = resp['data'] as Map<String, dynamic>? ?? const {};
+    final users = (data['users'] as List? ?? const [])
         .map((e) => User.fromJson(e as Map<String, dynamic>))
         .toList();
+    return (
+      users: users,
+      total: (data['total'] as num?)?.toInt() ?? users.length,
+    );
   }
 
   Future<void> blockUser(String userID) async {
@@ -544,6 +553,36 @@ class ApiService {
   Future<Conversation> openDM(String userID) async {
     final resp = await _post('/api/v1/conversations/dm', {'user_id': userID});
     return Conversation.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  /// Pays the target's inbox price (when required) and opens the DM. Idempotent
+  /// server-side: an already-open or already-paid pair is not charged again.
+  Future<Conversation> unlockDm(String userID) async {
+    final resp = await _post('/api/v1/conversations/dm/unlock', {
+      'user_id': userID,
+    });
+    return Conversation.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  /// The caller's own paid-inbox price (amount '0' = disabled).
+  Future<({String provider, String amount})> getInboxPrice() async {
+    final resp = await _get('/api/v1/users/me/inbox-price');
+    final d = resp['data'] as Map<String, dynamic>? ?? const {};
+    return (
+      provider: d['provider'] as String? ?? '',
+      amount: d['amount'] as String? ?? '0',
+    );
+  }
+
+  /// Sets (or clears, with amount '0') the caller's paid-inbox price.
+  Future<void> setInboxPrice({
+    required String provider,
+    required String amount,
+  }) async {
+    await _put('/api/v1/users/me/preferences', {
+      'inbox_price_provider': provider,
+      'inbox_price_amount': amount,
+    });
   }
 
   Future<Conversation> createGroup({
@@ -2079,6 +2118,47 @@ class ApiService {
   }) async {
     final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
     await _put('$base/$convID/topics-enabled', {'enabled': enabled});
+  }
+
+  Future<List<ConversationTopic>> getTopics(
+    String convID, {
+    bool channel = false,
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    final resp = await _get('$base/$convID/topics');
+    return ((resp['data'] as List?) ?? const [])
+        .map((e) => ConversationTopic.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Creates a topic (requires manage-topics permission server-side) and
+  /// enables topics on the conversation.
+  Future<ConversationTopic> createTopic(
+    String convID,
+    String name, {
+    String? iconColor,
+    bool channel = false,
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    final resp = await _post('$base/$convID/topics', {
+      'name': name,
+      'icon_color': ?iconColor,
+    });
+    return ConversationTopic.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  Future<void> updateTopic(
+    String convID,
+    String topicID, {
+    String? name,
+    bool? closed,
+    bool channel = false,
+  }) async {
+    final base = channel ? '/api/v1/channels' : '/api/v1/conversations';
+    await _put('$base/$convID/topics/$topicID', {
+      'name': ?name,
+      'closed': ?closed,
+    });
   }
 
   Future<ChannelAnalytics> getChannelStats(String chanID) async {

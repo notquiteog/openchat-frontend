@@ -27,6 +27,7 @@ import '../screens/invites/invite_preview_screen.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
 import '../services/link_preview_service.dart';
+import '../services/scam_heuristics.dart';
 import '../services/network_service.dart';
 import '../services/security_service.dart';
 import '../services/transcription_service.dart';
@@ -1698,13 +1699,16 @@ class _TextBubble extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     var linkPreviewsEnabled = true;
     var strictPrivacyMode = false;
+    var scamCautionEnabled = true;
     try {
       final settings = context.watch<SettingsProvider>();
       linkPreviewsEnabled = settings.linkPreviewsEnabled;
       strictPrivacyMode = settings.strictPrivacyMode;
+      scamCautionEnabled = settings.scamCautionEnabled;
     } on ProviderNotFoundException {
       linkPreviewsEnabled = true;
       strictPrivacyMode = false;
+      scamCautionEnabled = true;
     }
     final embeddedPreview = message.content!.linkPreview;
     // Honor a per-message "no link preview" flag — skips the IP-leaking fetch.
@@ -1715,6 +1719,11 @@ class _TextBubble extends StatelessWidget {
     // OpenChat invite links resolve via our own API (no third-party fetch), so
     // they preview regardless of the link-preview setting.
     final inviteToken = firstInviteToken(message.content!.text);
+    // On-device, render-only scam/phishing heuristic over the visible links.
+    // Never fetches the URL and is never serialized to the wire.
+    final scam = scamCautionEnabled
+        ? ScamHeuristics.scan(message.content!.text)
+        : null;
 
     return _BubbleShell(
       color: bubbleColor,
@@ -1771,6 +1780,8 @@ class _TextBubble extends StatelessWidget {
             style: TextStyle(color: textColor, fontSize: 15, height: 1.25),
             accentColor: isMe ? textColor.withValues(alpha: 0.9) : cs.primary,
           ),
+          if (scam != null && !_dismissedScamChips.contains(message.id))
+            _ScamCautionChip(messageId: message.id, verdict: scam),
           if (inviteToken != null) ...[
             const SizedBox(height: 8),
             _InvitePreviewCard(
@@ -2084,6 +2095,74 @@ class _BotInlineButtonState extends State<_BotInlineButton> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+}
+
+// Per-session, in-memory set of dismissed scam-caution chips, keyed by message
+// id, so a dismissed caution stays hidden while scrolling WITHOUT persisting any
+// "which scam links you saw" trail to disk.
+final Set<String> _dismissedScamChips = <String>{};
+
+/// A dismissible, render-only caution shown under a text bubble whose links trip
+/// the on-device lexical scam heuristic. Tapping it again opens nothing — it is
+/// purely informational and never leaves the device.
+class _ScamCautionChip extends StatefulWidget {
+  final String messageId;
+  final ScamVerdict verdict;
+
+  const _ScamCautionChip({required this.messageId, required this.verdict});
+
+  @override
+  State<_ScamCautionChip> createState() => _ScamCautionChipState();
+}
+
+class _ScamCautionChipState extends State<_ScamCautionChip> {
+  bool _dismissed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_dismissed) return const SizedBox.shrink();
+    final high = widget.verdict.severity == ScamSeverity.high;
+    final color = high ? const Color(0xFFD13438) : const Color(0xFFB26A00);
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.40)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.warning_amber_rounded, size: 16, color: color),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              widget.verdict.reason,
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.3,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+          ),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              _dismissedScamChips.add(widget.messageId);
+              setState(() => _dismissed = true);
+            },
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: Icon(Icons.close_rounded, size: 14, color: color),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

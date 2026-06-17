@@ -179,6 +179,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kNotifSensitive = 'notification_sensitive_content';
   static const _kStrictPrivacyMode = 'strict_privacy_mode';
   static const _kLinkPreviewsEnabled = 'link_previews_enabled';
+  static const _kScamCautionEnabled = 'scam_caution_enabled';
   static const _kMessageFontScale = 'message_font_scale';
   static const _kVoicePlaybackSpeed = 'voice_playback_speed';
   static const _kAutoDlWifi = 'auto_download_wifi';
@@ -252,6 +253,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _pauseAllowsCalls = true;
   bool _strictPrivacyMode = false;
   bool _linkPreviewsEnabled = true;
+  bool _scamCautionEnabled = true;
   double _messageFontScale = 1.0;
   double _voicePlaybackSpeed = 1.0;
   bool _autoDownloadWifi = true;
@@ -461,6 +463,10 @@ class SettingsProvider extends ChangeNotifier {
   bool get linkPreviewsEnabled =>
       _strictPrivacyMode ? false : _linkPreviewsEnabled;
 
+  /// Show the on-device, render-only scam/phishing caution chip. Purely local
+  /// (never fetches a URL), so it is independent of strict-privacy mode.
+  bool get scamCautionEnabled => _scamCautionEnabled;
+
   /// Message text scale factor (0.8–1.5, default 1.0). Applied to chat bubbles.
   double get messageFontScale => _messageFontScale;
   static const double minMessageFontScale = 0.8;
@@ -577,6 +583,7 @@ class SettingsProvider extends ChangeNotifier {
     _syncGlobalNotificationPauseToService();
     _strictPrivacyMode = _prefs!.getBool(_kStrictPrivacyMode) ?? false;
     _linkPreviewsEnabled = _prefs!.getBool(_kLinkPreviewsEnabled) ?? true;
+    _scamCautionEnabled = _prefs!.getBool(_kScamCautionEnabled) ?? true;
     _messageFontScale = (_prefs!.getDouble(_kMessageFontScale) ?? 1.0).clamp(
       minMessageFontScale,
       maxMessageFontScale,
@@ -1670,6 +1677,12 @@ class SettingsProvider extends ChangeNotifier {
     _linkPreviewsEnabled = value;
     notifyListeners();
     await _prefs?.setBool(_kLinkPreviewsEnabled, value);
+  }
+
+  Future<void> setScamCautionEnabled(bool value) async {
+    _scamCautionEnabled = value;
+    notifyListeners();
+    await _prefs?.setBool(_kScamCautionEnabled, value);
   }
 
   Future<void> setReduceTransparency(bool value) async {

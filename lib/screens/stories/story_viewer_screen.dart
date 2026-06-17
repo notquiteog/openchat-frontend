@@ -19,6 +19,7 @@ import '../../utils/story_background.dart';
 import '../../widgets/custom_emoji_image.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/reaction_emoji_picker.dart';
+import '../../widgets/story_manage_sheet.dart';
 
 enum _StoryLoadState { idle, loading, done, error }
 
@@ -189,6 +190,28 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
     await _react(key);
   }
 
+  /// Author-only: pin/archive/delete the current story. Applies the result to
+  /// the in-memory list so the change is reflected without leaving the viewer.
+  Future<void> _manage() async {
+    final outcome = await showStoryManageSheet(context, _story);
+    if (!mounted) return;
+    switch (outcome.result) {
+      case StoryManageResult.updated:
+        final updated = outcome.story;
+        if (updated != null) setState(() => _stories[_index] = updated);
+      case StoryManageResult.deleted:
+        _stories.removeAt(_index);
+        if (_stories.isEmpty) {
+          Navigator.pop(context);
+          return;
+        }
+        setState(() => _index = _index.clamp(0, _stories.length - 1));
+        _loadCurrent();
+      case StoryManageResult.unchanged:
+        break;
+    }
+  }
+
   Future<void> _showViewers() async {
     List<StoryViewer> viewers;
     try {
@@ -304,6 +327,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                 index: _index,
                 total: _stories.length,
                 onShowViewers: _showViewers,
+                onManage: _manage,
                 onClose: () => Navigator.pop(context),
               ),
             ),
@@ -425,6 +449,7 @@ class _StoryHeader extends StatelessWidget {
   final int index;
   final int total;
   final VoidCallback onShowViewers;
+  final VoidCallback? onManage;
   final VoidCallback onClose;
 
   const _StoryHeader({
@@ -433,6 +458,7 @@ class _StoryHeader extends StatelessWidget {
     required this.index,
     required this.total,
     required this.onShowViewers,
+    this.onManage,
     required this.onClose,
   });
 
@@ -520,6 +546,21 @@ class _StoryHeader extends StatelessWidget {
                       ],
                     ),
                   ),
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
+            if (isAuthor && onManage != null) ...[
+              GlassCircleIconButton(
+                key: const Key('story-manage-button'),
+                tooltip: 'Manage story',
+                size: 38,
+                glowIntensity: 0.04,
+                onPressed: onManage,
+                icon: const Icon(
+                  Icons.more_vert_rounded,
+                  size: 20,
+                  color: Colors.white,
                 ),
               ),
               const SizedBox(width: 8),
