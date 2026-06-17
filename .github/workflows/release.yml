@@ -127,15 +127,30 @@ jobs:
         run: |
           flutter pub get
 
-          plugin_link="windows/flutter/ephemeral/.plugin_symlinks/flutter_webrtc"
-          plugin_copy="${plugin_link}.materialized"
-
-          if [ -d "$plugin_link" ]; then
-            rm -rf "$plugin_copy"
-            cp -R -L "$plugin_link" "$plugin_copy"
-            rm -rf "$plugin_link"
-            mv "$plugin_copy" "$plugin_link"
+          webrtc_version="$(awk '/^  flutter_webrtc:$/ { in_pkg=1; next } in_pkg && /version:/ { gsub(/"/, "", $2); print $2; exit }' pubspec.lock)"
+          pub_cache="${PUB_CACHE:-$LOCALAPPDATA/Pub/Cache}"
+          if command -v cygpath >/dev/null 2>&1; then
+            pub_cache="$(cygpath -u "$pub_cache")"
           fi
+          cmake_file="$pub_cache/hosted/pub.dev/flutter_webrtc-$webrtc_version/third_party/CMakeLists.txt"
+          test -f "$cmake_file"
+
+          python - "$cmake_file" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          text = path.read_text()
+          if "LIBWEBRTC_THIRD_PARTY_DIR" not in text:
+              text = text.replace(
+                  'set(LIBWEBRTC_VERSION_INI "${CMAKE_CURRENT_LIST_DIR}/libwebrtc_version.ini")',
+                  'file(REAL_PATH "${CMAKE_CURRENT_LIST_DIR}" LIBWEBRTC_THIRD_PARTY_DIR)\nset(LIBWEBRTC_VERSION_INI "${LIBWEBRTC_THIRD_PARTY_DIR}/libwebrtc_version.ini")',
+              )
+              text = text.replace("${CMAKE_CURRENT_LIST_DIR}/downloads", "${LIBWEBRTC_THIRD_PARTY_DIR}/downloads")
+              text = text.replace('"${CMAKE_CURRENT_LIST_DIR}/libwebrtc"', '"${LIBWEBRTC_THIRD_PARTY_DIR}/libwebrtc"')
+              text = text.replace('"${CMAKE_CURRENT_LIST_DIR}"', '"${LIBWEBRTC_THIRD_PARTY_DIR}"')
+              path.write_text(text)
+          PY
 
           flutter build windows --release --no-pub ${{ env.DART_DEFINES }}
 
