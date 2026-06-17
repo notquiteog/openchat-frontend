@@ -987,6 +987,42 @@ class Message {
     return isDecrypted ? (decryptedContent ?? '') : '🔒 Encrypted';
   }
 
+  /// Short, privacy-safe body for a notification preview. Media render as a
+  /// fixed label (never a caption that could leak more than the user expects),
+  /// richer types reuse [listPreview], and text is trimmed to 120 chars. The
+  /// caller must have decrypted (setDecryptedContent) first; for a message that
+  /// never decrypted this falls back to "New message".
+  String get notificationPreview {
+    switch (type) {
+      case MessageType.image:
+      case MessageType.livePhoto:
+        return 'Photo';
+      case MessageType.video:
+        return 'Video';
+      case MessageType.videoNote:
+        return 'Video message';
+      case MessageType.animation:
+        return 'GIF';
+      case MessageType.voice:
+        return 'Voice message';
+      case MessageType.audio:
+        return 'Audio';
+      case MessageType.file:
+        return 'File';
+      case MessageType.sticker:
+        return 'Sticker';
+      case MessageType.contact:
+        return 'Contact';
+      case MessageType.venue:
+        return 'Location';
+      default:
+        break;
+    }
+    final preview = listPreview.trim();
+    if (preview.isEmpty || preview == '🔒 Encrypted') return 'New message';
+    return preview.length > 120 ? '${preview.substring(0, 120)}…' : preview;
+  }
+
   /// Public wire-name → enum mapping (mesh ingest builds messages directly).
   static MessageType parseType(String t) => _parseType(t);
 

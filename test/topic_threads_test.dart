@@ -45,6 +45,7 @@ void main() {
   });
 
   group('ChatProvider topic filter', () {
+    late _FakeApi api;
     late ChatProvider provider;
 
     Message msg(String id, {String? topicId}) => Message(
@@ -63,8 +64,9 @@ void main() {
       SharedPreferences.setMockInitialValues({});
       FlutterSecureStorage.setMockInitialValues({'user_id': 'self'});
       final storage = SecureStorageService();
+      api = _FakeApi(storage);
       provider = ChatProvider(
-        _FakeApi(storage),
+        api,
         storage,
         _FakeWs(storage),
         SettingsProvider(),
@@ -98,6 +100,42 @@ void main() {
       expect(provider.messagesFor('conv-1').length, 4);
     });
 
+    test('updateTopic patches cached name and closed state', () async {
+      api.topics = [
+        ConversationTopic(
+          id: 't1',
+          conversationId: 'conv-1',
+          name: 'General',
+          createdBy: 'u1',
+          createdAt: DateTime.utc(2026, 6, 16),
+        ),
+      ];
+      await provider.loadTopics('conv-1');
+
+      final renamed = await provider.updateTopic(
+        'conv-1',
+        't1',
+        name: 'Announcements',
+      );
+      expect(renamed?.name, 'Announcements');
+      expect(provider.topicsFor('conv-1').single.name, 'Announcements');
+      expect(api.lastTopicUpdate?['name'], 'Announcements');
+
+      final closed = await provider.updateTopic('conv-1', 't1', closed: true);
+      expect(closed?.isClosed, isTrue);
+      expect(provider.topicsFor('conv-1').single.isClosed, isTrue);
+      expect(api.lastTopicUpdate?['closed'], isTrue);
+
+      final reopened = await provider.updateTopic(
+        'conv-1',
+        't1',
+        closed: false,
+      );
+      expect(reopened?.isClosed, isFalse);
+      expect(provider.topicsFor('conv-1').single.isClosed, isFalse);
+      expect(api.lastTopicUpdate?['closed'], isFalse);
+    });
+
     test('setActiveTopic toggles state and notifies', () {
       var notified = 0;
       provider.addListener(() => notified++);
@@ -121,8 +159,34 @@ void main() {
 
 class _FakeApi extends ApiService {
   _FakeApi(super.storage);
+  List<ConversationTopic> topics = const [];
+  Map<String, Object?>? lastTopicUpdate;
+
   @override
   Future<List<Conversation>> listConversations() async => const [];
+
+  @override
+  Future<List<ConversationTopic>> getTopics(
+    String convID, {
+    bool channel = false,
+  }) async => topics;
+
+  @override
+  Future<void> updateTopic(
+    String convID,
+    String topicID, {
+    String? name,
+    bool? closed,
+    bool channel = false,
+  }) async {
+    lastTopicUpdate = {
+      'conv_id': convID,
+      'topic_id': topicID,
+      'name': name,
+      'closed': closed,
+      'channel': channel,
+    };
+  }
 }
 
 class _FakeWs extends WebSocketService {

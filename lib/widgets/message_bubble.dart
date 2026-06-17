@@ -4061,7 +4061,17 @@ class _PollBubbleState extends State<_PollBubble> {
       }
     }
     final cs = Theme.of(context).colorScheme;
-    final total = math.max(1, poll.totalVoterCount);
+    // Multi-answer polls let one voter mark several options, so an option's
+    // share is its votes over the *total votes cast* (sum across options), not
+    // over the unique-voter count — otherwise one voter picking N options would
+    // render every pick at 100%. Single-answer polls have one vote per voter,
+    // so the two denominators coincide there, and the voter count stays
+    // authoritative for the sealed-tally case (some ballots are counted but
+    // unreadable, so they belong in the denominator even when no option carries
+    // them).
+    final total = poll.allowsMultipleAnswers
+        ? math.max(1, poll.options.fold<int>(0, (sum, o) => sum + o.voterCount))
+        : math.max(1, poll.totalVoterCount);
     // Quiz: reveal the correct answer + explanation once the user has voted
     // (or the poll closed).
     final quizRevealed =

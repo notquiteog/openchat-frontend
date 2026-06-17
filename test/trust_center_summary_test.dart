@@ -12,7 +12,8 @@ void main() {
       biometricAvailable: true,
       biometricKeyExportEnabled: true,
       allowGroupAdd: false,
-      notificationSensitiveContent: false,
+      notificationShowSender: false,
+      notificationShowPreview: false,
       pushNotificationsEnabled: true,
       unencryptedConversations: 0,
       keyTransparencyWarnings: 0,
@@ -33,7 +34,8 @@ void main() {
       biometricAvailable: false,
       biometricKeyExportEnabled: false,
       allowGroupAdd: false,
-      notificationSensitiveContent: false,
+      notificationShowSender: false,
+      notificationShowPreview: false,
       pushNotificationsEnabled: false,
       unencryptedConversations: 2,
       keyTransparencyWarnings: 0,
@@ -53,7 +55,8 @@ void main() {
       biometricAvailable: true,
       biometricKeyExportEnabled: false,
       allowGroupAdd: true,
-      notificationSensitiveContent: true,
+      notificationShowSender: true,
+      notificationShowPreview: true,
       pushNotificationsEnabled: true,
       unencryptedConversations: 0,
       keyTransparencyWarnings: 0,
@@ -74,7 +77,8 @@ void main() {
       biometricAvailable: true,
       biometricKeyExportEnabled: true,
       allowGroupAdd: false,
-      notificationSensitiveContent: false,
+      notificationShowSender: false,
+      notificationShowPreview: false,
       pushNotificationsEnabled: true,
       unencryptedConversations: 0,
       keyTransparencyWarnings: 0,
@@ -99,7 +103,8 @@ void main() {
         biometricAvailable: true,
         biometricKeyExportEnabled: true,
         allowGroupAdd: false,
-        notificationSensitiveContent: false,
+        notificationShowSender: false,
+        notificationShowPreview: false,
         pushNotificationsEnabled: true,
         unencryptedConversations: 0,
         keyTransparencyWarnings: 0,
@@ -119,7 +124,8 @@ void main() {
       biometricAvailable: false,
       biometricKeyExportEnabled: false,
       allowGroupAdd: false,
-      notificationSensitiveContent: false,
+      notificationShowSender: false,
+      notificationShowPreview: false,
       pushNotificationsEnabled: false,
       unencryptedConversations: 0,
       keyTransparencyWarnings: 2,
@@ -127,5 +133,47 @@ void main() {
 
     expect(summary.level, TrustCenterLevel.attention);
     expect(summary.attentionCount, 2);
+  });
+
+  test('preview-only on push counts as one review item (OR, not double)', () {
+    TrustCenterSummary summarize({
+      required bool showSender,
+      required bool showPreview,
+      required bool push,
+    }) => evaluateTrustCenter(
+      hasLocalKey: true,
+      accountKeyExpired: false,
+      fingerprintMatchesAccount: true,
+      twoFactorEnabled: true,
+      appLockEnabled: true,
+      biometricAvailable: true,
+      biometricKeyExportEnabled: true,
+      allowGroupAdd: false,
+      notificationShowSender: showSender,
+      notificationShowPreview: showPreview,
+      pushNotificationsEnabled: push,
+      unencryptedConversations: 0,
+      keyTransparencyWarnings: 0,
+    );
+
+    // Either reveal, with push on, is the single lock-screen-exposure review.
+    expect(
+      summarize(showSender: false, showPreview: true, push: true).reviewCount,
+      1,
+    );
+    expect(
+      summarize(showSender: true, showPreview: false, push: true).reviewCount,
+      1,
+    );
+    // Both on is still one point (no double-count).
+    expect(
+      summarize(showSender: true, showPreview: true, push: true).reviewCount,
+      1,
+    );
+    // No push → nothing on the lock screen → no review item.
+    expect(
+      summarize(showSender: true, showPreview: true, push: false).reviewCount,
+      0,
+    );
   });
 }

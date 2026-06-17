@@ -41,11 +41,22 @@ const privateStateMessageRemindersKey = 'message_reminders';
 const privateStateViewedOnceMediaKey = 'viewed_once_media_message_ids';
 const privateStateRecentStickersKey = 'recent_stickers';
 const privateStateRecentEmojisKey = 'recent_emojis';
+// Maps conversation id -> {isGroupOrChannel, name} so the background isolates
+// (which receive only sealed events with no conversation type/name) can title a
+// notification correctly — group/channel name vs the DM sender. Written by the
+// foreground from the conversation cache; never leaves the encrypted blob.
+const privateStateConversationMetaKey = 'conversation_meta';
 
 class PrivateNotificationSettings {
   final bool pushEnabled;
   final bool wsBackgroundEnabled;
-  final bool sensitiveContent;
+
+  /// Receiver-side notification content controls (split from the legacy single
+  /// `sensitive_content` flag). [showSender] reveals who/where a message is
+  /// from (DM sender, or group/channel name); [showPreview] reveals a snippet
+  /// of the message body. Independent — any combination is valid.
+  final bool showSender;
+  final bool showPreview;
   final int? notificationsPausedUntilMs;
   final int? globalQuietHoursStartMinute;
   final int? globalQuietHoursEndMinute;
@@ -54,7 +65,8 @@ class PrivateNotificationSettings {
   const PrivateNotificationSettings({
     this.pushEnabled = false,
     this.wsBackgroundEnabled = false,
-    this.sensitiveContent = false,
+    this.showSender = false,
+    this.showPreview = false,
     this.notificationsPausedUntilMs,
     this.globalQuietHoursStartMinute,
     this.globalQuietHoursEndMinute,
@@ -66,10 +78,15 @@ PrivateNotificationSettings decodePrivateNotificationSettings(Object? raw) {
   if (raw is! Map) return const PrivateNotificationSettings();
   final quietStart = raw['global_quiet_start_minute'] as int?;
   final quietEnd = raw['global_quiet_end_minute'] as int?;
+  // Back-compat: blobs written before the sender/preview split carry only the
+  // single `sensitive_content` flag. Migrate it to BOTH new flags (old on =>
+  // both on, old off => both off) so existing users keep their behavior.
+  final legacySensitive = raw['sensitive_content'] as bool?;
   return PrivateNotificationSettings(
     pushEnabled: raw['push_enabled'] as bool? ?? false,
     wsBackgroundEnabled: raw['ws_background_enabled'] as bool? ?? false,
-    sensitiveContent: raw['sensitive_content'] as bool? ?? false,
+    showSender: raw['show_sender'] as bool? ?? legacySensitive ?? false,
+    showPreview: raw['show_preview'] as bool? ?? legacySensitive ?? false,
     notificationsPausedUntilMs: _notificationPauseUntilMsOrNull(
       raw['notifications_paused_until_ms'],
     ),
@@ -82,7 +99,8 @@ PrivateNotificationSettings decodePrivateNotificationSettings(Object? raw) {
 Map<String, dynamic> encodePrivateNotificationSettings({
   required bool pushEnabled,
   required bool wsBackgroundEnabled,
-  required bool sensitiveContent,
+  required bool showSender,
+  required bool showPreview,
   int? notificationsPausedUntilMs,
   int? globalQuietHoursStartMinute,
   int? globalQuietHoursEndMinute,
@@ -90,7 +108,8 @@ Map<String, dynamic> encodePrivateNotificationSettings({
 }) => {
   'push_enabled': pushEnabled,
   'ws_background_enabled': wsBackgroundEnabled,
-  'sensitive_content': sensitiveContent,
+  'show_sender': showSender,
+  'show_preview': showPreview,
   'notifications_paused_until_ms': ?notificationsPausedUntilMs,
   if (globalQuietHoursStartMinute != null)
     'global_quiet_start_minute': globalQuietHoursStartMinute
@@ -100,6 +119,43 @@ Map<String, dynamic> encodePrivateNotificationSettings({
     'global_quiet_end_minute': globalQuietHoursEndMinute.clamp(0, 1439).toInt(),
   'pause_allows_calls': pauseAllowsCalls,
 };
+
+/// Minimal conversation descriptor the notification layer needs to title a
+/// message: whether it is a group/channel (vs a 1:1 DM) and its display name.
+class NotificationConversationMeta {
+  final bool isGroupOrChannel;
+  final String name;
+
+  const NotificationConversationMeta({
+    required this.isGroupOrChannel,
+    required this.name,
+  });
+}
+
+Map<String, NotificationConversationMeta> decodeConversationMeta(Object? raw) {
+  if (raw is! Map) return const {};
+  final out = <String, NotificationConversationMeta>{};
+  raw.forEach((key, value) {
+    if (key is! String || key.isEmpty || value is! Map) return;
+    final name = value['name'];
+    out[key] = NotificationConversationMeta(
+      isGroupOrChannel: value['group'] as bool? ?? false,
+      name: name is String ? name : '',
+    );
+  });
+  return out;
+}
+
+Map<String, dynamic> encodeConversationMeta(
+  Map<String, NotificationConversationMeta> meta,
+) {
+  final out = <String, dynamic>{};
+  meta.forEach((id, m) {
+    if (id.isEmpty) return;
+    out[id] = {'group': m.isGroupOrChannel, 'name': m.name};
+  });
+  return out;
+}
 
 int? _notificationPauseUntilMsOrNull(Object? raw) {
   if (raw is! num) return null;

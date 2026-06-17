@@ -503,6 +503,12 @@ class ApiService {
     await _post('/api/v1/me/blocks', {'user_id': userID});
   }
 
+  Future<bool> isUserBlocked(String userID) async {
+    final resp = await _get('/api/v1/me/blocks/$userID');
+    final data = resp['data'] as Map<String, dynamic>? ?? const {};
+    return data['blocked'] as bool? ?? false;
+  }
+
   Future<void> unblockUser(String userID) async {
     await _delete('/api/v1/me/blocks/$userID');
   }
@@ -1103,29 +1109,6 @@ class ApiService {
 
   Future<void> unpinConversationMessage(String convID, String msgID) async {
     await _delete('/api/v1/conversations/$convID/messages/$msgID/pin');
-  }
-
-  // ── Encrypted notification hints (#54) ──
-  /// Fetch this device's sealed notification hint for a route; null if none.
-  Future<String?> getNotificationHint(String route) async {
-    try {
-      final resp = await _get('/api/v1/me/notification-hints/$route');
-      return resp['data']?['sealed_hint'] as String?;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Upload per-recipient sealed hints for a sealed send. Each entry is
-  /// `{recipient_user_id, sealed_hint}`; the server derives route tokens.
-  Future<void> uploadNotificationHints(
-    String convID,
-    List<Map<String, String>> hints,
-  ) async {
-    if (hints.isEmpty) return;
-    await _post('/api/v1/conversations/$convID/notification-hints', {
-      'hints': hints,
-    });
   }
 
   Future<Message> postToChannel({
@@ -3511,10 +3494,12 @@ class ApiService {
   Future<void> registerDeviceToken({
     required String token,
     required String platform,
+    bool clientRendered = false,
   }) async {
     await _put('/api/v1/users/me/device-token', {
       'token': token,
       'platform': platform,
+      'client_rendered': clientRendered,
     });
   }
 

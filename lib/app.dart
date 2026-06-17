@@ -1504,18 +1504,31 @@ class _AppRootState extends State<_AppRoot> {
     );
     if (settings.wsBackgroundEnabled) {
       unawaited(
-        BackgroundWsService.updateSensitiveContent(
-          settings.notificationSensitiveContent,
+        BackgroundWsService.updateContentVisibility(
+          NotificationContentVisibility(
+            showSender: settings.notificationShowSender,
+            showPreview: settings.notificationShowPreview,
+          ),
         ),
       );
     }
     // Server-side mute sync: FCM message pushes carry an OS-displayed
     // Notification block, so muted chats must be skipped at the sender.
     if (settings.pushNotificationsEnabled) {
+      final api = context.read<ApiService>();
       unawaited(
         PushNotificationService.syncMutedRoutes(
-          context.read<ApiService>(),
+          api,
           settings.mutedConversationIds,
+        ),
+      );
+      // Drive the server's data-only gating: a device that wants any content
+      // revealed (sender or preview) must receive data-only pushes so the
+      // client can decrypt + render. Re-register so the flag tracks the toggle.
+      unawaited(
+        PushNotificationService.syncClientRendered(
+          api,
+          settings.notificationShowSender || settings.notificationShowPreview,
         ),
       );
     }
@@ -1541,7 +1554,10 @@ class _AppRootState extends State<_AppRoot> {
     if (token.isEmpty) return;
     await BackgroundWsService.start(
       accessToken: token,
-      showSensitive: settings.notificationSensitiveContent,
+      visibility: NotificationContentVisibility(
+        showSender: settings.notificationShowSender,
+        showPreview: settings.notificationShowPreview,
+      ),
       conversationNotificationPreferences:
           settings.conversationNotificationPreferences,
       notificationsPausedUntilMs: settings.notificationPauseUntilMs,

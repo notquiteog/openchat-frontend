@@ -281,6 +281,52 @@ void main() {
     expect(find.text('Select all that apply'), findsNothing);
   });
 
+  testWidgets('multi-answer poll splits the bar by votes cast, not voters', (
+    tester,
+  ) async {
+    // One voter picked BOTH options. Each option is half of the two votes
+    // cast, so the bars must read 50% — not 100% each (which is what dividing
+    // by the single unique-voter count would produce).
+    final msg = pollMessage(anonymous: false, multi: true);
+    await pumpStaleHost(
+      tester,
+      msg.copyWith(
+        poll: msg.poll!.copyWith(
+          voterOptionIds: ['opt-a', 'opt-b'],
+          totalVoterCount: 1,
+          options: const [
+            PollOption(id: 'opt-a', index: 0, text: 'Beach', voterCount: 1),
+            PollOption(id: 'opt-b', index: 1, text: 'Hills', voterCount: 1),
+          ],
+        ),
+      ),
+    );
+    expect(find.text('50%'), findsNWidgets(2));
+    expect(find.text('100%'), findsNothing);
+  });
+
+  testWidgets('single-answer poll share stays over the voter count', (
+    tester,
+  ) async {
+    // Sanity guard for the other branch: one voter, one pick → 100% / 0%.
+    final msg = pollMessage(anonymous: false);
+    await pumpStaleHost(
+      tester,
+      msg.copyWith(
+        poll: msg.poll!.copyWith(
+          voterOptionIds: ['opt-a'],
+          totalVoterCount: 1,
+          options: const [
+            PollOption(id: 'opt-a', index: 0, text: 'Beach', voterCount: 1),
+            PollOption(id: 'opt-b', index: 1, text: 'Hills', voterCount: 0),
+          ],
+        ),
+      ),
+    );
+    expect(find.text('100%'), findsOneWidget);
+    expect(find.text('0%'), findsOneWidget);
+  });
+
   // ── Channel-shaped hosts ────────────────────────────────────────────────
   // The channel screen renders posts from a screen-local list that is loaded
   // once and never refreshed from ChatProvider — the bubble must still show

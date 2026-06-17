@@ -748,7 +748,8 @@ class NotificationService {
     required String conversationId,
     required String title,
     required String body,
-    bool showSensitive = false,
+    bool showSender = false,
+    bool showPreview = false,
     bool mentionedForCurrentUser = false,
     String? notificationText,
   }) async {
@@ -796,8 +797,8 @@ class NotificationService {
       linux: LinuxNotificationDetails(),
       windows: WindowsNotificationDetails(),
     );
-    final displayTitle = showSensitive ? title : 'OpenChat';
-    final displayBody = showSensitive ? body : 'New message';
+    final displayTitle = showSender ? title : 'OpenChat';
+    final displayBody = showPreview ? body : 'New message';
     // One notification slot per conversation — updates in place rather than stacking.
     await _plugin.show(
       id: conversationId.hashCode,

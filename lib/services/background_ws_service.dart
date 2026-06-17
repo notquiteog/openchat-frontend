@@ -1,22 +1,30 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart'
+    hide Message;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config/api_config.dart';
+import '../crypto/pgp_service.dart';
+import '../models/message.dart';
 import '../utils/local_conversation_preferences.dart';
 import 'background_notification_intent.dart' as intent_mapper;
-import 'background_notification_intent.dart' show NotificationIntent;
+import 'background_notification_intent.dart'
+    show NotificationIntent, NotificationContentVisibility;
 import 'local_private_state_service.dart';
 import 'notification_service.dart';
 import 'secure_storage_service.dart';
 
 export 'background_notification_intent.dart'
-    show NotificationIntent, NotificationIntentKind;
+    show
+        NotificationIntent,
+        NotificationIntentKind,
+        NotificationContentVisibility;
 
 /// Persists a WebSocket connection while the app is in the background so that
 /// users receive message and call notifications without relying on Firebase.
@@ -122,7 +130,7 @@ class BackgroundWsService {
   /// secure storage and notification rules from encrypted local state.
   static Future<bool> start({
     required String accessToken,
-    required bool showSensitive,
+    required NotificationContentVisibility visibility,
     Map<String, ConversationNotificationPreference>
         conversationNotificationPreferences =
         const {},
@@ -142,7 +150,7 @@ class BackgroundWsService {
     try {
       if (await _service.isRunning()) {
         await updateToken(accessToken);
-        await updateSensitiveContent(showSensitive);
+        await updateContentVisibility(visibility);
         await updateConversationNotificationPreferences(
           conversationNotificationPreferences,
         );
@@ -158,7 +166,7 @@ class BackgroundWsService {
       }
       final started = await _service.startService();
       if (started) {
-        await updateSensitiveContent(showSensitive);
+        await updateContentVisibility(visibility);
         await updateConversationNotificationPreferences(
           conversationNotificationPreferences,
         );
@@ -201,10 +209,16 @@ class BackgroundWsService {
     } catch (_) {}
   }
 
-  /// Sync the sensitive-content preference without restarting the service.
-  static Future<void> updateSensitiveContent(bool showSensitive) async {
+  /// Sync the notification content-visibility preferences (show sender / show
+  /// preview) into the running isolate without restarting the service.
+  static Future<void> updateContentVisibility(
+    NotificationContentVisibility visibility,
+  ) async {
     if (!_mobileOnly) return;
-    _service.invoke('setSensitive', {'sensitive': showSensitive});
+    _service.invoke('setContentVisibility', {
+      'showSender': visibility.showSender,
+      'showPreview': visibility.showPreview,
+    });
   }
 
   /// Tell the isolate whether the app is foregrounded. While foreground, the
@@ -263,7 +277,7 @@ class BackgroundWsService {
     // after startService(), and events on the plugin's broadcast stream are
     // dropped if no listener is attached yet.
     String? token;
-    bool showSensitive = false;
+    var visibility = NotificationContentVisibility.hidden;
     Map<String, ConversationNotificationPreference>
     conversationNotificationPreferences = const {};
     Set<String> mutedConversationIds = const {};
@@ -328,16 +342,18 @@ class BackgroundWsService {
           (raw) {
             reconnectAttempt = 0;
             if (appForeground) return;
-            _handleRaw(
-              raw,
-              notif,
-              showSensitive,
-              mutedConversationIds,
-              conversationNotificationPreferences,
-              notificationsPausedUntilMs,
-              globalQuietStartMinute,
-              globalQuietEndMinute,
-              pauseAllowsCalls,
+            unawaited(
+              _handleRaw(
+                raw,
+                notif,
+                visibility,
+                mutedConversationIds,
+                conversationNotificationPreferences,
+                notificationsPausedUntilMs,
+                globalQuietStartMinute,
+                globalQuietEndMinute,
+                pauseAllowsCalls,
+              ),
             );
           },
           onError: (_) {
@@ -373,8 +389,11 @@ class BackgroundWsService {
       if (!stopped && token != null) connect();
     });
 
-    service.on('setSensitive').listen((data) {
-      showSensitive = data?['sensitive'] as bool? ?? showSensitive;
+    service.on('setContentVisibility').listen((data) {
+      visibility = NotificationContentVisibility(
+        showSender: data?['showSender'] as bool? ?? visibility.showSender,
+        showPreview: data?['showPreview'] as bool? ?? visibility.showPreview,
+      );
     });
 
     service.on('setForeground').listen((data) {
@@ -418,7 +437,10 @@ class BackgroundWsService {
     final notificationSettings = decodePrivateNotificationSettings(
       localState[privateStateNotificationSettingsKey],
     );
-    showSensitive = notificationSettings.sensitiveContent;
+    visibility = NotificationContentVisibility(
+      showSender: notificationSettings.showSender,
+      showPreview: notificationSettings.showPreview,
+    );
     notificationsPausedUntilMs =
         notificationSettings.notificationsPausedUntilMs;
     globalQuietStartMinute = notificationSettings.globalQuietHoursStartMinute;
@@ -435,10 +457,10 @@ class BackgroundWsService {
     if (!stopped) connect();
   }
 
-  static void _handleRaw(
+  static Future<void> _handleRaw(
     dynamic raw,
     FlutterLocalNotificationsPlugin notif,
-    bool showSensitive,
+    NotificationContentVisibility visibility,
     Set<String> mutedConversationIds,
     Map<String, ConversationNotificationPreference>
     conversationNotificationPreferences,
@@ -446,13 +468,35 @@ class BackgroundWsService {
     int? globalQuietStartMinute,
     int? globalQuietEndMinute,
     bool pauseAllowsCalls,
-  ) {
+  ) async {
     if (raw is! String) return;
     for (final line in raw.trim().split('\n')) {
       if (line.isEmpty) continue;
-      final intent = notificationIntentFromRawLine(
-        line,
-        showSensitive: showSensitive,
+      Map<String, dynamic> json;
+      try {
+        json = jsonDecode(line) as Map<String, dynamic>;
+      } catch (_) {
+        continue;
+      }
+      final type = json['type'] as String?;
+      if (type == null) continue;
+      final data = (json['data'] as Map<String, dynamic>?) ?? const {};
+      // Resolve the group/channel name and a decrypted body snippet locally —
+      // both are absent from the sealed event. Best-effort: any failure leaves
+      // the relevant field null and the mapper falls back to generic text.
+      String? conversationTitle;
+      String? previewText;
+      if (type == 'new_message') {
+        final extras = await _resolveNewMessageExtras(data, visibility);
+        conversationTitle = extras.$1;
+        previewText = extras.$2;
+      }
+      final intent = intent_mapper.notificationIntentFromEvent(
+        type: type,
+        data: data,
+        visibility: visibility,
+        conversationTitle: conversationTitle,
+        previewText: previewText,
         mutedConversationIds: mutedConversationIds,
         conversationNotificationPreferences:
             conversationNotificationPreferences,
@@ -466,9 +510,61 @@ class BackgroundWsService {
     }
   }
 
+  /// Resolves the two receiver-side bits the isolate can't read off a sealed
+  /// event: the group/channel display name (for the title) and a decrypted
+  /// body snippet (for the preview). Reads are gated on the matching visibility
+  /// flag so we never touch the keyring/decrypt when the user keeps content
+  /// hidden. Returns (conversationTitle, previewText); either may be null.
+  static Future<(String?, String?)> _resolveNewMessageExtras(
+    Map<String, dynamic> data,
+    NotificationContentVisibility visibility,
+  ) async {
+    String? conversationTitle;
+    String? previewText;
+    final convId = data['conversation_id'] as String?;
+    if (visibility.showSender && convId != null && convId.isNotEmpty) {
+      try {
+        final state = await LocalPrivateStateService().readState();
+        final meta = decodeConversationMeta(
+          state[privateStateConversationMetaKey],
+        )[convId];
+        if (meta != null &&
+            meta.isGroupOrChannel &&
+            meta.name.trim().isNotEmpty) {
+          conversationTitle = meta.name.trim();
+        }
+      } catch (_) {}
+    }
+    if (visibility.showPreview) {
+      try {
+        final cipher = data['encrypted_payload'] as String?;
+        final privateKey = await SecureStorageService().getPrivateKey();
+        if (cipher != null &&
+            cipher.isNotEmpty &&
+            privateKey != null &&
+            privateKey.isNotEmpty) {
+          final plaintext = await PgpService.decrypt(
+            encryptedArmor: cipher,
+            privateKeyArmored: privateKey,
+          );
+          if (plaintext.isNotEmpty) {
+            final msg = Message.fromJson(data)..setDecryptedContent(plaintext);
+            previewText = msg.notificationPreview;
+          }
+        }
+      } catch (_) {
+        // Keyring locked, FFI unavailable in this isolate, malformed payload —
+        // leave previewText null so the body stays a generic "New message".
+      }
+    }
+    return (conversationTitle, previewText);
+  }
+
   static NotificationIntent? notificationIntentFromRawLine(
     String rawLine, {
-    required bool showSensitive,
+    required NotificationContentVisibility visibility,
+    String? conversationTitle,
+    String? previewText,
     Set<String> mutedConversationIds = const {},
     Map<String, ConversationNotificationPreference>
         conversationNotificationPreferences =
@@ -479,7 +575,9 @@ class BackgroundWsService {
     bool pauseAllowsCalls = true,
   }) => intent_mapper.notificationIntentFromRawLine(
     rawLine,
-    showSensitive: showSensitive,
+    visibility: visibility,
+    conversationTitle: conversationTitle,
+    previewText: previewText,
     mutedConversationIds: mutedConversationIds,
     conversationNotificationPreferences: conversationNotificationPreferences,
     notificationsPausedUntilMs: notificationsPausedUntilMs,
@@ -491,7 +589,9 @@ class BackgroundWsService {
   static NotificationIntent? notificationIntentFromEvent({
     required String type,
     required Map<String, dynamic> data,
-    required bool showSensitive,
+    required NotificationContentVisibility visibility,
+    String? conversationTitle,
+    String? previewText,
     Set<String> mutedConversationIds = const {},
     Map<String, ConversationNotificationPreference>
         conversationNotificationPreferences =
@@ -503,7 +603,9 @@ class BackgroundWsService {
   }) => intent_mapper.notificationIntentFromEvent(
     type: type,
     data: data,
-    showSensitive: showSensitive,
+    visibility: visibility,
+    conversationTitle: conversationTitle,
+    previewText: previewText,
     mutedConversationIds: mutedConversationIds,
     conversationNotificationPreferences: conversationNotificationPreferences,
     notificationsPausedUntilMs: notificationsPausedUntilMs,

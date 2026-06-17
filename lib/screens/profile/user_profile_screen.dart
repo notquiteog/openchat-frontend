@@ -127,10 +127,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     if (_isOwnProfile || _blockStatusLoaded) return;
     _blockStatusLoaded = true;
     try {
-      final blocked = await context.read<ApiService>().listBlockedUsers();
+      final blocked = await context.read<ApiService>().isUserBlocked(_user.id);
       if (!mounted) return;
       setState(() {
-        _isBlocked = blocked.users.any((user) => user.id == _user.id);
+        _isBlocked = blocked;
       });
     } catch (_) {}
   }

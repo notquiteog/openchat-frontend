@@ -237,13 +237,17 @@ class PushNotificationService {
     // Show an in-app local notification when a message arrives while the app
     // is open (FCM does not display the system notification in this case).
     _foregroundSub?.cancel();
-    _foregroundSub = FirebaseMessaging.onMessage.listen((RemoteMessage msg) {
+    _foregroundSub = FirebaseMessaging.onMessage.listen((
+      RemoteMessage msg,
+    ) async {
       if (msg.data['type'] == 'call_cancel') {
         unawaited(NotificationService.cancelIncomingCall());
         return;
       }
+      final visibility = await _currentVisibility();
       final intent = foregroundNotificationIntent(
         msg,
+        visibility: visibility,
         mutedConversationIds: NotificationService.mutedConversationIds,
         conversationNotificationPreferences:
             NotificationService.conversationNotificationPreferences,
@@ -256,12 +260,15 @@ class PushNotificationService {
       if (intent == null) return;
       switch (intent.kind) {
         case NotificationIntentKind.message:
+          // A foreground FCM push carries only {type, route} (no content), so
+          // intent.title/body are already generic; gate per the receiver's
+          // toggles for parity with the other paths.
           NotificationService.showMessage(
             conversationId: conversationIdForData(msg.data) ?? 'push',
             title: intent.title,
             body: intent.body,
-            showSensitive:
-                true, // title/body are already sanitised by the server
+            showSender: visibility.showSender,
+            showPreview: visibility.showPreview,
             notificationText: notificationRuleTextFromData(msg.data),
           );
           break;
@@ -384,6 +391,8 @@ class PushNotificationService {
   @visibleForTesting
   static NotificationIntent? foregroundNotificationIntent(
     RemoteMessage msg, {
+    NotificationContentVisibility visibility =
+        NotificationContentVisibility.hidden,
     Set<String> mutedConversationIds = const {},
     Map<String, ConversationNotificationPreference>
         conversationNotificationPreferences =
@@ -462,7 +471,7 @@ class PushNotificationService {
       return notificationIntentFromEvent(
         type: 'new_message',
         data: resolvedData,
-        showSensitive: true,
+        visibility: visibility,
         mutedConversationIds: mutedConversationIds,
         conversationNotificationPreferences:
             conversationNotificationPreferences,
@@ -530,7 +539,52 @@ class PushNotificationService {
     await api.registerDeviceToken(
       token: token,
       platform: registrationPlatformForCurrentDevice(),
+      clientRendered: await _clientRendered(),
     );
+  }
+
+  /// The receiver's notification content-visibility, read from encrypted local
+  /// state. PushNotificationService is static (no SettingsProvider handle), and
+  /// the background isolate has no provider at all, so both read it here.
+  static Future<NotificationContentVisibility> _currentVisibility() async {
+    try {
+      final state = await LocalPrivateStateService().readState();
+      final settings = decodePrivateNotificationSettings(
+        state[privateStateNotificationSettingsKey],
+      );
+      return NotificationContentVisibility(
+        showSender: settings.showSender,
+        showPreview: settings.showPreview,
+      );
+    } catch (_) {
+      return NotificationContentVisibility.hidden;
+    }
+  }
+
+  /// A device wanting any content revealed (sender or preview) must receive
+  /// data-only pushes so the client can decrypt and render the notification —
+  /// otherwise the OS shows the server's generic block before our code runs.
+  static Future<bool> _clientRendered() async {
+    final visibility = await _currentVisibility();
+    return visibility.showSender || visibility.showPreview;
+  }
+
+  /// Re-registers this device's token so the server's data-only gating tracks a
+  /// change to the Show sender / Show message preview toggles. Best-effort.
+  static Future<void> syncClientRendered(
+    ApiService api,
+    bool clientRendered,
+  ) async {
+    if (!_supported || !_registered) return;
+    try {
+      final token = await FirebaseMessaging.instance.getToken();
+      if (token == null || token.isEmpty) return;
+      await api.registerDeviceToken(
+        token: token,
+        platform: registrationPlatformForCurrentDevice(),
+        clientRendered: clientRendered,
+      );
+    } catch (_) {}
   }
 
   @visibleForTesting

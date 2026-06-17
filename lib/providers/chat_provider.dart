@@ -20,6 +20,7 @@ import '../services/amf_key_service.dart';
 import '../services/api_service.dart';
 import '../services/attachment_service.dart';
 import '../services/key_cache_service.dart';
+import '../services/local_private_state_service.dart';
 import '../services/message_search_service.dart';
 import '../services/message_cache_service.dart';
 import '../services/mls_service.dart';
@@ -339,6 +340,43 @@ class ChatProvider extends ChangeNotifier {
       _topics[convID] = [...?_topics[convID], topic];
       notifyListeners();
       return topic;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Renames or closes/reopens a topic and patches the cached list after the
+  /// server accepts the change. Returns null on failure.
+  Future<ConversationTopic?> updateTopic(
+    String convID,
+    String topicID, {
+    String? name,
+    bool? closed,
+    bool channel = false,
+  }) async {
+    try {
+      await _api.updateTopic(
+        convID,
+        topicID,
+        name: name,
+        closed: closed,
+        channel: channel,
+      );
+      final current = _topics[convID] ?? const <ConversationTopic>[];
+      ConversationTopic? updated;
+      _topics[convID] = [
+        for (final topic in current)
+          if (topic.id == topicID)
+            updated = topic.copyWith(
+              name: name,
+              closedAt: closed == true ? DateTime.now() : null,
+              clearClosedAt: closed == false,
+            )
+          else
+            topic,
+      ];
+      notifyListeners();
+      return updated;
     } catch (_) {
       return null;
     }
@@ -675,6 +713,7 @@ class ChatProvider extends ChangeNotifier {
         if (PushNotificationService.isRegistered) {
           unawaited(PushNotificationService.refreshPushRoutes(_api));
         }
+        _syncNotificationConversationMeta();
       }
     } finally {
       if (!silent) {
@@ -684,6 +723,26 @@ class ChatProvider extends ChangeNotifier {
         notifyListeners();
       }
     }
+  }
+
+  /// Mirrors group/channel titling metadata into encrypted local state so the
+  /// background isolates (which only see sealed events) can title a
+  /// notification with the group/channel name. Only groups/channels are stored
+  /// — DMs fall back to the sender (@username) the event already carries, so
+  /// the map stays small. Best-effort; [SettingsProvider] skips the write when
+  /// nothing changed.
+  void _syncNotificationConversationMeta() {
+    final meta = <String, NotificationConversationMeta>{};
+    for (final c in _conversations.values) {
+      if (!(c.isGroup || c.isChannel)) continue;
+      final name = c.name?.trim() ?? '';
+      if (name.isEmpty) continue;
+      meta[c.id] = NotificationConversationMeta(
+        isGroupOrChannel: true,
+        name: name,
+      );
+    }
+    unawaited(_settings.syncNotificationConversationMeta(meta));
   }
 
   /// Decrypts/backfills a conversation's last-message preview — shared by the
@@ -732,6 +791,7 @@ class ChatProvider extends ChangeNotifier {
         // current so its notifications resolve to the right chat.
         unawaited(PushNotificationService.refreshPushRoutes(_api));
       }
+      _syncNotificationConversationMeta();
       notifyListeners();
     } on ApiException catch (e) {
       if (e.statusCode == 403 || e.statusCode == 404) {
@@ -3129,23 +3189,6 @@ class ChatProvider extends ChangeNotifier {
       throw ChatSendException('Encryption failed: $e');
     }
 
-    // Rich notification previews (#54): for immediate text/media sends, when the
-    // account opted in, seal a per-recipient preview hint and upload it so the
-    // recipient's device can show a name+preview push. Best-effort, off the send
-    // path; the recipient resolves the route→sender locally so the hint only
-    // needs to carry the preview text.
-    if (frankMessage && _settings.notificationHintsEnabled) {
-      unawaited(
-        _uploadNotificationHints(
-          convID,
-          recipients,
-          messageType,
-          plaintextPayload,
-          privateKey,
-        ),
-      );
-    }
-
     return _PreparedEncryptedPayload(
       encryptedPayload: encrypted,
       signature: '',
@@ -3161,59 +3204,6 @@ class ChatProvider extends ChangeNotifier {
       postTokenKeyId: tokenBundle?.keyId,
       frankCom: signed.frankComB64,
     );
-  }
-
-  /// Seals a per-recipient preview hint (#54) and uploads it. The hint carries
-  /// only the truncated preview — the recipient derives the sender locally from
-  /// the route. Best-effort: any failure leaves the recipient on the generic
-  /// "New message" push.
-  Future<void> _uploadNotificationHints(
-    String convID,
-    List<PgpRecipient> recipients,
-    String messageType,
-    String plaintextPayload,
-    String privateKey,
-  ) async {
-    if (recipients.isEmpty || privateKey.isEmpty) return;
-    try {
-      final body = jsonEncode({
-        'preview': _notificationHintPreview(messageType, plaintextPayload),
-      });
-      final hints = <Map<String, String>>[];
-      for (final r in recipients) {
-        try {
-          final sealed = await PgpService.encrypt(
-            plaintext: body,
-            recipients: [r],
-            signingPrivateKeyArmored: privateKey,
-          );
-          hints.add({'recipient_user_id': r.userId, 'sealed_hint': sealed});
-        } catch (_) {}
-      }
-      await _api.uploadNotificationHints(convID, hints);
-    } catch (_) {}
-  }
-
-  String _notificationHintPreview(String messageType, String plaintextPayload) {
-    switch (messageType) {
-      case 'image':
-        return 'Photo';
-      case 'video':
-        return 'Video';
-      case 'voice':
-        return 'Voice message';
-      case 'audio':
-        return 'Audio';
-      case 'file':
-        return 'File';
-      case 'sticker':
-        return 'Sticker';
-      case 'location':
-        return 'Location';
-    }
-    var text = plaintextPayload.trim();
-    if (text.length > 120) text = '${text.substring(0, 120)}…';
-    return text.isEmpty ? 'New message' : text;
   }
 
   Future<Message?> _sendEncryptedPayloadWithResult({
@@ -5249,7 +5239,8 @@ class ChatProvider extends ChangeNotifier {
           conversationId: msg.conversationId,
           title: title,
           body: body,
-          showSensitive: _settings.notificationSensitiveContent,
+          showSender: _settings.notificationShowSender,
+          showPreview: _settings.notificationShowPreview,
           mentionedForCurrentUser: mentionedForCurrentUser,
           notificationText: body,
         );

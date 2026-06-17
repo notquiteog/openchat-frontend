@@ -15,6 +15,7 @@ import 'providers/key_provider.dart';
 import 'providers/settings_provider.dart';
 import 'providers/smp_provider.dart';
 import 'providers/stage_room_provider.dart';
+import 'crypto/pgp_service.dart';
 import 'services/api_service.dart';
 import 'services/background_ws_service.dart';
 import 'services/badge_service.dart';
@@ -80,14 +81,37 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
       return;
     }
     await NotificationService.init();
+    var title = 'OpenChat';
+    var body = switch (type) {
+      'group_call' => 'Call started',
+      'group_call_ring' => 'Incoming group call',
+      _ => 'New message',
+    };
+    // group_call(_ring) bodies are fixed labels shown verbatim (no private
+    // content). A new_message data-only push carries only an opaque route, so
+    // resolve the sender / group name and decrypt the latest message locally
+    // to honour the receiver's Show sender / Show message preview toggles.
+    var showSender = true;
+    var showPreview = true;
+    if (type == 'new_message') {
+      final visibility = await _currentNotificationVisibility();
+      showSender = visibility.showSender;
+      showPreview = visibility.showPreview;
+      if (showSender || showPreview) {
+        final display = await _terminatedMessageDisplay(
+          conversationId,
+          visibility,
+        );
+        title = display.$1;
+        body = display.$2;
+      }
+    }
     final shown = await NotificationService.showMessage(
       conversationId: conversationId,
-      title: 'OpenChat',
-      body: switch (type) {
-        'group_call' => 'Call started',
-        'group_call_ring' => 'Incoming group call',
-        _ => 'New message',
-      },
+      title: title,
+      body: body,
+      showSender: showSender,
+      showPreview: showPreview,
     );
     if (shown && type == 'new_message') {
       // Best-effort launcher badge bump while the app isn't running; the
@@ -164,6 +188,94 @@ Future<bool> _shouldShowMessageNotification(String conversationId) async {
     conversationId: conversationId,
     preferences: preferences,
   );
+}
+
+/// The receiver's notification content-visibility preferences, read from
+/// encrypted local state (the only source available to this terminated-app
+/// isolate). Defaults to hidden on any read failure.
+Future<NotificationContentVisibility> _currentNotificationVisibility() async {
+  try {
+    final state = await LocalPrivateStateService().readState();
+    final settings = decodePrivateNotificationSettings(
+      state[privateStateNotificationSettingsKey],
+    );
+    return NotificationContentVisibility(
+      showSender: settings.showSender,
+      showPreview: settings.showPreview,
+    );
+  } catch (_) {
+    return NotificationContentVisibility.hidden;
+  }
+}
+
+/// Resolves the (ungated) title + body for a terminated-app new-message push by
+/// reading the group/channel name from local state and fetching+decrypting the
+/// latest message. The caller passes the two visibility flags to
+/// [NotificationService.showMessage], which applies the actual gate — so this
+/// only does the work the flags require and degrades to ("OpenChat", "New
+/// message") on any failure (network, locked keyring, FFI unavailable here).
+Future<(String, String)> _terminatedMessageDisplay(
+  String conversationId,
+  NotificationContentVisibility visibility,
+) async {
+  var title = 'OpenChat';
+  var body = 'New message';
+  try {
+    final state = await LocalPrivateStateService().readState();
+    final meta = decodeConversationMeta(
+      state[privateStateConversationMetaKey],
+    )[conversationId];
+    final isGroupOrChannel = meta?.isGroupOrChannel ?? false;
+    final groupName = meta?.name.trim() ?? '';
+
+    String? sender;
+    String? preview;
+    final storage = SecureStorageService();
+    final token = await storage.getAccessToken();
+    if (token != null && token.isNotEmpty) {
+      final messages = await ApiService(
+        storage,
+      ).getMessages(conversationId, limit: 1);
+      if (messages.isNotEmpty) {
+        // Server orders messages created_at DESC, so the first is the newest —
+        // the one this push is about.
+        final msg = messages.first;
+        sender = msg.sender?.username;
+        if (visibility.showPreview && msg.encryptedPayload.isNotEmpty) {
+          final privateKey = await storage.getPrivateKey();
+          if (privateKey != null && privateKey.isNotEmpty) {
+            final raw = await PgpService.decrypt(
+              encryptedArmor: msg.encryptedPayload,
+              privateKeyArmored: privateKey,
+            );
+            if (raw.isNotEmpty) {
+              msg.setDecryptedContent(raw);
+              preview = msg.notificationPreview;
+            }
+          }
+        }
+      }
+    }
+
+    // Title is identity — only resolve it when Show sender is on (matches the
+    // background-WS path; showMessage would gate it away otherwise).
+    if (visibility.showSender) {
+      if (isGroupOrChannel && groupName.isNotEmpty) {
+        title = groupName;
+      } else if (sender != null && sender.isNotEmpty) {
+        title = '@$sender';
+      }
+    }
+    final trimmedPreview = preview?.trim() ?? '';
+    if (trimmedPreview.isNotEmpty) {
+      body = (isGroupOrChannel && sender != null && sender.isNotEmpty)
+          ? '@$sender: $trimmedPreview'
+          : trimmedPreview;
+    }
+  } catch (_) {
+    // Fall back to generic text — never crash the background isolate.
+  }
+  return (title, body);
 }
 
 /// Runs one pre-runApp init step, downgrading any failure to a log line.

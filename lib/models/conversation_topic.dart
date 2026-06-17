@@ -23,6 +23,23 @@ class ConversationTopic {
 
   bool get isClosed => closedAt != null;
 
+  ConversationTopic copyWith({
+    String? name,
+    String? iconColor,
+    DateTime? closedAt,
+    bool clearClosedAt = false,
+  }) {
+    return ConversationTopic(
+      id: id,
+      conversationId: conversationId,
+      name: name ?? this.name,
+      iconColor: iconColor ?? this.iconColor,
+      createdBy: createdBy,
+      closedAt: clearClosedAt ? null : (closedAt ?? this.closedAt),
+      createdAt: createdAt,
+    );
+  }
+
   factory ConversationTopic.fromJson(Map<String, dynamic> json) {
     return ConversationTopic(
       id: json['id'] as String,

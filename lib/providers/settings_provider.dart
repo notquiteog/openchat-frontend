@@ -191,7 +191,6 @@ class SettingsProvider extends ChangeNotifier {
   static const _kBoldText = 'a11y_bold_text';
   static const _kReduceMotion = 'a11y_reduce_motion';
   static const _kUiTextScale = 'a11y_ui_text_scale';
-  static const _kNotificationHintsEnabled = 'notification_hints_enabled';
   static const _kLocaleTag = 'app_locale_tag';
   static const _kSmartInboxFilter = 'smart_inbox_filter';
   static const _kThemeMode = 'theme_mode';
@@ -246,7 +245,8 @@ class SettingsProvider extends ChangeNotifier {
   bool _pushEnabled = false;
   bool _wsBgEnabled = false;
   bool _launchAtLogin = false;
-  bool _notifSensitive = false;
+  bool _notifShowSender = false;
+  bool _notifShowPreview = false;
   DateTime? _notificationsPausedUntil;
   int? _globalQuietHoursStartMinute;
   int? _globalQuietHoursEndMinute;
@@ -265,7 +265,6 @@ class SettingsProvider extends ChangeNotifier {
   bool _boldText = false;
   bool _reduceMotion = false;
   double _uiTextScale = 1.0;
-  bool _notificationHintsEnabled = false;
   String? _localeTag;
   List<String> _recentReactions = const [];
   SmartInboxFilter _smartInboxFilter = SmartInboxFilter.all;
@@ -289,6 +288,11 @@ class SettingsProvider extends ChangeNotifier {
   _conversationNotificationPreferences = {};
   final Map<String, ConversationPrivacyPreference>
   _conversationPrivacyPreferences = {};
+  // convId -> {isGroupOrChannel, name}: lets the background isolates title a
+  // notification with the group/channel name (they receive sealed events with
+  // no conversation type/name). Mirrored from ChatProvider's conversation cache.
+  final Map<String, NotificationConversationMeta>
+  _notificationConversationMeta = {};
 
   int get seedColorValue => _seedColor;
   Color get seedColor => Color(_seedColor);
@@ -406,11 +410,15 @@ class SettingsProvider extends ChangeNotifier {
   /// Desktop OS autostart. Device-level and intentionally survives logout.
   bool get launchAtLogin => _launchAtLogin;
 
-  /// Show sender name + message preview in notifications. Off = generic "New message" text.
-  ///
-  /// This is the single notification-content control. Strict privacy handles
-  /// live metadata surfaces instead of silently rewriting this preference.
-  bool get notificationSensitiveContent => _notifSensitive;
+  /// Reveal who/where a message is from in notifications (DM sender, or the
+  /// group/channel name). Off = generic "OpenChat" title. Independent of
+  /// [notificationShowPreview]. Strict privacy handles live metadata surfaces
+  /// instead of silently rewriting these preferences.
+  bool get notificationShowSender => _notifShowSender;
+
+  /// Reveal a snippet of the message body in notifications. Off = generic
+  /// "New message" text. Independent of [notificationShowSender].
+  bool get notificationShowPreview => _notifShowPreview;
 
   /// Timed pause expiry, or the internal indefinite sentinel date.
   DateTime? get notificationsPausedUntil => _notificationsPausedUntil;
@@ -481,11 +489,6 @@ class SettingsProvider extends ChangeNotifier {
   double get uiTextScale => _uiTextScale;
   static const double minUiTextScale = 1.0;
   static const double maxUiTextScale = 1.3;
-
-  /// Opt-in rich notification previews (#54): when on, sealed sends upload a
-  /// per-recipient PGP-sealed hint so a recipient's device can show a name +
-  /// preview. Off by default; stays end-to-end encrypted (device-level pref).
-  bool get notificationHintsEnabled => _notificationHintsEnabled;
 
   /// App language (#46). null = follow the device locale. Device-level pref
   /// (survives logout, like theme).
@@ -571,7 +574,8 @@ class SettingsProvider extends ChangeNotifier {
       _wsBgEnabled = false;
       await _persistPrivateLocalState();
     }
-    _notifSensitive = notificationSettings.sensitiveContent;
+    _notifShowSender = notificationSettings.showSender;
+    _notifShowPreview = notificationSettings.showPreview;
     _notificationsPausedUntil = _activePauseDateOrNull(
       notificationSettings.notificationsPausedUntilMs,
       DateTime.now(),
@@ -605,8 +609,6 @@ class SettingsProvider extends ChangeNotifier {
       minUiTextScale,
       maxUiTextScale,
     );
-    _notificationHintsEnabled =
-        _prefs!.getBool(_kNotificationHintsEnabled) ?? false;
     _localeTag = _prefs!.getString(_kLocaleTag);
     _recentReactions = _prefs!.getStringList(_kRecentReactions) ?? const [];
     _smartInboxFilter = smartInboxFilterFromName(
@@ -655,6 +657,11 @@ class SettingsProvider extends ChangeNotifier {
           privateState[privateStateConversationPrivacyPreferencesKey],
         ),
       );
+    _notificationConversationMeta
+      ..clear()
+      ..addAll(
+        decodeConversationMeta(privateState[privateStateConversationMetaKey]),
+      );
     _dropExpiredConversationNotificationPreferences(DateTime.now());
     _chatFolders
       ..clear()
@@ -694,6 +701,8 @@ class SettingsProvider extends ChangeNotifier {
     await _prefs!.remove(_kPushEnabled);
     await _prefs!.remove(_kWsBgEnabled);
     await _prefs!.remove(_kNotifSensitive);
+    // #54 rich-notification-preview hints removed — purge any orphaned pref.
+    await _prefs!.remove('notification_hints_enabled');
     _messageDrafts
       ..clear()
       ..addAll(_parsePrivateDrafts(privateState[privateStateMessageDraftsKey]));
@@ -748,7 +757,8 @@ class SettingsProvider extends ChangeNotifier {
     final notificationDefaults = decodePrivateNotificationSettings(null);
     _pushEnabled = notificationDefaults.pushEnabled;
     _wsBgEnabled = notificationDefaults.wsBackgroundEnabled;
-    _notifSensitive = notificationDefaults.sensitiveContent;
+    _notifShowSender = notificationDefaults.showSender;
+    _notifShowPreview = notificationDefaults.showPreview;
     _notificationsPausedUntil = null;
     _globalQuietHoursStartMinute = null;
     _globalQuietHoursEndMinute = null;
@@ -762,6 +772,7 @@ class SettingsProvider extends ChangeNotifier {
     _hiddenConversationIds.clear();
     _conversationNotificationPreferences.clear();
     _conversationPrivacyPreferences.clear();
+    _notificationConversationMeta.clear();
     _chatFolders.clear();
     _broadcastLists.clear();
     _recentStickerIds.clear();
@@ -1313,7 +1324,8 @@ class SettingsProvider extends ChangeNotifier {
       privateStateNotificationSettingsKey: encodePrivateNotificationSettings(
         pushEnabled: _pushEnabled,
         wsBackgroundEnabled: _wsBgEnabled,
-        sensitiveContent: _notifSensitive,
+        showSender: _notifShowSender,
+        showPreview: _notifShowPreview,
         notificationsPausedUntilMs: _notificationsPausedUntilMs,
         globalQuietHoursStartMinute: _globalQuietHoursStartMinute,
         globalQuietHoursEndMinute: _globalQuietHoursEndMinute,
@@ -1325,6 +1337,9 @@ class SettingsProvider extends ChangeNotifier {
           ),
       privateStateConversationPrivacyPreferencesKey:
           encodeConversationPrivacyPreferences(_conversationPrivacyPreferences),
+      privateStateConversationMetaKey: encodeConversationMeta(
+        _notificationConversationMeta,
+      ),
       privateStateChatFoldersKey: encodePrivateChatFolders(_chatFolders),
       privateStateBroadcastListsKey: encodePrivateBroadcastLists(
         _broadcastLists,
@@ -1595,11 +1610,48 @@ class SettingsProvider extends ChangeNotifier {
     await _prefs?.setBool(_kLaunchAtLogin, value);
   }
 
-  Future<void> setNotificationSensitiveContent(bool value) async {
-    _notifSensitive = value;
+  Future<void> setNotificationShowSender(bool value) async {
+    _notifShowSender = value;
     notifyListeners();
     await _persistPrivateLocalState();
     await _prefs?.remove(_kNotifSensitive);
+  }
+
+  Future<void> setNotificationShowPreview(bool value) async {
+    _notifShowPreview = value;
+    notifyListeners();
+    await _persistPrivateLocalState();
+    await _prefs?.remove(_kNotifSensitive);
+  }
+
+  /// Mirror the conversation cache's titling metadata (group/channel name vs
+  /// DM) into encrypted local state so the background isolates can title
+  /// notifications correctly. No write when nothing changed (avoids churning
+  /// the whole encrypted blob on every conversation refresh).
+  Future<void> syncNotificationConversationMeta(
+    Map<String, NotificationConversationMeta> meta,
+  ) async {
+    if (_conversationMetaEquals(_notificationConversationMeta, meta)) return;
+    _notificationConversationMeta
+      ..clear()
+      ..addAll(meta);
+    await _persistPrivateLocalState();
+  }
+
+  static bool _conversationMetaEquals(
+    Map<String, NotificationConversationMeta> a,
+    Map<String, NotificationConversationMeta> b,
+  ) {
+    if (a.length != b.length) return false;
+    for (final entry in a.entries) {
+      final other = b[entry.key];
+      if (other == null ||
+          other.isGroupOrChannel != entry.value.isGroupOrChannel ||
+          other.name != entry.value.name) {
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<void> pauseNotificationsFor(Duration duration) {
@@ -1707,12 +1759,6 @@ class SettingsProvider extends ChangeNotifier {
     _uiTextScale = value.clamp(minUiTextScale, maxUiTextScale);
     notifyListeners();
     await _prefs?.setDouble(_kUiTextScale, _uiTextScale);
-  }
-
-  Future<void> setNotificationHintsEnabled(bool value) async {
-    _notificationHintsEnabled = value;
-    notifyListeners();
-    await _prefs?.setBool(_kNotificationHintsEnabled, value);
   }
 
   /// Set the app language (#46). null/empty = follow the device locale.

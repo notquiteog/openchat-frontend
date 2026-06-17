@@ -5,6 +5,33 @@ import '../utils/local_conversation_preferences.dart';
 
 enum NotificationIntentKind { message, incomingCall }
 
+/// Receiver-side controls for how much of an incoming message a notification
+/// reveals. [showSender] reveals who/where a message is from (the DM sender, or
+/// a group/channel name); [showPreview] reveals a snippet of the body. These
+/// are independent privacy axes — any of the four combinations is valid.
+class NotificationContentVisibility {
+  final bool showSender;
+  final bool showPreview;
+
+  const NotificationContentVisibility({
+    this.showSender = false,
+    this.showPreview = false,
+  });
+
+  /// Reveal nothing — generic "OpenChat" / "New message". The safe default and
+  /// the fallback whenever a preview can't be resolved.
+  static const hidden = NotificationContentVisibility();
+
+  @override
+  bool operator ==(Object other) =>
+      other is NotificationContentVisibility &&
+      other.showSender == showSender &&
+      other.showPreview == showPreview;
+
+  @override
+  int get hashCode => Object.hash(showSender, showPreview);
+}
+
 class NotificationIntent {
   final NotificationIntentKind kind;
   final int notificationId;
@@ -21,7 +48,9 @@ class NotificationIntent {
 
 NotificationIntent? notificationIntentFromRawLine(
   String rawLine, {
-  required bool showSensitive,
+  required NotificationContentVisibility visibility,
+  String? conversationTitle,
+  String? previewText,
   Set<String> mutedConversationIds = const {},
   Map<String, ConversationNotificationPreference>
       conversationNotificationPreferences =
@@ -39,7 +68,9 @@ NotificationIntent? notificationIntentFromRawLine(
     return notificationIntentFromEvent(
       type: type,
       data: data,
-      showSensitive: showSensitive,
+      visibility: visibility,
+      conversationTitle: conversationTitle,
+      previewText: previewText,
       mutedConversationIds: mutedConversationIds,
       conversationNotificationPreferences: conversationNotificationPreferences,
       notificationsPausedUntilMs: notificationsPausedUntilMs,
@@ -55,7 +86,13 @@ NotificationIntent? notificationIntentFromRawLine(
 NotificationIntent? notificationIntentFromEvent({
   required String type,
   required Map<String, dynamic> data,
-  required bool showSensitive,
+  required NotificationContentVisibility visibility,
+  // Caller-resolved bits the background isolates can't derive from a sealed
+  // event: [conversationTitle] is the group/channel display name (null/empty =>
+  // a 1:1 DM); [previewText] is the locally-decrypted body snippet (null =>
+  // unavailable, so the body stays generic regardless of [showPreview]).
+  String? conversationTitle,
+  String? previewText,
   Set<String> mutedConversationIds = const {},
   Map<String, ConversationNotificationPreference>
       conversationNotificationPreferences =
@@ -94,8 +131,8 @@ NotificationIntent? notificationIntentFromEvent({
     return NotificationIntent(
       kind: NotificationIntentKind.message,
       notificationId: convId.hashCode,
-      title: showSensitive && sender != null ? '@$sender' : 'OpenChat',
-      body: 'New message',
+      title: _messageTitle(visibility, conversationTitle, sender),
+      body: _messageBody(visibility, conversationTitle, sender, previewText),
     );
   }
 
@@ -130,17 +167,53 @@ NotificationIntent? notificationIntentFromEvent({
       }
     }
     final caller = _stringOrNull(data['caller_username']);
+    // The caller is identity, so it follows showSender (a preview snippet is
+    // meaningless for a call).
     return NotificationIntent(
       kind: NotificationIntentKind.incomingCall,
       notificationId: 1,
       title: 'Incoming call',
-      body: showSensitive && caller != null
+      body: visibility.showSender && caller != null
           ? '@$caller is calling'
           : 'Incoming call',
     );
   }
 
   return null;
+}
+
+/// Title for a message notification: the conversation/sender identity when
+/// [NotificationContentVisibility.showSender] is on, else generic "OpenChat".
+String _messageTitle(
+  NotificationContentVisibility visibility,
+  String? conversationTitle,
+  String? sender,
+) {
+  if (!visibility.showSender) return 'OpenChat';
+  final groupName = conversationTitle?.trim();
+  if (groupName != null && groupName.isNotEmpty) return groupName;
+  if (sender != null && sender.isNotEmpty) return '@$sender';
+  return 'OpenChat';
+}
+
+/// Body for a message notification: the decrypted snippet when
+/// [NotificationContentVisibility.showPreview] is on AND a preview was
+/// resolved, else generic "New message". Group/channel previews are prefixed
+/// with the sender so the body reads "@alice: …".
+String _messageBody(
+  NotificationContentVisibility visibility,
+  String? conversationTitle,
+  String? sender,
+  String? previewText,
+) {
+  if (!visibility.showPreview) return 'New message';
+  final preview = previewText?.trim();
+  if (preview == null || preview.isEmpty) return 'New message';
+  final isGroupOrChannel = (conversationTitle?.trim().isNotEmpty ?? false);
+  if (isGroupOrChannel && sender != null && sender.isNotEmpty) {
+    return '@$sender: $preview';
+  }
+  return preview;
 }
 
 String? _stringOrNull(Object? value) {

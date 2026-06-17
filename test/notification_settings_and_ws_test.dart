@@ -112,7 +112,7 @@ void main() {
     );
 
     test(
-      'strict privacy leaves notification content as a solo toggle',
+      'sender and preview notification toggles persist independently',
       () async {
         SharedPreferences.setMockInitialValues({
           'strict_privacy_mode': true,
@@ -121,23 +121,49 @@ void main() {
 
         final provider = SettingsProvider();
         await provider.load();
-        await provider.setNotificationSensitiveContent(true);
+        await provider.setNotificationShowSender(true);
 
         expect(provider.strictPrivacyMode, isTrue);
-        expect(provider.notificationSensitiveContent, isTrue);
+        expect(provider.notificationShowSender, isTrue);
+        // Independent axes: enabling sender must not enable preview.
+        expect(provider.notificationShowPreview, isFalse);
         expect(provider.linkPreviewsEnabled, isFalse);
 
         await provider.setStrictPrivacyMode(false);
 
-        expect(provider.notificationSensitiveContent, isTrue);
+        expect(provider.notificationShowSender, isTrue);
         expect(provider.linkPreviewsEnabled, isTrue);
 
-        await provider.setNotificationSensitiveContent(false);
+        await provider.setNotificationShowPreview(true);
+        expect(provider.notificationShowPreview, isTrue);
 
-        expect(provider.notificationSensitiveContent, isFalse);
+        await provider.setNotificationShowSender(false);
+        expect(provider.notificationShowSender, isFalse);
+        // Turning sender off leaves preview untouched.
+        expect(provider.notificationShowPreview, isTrue);
         expect(provider.strictPrivacyMode, isFalse);
       },
     );
+
+    test('legacy sensitive_content blob migrates to both new flags', () async {
+      // A blob written before the split carries only sensitive_content.
+      SharedPreferences.setMockInitialValues({});
+      await LocalPrivateStateService().writeState({
+        privateStateNotificationSettingsKey: {'sensitive_content': true},
+      });
+      final providerOn = SettingsProvider();
+      await providerOn.load();
+      expect(providerOn.notificationShowSender, isTrue);
+      expect(providerOn.notificationShowPreview, isTrue);
+
+      await LocalPrivateStateService().writeState({
+        privateStateNotificationSettingsKey: {'sensitive_content': false},
+      });
+      final providerOff = SettingsProvider();
+      await providerOff.load();
+      expect(providerOff.notificationShowSender, isFalse);
+      expect(providerOff.notificationShowPreview, isFalse);
+    });
 
     test(
       'global pause settings round-trip through encrypted private state',
@@ -446,7 +472,10 @@ void main() {
     test('maps new_message into a message notification intent', () {
       final intent = BackgroundWsService.notificationIntentFromRawLine(
         '{"type":"new_message","data":{"conversation_id":"conv-1","sender_username":"alice"}}',
-        showSensitive: true,
+        visibility: const NotificationContentVisibility(
+          showSender: true,
+          showPreview: true,
+        ),
       );
 
       expect(intent, isNotNull);
@@ -459,7 +488,10 @@ void main() {
     test('suppresses muted background websocket message intents', () {
       final intent = BackgroundWsService.notificationIntentFromRawLine(
         '{"type":"new_message","data":{"conversation_id":"conv-1","sender_username":"alice"}}',
-        showSensitive: true,
+        visibility: const NotificationContentVisibility(
+          showSender: true,
+          showPreview: true,
+        ),
         mutedConversationIds: {'conv-1'},
       );
 
@@ -473,13 +505,19 @@ void main() {
 
       final rawMessage = BackgroundWsService.notificationIntentFromRawLine(
         '{"type":"new_message","data":{"conversation_id":"conv-1","sender_username":"alice"}}',
-        showSensitive: true,
+        visibility: const NotificationContentVisibility(
+          showSender: true,
+          showPreview: true,
+        ),
         notificationsPausedUntilMs: pausedUntilMs,
       );
       final eventJoinRequest = BackgroundWsService.notificationIntentFromEvent(
         type: 'join_request',
         data: {'conversation_id': 'conv-1', 'user_id': 'u-9'},
-        showSensitive: true,
+        visibility: const NotificationContentVisibility(
+          showSender: true,
+          showPreview: true,
+        ),
         notificationsPausedUntilMs: pausedUntilMs,
       );
 
@@ -495,13 +533,19 @@ void main() {
       final allowed = BackgroundWsService.notificationIntentFromEvent(
         type: 'incoming_call',
         data: {'conversation_id': 'conv-1', 'caller_username': 'bob'},
-        showSensitive: true,
+        visibility: const NotificationContentVisibility(
+          showSender: true,
+          showPreview: true,
+        ),
         notificationsPausedUntilMs: pausedUntilMs,
         pauseAllowsCalls: true,
       );
       final blocked = BackgroundWsService.notificationIntentFromRawLine(
         '{"type":"incoming_call","data":{"conversation_id":"conv-1","caller_username":"bob"}}',
-        showSensitive: true,
+        visibility: const NotificationContentVisibility(
+          showSender: true,
+          showPreview: true,
+        ),
         notificationsPausedUntilMs: pausedUntilMs,
         pauseAllowsCalls: false,
       );
@@ -518,12 +562,18 @@ void main() {
 
       final untrustedMetadata = BackgroundWsService.notificationIntentFromRawLine(
         '{"type":"new_message","data":{"conversation_id":"conv-1","sender_username":"alice","mentioned_user_ids":["u-2"]}}',
-        showSensitive: true,
+        visibility: const NotificationContentVisibility(
+          showSender: true,
+          showPreview: true,
+        ),
         conversationNotificationPreferences: preferences,
       );
       final matchingMetadata = BackgroundWsService.notificationIntentFromRawLine(
         '{"type":"new_message","data":{"conversation_id":"conv-1","sender_username":"alice","mentioned_user_ids":["u-1"]}}',
-        showSensitive: true,
+        visibility: const NotificationContentVisibility(
+          showSender: true,
+          showPreview: true,
+        ),
         conversationNotificationPreferences: preferences,
       );
 
@@ -608,7 +658,10 @@ void main() {
     test('expired mute-until websocket preference no longer suppresses', () {
       final intent = BackgroundWsService.notificationIntentFromRawLine(
         '{"type":"new_message","data":{"conversation_id":"conv-1","sender_username":"alice"}}',
-        showSensitive: true,
+        visibility: const NotificationContentVisibility(
+          showSender: true,
+          showPreview: true,
+        ),
         conversationNotificationPreferences: {
           'conv-1': ConversationNotificationPreference(
             mode: ConversationNotificationMode.muted,
@@ -633,6 +686,10 @@ void main() {
 
         final intent = PushNotificationService.foregroundNotificationIntent(
           msg,
+          visibility: const NotificationContentVisibility(
+            showSender: true,
+            showPreview: true,
+          ),
         );
 
         expect(intent, isNotNull);
@@ -730,7 +787,10 @@ void main() {
     test('maps call_offer into an incoming-call notification intent', () {
       final intent = BackgroundWsService.notificationIntentFromRawLine(
         '{"type":"call_offer","data":{"caller_username":"bob"}}',
-        showSensitive: true,
+        visibility: const NotificationContentVisibility(
+          showSender: true,
+          showPreview: true,
+        ),
       );
 
       expect(intent, isNotNull);
@@ -743,7 +803,10 @@ void main() {
     test('maps join_request into a reviewable notification intent', () {
       final intent = BackgroundWsService.notificationIntentFromRawLine(
         '{"type":"join_request","data":{"conversation_id":"conv-1","user_id":"u-9"}}',
-        showSensitive: true,
+        visibility: const NotificationContentVisibility(
+          showSender: true,
+          showPreview: true,
+        ),
       );
 
       expect(intent, isNotNull);
@@ -755,7 +818,10 @@ void main() {
     test('muted conversations suppress join_request intents too', () {
       final intent = BackgroundWsService.notificationIntentFromRawLine(
         '{"type":"join_request","data":{"conversation_id":"conv-1","user_id":"u-9"}}',
-        showSensitive: true,
+        visibility: const NotificationContentVisibility(
+          showSender: true,
+          showPreview: true,
+        ),
         mutedConversationIds: {'conv-1'},
       );
 
@@ -766,7 +832,10 @@ void main() {
       expect(
         BackgroundWsService.notificationIntentFromRawLine(
           'not json',
-          showSensitive: true,
+          visibility: const NotificationContentVisibility(
+            showSender: true,
+            showPreview: true,
+          ),
         ),
         isNull,
       );
@@ -774,7 +843,10 @@ void main() {
       expect(
         BackgroundWsService.notificationIntentFromRawLine(
           '{"type":"typing","data":{"conversation_id":"conv-1"}}',
-          showSensitive: true,
+          visibility: const NotificationContentVisibility(
+            showSender: true,
+            showPreview: true,
+          ),
         ),
         isNull,
       );
@@ -786,7 +858,10 @@ void main() {
       final intent = BackgroundWsService.notificationIntentFromEvent(
         type: 'new_message',
         data: {'conversation_id': 'conv-1', 'sender_username': 'alice'},
-        showSensitive: true,
+        visibility: const NotificationContentVisibility(
+          showSender: true,
+          showPreview: true,
+        ),
       );
 
       expect(intent, isNotNull);
@@ -800,7 +875,10 @@ void main() {
       final intent = BackgroundWsService.notificationIntentFromEvent(
         type: 'new_message',
         data: {'conversation_id': 'conv-1', 'sender_username': 'alice'},
-        showSensitive: true,
+        visibility: const NotificationContentVisibility(
+          showSender: true,
+          showPreview: true,
+        ),
         mutedConversationIds: {'conv-1'},
       );
 
@@ -811,12 +889,87 @@ void main() {
       final intent = BackgroundWsService.notificationIntentFromEvent(
         type: 'join_request',
         data: {'conversation_id': 'conv-1', 'user_id': 'u-9'},
-        showSensitive: true,
+        visibility: const NotificationContentVisibility(
+          showSender: true,
+          showPreview: true,
+        ),
       );
 
       expect(intent, isNotNull);
       expect(intent!.kind, NotificationIntentKind.message);
       expect(intent.body, 'New join request');
+    });
+  });
+
+  group('Sender / preview visibility gating', () {
+    NotificationIntent? build({
+      required bool showSender,
+      required bool showPreview,
+      String? conversationTitle,
+      String? previewText,
+    }) => BackgroundWsService.notificationIntentFromEvent(
+      type: 'new_message',
+      data: const {'conversation_id': 'conv-1', 'sender_username': 'alice'},
+      visibility: NotificationContentVisibility(
+        showSender: showSender,
+        showPreview: showPreview,
+      ),
+      conversationTitle: conversationTitle,
+      previewText: previewText,
+    );
+
+    test('both off → fully generic', () {
+      final intent = build(showSender: false, showPreview: false);
+      expect(intent!.title, 'OpenChat');
+      expect(intent.body, 'New message');
+    });
+
+    test('sender on, preview off → DM shows @sender but generic body', () {
+      final intent = build(
+        showSender: true,
+        showPreview: false,
+        previewText: 'hey there',
+      );
+      expect(intent!.title, '@alice');
+      expect(intent.body, 'New message');
+    });
+
+    test('sender off, preview on → hide identity, show snippet', () {
+      final intent = build(
+        showSender: false,
+        showPreview: true,
+        previewText: 'hey there',
+      );
+      expect(intent!.title, 'OpenChat');
+      expect(intent.body, 'hey there');
+    });
+
+    test('group: title is the conversation name, body prefixes the sender', () {
+      final intent = build(
+        showSender: true,
+        showPreview: true,
+        conversationTitle: 'Project X',
+        previewText: 'ship it',
+      );
+      expect(intent!.title, 'Project X');
+      expect(intent.body, '@alice: ship it');
+    });
+
+    test('group with preview off keeps the name but a generic body', () {
+      final intent = build(
+        showSender: true,
+        showPreview: false,
+        conversationTitle: 'Project X',
+        previewText: 'ship it',
+      );
+      expect(intent!.title, 'Project X');
+      expect(intent.body, 'New message');
+    });
+
+    test('preview on but no decrypted text falls back to generic body', () {
+      final intent = build(showSender: true, showPreview: true);
+      expect(intent!.title, '@alice');
+      expect(intent.body, 'New message');
     });
   });
 

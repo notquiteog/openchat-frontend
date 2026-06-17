@@ -144,7 +144,10 @@ class _NotificationsSettingsScreenState
       final token = await storage.getAccessToken() ?? '';
       final started = await BackgroundWsService.start(
         accessToken: token,
-        showSensitive: settings.notificationSensitiveContent,
+        visibility: NotificationContentVisibility(
+          showSender: settings.notificationShowSender,
+          showPreview: settings.notificationShowPreview,
+        ),
         conversationNotificationPreferences:
             settings.conversationNotificationPreferences,
         notificationsPausedUntilMs: settings.notificationPauseUntilMs,
@@ -367,20 +370,18 @@ class _NotificationsSettingsScreenState
         SettingsGroup(
           children: [
             SettingsSwitchTile(
-              icon: Icons.visibility_outlined,
-              title: 'Show Sensitive Content',
-              subtitle: 'Show sender and preview in notifications',
-              value: settings.notificationSensitiveContent,
-              onChanged: settings.setNotificationSensitiveContent,
+              icon: Icons.person_outline,
+              title: 'Show sender',
+              subtitle: 'Reveal who or which group a message is from',
+              value: settings.notificationShowSender,
+              onChanged: settings.setNotificationShowSender,
             ),
             SettingsSwitchTile(
-              icon: Icons.notifications_active_outlined,
-              title: 'Rich notification previews',
-              subtitle:
-                  'Send an end-to-end encrypted preview so your messages '
-                  'show a snippet in the recipient’s push (off by default)',
-              value: settings.notificationHintsEnabled,
-              onChanged: settings.setNotificationHintsEnabled,
+              icon: Icons.notes_outlined,
+              title: 'Show message preview',
+              subtitle: 'Reveal a snippet of the message text',
+              value: settings.notificationShowPreview,
+              onChanged: settings.setNotificationShowPreview,
             ),
           ],
         ),

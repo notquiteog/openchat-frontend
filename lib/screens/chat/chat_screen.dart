@@ -17,6 +17,7 @@ import '../../config/api_config.dart';
 import '../../models/bot_command.dart';
 import '../../models/channel_pinned_message.dart';
 import '../../models/conversation.dart';
+import '../../models/conversation_topic.dart';
 import '../../models/key_trust_pin.dart';
 import '../../models/message.dart';
 import '../../models/user.dart';
@@ -475,7 +476,14 @@ class _ChatScreenState extends State<ChatScreen> {
       final payload = _suppressLinkPreview
           ? _payloadWithSuppressedPreview(draft.payload, draft.text)
           : draft.payload;
-      final sent = await context.read<ChatProvider>().sendMessage(
+      final chat = context.read<ChatProvider>();
+      final activeTopic = _selectedTopic(chat, conv);
+      if (activeTopic?.isClosed == true) {
+        _restoreComposedMessage(rawText, replyingTo, draftEntities);
+        showAppToast(context, 'This topic is closed', isError: true);
+        return;
+      }
+      final sent = await chat.sendMessage(
         convID: conv.id,
         plaintext: payload,
         replyTo: replyTo,
@@ -2737,7 +2745,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     conversationId: conv.id,
                     onShowAll: () => _showConversationPinsSheet(currentUserID),
                   ),
-                  _buildTopicBar(chat, conv),
+                  _buildTopicBar(chat, conv, currentUserID),
                   Expanded(
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
@@ -3457,10 +3465,19 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Horizontal topic ("thread") filter strip for groups/channels. Tapping a
   /// topic filters the message stream to it; "All" clears the filter.
-  Widget _buildTopicBar(ChatProvider chat, Conversation conv) {
+  Widget _buildTopicBar(
+    ChatProvider chat,
+    Conversation conv,
+    String currentUserID,
+  ) {
     if (!(conv.isGroup || conv.isChannel)) return const SizedBox.shrink();
     final topics = chat.topicsFor(conv.id);
     if (topics.isEmpty && !conv.topicsEnabled) return const SizedBox.shrink();
+    final canManageTopics =
+        _currentMember(
+          currentUserID,
+        )?.hasPermission(AdminPermission.manageTopics) ??
+        false;
     return SizedBox(
       height: 46,
       child: ListView(
@@ -3475,14 +3492,27 @@ class _ChatScreenState extends State<ChatScreen> {
           for (final t in topics)
             _TopicChip(
               label: t.name,
+              closed: t.isClosed,
               selected: _activeTopicId == t.id,
               onTap: () => setState(
                 () => _activeTopicId = _activeTopicId == t.id ? null : t.id,
               ),
+              onLongPress: canManageTopics
+                  ? () => _showTopicActions(conv, t)
+                  : null,
             ),
         ],
       ),
     );
+  }
+
+  ConversationTopic? _selectedTopic(ChatProvider chat, Conversation conv) {
+    final id = _activeTopicId;
+    if (id == null) return null;
+    for (final topic in chat.topicsFor(conv.id)) {
+      if (topic.id == id) return topic;
+    }
+    return null;
   }
 
   Future<void> _createTopic(Conversation conv) async {
@@ -3502,12 +3532,17 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<String?> _promptTopicName() async {
-    final ctrl = TextEditingController();
+  Future<String?> _promptTopicName({
+    String initialName = '',
+    String title = 'New topic',
+    String actionLabel = 'Create',
+  }) async {
+    final ctrl = TextEditingController(text: initialName);
+    ctrl.selection = TextSelection.collapsed(offset: ctrl.text.length);
     final name = await showDialog<String>(
       context: context,
       builder: (dctx) => GlassAlertDialog(
-        title: const Text('New topic'),
+        title: Text(title),
         content: TextField(
           controller: ctrl,
           autofocus: true,
@@ -3522,13 +3557,105 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.of(dctx).pop(ctrl.text),
-            child: const Text('Create'),
+            child: Text(actionLabel),
           ),
         ],
       ),
     );
     ctrl.dispose();
     return name;
+  }
+
+  void _showTopicActions(Conversation conv, ConversationTopic topic) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) {
+        void runAfterClose(FutureOr<void> Function() action) {
+          Navigator.of(sheetCtx).pop();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            unawaited(Future<void>.sync(action));
+          });
+        }
+
+        return GlassBottomSheetFrame(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const GlassSheetGrabber(),
+              GlassSheetHeader(
+                icon: topic.isClosed
+                    ? Icons.lock_outline_rounded
+                    : Icons.forum_outlined,
+                title: topic.name,
+                subtitle: topic.isClosed ? 'Closed topic' : 'Open topic',
+                onClose: () => Navigator.of(sheetCtx).pop(),
+              ),
+              _MenuTile(
+                icon: Icons.edit_outlined,
+                label: 'Rename topic',
+                onTap: () => runAfterClose(() => _renameTopic(conv, topic)),
+              ),
+              _MenuTile(
+                icon: topic.isClosed
+                    ? Icons.lock_open_rounded
+                    : Icons.lock_outline_rounded,
+                label: topic.isClosed ? 'Reopen topic' : 'Close topic',
+                onTap: () => runAfterClose(() => _setTopicClosed(conv, topic)),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _renameTopic(Conversation conv, ConversationTopic topic) async {
+    final name = await _promptTopicName(
+      initialName: topic.name,
+      title: 'Rename topic',
+      actionLabel: 'Save',
+    );
+    final trimmed = name?.trim();
+    if (trimmed == null || trimmed.isEmpty || trimmed == topic.name) return;
+    if (!mounted) return;
+    final updated = await context.read<ChatProvider>().updateTopic(
+      conv.id,
+      topic.id,
+      name: trimmed,
+      channel: conv.isChannel,
+    );
+    if (!mounted) return;
+    showAppToast(
+      context,
+      updated == null ? 'Could not rename topic' : 'Topic renamed',
+      isError: updated == null,
+    );
+  }
+
+  Future<void> _setTopicClosed(
+    Conversation conv,
+    ConversationTopic topic,
+  ) async {
+    final close = !topic.isClosed;
+    final updated = await context.read<ChatProvider>().updateTopic(
+      conv.id,
+      topic.id,
+      closed: close,
+      channel: conv.isChannel,
+    );
+    if (!mounted) return;
+    showAppToast(
+      context,
+      updated == null
+          ? 'Could not update topic'
+          : close
+          ? 'Topic closed'
+          : 'Topic reopened',
+      isError: updated == null,
+    );
   }
 
   void _showChatMenu(
@@ -3728,6 +3855,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _buildInputBar(BuildContext context, String currentUserID) {
     final scheme = Theme.of(context).colorScheme;
+    final activeTopic = _selectedTopic(context.read<ChatProvider>(), conv);
+    final topicClosed = activeTopic?.isClosed ?? false;
     final mentionSuggestions = _mentionSuggestions(currentUserID);
     final specialMentions = _specialMentionSuggestions();
     final commandSuggestionList = commandSuggestions(
@@ -3768,6 +3897,30 @@ class _ChatScreenState extends State<ChatScreen> {
                       onSpecialSelected: _insertSpecialMention,
                     ),
                   if (_replyingTo != null) _buildReplyPreview(context),
+                  if (topicClosed)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(10, 6, 10, 2),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.lock_outline_rounded,
+                            size: 16,
+                            color: scheme.onSurface.withValues(alpha: 0.62),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'This topic is closed',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: scheme.onSurface.withValues(alpha: 0.66),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   Row(
                     children: [
                       IconButton(
@@ -3779,10 +3932,12 @@ class _ChatScreenState extends State<ChatScreen> {
                         tooltip: _showCustomEmojis
                             ? 'Keyboard'
                             : 'Custom emoji',
-                        onPressed: () => setState(() {
-                          _showCustomEmojis = !_showCustomEmojis;
-                          if (_showCustomEmojis) _showStickers = false;
-                        }),
+                        onPressed: topicClosed
+                            ? null
+                            : () => setState(() {
+                                _showCustomEmojis = !_showCustomEmojis;
+                                if (_showCustomEmojis) _showStickers = false;
+                              }),
                       ),
                       IconButton(
                         icon: Icon(
@@ -3791,22 +3946,27 @@ class _ChatScreenState extends State<ChatScreen> {
                               : Icons.sticky_note_2_outlined,
                         ),
                         tooltip: _showStickers ? 'Keyboard' : 'Stickers',
-                        onPressed: () => setState(() {
-                          _showStickers = !_showStickers;
-                          if (_showStickers) _showCustomEmojis = false;
-                        }),
+                        onPressed: topicClosed
+                            ? null
+                            : () => setState(() {
+                                _showStickers = !_showStickers;
+                                if (_showStickers) _showCustomEmojis = false;
+                              }),
                       ),
                       Expanded(
                         child: TextField(
                           controller: _inputCtrl,
-                          onChanged: (_) => _onTyping(),
-                          onSubmitted: (_) => _sendMessage(),
+                          enabled: !topicClosed,
+                          onChanged: topicClosed ? null : (_) => _onTyping(),
+                          onSubmitted: topicClosed
+                              ? null
+                              : (_) => _sendMessage(),
                           maxLines: null,
                           textInputAction: TextInputAction.send,
                           // Punchier weight to stay legible over the refracting glass.
                           style: const TextStyle(fontWeight: FontWeight.w500),
                           decoration: InputDecoration(
-                            hintText: 'Message',
+                            hintText: topicClosed ? 'Topic closed' : 'Message',
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(22),
                               borderSide: BorderSide.none,
@@ -3824,7 +3984,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                       const SizedBox(width: 4),
                       GlassCircleIconButton(
-                        onPressed: _showAttachmentPicker,
+                        onPressed: topicClosed ? null : _showAttachmentPicker,
                         tooltip: 'Attach file',
                         icon: const Icon(Icons.attach_file_outlined, size: 22),
                       ),
@@ -3832,8 +3992,8 @@ class _ChatScreenState extends State<ChatScreen> {
                       Tooltip(
                         message: 'Hold for send options',
                         child: GestureDetector(
-                          onTap: _sendMessage,
-                          onLongPress: _showSendOptions,
+                          onTap: topicClosed ? null : _sendMessage,
+                          onLongPress: topicClosed ? null : _showSendOptions,
                           child: GlassContainer(
                             shape: const LiquidRoundedSuperellipse(
                               borderRadius: 999,
@@ -6133,13 +6293,17 @@ class _BouncingDots extends AnimatedWidget {
 /// A pill chip in the topic filter strip.
 class _TopicChip extends StatelessWidget {
   final String label;
+  final bool closed;
   final bool selected;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
   const _TopicChip({
     required this.label,
+    this.closed = false,
     required this.selected,
     required this.onTap,
+    this.onLongPress,
   });
 
   @override
@@ -6150,21 +6314,37 @@ class _TopicChip extends StatelessWidget {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: onTap,
+        onLongPress: onLongPress,
         child: GlassContainer(
           shape: const LiquidRoundedSuperellipse(borderRadius: 999),
           allowElevation: true,
           glowIntensity: selected ? 0.10 : 0.04,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                color: selected
-                    ? scheme.primary
-                    : scheme.onSurface.withValues(alpha: 0.72),
-              ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (closed) ...[
+                  Icon(
+                    Icons.lock_outline_rounded,
+                    size: 13,
+                    color: selected
+                        ? scheme.primary
+                        : scheme.onSurface.withValues(alpha: 0.56),
+                  ),
+                  const SizedBox(width: 5),
+                ],
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    color: selected
+                        ? scheme.primary
+                        : scheme.onSurface.withValues(alpha: 0.72),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
