@@ -126,17 +126,9 @@ class _OnDeviceAiScreenState extends State<OnDeviceAiScreen> {
     final titleStyle = theme.textTheme.titleSmall?.copyWith(
       fontWeight: FontWeight.w700,
     );
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: const GlassAppBar(title: Text('On-device intelligence')),
-      body: ListView(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
-          16,
-          16,
-        ),
-        children: [
+    return GlassScreenScaffold.list(
+      title: const Text('On-device intelligence'),
+      children: [
           Text(
             'These models run entirely on this device. Audio and text never '
             'leave it — the only network use is the model download itself.',
@@ -228,7 +220,6 @@ class _OnDeviceAiScreenState extends State<OnDeviceAiScreen> {
                       ),
               ),
         ],
-      ),
     );
   }
 }

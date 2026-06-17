@@ -367,9 +367,8 @@ class _ChannelMembersScreenState extends State<ChannelMembersScreen> {
   @override
   Widget build(BuildContext context) {
     final topInset = MediaQuery.paddingOf(context).top + kToolbarHeight;
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(title: const Text('Members & roles')),
+    return GlassScreenScaffold(
+      title: const Text('Members & roles'),
       body: Column(
         children: [
           SizedBox(height: topInset + 8),

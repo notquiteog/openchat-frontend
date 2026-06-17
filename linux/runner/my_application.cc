@@ -60,6 +60,13 @@ static void my_application_activate(GApplication* application) {
 
   gtk_window_set_default_size(window, 1280, 720);
 
+  // Force the Impeller (Vulkan) rendering backend on Linux desktop. The engine
+  // reads these env vars at startup (engine_switches.cc) and prepends "--", so
+  // this is equivalent to launching with `--enable-impeller=true`. Fixes glass
+  // backdrop edges re-rasterizing during page transitions on the Skia path.
+  g_setenv("FLUTTER_ENGINE_SWITCHES", "1", TRUE);
+  g_setenv("FLUTTER_ENGINE_SWITCH_1", "enable-impeller=true", TRUE);
+
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(
       project, self->dart_entrypoint_arguments);

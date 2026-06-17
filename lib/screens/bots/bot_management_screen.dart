@@ -124,18 +124,15 @@ class _BotManagementScreenState extends State<BotManagementScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(
-        title: const Text('My Bots'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            tooltip: 'Create bot',
-            onPressed: _createBot,
-          ),
-        ],
-      ),
+    return GlassScreenScaffold(
+      title: const Text('My Bots'),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.add),
+          tooltip: 'Create bot',
+          onPressed: _createBot,
+        ),
+      ],
       body: _loading
           ? const Center(child: GlassProgressIndicator.circular())
           : _bots.isEmpty
@@ -197,8 +194,13 @@ class _BotManagementScreenState extends State<BotManagementScreen> {
                 final scheme = Theme.of(context).colorScheme;
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8),
-                  child: GlassCard(
-                    padding: EdgeInsets.zero,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: scheme.surfaceContainerHighest.withValues(
+                        alpha: 0.5,
+                      ),
+                      borderRadius: BorderRadius.circular(22),
+                    ),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(22),
                       child: Material(

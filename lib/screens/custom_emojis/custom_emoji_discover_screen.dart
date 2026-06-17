@@ -52,22 +52,22 @@ class _CustomEmojiDiscoverScreenState extends State<CustomEmojiDiscoverScreen> {
 
   Future<void> _add(Map<String, dynamic> pack) async {
     final api = context.read<ApiService>();
-    final messenger = ScaffoldMessenger.of(context);
     final id = pack['id'] as String;
     try {
       await api.addCustomEmojiPackToLibrary(id);
-      if (mounted) setState(() => _added.add(id));
-      messenger.showSnackBar(const SnackBar(content: Text('Added to library')));
+      if (!mounted) return;
+      setState(() => _added.add(id));
+      showAppToast(context, 'Added to library');
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+      if (!mounted) return;
+      showAppToast(context, 'Failed: $e', isError: true);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(title: const Text('Discover emoji packs')),
+    return GlassScreenScaffold(
+      title: const Text('Discover emoji packs'),
       body: Column(
         children: [
           Padding(
@@ -77,21 +77,22 @@ class _CustomEmojiDiscoverScreenState extends State<CustomEmojiDiscoverScreen> {
               16,
               8,
             ),
-            child: TextField(
-              controller: _queryCtrl,
-              textInputAction: TextInputAction.search,
-              onSubmitted: (_) => _search(),
-              decoration: InputDecoration(
-                hintText: 'Search emoji packs',
-                prefixIcon: const Icon(Icons.search_rounded),
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.arrow_forward_rounded),
+            child: Row(
+              children: [
+                Expanded(
+                  child: GlassSearchBar(
+                    controller: _queryCtrl,
+                    placeholder: 'Search emoji packs',
+                    onSubmitted: (_) => _search(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                GlassCircleIconButton(
+                  tooltip: 'Search',
                   onPressed: _search,
+                  icon: const Icon(Icons.arrow_forward_rounded, size: 20),
                 ),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
+              ],
             ),
           ),
           Expanded(

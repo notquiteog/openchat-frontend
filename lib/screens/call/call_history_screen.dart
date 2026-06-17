@@ -96,18 +96,15 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final visible = _visible;
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(
-        title: const Text('Calls'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.more_vert_rounded),
-            tooltip: 'More',
-            onPressed: _entries.isEmpty ? null : _confirmClearAll,
-          ),
-        ],
-      ),
+    return GlassScreenScaffold(
+      title: const Text('Calls'),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.more_vert_rounded),
+          tooltip: 'More',
+          onPressed: _entries.isEmpty ? null : _confirmClearAll,
+        ),
+      ],
       body: _loading
           ? const Center(child: GlassProgressIndicator.circular())
           : _entries.isEmpty

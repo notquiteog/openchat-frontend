@@ -463,14 +463,11 @@ class _ModerationScreenState extends State<ModerationScreen> {
         if (didPop) return;
         Navigator.pop(context, _pendingResult);
       },
-      child: Scaffold(
-        extendBodyBehindAppBar: true,
-        appBar: GlassAppBar(
-          title: const Text('Moderation'),
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back_rounded),
-            onPressed: () => Navigator.pop(context, _pendingResult),
-          ),
+      child: GlassScreenScaffold(
+        title: const Text('Moderation'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded),
+          onPressed: () => Navigator.pop(context, _pendingResult),
         ),
         body: _loading
             ? const Center(child: GlassProgressIndicator.circular())

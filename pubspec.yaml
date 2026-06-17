@@ -1,6 +1,6 @@
 name: openchat
 description: Open-source E2E encrypted messenger with PGP
-version: 0.5.78+132
+version: 0.5.79+133
 publish_to: 'none'
 
 environment:
@@ -79,7 +79,7 @@ dependencies:
   mobile_scanner: ^7.2.0
 
   # iOS 26 Liquid Glass UI kit — shader-based refraction, physics animations
-  liquid_glass_widgets: ^0.16.0
+  liquid_glass_widgets: ^0.16.2
 
   # UI utilities
   intl: ^0.20.2

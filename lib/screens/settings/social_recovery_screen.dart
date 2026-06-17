@@ -196,17 +196,9 @@ class _SocialRecoveryScreenState extends State<SocialRecoveryScreen> {
     final scheme = Theme.of(context).colorScheme;
     final ceremony = _ceremony;
 
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: const GlassAppBar(title: Text('Recover with guardians')),
-      body: ListView(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
-          16,
-          MediaQuery.paddingOf(context).bottom + 32,
-        ),
-        children: [
+    return GlassScreenScaffold.list(
+      title: const Text('Recover with guardians'),
+      children: [
           if (_starting)
             const GlassCard(
               child: Row(
@@ -387,7 +379,6 @@ class _SocialRecoveryScreenState extends State<SocialRecoveryScreen> {
             ),
           ],
         ],
-      ),
     );
   }
 }

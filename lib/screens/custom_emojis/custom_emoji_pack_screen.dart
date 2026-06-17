@@ -3,6 +3,7 @@ import 'package:file_selector/file_selector.dart' as fs;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart' as lg;
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../config/api_config.dart';
@@ -67,21 +68,22 @@ class _CustomEmojiPackScreenState extends State<CustomEmojiPackScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(
-              controller: nameCtrl,
-              decoration: const InputDecoration(labelText: 'Pack name'),
-              textCapitalization: TextCapitalization.words,
-              maxLength: _customEmojiPackNameMax,
-              autofocus: true,
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: descCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Description (optional)',
+            lg.GlassFormField(
+              label: 'Pack name',
+              child: lg.GlassTextField(
+                controller: nameCtrl,
+                maxLength: _customEmojiPackNameMax,
+                autofocus: true,
               ),
-              maxLines: 2,
-              maxLength: _customEmojiPackDescriptionMax,
+            ),
+            const SizedBox(height: 12),
+            lg.GlassFormField(
+              label: 'Description (optional)',
+              child: lg.GlassTextField(
+                controller: descCtrl,
+                maxLines: 2,
+                maxLength: _customEmojiPackDescriptionMax,
+              ),
             ),
           ],
         ),
@@ -121,28 +123,25 @@ class _CustomEmojiPackScreenState extends State<CustomEmojiPackScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(
-        title: const Text('Custom Emoji Packs'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.search_rounded),
-            tooltip: 'Discover packs',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => const CustomEmojiDiscoverScreen(),
-              ),
+    return GlassScreenScaffold(
+      title: const Text('Custom Emoji Packs'),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.search_rounded),
+          tooltip: 'Discover packs',
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => const CustomEmojiDiscoverScreen(),
             ),
           ),
-          IconButton(
-            icon: const Icon(Icons.add_reaction_outlined),
-            tooltip: 'New pack',
-            onPressed: _createPack,
-          ),
-        ],
-      ),
+        ),
+        IconButton(
+          icon: const Icon(Icons.add_reaction_outlined),
+          tooltip: 'New pack',
+          onPressed: _createPack,
+        ),
+      ],
       body: _loading
           ? const Center(child: GlassProgressIndicator.circular())
           : _packs.isEmpty
@@ -198,8 +197,13 @@ class _CustomEmojiPackScreenState extends State<CustomEmojiPackScreen> {
                 final scheme = Theme.of(context).colorScheme;
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8),
-                  child: GlassCard(
-                    padding: EdgeInsets.zero,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: scheme.surfaceContainerHighest.withValues(
+                        alpha: 0.5,
+                      ),
+                      borderRadius: BorderRadius.circular(22),
+                    ),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(22),
                       child: Material(
@@ -387,28 +391,30 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(labelText: 'Name'),
-                maxLength: _customEmojiNameMax,
-                autofocus: true,
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: emojiCtrl,
-                decoration: InputDecoration(
-                  labelText: 'Base emoji',
-                  helperText: 'One emoji only',
-                  errorText: emojiError,
+              lg.GlassFormField(
+                label: 'Name',
+                child: lg.GlassTextField(
+                  controller: nameCtrl,
+                  maxLength: _customEmojiNameMax,
+                  autofocus: true,
                 ),
-                // Clamp input to a single grapheme cluster (handles ZWJ
-                // sequences, skin-tone modifiers, flags, etc. correctly).
-                inputFormatters: [const _SingleEmojiFormatter()],
-                onChanged: (_) {
-                  if (emojiError != null) {
-                    setDialogState(() => emojiError = null);
-                  }
-                },
+              ),
+              const SizedBox(height: 12),
+              lg.GlassFormField(
+                label: 'Base emoji',
+                helperText: 'One emoji only',
+                errorText: emojiError,
+                child: lg.GlassTextField(
+                  controller: emojiCtrl,
+                  // Clamp input to a single grapheme cluster (handles ZWJ
+                  // sequences, skin-tone modifiers, flags, etc. correctly).
+                  inputFormatters: const [_SingleEmojiFormatter()],
+                  onChanged: (_) {
+                    if (emojiError != null) {
+                      setDialogState(() => emojiError = null);
+                    }
+                  },
+                ),
               ),
             ],
           ),
@@ -527,18 +533,22 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(
-              controller: nameCtrl,
-              decoration: const InputDecoration(labelText: 'Pack name'),
-              maxLength: _customEmojiPackNameMax,
-              autofocus: true,
+            lg.GlassFormField(
+              label: 'Pack name',
+              child: lg.GlassTextField(
+                controller: nameCtrl,
+                maxLength: _customEmojiPackNameMax,
+                autofocus: true,
+              ),
             ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: descCtrl,
-              decoration: const InputDecoration(labelText: 'Description'),
-              maxLines: 2,
-              maxLength: _customEmojiPackDescriptionMax,
+            const SizedBox(height: 12),
+            lg.GlassFormField(
+              label: 'Description',
+              child: lg.GlassTextField(
+                controller: descCtrl,
+                maxLines: 2,
+                maxLength: _customEmojiPackDescriptionMax,
+              ),
             ),
           ],
         ),
@@ -583,41 +593,38 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
     final isOwner =
         currentUserId != null && _pack['creator_id'] == currentUserId;
 
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(
-        title: Text(_pack['name'] as String? ?? 'Pack'),
-        actions: isOwner
-            ? [
-                IconButton(
-                  icon: const Icon(Icons.ios_share_rounded),
-                  tooltip: 'Share pack',
-                  onPressed: _sharePack,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.image_outlined),
-                  tooltip: 'Set cover image',
-                  onPressed: _setCoverImage,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.edit_outlined),
-                  tooltip: 'Edit pack info',
-                  onPressed: _editPackInfo,
-                ),
-              ]
-            : [
-                IconButton(
-                  icon: const Icon(Icons.ios_share_rounded),
-                  tooltip: 'Share pack',
-                  onPressed: _sharePack,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.bookmark_remove_outlined),
-                  tooltip: 'Remove from library',
-                  onPressed: _removeFromLibrary,
-                ),
-              ],
-      ),
+    return GlassScreenScaffold(
+      title: Text(_pack['name'] as String? ?? 'Pack'),
+      actions: isOwner
+          ? [
+              IconButton(
+                icon: const Icon(Icons.ios_share_rounded),
+                tooltip: 'Share pack',
+                onPressed: _sharePack,
+              ),
+              IconButton(
+                icon: const Icon(Icons.image_outlined),
+                tooltip: 'Set cover image',
+                onPressed: _setCoverImage,
+              ),
+              IconButton(
+                icon: const Icon(Icons.edit_outlined),
+                tooltip: 'Edit pack info',
+                onPressed: _editPackInfo,
+              ),
+            ]
+          : [
+              IconButton(
+                icon: const Icon(Icons.ios_share_rounded),
+                tooltip: 'Share pack',
+                onPressed: _sharePack,
+              ),
+              IconButton(
+                icon: const Icon(Icons.bookmark_remove_outlined),
+                tooltip: 'Remove from library',
+                onPressed: _removeFromLibrary,
+              ),
+            ],
       body: _loading
           ? const Center(child: GlassProgressIndicator.circular())
           : Column(

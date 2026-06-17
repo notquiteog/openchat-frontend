@@ -122,28 +122,25 @@ class _StickerPackScreenState extends State<StickerPackScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(
-        title: const Text('Sticker Packs'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.search_rounded),
-            tooltip: 'Discover packs',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => const StickerDiscoverScreen(),
-              ),
+    return GlassScreenScaffold(
+      title: const Text('Sticker Packs'),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.search_rounded),
+          tooltip: 'Discover packs',
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => const StickerDiscoverScreen(),
             ),
           ),
-          IconButton(
-            icon: const Icon(Icons.add),
-            tooltip: 'New pack',
-            onPressed: _createPack,
-          ),
-        ],
-      ),
+        ),
+        IconButton(
+          icon: const Icon(Icons.add),
+          tooltip: 'New pack',
+          onPressed: _createPack,
+        ),
+      ],
       body: _loading
           ? const Center(child: GlassProgressIndicator.circular())
           : _packs.isEmpty
@@ -199,8 +196,11 @@ class _StickerPackScreenState extends State<StickerPackScreen> {
                 final scheme = Theme.of(context).colorScheme;
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8),
-                  child: GlassCard(
-                    padding: EdgeInsets.zero,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: scheme.onSurface.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(22),
+                    ),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(22),
                       child: Material(
@@ -388,9 +388,9 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(
+            GlassTextField(
               controller: nameCtrl,
-              decoration: const InputDecoration(labelText: 'Name'),
+              placeholder: 'Name',
               maxLength: _stickerNameMax,
               autofocus: true,
             ),
@@ -500,16 +500,16 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(
+            GlassTextField(
               controller: nameCtrl,
-              decoration: const InputDecoration(labelText: 'Pack name'),
+              placeholder: 'Pack name',
               maxLength: _stickerPackNameMax,
               autofocus: true,
             ),
             const SizedBox(height: 8),
-            TextField(
+            GlassTextField(
               controller: descCtrl,
-              decoration: const InputDecoration(labelText: 'Description'),
+              placeholder: 'Description',
               maxLines: 2,
               maxLength: _stickerPackDescriptionMax,
             ),
@@ -560,55 +560,52 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
     final isOwner =
         currentUserId != null && _pack['creator_id'] == currentUserId;
 
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(
-        title: Text(_pack['name'] as String? ?? 'Pack'),
-        actions: isOwner
-            ? [
-                IconButton(
-                  icon: const Icon(Icons.ios_share_rounded),
-                  tooltip: 'Share pack',
-                  onPressed: _sharePack,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.auto_fix_high_rounded),
-                  tooltip: 'Create from photo',
-                  onPressed: () async {
-                    final added = await Navigator.push<bool>(
-                      context,
-                      MaterialPageRoute<bool>(
-                        builder: (_) =>
-                            StickerEditorScreen(packId: _pack['id'] as String),
-                      ),
-                    );
-                    if (added == true) await _reload();
-                  },
-                ),
-                IconButton(
-                  icon: const Icon(Icons.image_outlined),
-                  tooltip: 'Set cover image',
-                  onPressed: _setCoverImage,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.edit_outlined),
-                  tooltip: 'Edit pack info',
-                  onPressed: _editPackInfo,
-                ),
-              ]
-            : [
-                IconButton(
-                  icon: const Icon(Icons.ios_share_rounded),
-                  tooltip: 'Share pack',
-                  onPressed: _sharePack,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.bookmark_remove_outlined),
-                  tooltip: 'Remove from library',
-                  onPressed: _removeFromLibrary,
-                ),
-              ],
-      ),
+    return GlassScreenScaffold(
+      title: Text(_pack['name'] as String? ?? 'Pack'),
+      actions: isOwner
+          ? [
+              IconButton(
+                icon: const Icon(Icons.ios_share_rounded),
+                tooltip: 'Share pack',
+                onPressed: _sharePack,
+              ),
+              IconButton(
+                icon: const Icon(Icons.auto_fix_high_rounded),
+                tooltip: 'Create from photo',
+                onPressed: () async {
+                  final added = await Navigator.push<bool>(
+                    context,
+                    MaterialPageRoute<bool>(
+                      builder: (_) =>
+                          StickerEditorScreen(packId: _pack['id'] as String),
+                    ),
+                  );
+                  if (added == true) await _reload();
+                },
+              ),
+              IconButton(
+                icon: const Icon(Icons.image_outlined),
+                tooltip: 'Set cover image',
+                onPressed: _setCoverImage,
+              ),
+              IconButton(
+                icon: const Icon(Icons.edit_outlined),
+                tooltip: 'Edit pack info',
+                onPressed: _editPackInfo,
+              ),
+            ]
+          : [
+              IconButton(
+                icon: const Icon(Icons.ios_share_rounded),
+                tooltip: 'Share pack',
+                onPressed: _sharePack,
+              ),
+              IconButton(
+                icon: const Icon(Icons.bookmark_remove_outlined),
+                tooltip: 'Remove from library',
+                onPressed: _removeFromLibrary,
+              ),
+            ],
       body: _loading
           ? const Center(child: GlassProgressIndicator.circular())
           : Column(

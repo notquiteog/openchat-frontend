@@ -36,21 +36,18 @@ class _SystemAdminConsoleScreenState extends State<SystemAdminConsoleScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(
-        title: const Text('System Admin'),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: GlassCircleIconButton(
-              tooltip: 'Refresh metrics',
-              onPressed: () => _refresh(toast: true),
-              icon: const Icon(Icons.refresh_rounded),
-            ),
+    return GlassScreenScaffold(
+      title: const Text('System Admin'),
+      actions: [
+        Padding(
+          padding: const EdgeInsets.only(right: 12),
+          child: GlassCircleIconButton(
+            tooltip: 'Refresh metrics',
+            onPressed: () => _refresh(toast: true),
+            icon: const Icon(Icons.refresh_rounded),
           ),
-        ],
-      ),
+        ),
+      ],
       body: FutureBuilder<OperatorMetrics>(
         future: _metricsFuture,
         builder: (context, snapshot) {

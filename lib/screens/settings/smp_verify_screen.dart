@@ -68,17 +68,10 @@ class _SmpVerifyScreenState extends State<SmpVerifyScreen> {
         if (smp.sessionFor(c.id)?.status == SmpStatus.awaitingAnswer) c,
     ];
 
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: const GlassAppBar(title: Text('Verify a contact')),
-      body: ListView(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
-          16,
-          16,
-        ),
-        children: [
+    return GlassScreenScaffold.list(
+      title: const Text('Verify a contact'),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+      children: [
           GlassCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -143,16 +136,14 @@ class _SmpVerifyScreenState extends State<SmpVerifyScreen> {
                   onChanged: (c) => setState(() => _selected = c),
                 ),
                 const SizedBox(height: 8),
-                TextField(
+                GlassTextField(
                   controller: _questionCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Question (sent to them)',
-                  ),
+                  placeholder: 'Question (sent to them)',
                 ),
                 const SizedBox(height: 8),
-                TextField(
+                GlassTextField(
                   controller: _answerCtrl,
-                  decoration: const InputDecoration(labelText: 'Shared answer'),
+                  placeholder: 'Shared answer',
                 ),
                 const SizedBox(height: 12),
                 GlassButtonWidget(
@@ -162,10 +153,10 @@ class _SmpVerifyScreenState extends State<SmpVerifyScreen> {
                           final conv = _selected!;
                           final fp = _peerFingerprint(conv, myId);
                           if (fp.isEmpty) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Contact has no key on file'),
-                              ),
+                            showAppToast(
+                              context,
+                              'Contact has no key on file',
+                              isError: true,
                             );
                             return;
                           }
@@ -188,8 +179,7 @@ class _SmpVerifyScreenState extends State<SmpVerifyScreen> {
             const SizedBox(height: 16),
             _StatusCard(session: smp.sessionFor(_selected!.id)),
           ],
-        ],
-      ),
+      ],
     );
   }
 }
@@ -222,9 +212,9 @@ class _IncomingCard extends StatelessWidget {
           const SizedBox(height: 4),
           Text('Q: $question'),
           const SizedBox(height: 8),
-          TextField(
+          GlassTextField(
             controller: controller,
-            decoration: const InputDecoration(labelText: 'Your answer'),
+            placeholder: 'Your answer',
           ),
           const SizedBox(height: 8),
           GlassButtonWidget(

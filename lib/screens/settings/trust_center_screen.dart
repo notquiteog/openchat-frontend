@@ -1588,18 +1588,15 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
       sessions: _sessions,
     );
 
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(
-        title: const Text('Privacy & Security'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded),
-            tooltip: 'Refresh',
-            onPressed: _loading ? null : _load,
-          ),
-        ],
-      ),
+    return GlassScreenScaffold(
+      title: const Text('Privacy & Security'),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.refresh_rounded),
+          tooltip: 'Refresh',
+          onPressed: _loading ? null : _load,
+        ),
+      ],
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(

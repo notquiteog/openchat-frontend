@@ -61,21 +61,18 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(
-        title: const Text('Admin'),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: GlassCircleIconButton(
-              tooltip: 'Refresh',
-              onPressed: _refresh,
-              icon: const Icon(Icons.refresh_rounded),
-            ),
+    return GlassScreenScaffold(
+      title: const Text('Admin'),
+      actions: [
+        Padding(
+          padding: const EdgeInsets.only(right: 12),
+          child: GlassCircleIconButton(
+            tooltip: 'Refresh',
+            onPressed: _refresh,
+            icon: const Icon(Icons.refresh_rounded),
           ),
-        ],
-      ),
+        ),
+      ],
       body: LiquidMeshBackground(
         child: ListView(
           padding: EdgeInsets.fromLTRB(

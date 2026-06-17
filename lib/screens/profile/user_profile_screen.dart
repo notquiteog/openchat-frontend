@@ -509,22 +509,34 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  SegmentedButton<String>(
-                    segments: [
-                      for (final p in providers)
-                        ButtonSegment(value: p, label: Text(p.toUpperCase())),
-                    ],
-                    selected: {provider},
-                    onSelectionChanged: (next) => setSheet(() {
-                      provider = next.first;
-                      if (payMode &&
-                          amountUnit == 'crypto' &&
-                          paymentSource == 'wallet' &&
-                          amount > balanceFor(provider)) {
-                        paymentSource = 'external';
-                      }
-                    }),
-                  ),
+                  // GlassSegmentedControl asserts >= 2 segments, but the enabled
+                  // provider list can collapse to one (a seller offering only
+                  // BTC or only XMR) — fall back to a static label in that case.
+                  if (providers.length >= 2)
+                    GlassSegmentedControl(
+                      segments: [for (final p in providers) p.toUpperCase()],
+                      selectedIndex: providers.indexOf(provider),
+                      onSegmentSelected: (i) => setSheet(() {
+                        provider = providers[i];
+                        if (payMode &&
+                            amountUnit == 'crypto' &&
+                            paymentSource == 'wallet' &&
+                            amount > balanceFor(provider)) {
+                          paymentSource = 'external';
+                        }
+                      }),
+                    )
+                  else
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Text(
+                          provider.toUpperCase(),
+                          style: Theme.of(context).textTheme.labelLarge,
+                        ),
+                      ),
+                    ),
                   const SizedBox(height: 12),
                   if (payMode) ...[
                     SegmentedButton<String>(
@@ -547,33 +559,33 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                     ),
                     const SizedBox(height: 12),
                   ],
-                  SegmentedButton<String>(
-                    showSelectedIcon: false,
-                    segments: [
-                      ButtonSegment(
-                        value: 'crypto',
-                        label: Text(provider.toUpperCase()),
-                      ),
-                      const ButtonSegment(value: 'usd', label: Text('USD')),
-                      const ButtonSegment(value: 'eur', label: Text('EUR')),
-                    ],
-                    selected: {amountUnit},
-                    onSelectionChanged: (next) => setSheet(() {
-                      amountUnit = next.first;
-                      if (payMode &&
-                          amountUnit == 'crypto' &&
-                          paymentSource == 'wallet' &&
-                          amount > balanceFor(provider)) {
-                        paymentSource = 'external';
-                      }
-                    }),
+                  Builder(
+                    builder: (_) {
+                      const unitValues = ['crypto', 'usd', 'eur'];
+                      return GlassSegmentedControl(
+                        segments: [provider.toUpperCase(), 'USD', 'EUR'],
+                        selectedIndex: unitValues.indexOf(amountUnit),
+                        onSegmentSelected: (i) => setSheet(() {
+                          amountUnit = unitValues[i];
+                          if (payMode &&
+                              amountUnit == 'crypto' &&
+                              paymentSource == 'wallet' &&
+                              amount > balanceFor(provider)) {
+                            paymentSource = 'external';
+                          }
+                        }),
+                      );
+                    },
                   ),
                   const SizedBox(height: 12),
-                  TextField(
+                  GlassTextField(
                     controller: amountCtrl,
                     keyboardType: const TextInputType.numberWithOptions(
                       decimal: true,
                     ),
+                    placeholder: amountUnit == 'crypto'
+                        ? 'Amount ${provider.toUpperCase()}'
+                        : 'Amount ${amountUnit.toUpperCase()}',
                     onChanged: (_) {
                       final nextAmount =
                           double.tryParse(amountCtrl.text.trim()) ?? 0;
@@ -586,22 +598,12 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                         }
                       });
                     },
-                    decoration: InputDecoration(
-                      labelText: amountUnit == 'crypto'
-                          ? 'Amount ${provider.toUpperCase()}'
-                          : 'Amount ${amountUnit.toUpperCase()}',
-                      border: const OutlineInputBorder(),
-                    ),
                   ),
                   const SizedBox(height: 12),
-                  TextField(
+                  GlassTextField(
                     controller: noteCtrl,
                     maxLength: 160,
-                    decoration: const InputDecoration(
-                      labelText: 'Note',
-                      border: OutlineInputBorder(),
-                      counterText: '',
-                    ),
+                    placeholder: 'Note',
                   ),
                   const SizedBox(height: 12),
                   GlassButtonWidget.icon(
@@ -763,27 +765,24 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final isAdmin = _viewerIsAdmin;
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(
-        title: Text('@${_user.username}'),
-        actions: [
-          if (!_isOwnProfile)
-            IconButton(
-              icon: Icon(
-                _isBlocked ? Icons.person_add_alt_1 : Icons.block_rounded,
-              ),
-              tooltip: _isBlocked ? 'Unblock user' : 'Block user',
-              onPressed: _blockBusy ? null : _toggleBlock,
+    return GlassScreenScaffold(
+      title: Text('@${_user.username}'),
+      actions: [
+        if (!_isOwnProfile)
+          IconButton(
+            icon: Icon(
+              _isBlocked ? Icons.person_add_alt_1 : Icons.block_rounded,
             ),
-          if (isAdmin && !_isOwnProfile)
-            IconButton(
-              icon: const Icon(Icons.more_vert),
-              tooltip: 'Admin actions',
-              onPressed: () => _showAdminMenu(context),
-            ),
-        ],
-      ),
+            tooltip: _isBlocked ? 'Unblock user' : 'Block user',
+            onPressed: _blockBusy ? null : _toggleBlock,
+          ),
+        if (isAdmin && !_isOwnProfile)
+          IconButton(
+            icon: const Icon(Icons.more_vert),
+            tooltip: 'Admin actions',
+            onPressed: () => _showAdminMenu(context),
+          ),
+      ],
       body: _loading
           ? const Center(child: GlassProgressIndicator.circular())
           : ListView(

@@ -1618,27 +1618,33 @@ class _IncomingCallModalState extends State<IncomingCallModal>
                               children: [
                                 _DismissButton(onTap: cp.dismissIncomingCall),
                                 SizedBox(height: desktopLayout ? 26 : 32),
-                                Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceEvenly,
-                                  children: [
-                                    _CallAction(
-                                      icon: Icons.call_end_rounded,
-                                      label: 'Decline',
-                                      color: _callEndColor,
-                                      onTap: cp.rejectIncomingCall,
-                                      size: 78,
-                                    ),
-                                    _CallAction(
-                                      icon: incoming.isVideo
-                                          ? Icons.videocam_rounded
-                                          : Icons.call_rounded,
-                                      label: 'Answer',
-                                      color: _callAnswerColor,
-                                      onTap: answer,
-                                      size: 78,
-                                    ),
-                                  ],
+                                // Decline + Answer share one glass layer so the
+                                // entrance animation captures the backdrop once,
+                                // not twice. Grouped mode keeps each button's
+                                // own red/green tint (per-child settings).
+                                AdaptiveLiquidGlassLayer(
+                                  child: Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceEvenly,
+                                    children: [
+                                      _CallAction(
+                                        icon: Icons.call_end_rounded,
+                                        label: 'Decline',
+                                        color: _callEndColor,
+                                        onTap: cp.rejectIncomingCall,
+                                        size: 78,
+                                      ),
+                                      _CallAction(
+                                        icon: incoming.isVideo
+                                            ? Icons.videocam_rounded
+                                            : Icons.call_rounded,
+                                        label: 'Answer',
+                                        color: _callAnswerColor,
+                                        onTap: answer,
+                                        size: 78,
+                                      ),
+                                    ],
+                                  ),
                                 ),
                                 SizedBox(height: desktopLayout ? 24 : 40),
                               ],
@@ -1774,7 +1780,8 @@ class _CallAction extends StatelessWidget {
           icon: Icon(icon, size: size * 0.4, color: Colors.white),
           onPressed: onTap,
           size: size,
-          useOwnLayer: true,
+          // Grouped into the incoming-actions shared AdaptiveLiquidGlassLayer.
+          useOwnLayer: false,
           quality: GlassQuality.standard,
           glowColor: color,
           glowRadius: 30,

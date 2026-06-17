@@ -41,218 +41,204 @@ class PgpKeysScreen extends StatelessWidget {
       statusTitle = 'No Key Found';
     }
 
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: const GlassAppBar(title: Text('PGP Key Management')),
-      body: ListView(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
-          16,
-          MediaQuery.paddingOf(context).bottom + 16,
-        ),
-        children: [
-          GlassCard(
-            tint: isExpired ? scheme.error.withValues(alpha: 0.10) : null,
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: statusColor.withValues(alpha: 0.14),
-                      ),
-                      child: Icon(statusIcon, size: 18, color: statusColor),
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      statusTitle,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 15,
-                        color: isExpired ? scheme.error : null,
-                      ),
-                    ),
-                  ],
-                ),
-                if (keys.hasKey && keys.fingerprint != null) ...[
-                  const SizedBox(height: 14),
-                  _FingerprintDisplay(fingerprint: keys.fingerprint!),
-                ],
-                if (hasFiniteExpiry) ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    isExpired
-                        ? 'Expired on ${expiresAt.toLocal().toString().split(".").first}. '
-                              'Until you rotate to a fresh key, you cannot send or receive '
-                              'messages and other users will exclude you from group encryption.'
-                        : 'Expires on ${expiresAt.toLocal().toString().split(".").first}. '
-                              'Rotate before that date to avoid disruption — keys generated '
-                              'by OpenChat have no expiry, so this only applies to imported keys.',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: isExpired ? scheme.error : Colors.orange,
-                    ),
-                  ),
-                ],
-                if (!keys.hasKey)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      'No PGP key found on this device. '
-                      'Import an existing key or generate a new one.',
-                      style: TextStyle(color: Colors.orange, fontSize: 13),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          if (keys.hasKey) ...[
-            GlassCard(
-              padding: EdgeInsets.zero,
-              child: Column(
+    return GlassScreenScaffold.list(
+      title: const Text('PGP Key Management'),
+      children: [
+        GlassCard(
+          tint: isExpired ? scheme.error.withValues(alpha: 0.10) : null,
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  _ActionTile(
-                    icon: Icons.copy,
-                    title: 'Copy Public Key',
-                    subtitle:
-                        'Share this with anyone who wants to verify your messages',
-                    onTap: () async {
-                      final pub = await keys.exportPublicKey();
-                      if (pub != null) {
-                        await Clipboard.setData(ClipboardData(text: pub));
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Public key copied to clipboard'),
-                            ),
-                          );
-                        }
-                      }
-                    },
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: statusColor.withValues(alpha: 0.14),
+                    ),
+                    child: Icon(statusIcon, size: 18, color: statusColor),
                   ),
-                  const _PgpDivider(),
-                  _ActionTile(
-                    icon: Icons.download_outlined,
-                    title: 'Export Private Key (Backup)',
-                    subtitle: 'Save your private key for use on another device',
-                    onTap: () => _showExportPrivateKey(context, keys),
-                  ),
-                  const _PgpDivider(),
-                  _ActionTile(
-                    icon: Icons.autorenew,
-                    title: 'Rotate PGP Key',
-                    subtitle:
-                        'Generate and register a new key pair. Back up your old '
-                        'private key first — it is needed to read messages sent before rotation.',
-                    onTap: () => _showRotateKey(context, keys),
+                  const SizedBox(width: 12),
+                  Text(
+                    statusTitle,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 15,
+                      color: isExpired ? scheme.error : null,
+                    ),
                   ),
                 ],
               ),
-            ),
-            const SizedBox(height: 8),
-            GlassCard(
-              tint: scheme.error.withValues(alpha: 0.06),
-              padding: EdgeInsets.zero,
-              child: _ActionTile(
-                icon: Icons.delete_forever,
-                title: 'Delete Local Keys',
-                subtitle:
-                    'WARNING: Permanently removes keys from this device. '
-                    'Encrypted messages will become unreadable.',
-                isDestructive: true,
-                onTap: () => _confirmDeleteKeys(context, keys),
-              ),
-            ),
-            const SizedBox(height: 8),
-          ],
+              if (keys.hasKey && keys.fingerprint != null) ...[
+                const SizedBox(height: 14),
+                _FingerprintDisplay(fingerprint: keys.fingerprint!),
+              ],
+              if (hasFiniteExpiry) ...[
+                const SizedBox(height: 12),
+                Text(
+                  isExpired
+                      ? 'Expired on ${expiresAt.toLocal().toString().split(".").first}. '
+                            'Until you rotate to a fresh key, you cannot send or receive '
+                            'messages and other users will exclude you from group encryption.'
+                      : 'Expires on ${expiresAt.toLocal().toString().split(".").first}. '
+                            'Rotate before that date to avoid disruption — keys generated '
+                            'by OpenChat have no expiry, so this only applies to imported keys.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isExpired ? scheme.error : Colors.orange,
+                  ),
+                ),
+              ],
+              if (!keys.hasKey)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    'No PGP key found on this device. '
+                    'Import an existing key or generate a new one.',
+                    style: TextStyle(color: Colors.orange, fontSize: 13),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
 
+        if (keys.hasKey) ...[
           GlassCard(
             padding: EdgeInsets.zero,
-            child: _ActionTile(
-              icon: Icons.upload_outlined,
-              title: 'Import Key Pair',
-              subtitle:
-                  'Import an existing PGP key pair from clipboard or file',
-              onTap: () => _showImportKeys(context, keys),
+            child: Column(
+              children: [
+                _ActionTile(
+                  icon: Icons.copy,
+                  title: 'Copy Public Key',
+                  subtitle:
+                      'Share this with anyone who wants to verify your messages',
+                  onTap: () async {
+                    final pub = await keys.exportPublicKey();
+                    if (pub != null) {
+                      await Clipboard.setData(ClipboardData(text: pub));
+                      if (context.mounted) {
+                        showAppToast(context, 'Public key copied to clipboard');
+                      }
+                    }
+                  },
+                ),
+                const _PgpDivider(),
+                _ActionTile(
+                  icon: Icons.download_outlined,
+                  title: 'Export Private Key (Backup)',
+                  subtitle: 'Save your private key for use on another device',
+                  onTap: () => _showExportPrivateKey(context, keys),
+                ),
+                const _PgpDivider(),
+                _ActionTile(
+                  icon: Icons.autorenew,
+                  title: 'Rotate PGP Key',
+                  subtitle:
+                      'Generate and register a new key pair. Back up your old '
+                      'private key first — it is needed to read messages sent before rotation.',
+                  onTap: () => _showRotateKey(context, keys),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 8),
           GlassCard(
+            tint: scheme.error.withValues(alpha: 0.06),
             padding: EdgeInsets.zero,
             child: _ActionTile(
-              icon: Icons.qr_code_scanner_rounded,
-              title: 'Scan Fingerprint QR',
+              icon: Icons.delete_forever,
+              title: 'Delete Local Keys',
               subtitle:
-                  'Scan another person’s OpenChat QR to validate their identity',
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute<void>(
-                  builder: (_) => const IdentityQrScannerScreen(),
-                ),
+                  'WARNING: Permanently removes keys from this device. '
+                  'Encrypted messages will become unreadable.',
+              isDestructive: true,
+              onTap: () => _confirmDeleteKeys(context, keys),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+
+        GlassCard(
+          padding: EdgeInsets.zero,
+          child: _ActionTile(
+            icon: Icons.upload_outlined,
+            title: 'Import Key Pair',
+            subtitle: 'Import an existing PGP key pair from clipboard or file',
+            onTap: () => _showImportKeys(context, keys),
+          ),
+        ),
+        const SizedBox(height: 8),
+        GlassCard(
+          padding: EdgeInsets.zero,
+          child: _ActionTile(
+            icon: Icons.qr_code_scanner_rounded,
+            title: 'Scan Fingerprint QR',
+            subtitle:
+                'Scan another person’s OpenChat QR to validate their identity',
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => const IdentityQrScannerScreen(),
               ),
             ),
           ),
+        ),
 
-          const SizedBox(height: 16),
-          GlassCard(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: 34,
-                  height: 34,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: scheme.primary.withValues(alpha: 0.12),
-                  ),
-                  child: Icon(
-                    Icons.info_outline,
-                    size: 17,
-                    color: scheme.primary,
-                  ),
+        const SizedBox(height: 16),
+        GlassCard(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: scheme.primary.withValues(alpha: 0.12),
                 ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'About PGP Encryption',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        'OpenChat uses OpenPGP (RFC 4880) for end-to-end encryption. '
-                        'Your private key is stored only on this device using the system keychain. '
-                        'It is never transmitted to any server.\n\n'
-                        'All messages are encrypted using your recipients\' public keys before '
-                        'being sent. Only the intended recipients can decrypt them.',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: scheme.onSurface.withValues(alpha: 0.70),
-                        ),
-                      ),
-                    ],
-                  ),
+                child: Icon(
+                  Icons.info_outline,
+                  size: 17,
+                  color: scheme.primary,
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'About PGP Encryption',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'OpenChat uses OpenPGP (RFC 4880) for end-to-end encryption. '
+                      'Your private key is stored only on this device using the system keychain. '
+                      'It is never transmitted to any server.\n\n'
+                      'All messages are encrypted using your recipients\' public keys before '
+                      'being sent. Only the intended recipients can decrypt them.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: scheme.onSurface.withValues(alpha: 0.70),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 32),
-        ],
-      ),
+        ),
+        const SizedBox(height: 32),
+      ],
     );
   }
 
@@ -266,8 +252,10 @@ class PgpKeysScreen extends StatelessWidget {
       final ok = await keys.authenticateAndUnlockKey();
       if (!ok) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Biometric authentication failed')),
+          showAppToast(
+            context,
+            'Biometric authentication failed',
+            isError: true,
           );
         }
         return;
@@ -302,11 +290,7 @@ class PgpKeysScreen extends StatelessWidget {
       if (priv != null) {
         await Clipboard.setData(ClipboardData(text: priv));
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Private key copied. Store it very safely.'),
-            ),
-          );
+          showAppToast(context, 'Private key copied. Store it very safely.');
         }
       }
     }
@@ -427,15 +411,12 @@ class PgpKeysScreen extends StatelessWidget {
         keyType: selectedKeyType,
       );
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              ok
-                  ? 'Key rotated. Back up your new private key!'
-                  : 'Rotation failed — check your connection and try again',
-            ),
-            backgroundColor: ok ? Colors.green : Colors.red,
-          ),
+        showAppToast(
+          context,
+          ok
+              ? 'Key rotated. Back up your new private key!'
+              : 'Rotation failed — check your connection and try again',
+          isError: !ok,
         );
       }
     }
@@ -482,12 +463,10 @@ class PgpKeysScreen extends StatelessWidget {
               );
               if (ctx.mounted) {
                 Navigator.pop(ctx);
-                ScaffoldMessenger.of(ctx).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      ok ? 'Key imported successfully' : 'Invalid private key',
-                    ),
-                  ),
+                showAppToast(
+                  ctx,
+                  ok ? 'Key imported successfully' : 'Invalid private key',
+                  isError: !ok,
                 );
               }
             },
@@ -527,9 +506,7 @@ class _FingerprintDisplay extends StatelessWidget {
               child: GestureDetector(
                 onTap: () {
                   Clipboard.setData(ClipboardData(text: fingerprint));
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Fingerprint copied')),
-                  );
+                  showAppToast(context, 'Fingerprint copied');
                 },
                 child: Text(
                   formatted,

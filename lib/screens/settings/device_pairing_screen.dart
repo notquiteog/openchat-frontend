@@ -284,42 +284,33 @@ class _DevicePairingScreenState extends State<DevicePairingScreen> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: const GlassAppBar(title: Text('Link Device')),
-      body: ListView(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
-          16,
-          MediaQuery.paddingOf(context).bottom + 32,
-        ),
-        children: [
-          SegmentedButton<DevicePairingMode>(
-            segments: const [
-              ButtonSegment(
-                value: DevicePairingMode.create,
-                icon: Icon(Icons.qr_code_rounded),
-                label: Text('Show QR'),
-              ),
-              ButtonSegment(
-                value: DevicePairingMode.scan,
-                icon: Icon(Icons.qr_code_scanner_rounded),
-                label: Text('Scan QR'),
-              ),
-            ],
-            selected: {_mode},
-            onSelectionChanged: (value) => _setMode(value.first),
-          ),
-          const SizedBox(height: 16),
-          if (_mode == DevicePairingMode.create) _buildCreate(scheme),
-          if (_mode == DevicePairingMode.scan) _buildScan(),
-          if (_status != null) ...[
-            const SizedBox(height: 12),
-            GlassCard(child: Text(_status!)),
+    return GlassScreenScaffold.list(
+      title: const Text('Link Device'),
+      children: [
+        SegmentedButton<DevicePairingMode>(
+          segments: const [
+            ButtonSegment(
+              value: DevicePairingMode.create,
+              icon: Icon(Icons.qr_code_rounded),
+              label: Text('Show QR'),
+            ),
+            ButtonSegment(
+              value: DevicePairingMode.scan,
+              icon: Icon(Icons.qr_code_scanner_rounded),
+              label: Text('Scan QR'),
+            ),
           ],
+          selected: {_mode},
+          onSelectionChanged: (value) => _setMode(value.first),
+        ),
+        const SizedBox(height: 16),
+        if (_mode == DevicePairingMode.create) _buildCreate(scheme),
+        if (_mode == DevicePairingMode.scan) _buildScan(),
+        if (_status != null) ...[
+          const SizedBox(height: 12),
+          GlassCard(child: Text(_status!)),
         ],
-      ),
+      ],
     );
   }
 

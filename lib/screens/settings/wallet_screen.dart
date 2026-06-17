@@ -48,53 +48,71 @@ class PendingDepositCard extends StatelessWidget {
     final theme = Theme.of(context);
     final provider = (deposit['provider'] ?? '').toString();
     final isSub = (deposit['purpose'] ?? 'topup') == 'channel_sub';
-    return GestureDetector(
-      onTap: onTap,
-      child: GlassCard(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+    // A recurring pending-deposit row is scrolling content, not floating
+    // chrome: render it on an opaque grouped surface (iOS-26) while keeping the
+    // tap affordance — an InkWell restores the press feedback the old static
+    // GestureDetector+GlassCard lacked.
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: reducedGlassSurfaceColor(context),
+        borderRadius: const BorderRadius.all(Radius.circular(22)),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: const BorderRadius.all(Radius.circular(22)),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(
-                  isSub
-                      ? Icons.workspace_premium_outlined
-                      : Icons.arrow_downward,
-                  size: 16,
-                  color: theme.colorScheme.primary,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    isSub
-                        ? 'Channel subscription ${provider.toUpperCase()}'
-                        : 'Deposit ${provider.toUpperCase()}',
-                    style: const TextStyle(
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w700,
+                Row(
+                  children: [
+                    Icon(
+                      isSub
+                          ? Icons.workspace_premium_outlined
+                          : Icons.arrow_downward,
+                      size: 16,
+                      color: theme.colorScheme.primary,
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        isSub
+                            ? 'Channel subscription ${provider.toUpperCase()}'
+                            : 'Deposit ${provider.toUpperCase()}',
+                        style: const TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    Icon(
+                      Icons.qr_code_2,
+                      size: 18,
+                      color: theme.colorScheme.onSurface.withValues(
+                        alpha: 0.45,
+                      ),
+                    ),
+                  ],
                 ),
-                Icon(
-                  Icons.qr_code_2,
-                  size: 18,
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                const SizedBox(height: 12),
+                DepositProgressView(
+                  depositId: (deposit['id'] ?? '').toString(),
+                  initialConfirmations:
+                      (deposit['confirmations'] as num?)?.toInt() ?? 0,
+                  requiredConfirmations:
+                      (deposit['required_confirmations'] as num?)?.toInt() ?? 0,
+                  initialStatus:
+                      deposit['status']?.toString() ?? 'nothing_sent',
+                  onConfirmed: onConfirmed,
+                  progressStream: progressStream,
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            DepositProgressView(
-              depositId: (deposit['id'] ?? '').toString(),
-              initialConfirmations:
-                  (deposit['confirmations'] as num?)?.toInt() ?? 0,
-              requiredConfirmations:
-                  (deposit['required_confirmations'] as num?)?.toInt() ?? 0,
-              initialStatus: deposit['status']?.toString() ?? 'nothing_sent',
-              onConfirmed: onConfirmed,
-              progressStream: progressStream,
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -205,9 +223,7 @@ class _WalletScreenState extends State<WalletScreen> {
       _showDepositAddress(dep);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Deposit failed: $e')));
+      showAppToast(context, 'Deposit failed: $e', isError: true);
     }
   }
 
@@ -271,23 +287,25 @@ class _WalletScreenState extends State<WalletScreen> {
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  TextField(
-                    controller: addressCtrl,
-                    decoration: const InputDecoration(labelText: 'Address'),
-                    onChanged: (_) => setDialog(() {}),
+                  lg.GlassFormField(
+                    label: 'Address',
+                    child: lg.GlassTextField(
+                      controller: addressCtrl,
+                      onChanged: (_) => setDialog(() {}),
+                    ),
                   ),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: amountCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
+                  lg.GlassFormField(
+                    label: 'Amount ${provider.toUpperCase()}',
+                    helperText:
+                        'Available ${_formatCrypto(available, provider)}',
+                    child: lg.GlassTextField(
+                      controller: amountCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      onChanged: (_) => setDialog(() {}),
                     ),
-                    decoration: InputDecoration(
-                      labelText: 'Amount ${provider.toUpperCase()}',
-                      helperText:
-                          'Available ${_formatCrypto(available, provider)}',
-                    ),
-                    onChanged: (_) => setDialog(() {}),
                   ),
                   const SizedBox(height: 8),
                   Align(
@@ -327,9 +345,7 @@ class _WalletScreenState extends State<WalletScreen> {
       if (mounted) await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Withdrawal failed: $e')));
+      showAppToast(context, 'Withdrawal failed: $e', isError: true);
     } finally {
       addressCtrl.dispose();
       amountCtrl.dispose();
@@ -456,9 +472,8 @@ class _WalletScreenState extends State<WalletScreen> {
     final pending = isDecoy
         ? const <Map<String, dynamic>>[]
         : pendingDeposits(_deposits);
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: const GlassAppBar(title: Text('Wallet')),
+    return GlassScreenScaffold(
+      title: const Text('Wallet'),
       body: _loading && !isDecoy
           ? const Center(child: GlassProgressIndicator.circular())
           : _error != null && !isDecoy
@@ -475,6 +490,7 @@ class _WalletScreenState extends State<WalletScreen> {
                 children: [
                   for (final provider in _providers) ...[
                     GlassCard(
+                      quality: GlassQuality.minimal,
                       padding: const EdgeInsets.all(20),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -610,6 +626,7 @@ class _WalletScreenState extends State<WalletScreen> {
                     ),
                   if (allItems.isEmpty)
                     GlassCard(
+                      quality: GlassQuality.minimal,
                       padding: const EdgeInsets.all(18),
                       child: Row(
                         children: [
@@ -633,6 +650,7 @@ class _WalletScreenState extends State<WalletScreen> {
                     )
                   else if (filteredItems.isEmpty)
                     GlassCard(
+                      quality: GlassQuality.minimal,
                       padding: const EdgeInsets.all(18),
                       child: Row(
                         children: [
@@ -655,8 +673,17 @@ class _WalletScreenState extends State<WalletScreen> {
                       ),
                     )
                   else
-                    GlassCard(
-                      padding: EdgeInsets.zero,
+                    // Scrolling transaction history is content, not floating
+                    // chrome: iOS-26 keeps it on an opaque grouped surface and
+                    // reserves glass for the action buttons / app bar.
+                    Container(
+                      clipBehavior: Clip.antiAlias,
+                      decoration: BoxDecoration(
+                        color: reducedGlassSurfaceColor(context),
+                        borderRadius: const BorderRadius.all(
+                          Radius.circular(22),
+                        ),
+                      ),
                       child: Column(
                         children: [
                           for (var i = 0; i < filteredItems.length; i++) ...[

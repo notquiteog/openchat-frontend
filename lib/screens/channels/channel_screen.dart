@@ -212,8 +212,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     final chat = context.watch<ChatProvider>();
     final subscribed = chat.conversations.where((c) => c.isChannel).toList();
     final searching = _searchCtrl.text.isNotEmpty;
-    return Scaffold(
-      extendBodyBehindAppBar: true,
+    return GlassScreenScaffold(
       appBar: GlassAppBar(
         title: const Text('Channels'),
         actions: [
@@ -302,95 +301,102 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
         final ch = channels[i];
         return Padding(
           padding: const EdgeInsets.only(bottom: 8),
-          child: GlassCard(
-            padding: EdgeInsets.zero,
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(22),
-                onTap: () => _openChannel(ch),
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Row(
-                    children: [
-                      Container(
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: scheme.primary.withValues(alpha: 0.20),
-                              blurRadius: 8,
-                              offset: const Offset(0, 3),
-                            ),
-                          ],
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(22),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(22),
+                  onTap: () => _openChannel(ch),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(
+                      children: [
+                        Container(
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: scheme.primary.withValues(alpha: 0.20),
+                                blurRadius: 8,
+                                offset: const Offset(0, 3),
+                              ),
+                            ],
+                          ),
+                          child: CircleAvatar(
+                            radius: 24,
+                            backgroundImage: ch.avatarUrl != null
+                                ? CachedNetworkImageProvider(
+                                    ApiConfig.resolveMedia(ch.avatarUrl!),
+                                  )
+                                : null,
+                            child: ch.avatarUrl == null
+                                ? Text(
+                                    ch.name?.substring(0, 1).toUpperCase() ??
+                                        'C',
+                                  )
+                                : null,
+                          ),
                         ),
-                        child: CircleAvatar(
-                          radius: 24,
-                          backgroundImage: ch.avatarUrl != null
-                              ? CachedNetworkImageProvider(
-                                  ApiConfig.resolveMedia(ch.avatarUrl!),
-                                )
-                              : null,
-                          child: ch.avatarUrl == null
-                              ? Text(
-                                  ch.name?.substring(0, 1).toUpperCase() ?? 'C',
-                                )
-                              : null,
-                        ),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Row(
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    ch.name ?? 'Unnamed',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 15,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                if (ch.handle != null)
-                                  Padding(
-                                    padding: const EdgeInsets.only(left: 6),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Row(
+                                children: [
+                                  Flexible(
                                     child: Text(
-                                      '@${ch.handle}',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: scheme.primary,
-                                        fontWeight: FontWeight.w600,
+                                      ch.name ?? 'Unnamed',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 15,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  if (ch.handle != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(left: 6),
+                                      child: Text(
+                                        '@${ch.handle}',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: scheme.primary,
+                                          fontWeight: FontWeight.w600,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                              ],
-                            ),
-                            if (ch.description != null)
-                              Text(
-                                ch.description!,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: scheme.onSurface.withValues(
-                                    alpha: 0.55,
+                                ],
+                              ),
+                              if (ch.description != null)
+                                Text(
+                                  ch.description!,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: scheme.onSurface.withValues(
+                                      alpha: 0.55,
+                                    ),
                                   ),
                                 ),
-                              ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                      Icon(
-                        Icons.arrow_forward_ios_rounded,
-                        size: 14,
-                        color: scheme.onSurface.withValues(alpha: 0.35),
-                      ),
-                    ],
+                        Icon(
+                          Icons.arrow_forward_ios_rounded,
+                          size: 14,
+                          color: scheme.onSurface.withValues(alpha: 0.35),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -4220,8 +4226,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     );
 
     final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
-    return Scaffold(
-      extendBodyBehindAppBar: true,
+    return GlassScreenScaffold(
       // The wallpaper must stay fixed behind the keyboard (like the DM chat
       // screen); content animates up via the AnimatedPadding below instead.
       resizeToAvoidBottomInset: false,
@@ -4540,64 +4545,71 @@ class _PinnedChannelMessagesBar extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: GlassContainer(
-          shape: const LiquidRoundedSuperellipse(borderRadius: 22),
-          allowElevation: true,
-          glowIntensity: 0.05,
-          padding: const EdgeInsets.fromLTRB(12, 9, 6, 9),
-          child: Row(
-            children: [
-              Container(
-                width: 3,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: scheme.primary,
-                  borderRadius: BorderRadius.circular(999),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Icon(Icons.push_pin_rounded, size: 18, color: scheme.primary),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
+      child: Row(
+        children: [
+          Expanded(
+            child: GlassButton.custom(
+              onTap: onTap,
+              shape: const LiquidRoundedSuperellipse(borderRadius: 22),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
+                child: Row(
                   children: [
-                    Text(
-                      pinnedCount == 1
-                          ? 'Pinned message'
-                          : '$pinnedCount pinned messages',
-                      style: TextStyle(
+                    Container(
+                      width: 3,
+                      height: 34,
+                      decoration: BoxDecoration(
                         color: scheme.primary,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
+                        borderRadius: BorderRadius.circular(999),
                       ),
                     ),
-                    const SizedBox(height: 1),
-                    Text(
-                      latestPinnedMessage.preview,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: scheme.onSurface.withValues(alpha: 0.72),
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
+                    const SizedBox(width: 10),
+                    Icon(
+                      Icons.push_pin_rounded,
+                      size: 18,
+                      color: scheme.primary,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            pinnedCount == 1
+                                ? 'Pinned message'
+                                : '$pinnedCount pinned messages',
+                            style: TextStyle(
+                              color: scheme.primary,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 1),
+                          Text(
+                            latestPinnedMessage.preview,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: scheme.onSurface.withValues(alpha: 0.72),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
                 ),
               ),
-              IconButton(
-                tooltip: 'Pinned messages',
-                icon: const Icon(Icons.keyboard_arrow_down_rounded),
-                onPressed: onShowAll,
-              ),
-            ],
+            ),
           ),
-        ),
+          IconButton(
+            tooltip: 'Pinned messages',
+            icon: const Icon(Icons.keyboard_arrow_down_rounded),
+            onPressed: onShowAll,
+          ),
+        ],
       ),
     );
   }

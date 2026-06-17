@@ -41,6 +41,10 @@
         android:label="openchat"
         android:name="${applicationName}"
         android:icon="@mipmap/launcher_icon">
+        <!-- Force the Impeller (Vulkan) rendering backend (default on API 29+). -->
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="true" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

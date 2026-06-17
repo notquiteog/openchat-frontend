@@ -2,6 +2,8 @@
 #include <flutter/flutter_view_controller.h>
 #include <windows.h>
 
+#include <cstdlib>
+
 #include "flutter_window.h"
 #include "utils.h"
 
@@ -18,6 +20,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
   RegisterUrlProtocol(L"openchat", L"OpenChat");
+
+  // Force the Impeller (Vulkan) rendering backend on Windows desktop. The engine
+  // reads these env vars at startup and prepends "--", equivalent to launching
+  // with `--enable-impeller=true`.
+  _putenv_s("FLUTTER_ENGINE_SWITCHES", "1");
+  _putenv_s("FLUTTER_ENGINE_SWITCH_1", "enable-impeller=true");
 
   flutter::DartProject project(L"data");
 

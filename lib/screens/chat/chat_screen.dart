@@ -2678,9 +2678,8 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     if (_locked && !_unlocked) {
-      return Scaffold(
+      return GlassScreenScaffold(
         appBar: const GlassAppBar(title: Text('Locked')),
-        extendBodyBehindAppBar: true,
         body: PinLockGate(
           title: conv.displayName(
             context.read<AuthProvider>().currentUser?.id ?? '',
@@ -2715,7 +2714,10 @@ class _ChatScreenState extends State<ChatScreen> {
         ? Color(auth.currentUser!.bubbleColor!)
         : null;
     final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
-    return Scaffold(
+    return GlassScreenScaffold(
+      // The chat thread is a plain (non-extendBody) scaffold: the message list
+      // sits BELOW the bar, not behind it. Keep that layout.
+      extendBody: false,
       resizeToAvoidBottomInset: false,
       appBar: _buildAppBar(context, typingUsers, currentUserID),
       body: DropTarget(
@@ -6319,6 +6321,9 @@ class _TopicChip extends StatelessWidget {
           shape: const LiquidRoundedSuperellipse(borderRadius: 999),
           allowElevation: true,
           glowIntensity: selected ? 0.10 : 0.04,
+          // Cheaper per-chip shader keeps horizontal thread-strip scrolling
+          // smooth (the strip is a ListView of these chips).
+          quality: GlassQuality.minimal,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
             child: Row(
@@ -6526,11 +6531,11 @@ class _ConversationPinnedBar extends StatelessWidget {
     final first = pins.first;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
+      child: GlassButton.custom(
         onTap: onShowAll,
-        child: GlassContainer(
-          shape: const LiquidRoundedSuperellipse(borderRadius: 16),
+        height: 56,
+        shape: const LiquidRoundedSuperellipse(borderRadius: 16),
+        child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Row(
             children: [
@@ -6592,9 +6597,11 @@ class _GroupCallBanner extends StatelessWidget {
     final count = info.participantIds.length;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
-      child: GestureDetector(
+      child: GlassButton.custom(
         onTap: () => _join(context),
-        child: GlassContainer(
+        height: 56,
+        shape: const LiquidRoundedSuperellipse(borderRadius: 16),
+        child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           child: Row(
             children: [

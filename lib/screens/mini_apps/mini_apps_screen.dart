@@ -65,26 +65,20 @@ class _MiniAppsScreenState extends State<MiniAppsScreen> {
   Future<void> _openApp(Map<String, dynamic> app) async {
     final url = app['url']?.toString() ?? '';
     final uri = Uri.tryParse(url);
-    final messenger = ScaffoldMessenger.of(context);
     if (uri == null || uri.scheme != 'https' || uri.host.isEmpty) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Mini apps must use HTTPS')),
-      );
+      showAppToast(context, 'Mini apps must use HTTPS', isError: true);
       return;
     }
     final opened = await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
-    if (!opened) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Mini app could not be opened')),
-      );
+    if (!opened && mounted) {
+      showAppToast(context, 'Mini app could not be opened', isError: true);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: const GlassAppBar(title: Text('Mini Apps')),
+    return GlassScreenScaffold(
+      title: const Text('Mini Apps'),
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
@@ -95,13 +89,10 @@ class _MiniAppsScreenState extends State<MiniAppsScreen> {
             MediaQuery.paddingOf(context).bottom + 32,
           ),
           children: [
-            TextField(
+            GlassSearchBar(
               controller: _searchCtrl,
+              placeholder: 'Search mini apps',
               onChanged: _queueSearch,
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search_rounded),
-                hintText: 'Search mini apps',
-              ),
             ),
             const SizedBox(height: 14),
             if (_loading)

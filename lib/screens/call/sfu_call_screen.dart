@@ -186,30 +186,34 @@ class _SfuCallScreenState extends State<SfuCallScreen> {
                 useOwnLayer: true,
                 quality: GlassQuality.standard,
                 padding: const EdgeInsets.all(14),
-                child: Wrap(
-                  alignment: WrapAlignment.center,
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    for (final emoji in sfuCallReactionEmojiAllowlist)
-                      GlassButton.custom(
-                        onTap: () {
-                          Navigator.of(sheetContext).pop();
-                          unawaited(sfu.sendReaction(emoji));
-                        },
-                        width: 52,
-                        height: 52,
-                        shape: const LiquidOval(),
-                        useOwnLayer: true,
-                        quality: GlassQuality.standard,
-                        child: Center(
-                          child: Text(
-                            emoji,
-                            style: const TextStyle(fontSize: 26),
+                child: AdaptiveLiquidGlassLayer(
+                  child: Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      for (final emoji in sfuCallReactionEmojiAllowlist)
+                        GlassButton.custom(
+                          onTap: () {
+                            Navigator.of(sheetContext).pop();
+                            unawaited(sfu.sendReaction(emoji));
+                          },
+                          width: 52,
+                          height: 52,
+                          shape: const LiquidOval(),
+                          // Group into the sheet's shared glass layer rather than
+                          // one backdrop capture per emoji (8 < 16-shape ceiling).
+                          useOwnLayer: false,
+                          quality: GlassQuality.standard,
+                          child: Center(
+                            child: Text(
+                              emoji,
+                              style: const TextStyle(fontSize: 26),
+                            ),
                           ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),

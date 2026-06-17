@@ -49,18 +49,15 @@ class _ChannelAnalyticsScreenState extends State<ChannelAnalyticsScreen> {
   @override
   Widget build(BuildContext context) {
     final analytics = _analytics;
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(
-        title: const Text('Analytics'),
-        actions: [
-          IconButton(
-            tooltip: 'Refresh',
-            icon: const Icon(Icons.refresh_rounded),
-            onPressed: _loading ? null : _load,
-          ),
-        ],
-      ),
+    return GlassScreenScaffold(
+      title: const Text('Analytics'),
+      actions: [
+        IconButton(
+          tooltip: 'Refresh',
+          icon: const Icon(Icons.refresh_rounded),
+          onPressed: _loading ? null : _load,
+        ),
+      ],
       body: _loading && analytics == null
           ? const Center(child: GlassProgressIndicator.circular())
           : analytics == null

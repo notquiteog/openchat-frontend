@@ -53,6 +53,11 @@ export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
         GlassPage,
         GlassStatusBarStyle,
         GlassScrollEdgeEffect,
+        // Layers & motion — share one backdrop capture across a cluster of
+        // sibling glass shapes (perf), and tilt/gyroscope specular lighting.
+        AdaptiveLiquidGlassLayer,
+        AdaptiveGlass,
+        GlassMotionScope,
         // Content-aware brightness (iOS 26 light/dark adaptation)
         GlassContentAwareScope,
         GlassContentAwareContent,
@@ -371,6 +376,144 @@ class GlassAppBar extends StatelessWidget implements PreferredSizeWidget {
   }
 }
 
+// ── GlassScreenScaffold ───────────────────────────────────────────────────────
+
+/// iOS-26 glass screen scaffold, backed by the package [lg.GlassScaffold].
+///
+/// Replaces the hand-rolled `Scaffold(extendBodyBehindAppBar: true) +
+/// GlassAppBar + manual top-spacer` recipe that ~33 screens copy-paste. Gives
+/// every screen, for free:
+///  - the frosted local [GlassAppBar] (incl. an optional TabBar `bottom` slot —
+///    the *package's* GlassAppBar has no such slot, so we keep the local one and
+///    hand it to GlassScaffold, which honours its [PreferredSizeWidget] height);
+///  - an automatic scroll-edge top fade (content dissolves under the bar);
+///  - [GlassIsolationScope] so body glass cards don't composite over the bar's
+///    glass buttons;
+///  - optional content-aware brightness (glyphs cross-fade over light/dark
+///    content as it scrolls).
+///
+/// Use the default constructor with your own [body], or [GlassScreenScaffold.list]
+/// for a padded [ListView] whose top inset clears the bar automatically (so the
+/// `MediaQuery.paddingOf(context).top + kToolbarHeight + 12` math lives here
+/// once instead of in every screen).
+class GlassScreenScaffold extends StatelessWidget {
+  /// App-bar title (when [appBar] is not supplied) — the wrapper builds a
+  /// [GlassAppBar] from this.
+  final Widget? title;
+
+  /// A pre-built app bar, for screens that build their bar dynamically or need
+  /// `GlassAppBar` options the title/actions shorthand doesn't cover (e.g.
+  /// `titleSpacing`). When set, [title]/[actions]/[leading]/[centerTitle]/
+  /// [bottom]/[automaticallyImplyLeading] are ignored.
+  final PreferredSizeWidget? appBar;
+
+  final List<Widget>? actions;
+  final Widget? leading;
+  final bool automaticallyImplyLeading;
+  final bool centerTitle;
+  final PreferredSizeWidget? bottom;
+  final Widget? bottomBar;
+  final Widget? floatingActionButton;
+  final bool contentAwareBrightness;
+  final bool resizeToAvoidBottomInset;
+
+  /// Whether the body draws behind the app bar (iOS-26 scroll-behind; default).
+  /// Set false to keep the body strictly below the bar — for screens that were
+  /// a plain Scaffold WITHOUT `extendBodyBehindAppBar` (e.g. the chat thread).
+  final bool extendBody;
+
+  /// Caller-supplied body (default constructor). Null in `.list` mode.
+  final Widget? body;
+
+  /// List-mode rows (the `.list` constructor). Null when [body] is supplied.
+  final List<Widget>? children;
+
+  /// Horizontal (+ extra bottom) padding applied in `.list` mode.
+  final EdgeInsets contentPadding;
+
+  const GlassScreenScaffold({
+    super.key,
+    this.title,
+    this.appBar,
+    required Widget this.body,
+    this.actions,
+    this.leading,
+    this.automaticallyImplyLeading = true,
+    this.centerTitle = false,
+    this.bottom,
+    this.bottomBar,
+    this.floatingActionButton,
+    this.contentAwareBrightness = false,
+    this.resizeToAvoidBottomInset = true,
+    this.extendBody = true,
+  }) : assert(
+         title != null || appBar != null,
+         'Provide either title or a pre-built appBar',
+       ),
+       children = null,
+       contentPadding = const EdgeInsets.symmetric(horizontal: 16);
+
+  /// Builds a [ListView] of [children] with a top inset that clears the bar
+  /// (and an optional TabBar [bottom]) and a comfortable bottom inset.
+  const GlassScreenScaffold.list({
+    super.key,
+    required Widget this.title,
+    required List<Widget> this.children,
+    this.actions,
+    this.leading,
+    this.automaticallyImplyLeading = true,
+    this.centerTitle = false,
+    this.bottom,
+    this.bottomBar,
+    this.floatingActionButton,
+    this.contentAwareBrightness = false,
+    this.resizeToAvoidBottomInset = true,
+    this.extendBody = true,
+    this.contentPadding = const EdgeInsets.symmetric(horizontal: 16),
+  }) : body = null,
+       appBar = null;
+
+  @override
+  Widget build(BuildContext context) {
+    final PreferredSizeWidget bar =
+        appBar ??
+        GlassAppBar(
+          title: title!,
+          actions: actions,
+          leading: leading,
+          centerTitle: centerTitle,
+          bottom: bottom,
+          automaticallyImplyLeading: automaticallyImplyLeading,
+        );
+
+    final Widget content;
+    if (children != null) {
+      final media = MediaQuery.of(context);
+      content = ListView(
+        padding: EdgeInsets.fromLTRB(
+          contentPadding.left,
+          media.padding.top + bar.preferredSize.height + 12,
+          contentPadding.right,
+          media.padding.bottom + 32 + contentPadding.bottom,
+        ),
+        children: children!,
+      );
+    } else {
+      content = body!;
+    }
+
+    return lg.GlassScaffold(
+      appBar: bar,
+      bottomBar: bottomBar,
+      floatingActionButton: floatingActionButton,
+      resizeToAvoidBottomInset: resizeToAvoidBottomInset,
+      extendBody: extendBody,
+      contentAwareBrightness: contentAwareBrightness,
+      body: content,
+    );
+  }
+}
+
 // ── GlassCard ────────────────────────────────────────────────────────────────
 
 /// A raised glass-backed panel for grouping content — uses the package's
@@ -383,6 +526,13 @@ class GlassCard extends StatelessWidget {
   final double blur;
   final Color? tint;
 
+  /// Rendering quality for the card's glass. Forwarded to the inner
+  /// [GlassContainer]. Leave null to inherit the ambient theme/layer default
+  /// (the app sets a minimal default globally); pass [GlassQuality.minimal]
+  /// for cards that recur as the background of a scrolling list so the shader
+  /// stays cheap during scroll.
+  final GlassQuality? quality;
+
   const GlassCard({
     super.key,
     required this.child,
@@ -391,6 +541,7 @@ class GlassCard extends StatelessWidget {
     this.borderRadius = const BorderRadius.all(Radius.circular(22)),
     this.blur = 50,
     this.tint,
+    this.quality,
   });
 
   @override
@@ -403,6 +554,7 @@ class GlassCard extends StatelessWidget {
       padding: padding,
       allowElevation: true,
       glowIntensity: isDark ? 0.04 : 0.02,
+      quality: quality,
       child: child,
     );
 
@@ -805,7 +957,6 @@ class GlassButtonWidget extends StatelessWidget {
   final Color? color;
   final Color? foregroundColor;
   final EdgeInsetsGeometry padding;
-  final double blur;
 
   const GlassButtonWidget({
     super.key,
@@ -814,7 +965,6 @@ class GlassButtonWidget extends StatelessWidget {
     this.color,
     this.foregroundColor,
     this.padding = const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
-    this.blur = 24,
   });
 
   factory GlassButtonWidget.icon({
@@ -828,7 +978,6 @@ class GlassButtonWidget extends StatelessWidget {
       horizontal: 20,
       vertical: 14,
     ),
-    double blur = 24,
   }) {
     return GlassButtonWidget(
       key: key,
@@ -836,7 +985,6 @@ class GlassButtonWidget extends StatelessWidget {
       color: color,
       foregroundColor: foregroundColor,
       padding: padding,
-      blur: blur,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [icon, const SizedBox(width: 8), label],

@@ -84,7 +84,6 @@ class _PremiumScreenState extends State<PremiumScreen> {
     required String provider,
     required String source,
   }) async {
-    final messenger = ScaffoldMessenger.of(context);
     final api = context.read<ApiService>();
     final auth = context.read<AuthProvider>();
     try {
@@ -99,9 +98,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
         await auth.refreshCurrentUser();
         if (mounted) {
           await _loadStatus();
-          messenger.showSnackBar(
-            const SnackBar(content: Text('Premium paid from app wallet')),
-          );
+          if (mounted) showAppToast(context, 'Premium paid from app wallet');
         }
         return;
       }
@@ -120,7 +117,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
         if (mounted) _showInvoiceWait(invoice, externalCheckout: false);
       }
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Checkout failed: $e')));
+      if (mounted) showAppToast(context, 'Checkout failed: $e', isError: true);
       await _loadStatus();
     }
   }
@@ -149,9 +146,8 @@ class _PremiumScreenState extends State<PremiumScreen> {
     final user = context.watch<AuthProvider>().currentUser;
     final theme = Theme.of(context);
 
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: const GlassAppBar(title: Text('OpenChat Premium')),
+    return GlassScreenScaffold(
+      title: const Text('OpenChat Premium'),
       body: _loading
           ? const Center(child: GlassProgressIndicator.circular())
           : _loadError != null
@@ -243,7 +239,6 @@ class _PremiumScreenState extends State<PremiumScreen> {
 
   Future<void> _cancelInvoice(Map<String, dynamic> invoice) async {
     final id = invoice['id'] as String;
-    final messenger = ScaffoldMessenger.of(context);
     try {
       await context.read<ApiService>().cancelInvoice(id);
       setState(() {
@@ -254,11 +249,9 @@ class _PremiumScreenState extends State<PremiumScreen> {
             )
             .toList(growable: false);
       });
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Payment cancelled')),
-      );
+      if (mounted) showAppToast(context, 'Payment cancelled');
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Cancel failed: $e')));
+      if (mounted) showAppToast(context, 'Cancel failed: $e', isError: true);
     }
   }
 }

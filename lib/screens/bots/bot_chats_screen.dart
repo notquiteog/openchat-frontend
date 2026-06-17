@@ -63,29 +63,17 @@ class _BotChatsScreenState extends State<BotChatsScreen> {
     final botChats = chat.conversations
         .where((c) => c.isBotDM(currentUserID))
         .toList();
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: const GlassAppBar(title: Text('Bots')),
+    return GlassScreenScaffold(
+      title: const Text('Bots'),
       body: Column(
         children: [
           SizedBox(height: MediaQuery.paddingOf(context).top + kToolbarHeight),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-            child: TextField(
+            child: GlassSearchBar(
               controller: _searchCtrl,
+              placeholder: 'Search bots by @username…',
               onChanged: _search,
-              decoration: InputDecoration(
-                hintText: 'Search bots by @username…',
-                prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                filled: true,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 8,
-                ),
-              ),
             ),
           ),
           if (_searching) const GlassProgressIndicator.linear(),

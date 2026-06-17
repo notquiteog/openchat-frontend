@@ -37,7 +37,10 @@ void main() {
 
     await tester.tap(find.text('Text'));
     await tester.pump();
-    await tester.enterText(find.byType(TextField).first, 'Bright text day');
+    // Use EditableText (matches both Material TextField and the glass
+    // CupertinoTextField-backed GlassTextArea) so the finder is robust to the
+    // caption field's glass migration.
+    await tester.enterText(find.byType(EditableText).first, 'Bright text day');
     await tester.tap(find.text('Public'));
     await tester.pump();
     await tester.tap(find.text('Share story'));

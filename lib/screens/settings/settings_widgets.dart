@@ -26,18 +26,10 @@ class SettingsScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(title: Text(title), actions: actions),
-      body: ListView(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
-          16,
-          MediaQuery.paddingOf(context).bottom + 32,
-        ),
-        children: children,
-      ),
+    return GlassScreenScaffold.list(
+      title: Text(title),
+      actions: actions,
+      children: children,
     );
   }
 }

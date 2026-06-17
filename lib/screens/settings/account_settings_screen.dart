@@ -4,6 +4,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
+    show GlassFormField, GlassTextArea;
 import 'package:provider/provider.dart';
 
 import '../../config/api_config.dart';
@@ -28,7 +30,6 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
     if (user == null) return;
     final api = context.read<ApiService>();
     final auth = context.read<AuthProvider>();
-    final messenger = ScaffoldMessenger.of(context);
 
     final displayNameCtrl = TextEditingController(
       text: user.profileDisplayName ?? '',
@@ -61,9 +62,9 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
               });
             } catch (e) {
               setStateDialog(() => uploading = false);
-              messenger.showSnackBar(
-                SnackBar(content: Text('Upload failed: $e')),
-              );
+              if (ctx.mounted) {
+                showAppToast(ctx, 'Upload failed: $e', isError: true);
+              }
             }
           }
 
@@ -128,13 +129,13 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  TextField(
-                    controller: displayNameCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Display name',
-                      prefixIcon: Icon(Icons.badge_outlined),
+                  GlassFormField(
+                    label: 'Display name',
+                    child: GlassTextField(
+                      controller: displayNameCtrl,
+                      prefixIcon: const Icon(Icons.badge_outlined),
+                      maxLength: 96,
                     ),
-                    maxLength: 96,
                   ),
                   const SizedBox(height: 8),
                   TextField(
@@ -151,11 +152,14 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                     textCapitalization: TextCapitalization.none,
                   ),
                   const SizedBox(height: 8),
-                  TextField(
-                    controller: bioCtrl,
-                    decoration: const InputDecoration(labelText: 'Bio'),
-                    maxLines: 3,
-                    maxLength: 200,
+                  GlassFormField(
+                    label: 'Bio',
+                    child: GlassTextField(
+                      controller: bioCtrl,
+                      minLines: 1,
+                      maxLines: 3,
+                      maxLength: 200,
+                    ),
                   ),
                 ],
               ),
@@ -198,9 +202,13 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                           );
                           await auth.refreshCurrentUser();
                         } catch (e) {
-                          messenger.showSnackBar(
-                            SnackBar(content: Text('Failed to update: $e')),
-                          );
+                          if (mounted) {
+                            showAppToast(
+                              context,
+                              'Failed to update: $e',
+                              isError: true,
+                            );
+                          }
                         }
                       },
                 child: const Text('Save'),
@@ -258,14 +266,14 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                 ],
               ),
               const SizedBox(height: 4),
-              TextField(
-                controller: amountCtrl,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                decoration: InputDecoration(
-                  labelText: 'Amount (${provider.toUpperCase()})',
-                  hintText: '0 to disable',
+              GlassFormField(
+                label: 'Amount (${provider.toUpperCase()})',
+                child: GlassTextField(
+                  controller: amountCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  placeholder: '0 to disable',
                 ),
               ),
             ],
@@ -303,7 +311,6 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
 
   Future<void> _manageBusinessProfile() async {
     final api = context.read<ApiService>();
-    final messenger = ScaffoldMessenger.of(context);
     final profile = await api.getBusinessProfile();
     final displayCtrl = TextEditingController(
       text: profile['display_name'] as String? ?? '',
@@ -349,50 +356,52 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                   ),
                   onTap: () => setDlg(() => enabled = !enabled),
                 ),
-                TextField(
-                  controller: displayCtrl,
-                  decoration: const InputDecoration(labelText: 'Display name'),
-                ),
-                TextField(
-                  controller: greetingCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Greeting message',
-                  ),
-                ),
-                TextField(
-                  controller: awayCtrl,
-                  decoration: const InputDecoration(labelText: 'Away message'),
+                GlassFormField(
+                  label: 'Display name',
+                  child: GlassTextField(controller: displayCtrl),
                 ),
                 const SizedBox(height: 10),
-                TextField(
-                  controller: quickRepliesCtrl,
-                  minLines: 2,
-                  maxLines: 5,
-                  decoration: const InputDecoration(
-                    labelText: 'Quick replies',
-                    hintText: '/hours | We are open 9-5 today',
+                GlassFormField(
+                  label: 'Greeting message',
+                  child: GlassTextField(controller: greetingCtrl),
+                ),
+                const SizedBox(height: 10),
+                GlassFormField(
+                  label: 'Away message',
+                  child: GlassTextField(controller: awayCtrl),
+                ),
+                const SizedBox(height: 10),
+                GlassFormField(
+                  label: 'Quick replies',
+                  child: GlassTextArea(
+                    controller: quickRepliesCtrl,
+                    minLines: 2,
+                    maxLines: 5,
+                    placeholder: '/hours | We are open 9-5 today',
                   ),
                 ),
                 const SizedBox(height: 10),
-                TextField(
-                  controller: weekdayHoursCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Weekday hours',
-                    hintText: 'Mon-Fri 09:00-17:00',
+                GlassFormField(
+                  label: 'Weekday hours',
+                  child: GlassTextField(
+                    controller: weekdayHoursCtrl,
+                    placeholder: 'Mon-Fri 09:00-17:00',
                   ),
                 ),
-                TextField(
-                  controller: saturdayHoursCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Saturday hours',
-                    hintText: 'Closed',
+                const SizedBox(height: 10),
+                GlassFormField(
+                  label: 'Saturday hours',
+                  child: GlassTextField(
+                    controller: saturdayHoursCtrl,
+                    placeholder: 'Closed',
                   ),
                 ),
-                TextField(
-                  controller: sundayHoursCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Sunday hours',
-                    hintText: 'Closed',
+                const SizedBox(height: 10),
+                GlassFormField(
+                  label: 'Sunday hours',
+                  child: GlassTextField(
+                    controller: sundayHoursCtrl,
+                    placeholder: 'Closed',
                   ),
                 ),
               ],
@@ -429,9 +438,7 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                   enabled: enabled,
                 );
                 if (ctx.mounted) Navigator.pop(ctx);
-                messenger.showSnackBar(
-                  const SnackBar(content: Text('Business profile saved')),
-                );
+                if (mounted) showAppToast(context, 'Business profile saved');
               },
               child: const Text('Save'),
             ),

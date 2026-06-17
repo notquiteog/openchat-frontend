@@ -214,7 +214,7 @@ class _PrivacyOnboardingScreenState extends State<PrivacyOnboardingScreen> {
                           ],
                         ),
                       ),
-                      FilledButton.icon(
+                      GlassButtonWidget.icon(
                         key: const Key('privacy-onboarding-next'),
                         onPressed: _next,
                         icon: Icon(

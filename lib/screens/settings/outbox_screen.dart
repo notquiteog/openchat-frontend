@@ -100,55 +100,45 @@ class _OutboxScreenState extends State<OutboxScreen> {
       grouped.putIfAbsent(item.conversationId, () => []).add(item);
     }
 
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(
-        title: const Text('Outbox'),
-        actions: [
-          if (items.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.delete_sweep_outlined),
-              tooltip: 'Clear all',
-              onPressed: _clearAll,
+    return GlassScreenScaffold.list(
+      title: const Text('Outbox'),
+      actions: [
+        if (items.isNotEmpty)
+          IconButton(
+            icon: const Icon(Icons.delete_sweep_outlined),
+            tooltip: 'Clear all',
+            onPressed: _clearAll,
+          ),
+      ],
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+      children: [
+        if (items.isEmpty)
+          _OutboxEmptyState()
+        else
+          for (final entry in grouped.entries) ...[
+            _OutboxSectionHeader(
+              title:
+                  chat
+                      .conversationById(entry.key)
+                      ?.displayName(currentUserId) ??
+                  'Unknown conversation',
             ),
-        ],
-      ),
-      body: ListView(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          MediaQuery.paddingOf(context).top + kToolbarHeight + 16,
-          16,
-          MediaQuery.paddingOf(context).bottom + 32,
-        ),
-        children: [
-          if (items.isEmpty)
-            _OutboxEmptyState()
-          else
-            for (final entry in grouped.entries) ...[
-              _OutboxSectionHeader(
-                title:
-                    chat
-                        .conversationById(entry.key)
-                        ?.displayName(currentUserId) ??
-                    'Unknown conversation',
+            GlassCard(
+              padding: EdgeInsets.zero,
+              child: Column(
+                children: [
+                  for (var i = 0; i < entry.value.length; i++)
+                    _OutboxItemTile(
+                      item: entry.value[i],
+                      isLast: i == entry.value.length - 1,
+                      onTap: () => _showItemActions(entry.value[i]),
+                    ),
+                ],
               ),
-              GlassCard(
-                padding: EdgeInsets.zero,
-                child: Column(
-                  children: [
-                    for (var i = 0; i < entry.value.length; i++)
-                      _OutboxItemTile(
-                        item: entry.value[i],
-                        isLast: i == entry.value.length - 1,
-                        onTap: () => _showItemActions(entry.value[i]),
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-            ],
-        ],
-      ),
+            ),
+            const SizedBox(height: 16),
+          ],
+      ],
     );
   }
 }

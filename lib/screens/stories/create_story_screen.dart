@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
+    show GlassSpring, GlassTextArea, SpringBuilder;
 import 'package:provider/provider.dart';
 import 'package:video_player/video_player.dart';
 import '../../crypto/pgp_service.dart';
@@ -716,26 +718,30 @@ class _BackgroundSwatches extends StatelessWidget {
               padding: const EdgeInsets.only(right: 8),
               child: GestureDetector(
                 onTap: () => onChanged(option),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  curve: Curves.easeOutCubic,
-                  width: 42,
-                  height: 42,
-                  decoration: storyBackgroundDecoration(option).copyWith(
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: selected == option ? Colors.white : Colors.white38,
-                      width: selected == option ? 2 : 1,
+                child: SpringBuilder(
+                  value: selected == option ? 1.0 : 0.0,
+                  spring: GlassSpring.snappy(),
+                  builder: (context, t, _) => Container(
+                    width: 42,
+                    height: 42,
+                    decoration: storyBackgroundDecoration(option).copyWith(
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: Color.lerp(Colors.white38, Colors.white, t)!,
+                        width: 1 + t,
+                      ),
+                      boxShadow: t > 0
+                          ? [
+                              BoxShadow(
+                                color: Colors.white.withValues(
+                                  alpha: 0.24 * t,
+                                ),
+                                blurRadius: 14,
+                                spreadRadius: -2,
+                              ),
+                            ]
+                          : null,
                     ),
-                    boxShadow: selected == option
-                        ? [
-                            BoxShadow(
-                              color: Colors.white.withValues(alpha: 0.24),
-                              blurRadius: 14,
-                              spreadRadius: -2,
-                            ),
-                          ]
-                        : null,
                   ),
                 ),
               ),
@@ -838,26 +844,15 @@ class _CaptionField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
+    return GlassTextArea(
       controller: controller,
-      maxLines: 3,
       minLines: 1,
-      style: const TextStyle(color: Colors.white),
-      cursorColor: Colors.white,
-      decoration: InputDecoration(
-        hintText: 'Add a caption…',
-        hintStyle: const TextStyle(color: Colors.white54),
-        filled: true,
-        fillColor: Colors.white.withValues(alpha: 0.08),
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 14,
-          vertical: 12,
-        ),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: BorderSide.none,
-        ),
-      ),
+      maxLines: 3,
+      placeholder: 'Add a caption…',
+      shape: const LiquidRoundedSuperellipse(borderRadius: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      textStyle: const TextStyle(color: Colors.white),
+      placeholderStyle: const TextStyle(color: Colors.white54),
     );
   }
 }

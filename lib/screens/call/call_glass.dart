@@ -232,7 +232,9 @@ class CallControlButton extends StatelessWidget {
           icon: Icon(icon),
           onPressed: onTap,
           size: size,
-          useOwnLayer: true,
+          // Grouped into CallControlsPanel's single shared glass layer instead
+          // of capturing its own backdrop per button (was double-glass).
+          useOwnLayer: false,
           quality: GlassQuality.standard,
           glowColor: active ? activeColor : null,
           glowRadius: 18,
@@ -291,13 +293,18 @@ class CallControlsPanel extends StatelessWidget {
               horizontal: desktopLayout ? 20 : 8,
               vertical: desktopLayout ? 18 : 16,
             ),
-            child: Wrap(
-              alignment: WrapAlignment.center,
-              runAlignment: WrapAlignment.center,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: desktopLayout ? 24 : (compactLayout ? 8 : 12),
-              runSpacing: 14,
-              children: secondaryControls,
+            // One shared blend-group layer for the secondary buttons (the
+            // documented grouped-toolbar idiom) so they capture the backdrop
+            // once instead of per-button.
+            child: AdaptiveLiquidGlassLayer(
+              child: Wrap(
+                alignment: WrapAlignment.center,
+                runAlignment: WrapAlignment.center,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: desktopLayout ? 24 : (compactLayout ? 8 : 12),
+                runSpacing: 14,
+                children: secondaryControls,
+              ),
             ),
           ),
           const SizedBox(height: 10),

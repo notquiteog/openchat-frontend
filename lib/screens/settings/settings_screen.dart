@@ -241,9 +241,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           if (ctx.mounted) Navigator.pop(ctx);
                         } catch (e) {
                           if (ctx.mounted) setDlg(() => submitting = false);
-                          messenger.showSnackBar(
-                            SnackBar(content: Text('Delete failed: $e')),
-                          );
+                          if (ctx.mounted) {
+                            showAppToast(
+                              ctx,
+                              'Delete failed: $e',
+                              isError: true,
+                            );
+                          }
                         }
                       },
                 child: submitting
@@ -274,17 +278,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final user = context.watch<AuthProvider>().currentUser;
     final scheme = Theme.of(context).colorScheme;
 
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: const GlassAppBar(title: Text('Settings')),
-      body: ListView(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
-          16,
-          MediaQuery.paddingOf(context).bottom + 32,
-        ),
-        children: [
+    return GlassScreenScaffold.list(
+      title: const Text('Settings'),
+      children: [
           // ── Profile header → Account page ────────────────────────────────
           if (user != null) ...[
             GestureDetector(
@@ -543,7 +539,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ],
           ),
         ],
-      ),
     );
   }
 }

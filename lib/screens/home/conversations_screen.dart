@@ -333,8 +333,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
     };
     final conversations = inboxData.conversations;
 
-    final inbox = Scaffold(
-      extendBodyBehindAppBar: true,
+    final inbox = GlassScreenScaffold(
       appBar: GlassAppBar(
         title: const Text('Chats'),
         actions: [

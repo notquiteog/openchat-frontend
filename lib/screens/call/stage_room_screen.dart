@@ -199,8 +199,7 @@ class _StageRoomScreenState extends State<StageRoomScreen> {
       ...stage.speakerIds.where((s) => s != stage.hostId),
     ];
 
-    return Scaffold(
-      extendBodyBehindAppBar: true,
+    return GlassScreenScaffold(
       appBar: GlassAppBar(
         title: Text(widget.conversation.displayName('')),
         actions: [
@@ -305,7 +304,7 @@ class _StageRoomScreenState extends State<StageRoomScreen> {
                 ),
               ],
             ),
-      bottomNavigationBar: stage.isActive
+      bottomBar: stage.isActive
           ? SafeArea(
               child: Padding(
                 padding: const EdgeInsets.all(16),

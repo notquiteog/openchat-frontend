@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
+    show GlassPullDownButton, GlassMenuItem;
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
 
@@ -30,18 +32,15 @@ class BroadcastListsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final settings = context.watch<SettingsProvider>();
     final lists = settings.broadcastLists;
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(
-        title: const Text('Broadcast lists'),
-        actions: [
-          IconButton(
-            tooltip: 'New list',
-            icon: const Icon(Icons.add_rounded),
-            onPressed: () => _editList(context, null),
-          ),
-        ],
-      ),
+    return GlassScreenScaffold(
+      title: const Text('Broadcast lists'),
+      actions: [
+        IconButton(
+          tooltip: 'New list',
+          icon: const Icon(Icons.add_rounded),
+          onPressed: () => _editList(context, null),
+        ),
+      ],
       body: lists.isEmpty
           ? Center(
               child: Padding(
@@ -75,30 +74,13 @@ class BroadcastListsScreen extends StatelessWidget {
               ),
               children: [
                 for (final list in lists)
-                  GlassCard(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    child: GlassListTile(
-                      leading: const CircleAvatar(
-                        child: Icon(Icons.campaign_rounded),
-                      ),
-                      title: Text(list.name),
-                      subtitle: Text('${list.memberUserIds.length} recipients'),
-                      onTap: () => _compose(context, list),
-                      trailing: PopupMenuButton<String>(
-                        onSelected: (v) {
-                          if (v == 'edit') _editList(context, list);
-                          if (v == 'delete') {
-                            context
-                                .read<SettingsProvider>()
-                                .removeBroadcastList(list.id);
-                          }
-                        },
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(value: 'edit', child: Text('Edit')),
-                          PopupMenuItem(value: 'delete', child: Text('Delete')),
-                        ],
-                      ),
-                    ),
+                  _BroadcastListRow(
+                    list: list,
+                    onTap: () => _compose(context, list),
+                    onEdit: () => _editList(context, list),
+                    onDelete: () => context
+                        .read<SettingsProvider>()
+                        .removeBroadcastList(list.id),
                   ),
               ],
             ),
@@ -137,17 +119,19 @@ class BroadcastListsScreen extends StatelessWidget {
                     shrinkWrap: true,
                     children: [
                       for (final u in contacts)
-                        CheckboxListTile(
-                          value: selected.contains(u.id),
-                          onChanged: (v) => setSheet(() {
-                            if (v == true) {
-                              selected.add(u.id);
-                            } else {
-                              selected.remove(u.id);
-                            }
-                          }),
+                        GlassListTile(
                           title: Text(u.displayName),
                           subtitle: Text('@${u.username}'),
+                          trailing: GlassSwitch(
+                            value: selected.contains(u.id),
+                            onChanged: (v) => setSheet(() {
+                              if (v) {
+                                selected.add(u.id);
+                              } else {
+                                selected.remove(u.id);
+                              }
+                            }),
+                          ),
                         ),
                     ],
                   ),
@@ -167,8 +151,10 @@ class BroadcastListsScreen extends StatelessWidget {
     if (saved != true || !context.mounted) return;
     final name = nameCtrl.text.trim();
     if (name.isEmpty || selected.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Name and at least one contact required')),
+      showAppToast(
+        context,
+        'Name and at least one contact required',
+        isError: true,
       );
       return;
     }
@@ -209,7 +195,6 @@ class BroadcastListsScreen extends StatelessWidget {
     final text = textCtrl.text.trim();
     if (text.isEmpty) return;
     final chat = context.read<ChatProvider>();
-    final messenger = ScaffoldMessenger.of(context);
     var ok = 0;
     for (final userId in list.memberUserIds) {
       try {
@@ -218,8 +203,89 @@ class BroadcastListsScreen extends StatelessWidget {
       } catch (_) {}
     }
     if (!context.mounted) return;
-    messenger.showSnackBar(
-      SnackBar(content: Text('Sent to $ok/${list.memberUserIds.length}')),
+    showAppToast(context, 'Sent to $ok/${list.memberUserIds.length}');
+  }
+}
+
+/// Opaque content row for a single broadcast list. Glass is reserved for
+/// floating chrome, so the scrolling rows render as flat themed fills (mirroring
+/// the conversations list) rather than a GlassCard per row.
+class _BroadcastListRow extends StatelessWidget {
+  const _BroadcastListRow({
+    required this.list,
+    required this.onTap,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final BroadcastList list;
+  final VoidCallback onTap;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final fill = isDark
+        ? scheme.surfaceContainerHigh
+        : scheme.surfaceContainerLow;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: fill,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+            child: Row(
+              children: [
+                const CircleAvatar(child: Icon(Icons.campaign_rounded)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        list.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${list.memberUserIds.length} recipients',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurface.withValues(alpha: 0.6),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                GlassPullDownButton(
+                  items: [
+                    GlassMenuItem(title: 'Edit', onTap: onEdit),
+                    GlassMenuItem(
+                      title: 'Delete',
+                      isDestructive: true,
+                      onTap: onDelete,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

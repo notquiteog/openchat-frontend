@@ -66,15 +66,12 @@ class _StickerEditorScreenState extends State<StickerEditorScreen> {
     final bytes = _bytes;
     if (bytes == null) return;
     setState(() => _busy = true);
-    final messenger = ScaffoldMessenger.of(context);
     // The segmentation model is fetched on demand — warn about the one-time
     // download and surface its progress on the button label.
     final modelCached = await SegmentationService.isModelCached();
     if (!mounted) return;
     if (SegmentationService.isSupported && !modelCached) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Downloading AI model (one-time, ~5MB)…')),
-      );
+      showAppToast(context, 'Downloading AI model (one-time, ~5MB)…');
       _modelDownloadSub = SegmentationService.downloadProgress.listen((p) {
         if (mounted) setState(() => _modelDownloadProgress = p);
       });
@@ -87,13 +84,17 @@ class _StickerEditorScreenState extends State<StickerEditorScreen> {
         _bgRemoved = true;
       });
     } on SegmentationException catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('Background removal failed: ${e.message}')),
-      );
+      if (mounted) {
+        showAppToast(
+          context,
+          'Background removal failed: ${e.message}',
+          isError: true,
+        );
+      }
     } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('Background removal failed: $e')),
-      );
+      if (mounted) {
+        showAppToast(context, 'Background removal failed: $e', isError: true);
+      }
     } finally {
       await _modelDownloadSub?.cancel();
       _modelDownloadSub = null;
@@ -112,7 +113,6 @@ class _StickerEditorScreenState extends State<StickerEditorScreen> {
     if (bytes == null || name.isEmpty) return;
     setState(() => _busy = true);
     final api = context.read<ApiService>();
-    final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
     try {
       await api.addStickerToPack(
@@ -121,12 +121,12 @@ class _StickerEditorScreenState extends State<StickerEditorScreen> {
         filename: _bgRemoved ? 'sticker.png' : 'sticker.jpg',
         name: name,
       );
-      messenger.showSnackBar(const SnackBar(content: Text('Sticker added')));
+      if (mounted) showAppToast(context, 'Sticker added');
       navigator.pop(true);
     } catch (e) {
       if (mounted) {
         setState(() => _busy = false);
-        messenger.showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+        showAppToast(context, 'Upload failed: $e', isError: true);
       }
     }
   }
@@ -134,18 +134,10 @@ class _StickerEditorScreenState extends State<StickerEditorScreen> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: const GlassAppBar(title: Text('Create sticker')),
-      body: ListView(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
-          16,
-          16,
-        ),
-        children: [
-          AspectRatio(
+    return GlassScreenScaffold.list(
+      title: const Text('Create sticker'),
+      children: [
+        AspectRatio(
             aspectRatio: 1,
             child: Container(
               decoration: BoxDecoration(
@@ -204,12 +196,9 @@ class _StickerEditorScreenState extends State<StickerEditorScreen> {
             ],
           ),
           const SizedBox(height: 16),
-          TextField(
+          GlassTextField(
             controller: _nameCtrl,
-            decoration: const InputDecoration(
-              labelText: 'Sticker name',
-              border: OutlineInputBorder(),
-            ),
+            placeholder: 'Sticker name',
           ),
           const SizedBox(height: 16),
           GlassButtonWidget(
@@ -217,7 +206,6 @@ class _StickerEditorScreenState extends State<StickerEditorScreen> {
             child: const Text('Add to pack'),
           ),
         ],
-      ),
-    );
+      );
   }
 }

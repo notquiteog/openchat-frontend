@@ -188,26 +188,16 @@ class _NearbyScreenState extends State<NearbyScreen> {
         ? _recentPeers
         : const <RecentNearbyPeer>[];
     final searching = mesh != null && mesh.isRunning && mesh.error == null;
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(
-        title: const Text('Nearby'),
-        actions: [
-          IconButton(
-            tooltip: 'About Nearby privacy',
-            icon: const Icon(Icons.lock_outline_rounded),
-            onPressed: _showPrivacyInfo,
-          ),
-        ],
-      ),
-      body: ListView(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
-          16,
-          MediaQuery.paddingOf(context).bottom + 16,
+    return GlassScreenScaffold.list(
+      title: const Text('Nearby'),
+      actions: [
+        IconButton(
+          tooltip: 'About Nearby privacy',
+          icon: const Icon(Icons.lock_outline_rounded),
+          onPressed: _showPrivacyInfo,
         ),
-        children: [
+      ],
+      children: [
           _RadarHero(
             active: searching,
             peerCount: peers.length,
@@ -321,8 +311,7 @@ class _NearbyScreenState extends State<NearbyScreen> {
             ],
           ],
         ],
-      ),
-    );
+      );
   }
 
   Widget _statusChips(NearbyMeshService mesh) {

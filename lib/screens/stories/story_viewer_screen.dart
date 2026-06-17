@@ -781,7 +781,7 @@ class _StoryReplyBar extends StatelessWidget {
   }
 }
 
-class _StoryReactButton extends StatefulWidget {
+class _StoryReactButton extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
   final Widget child;
@@ -793,33 +793,27 @@ class _StoryReactButton extends StatefulWidget {
   });
 
   @override
-  State<_StoryReactButton> createState() => _StoryReactButtonState();
-}
-
-class _StoryReactButtonState extends State<_StoryReactButton> {
-  bool _pressed = false;
-
-  @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: widget.onTap,
-      onTapDown: (_) => setState(() => _pressed = true),
-      onTapUp: (_) => setState(() => _pressed = false),
-      onTapCancel: () => setState(() => _pressed = false),
-      child: AnimatedScale(
-        scale: _pressed ? 1.22 : 1.0,
-        duration: const Duration(milliseconds: 120),
-        curve: Curves.easeOutBack,
-        child: Container(
+    // Real iOS-26 press physics (anchored squish + glow, Reduce-Motion safe).
+    // The chips are siblings inside the reaction-bar glass pill, so use a low
+    // stretch and a transparent style to avoid double-drawing glass; the
+    // selected state keeps its own white circle inside the child.
+    return GlassButton.custom(
+      onTap: onTap,
+      style: GlassButtonStyle.transparent,
+      shape: const LiquidOval(),
+      stretch: 0.15,
+      width: 38,
+      height: 38,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: selected ? Colors.white24 : Colors.transparent,
+        ),
+        child: SizedBox(
           width: 38,
           height: 38,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: widget.selected ? Colors.white24 : Colors.transparent,
-          ),
-          child: widget.child,
+          child: Center(child: child),
         ),
       ),
     );

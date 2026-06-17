@@ -70,18 +70,15 @@ class _AdminAuditLogScreenState extends State<AdminAuditLogScreen> {
   @override
   Widget build(BuildContext context) {
     final visibleEvents = _visibleEvents;
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: GlassAppBar(
-        title: const Text('Audit log'),
-        actions: [
-          IconButton(
-            tooltip: 'Refresh',
-            icon: const Icon(Icons.refresh_rounded),
-            onPressed: _load,
-          ),
-        ],
-      ),
+    return GlassScreenScaffold(
+      title: const Text('Audit log'),
+      actions: [
+        IconButton(
+          tooltip: 'Refresh',
+          icon: const Icon(Icons.refresh_rounded),
+          onPressed: _load,
+        ),
+      ],
       body: _loading
           ? const Center(child: GlassProgressIndicator.circular())
           : Column(
