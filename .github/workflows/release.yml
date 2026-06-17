@@ -142,13 +142,16 @@ jobs:
           path = pathlib.Path(sys.argv[1])
           text = path.read_text()
           if "LIBWEBRTC_THIRD_PARTY_DIR" not in text:
-              text = text.replace(
-                  'set(LIBWEBRTC_VERSION_INI "${CMAKE_CURRENT_LIST_DIR}/libwebrtc_version.ini")',
-                  'file(REAL_PATH "${CMAKE_CURRENT_LIST_DIR}" LIBWEBRTC_THIRD_PARTY_DIR)\nset(LIBWEBRTC_VERSION_INI "${LIBWEBRTC_THIRD_PARTY_DIR}/libwebrtc_version.ini")',
-              )
-              text = text.replace("${CMAKE_CURRENT_LIST_DIR}/downloads", "${LIBWEBRTC_THIRD_PARTY_DIR}/downloads")
-              text = text.replace('"${CMAKE_CURRENT_LIST_DIR}/libwebrtc"', '"${LIBWEBRTC_THIRD_PARTY_DIR}/libwebrtc"')
-              text = text.replace('"${CMAKE_CURRENT_LIST_DIR}"', '"${LIBWEBRTC_THIRD_PARTY_DIR}"')
+              # Resolve the symlinked ${CMAKE_CURRENT_LIST_DIR} to a real path so
+              # CMake's file(ARCHIVE_EXTRACT) doesn't write *through* the
+              # .plugin_symlinks/flutter_webrtc symlink (it refuses: "Cannot
+              # extract through symlink"). Replace ALL refs first, THEN prepend
+              # the REAL_PATH definition — otherwise the broad replace clobbers
+              # the ${CMAKE_CURRENT_LIST_DIR} argument inside file(REAL_PATH ...)
+              # itself, which made it resolve to .../windows instead of
+              # .../third_party ("missing version manifest at .../windows/...").
+              text = text.replace("${CMAKE_CURRENT_LIST_DIR}", "${LIBWEBRTC_THIRD_PARTY_DIR}")
+              text = 'file(REAL_PATH "${CMAKE_CURRENT_LIST_DIR}" LIBWEBRTC_THIRD_PARTY_DIR)\n' + text
               path.write_text(text)
           PY
 
@@ -199,8 +202,14 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          # GCC 16 toolchain (matches local dev; the linux/CMakeLists.txt
+          # `-include cstdint` fix is required for it). Not in stock Ubuntu, so
+          # add the toolchain PPA. If the PPA lacks gcc-16 for this runner's
+          # Ubuntu, this install fails — bump the runner image or pin a source.
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
           sudo apt-get update -q
           sudo apt-get install -y \
+            gcc-16 g++-16 \
             clang lld cmake ninja-build pkg-config \
             libgtk-3-dev liblzma-dev libsecret-1-dev libayatana-appindicator3-dev \
             libx11-dev libxi-dev \
@@ -221,9 +230,12 @@ jobs:
 
       - name: Build Linux
         env:
+          CC: gcc-16
+          CXX: g++-16
           CPATH: /usr/local/include:/usr/include/libayatana-appindicator3-0.1
           LDFLAGS: -fuse-ld=lld
         run: |
+          gcc-16 --version
           flutter pub get
           flutter build linux --verbose --release ${{ env.DART_DEFINES }}
 
