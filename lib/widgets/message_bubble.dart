@@ -6479,19 +6479,33 @@ class _StickerBubbleState extends State<_StickerBubble> {
   @override
   Widget build(BuildContext context) {
     final fileUrl = _sticker?['file_url'] as String?;
+    // Decode at the long edge only so the bitmap keeps the sticker's native
+    // aspect ratio — forcing a square decode (and a square box) is what made
+    // non-square stickers look squished.
     final stickerCacheSize = _decodeCacheDimension(
       120,
       MediaQuery.devicePixelRatioOf(context),
     );
+    // A 120px placeholder footprint keeps the bubble stable while the metadata
+    // and bitmap load; once decoded, the image lays itself out at its natural
+    // ratio, capped to 120 on each axis (Image preserves aspect ratio when it
+    // fits itself into the constraints).
+    const placeholder = SizedBox(
+      width: 120,
+      height: 120,
+      child: Center(child: GlassProgressIndicator.circular(strokeWidth: 2)),
+    );
+    const broken = SizedBox(
+      width: 120,
+      height: 120,
+      child: Center(child: Icon(Icons.broken_image_outlined, size: 44)),
+    );
     return GestureDetector(
       onTap: _sticker != null ? _onTap : null,
-      child: SizedBox(
-        width: 120,
-        height: 120,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 120, maxHeight: 120),
         child: _loading
-            ? const Center(
-                child: GlassProgressIndicator.circular(strokeWidth: 2),
-              )
+            ? placeholder
             : fileUrl != null
             ? ClipRRect(
                 borderRadius: BorderRadius.circular(8),
@@ -6499,16 +6513,11 @@ class _StickerBubbleState extends State<_StickerBubble> {
                   imageUrl: ApiConfig.resolveMedia(fileUrl),
                   fit: BoxFit.contain,
                   memCacheWidth: stickerCacheSize,
-                  memCacheHeight: stickerCacheSize,
-                  placeholder: (_, _) => const Center(
-                    child: GlassProgressIndicator.circular(strokeWidth: 2),
-                  ),
-                  errorWidget: (_, _, _) => const Center(
-                    child: Icon(Icons.broken_image_outlined, size: 44),
-                  ),
+                  placeholder: (_, _) => placeholder,
+                  errorWidget: (_, _, _) => broken,
                 ),
               )
-            : const Center(child: Icon(Icons.broken_image_outlined, size: 44)),
+            : broken,
       ),
     );
   }

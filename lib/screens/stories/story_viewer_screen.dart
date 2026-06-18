@@ -11,6 +11,7 @@ import '../../models/story.dart';
 import '../../models/story_viewer.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/chat_provider.dart';
+import '../../providers/key_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/attachment_service.dart';
@@ -22,6 +23,15 @@ import '../../widgets/reaction_emoji_picker.dart';
 import '../../widgets/story_manage_sheet.dart';
 
 enum _StoryLoadState { idle, loading, done, error }
+
+/// A story-load failure carrying a human-readable reason. [canUnlock] flags the
+/// one recoverable case — a locked PGP key — so the viewer can offer an inline
+/// unlock instead of a dead-end "Could not load story" message.
+class _StoryLoadException implements Exception {
+  final String message;
+  final bool canUnlock;
+  const _StoryLoadException(this.message, {this.canUnlock = false});
+}
 
 class StoryViewerScreen extends StatefulWidget {
   final List<Story> stories;
@@ -47,6 +57,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
   VideoPlayerController? _video;
   File? _tempFile;
   String? _error;
+  bool _errorCanUnlock = false;
 
   Story get _story => _stories[_index];
 
@@ -75,6 +86,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
     setState(() {
       _state = _StoryLoadState.loading;
       _error = null;
+      _errorCanUnlock = false;
     });
     try {
       final api = context.read<ApiService>();
@@ -88,38 +100,69 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
                 .getPrivateKeyIfUnlocked() ??
             '';
         if (privateKey.isEmpty) {
-          throw StateError('PGP key locked');
+          // The common case that used to read as "Could not load story": the
+          // viewer's key is simply locked. It's recoverable in place.
+          throw const _StoryLoadException(
+            'Unlock your PGP key to view this story.',
+            canUnlock: true,
+          );
         }
-        final raw = await PgpService.decrypt(
-          encryptedArmor: _story.encryptedPayload!,
-          privateKeyArmored: privateKey,
-        );
-        final meta = jsonDecode(raw);
+        final String raw;
+        try {
+          raw = await PgpService.decrypt(
+            encryptedArmor: _story.encryptedPayload!,
+            privateKeyArmored: privateKey,
+          );
+        } catch (e) {
+          // The envelope is addressed to a fixed set of recipients. If our key
+          // isn't one of them — e.g. we weren't a contact when it was posted —
+          // decryption fails. That's an access problem, not corruption.
+          throw const _StoryLoadException(
+            "You don't have access to this story.",
+          );
+        }
+        Object? meta;
+        try {
+          meta = jsonDecode(raw);
+        } catch (_) {
+          meta = null;
+        }
         if (meta is! Map<String, dynamic> || meta['openchat_story_meta'] != 1) {
-          throw StateError('bad story meta');
+          throw const _StoryLoadException(
+            "This story's details are unreadable.",
+          );
         }
         _stories[_index] = _story.withDecryptedMeta(meta);
       }
 
       if (_story.isText) {
-        await api.viewStory(_story.id);
+        await _markViewed(api);
         if (!mounted) return;
         setState(() => _state = _StoryLoadState.done);
         return;
       }
 
       final attachmentId = _story.attachmentId;
-      if (attachmentId == null) throw StateError('missing attachment');
+      if (attachmentId == null) {
+        throw const _StoryLoadException("This story's media is missing.");
+      }
 
-      await api.viewStory(_story.id);
+      await _markViewed(api);
       final svc = AttachmentService(api);
-      final bytes = _story.fileKey != null && _story.fileNonce != null
-          ? await svc.downloadAndDecrypt(
-              attachmentId: attachmentId,
-              fileKeyB64: _story.fileKey!,
-              fileNonceB64: _story.fileNonce!,
-            )
-          : await svc.downloadRaw(attachmentId: attachmentId);
+      final Uint8List bytes;
+      try {
+        bytes = _story.fileKey != null && _story.fileNonce != null
+            ? await svc.downloadAndDecrypt(
+                attachmentId: attachmentId,
+                fileKeyB64: _story.fileKey!,
+                fileNonceB64: _story.fileNonce!,
+              )
+            : await svc.downloadRaw(attachmentId: attachmentId);
+      } catch (e) {
+        throw const _StoryLoadException(
+          "Couldn't download this story's media.",
+        );
+      }
 
       if (_story.isVideo) {
         final dir = await getTemporaryDirectory();
@@ -128,7 +171,13 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
         );
         await file.writeAsBytes(bytes, flush: true);
         final controller = VideoPlayerController.file(file);
-        await controller.initialize();
+        try {
+          await controller.initialize();
+        } catch (e) {
+          await controller.dispose();
+          file.delete().ignore();
+          throw const _StoryLoadException("This video format isn't supported.");
+        }
         await controller.setLooping(true);
         await controller.play();
         if (!mounted) {
@@ -148,13 +197,41 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
           _state = _StoryLoadState.done;
         });
       }
-    } catch (e) {
+    } on _StoryLoadException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message;
+        _errorCanUnlock = e.canUnlock;
+        _state = _StoryLoadState.error;
+      });
+    } catch (e, st) {
+      // Anything unmapped keeps the generic message but is logged so the real
+      // cause is recoverable from a report instead of guessed at.
+      debugPrint('story ${_story.id} failed to load: $e\n$st');
       if (!mounted) return;
       setState(() {
         _error = 'Could not load story.';
+        _errorCanUnlock = false;
         _state = _StoryLoadState.error;
       });
     }
+  }
+
+  /// Records the view, mapping a server rejection (no access / expired /
+  /// deleted) to a clear reason rather than the generic fallback.
+  Future<void> _markViewed(ApiService api) async {
+    try {
+      await api.viewStory(_story.id);
+    } catch (e) {
+      throw const _StoryLoadException('This story is no longer available.');
+    }
+  }
+
+  /// Locked-key recovery: authenticate, then re-run the load in place.
+  Future<void> _unlockAndRetry() async {
+    final ok = await context.read<KeyProvider>().authenticateAndUnlockKey();
+    if (!mounted || !ok) return;
+    await _loadCurrent();
   }
 
   String _videoExt(Story story) {
@@ -316,7 +393,10 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
           fit: StackFit.expand,
           children: [
             _buildMedia(),
-            _TapZones(onPrevious: _previous, onNext: _next),
+            // Suppress the full-screen tap zones while showing the error state
+            // so its action buttons (unlock / retry) actually receive taps.
+            if (_state != _StoryLoadState.error)
+              _TapZones(onPrevious: _previous, onNext: _next),
             Positioned(
               left: 12,
               right: 12,
@@ -368,9 +448,38 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
       ),
       _StoryLoadState.done when _story.isText => _TextStoryMedia(story: _story),
       _StoryLoadState.error => Center(
-        child: Text(
-          _error ?? 'Story unavailable',
-          style: const TextStyle(color: Colors.white70),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _errorCanUnlock
+                    ? Icons.lock_outline_rounded
+                    : Icons.error_outline_rounded,
+                color: Colors.white70,
+                size: 44,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                _error ?? 'Story unavailable',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white70),
+              ),
+              const SizedBox(height: 16),
+              _errorCanUnlock
+                  ? GlassButtonWidget.icon(
+                      icon: const Icon(Icons.lock_open_rounded),
+                      label: const Text('Unlock key'),
+                      onPressed: _unlockAndRetry,
+                    )
+                  : GlassButtonWidget.icon(
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const Text('Retry'),
+                      onPressed: _loadCurrent,
+                    ),
+            ],
+          ),
         ),
       ),
       _ => Center(child: GlassProgressIndicator.circular(color: Colors.white)),
@@ -810,11 +919,7 @@ class _StoryReactButton extends StatelessWidget {
           shape: BoxShape.circle,
           color: selected ? Colors.white24 : Colors.transparent,
         ),
-        child: SizedBox(
-          width: 38,
-          height: 38,
-          child: Center(child: child),
-        ),
+        child: SizedBox(width: 38, height: 38, child: Center(child: child)),
       ),
     );
   }

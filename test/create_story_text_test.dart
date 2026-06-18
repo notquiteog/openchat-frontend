@@ -43,6 +43,10 @@ void main() {
     await tester.enterText(find.byType(EditableText).first, 'Bright text day');
     await tester.tap(find.text('Public'));
     await tester.pump();
+    // The composer's controls scroll; make sure the publish button is on-screen
+    // before tapping (it sits below the fold on small test surfaces).
+    await tester.ensureVisible(find.text('Share story'));
+    await tester.pump();
     await tester.tap(find.text('Share story'));
     await tester.pump();
 
@@ -62,6 +66,7 @@ class _CapturingStoryApi extends ApiService {
   String? caption;
   String? background;
   String? privacy;
+  bool startNew = false;
 
   @override
   Future<Story> createStory({
@@ -77,10 +82,12 @@ class _CapturingStoryApi extends ApiService {
     String caption = '',
     String privacy = 'contacts',
     List<String> allowUserIds = const [],
+    List<String> blockUserIds = const [],
     String? conversationId,
     int expiresInSeconds = 24 * 60 * 60,
     bool pinned = false,
     bool noForwards = false,
+    bool startNew = false,
     List<Map<String, dynamic>> entities = const [],
   }) async {
     this.attachmentId = attachmentId;
@@ -88,6 +95,7 @@ class _CapturingStoryApi extends ApiService {
     this.caption = caption;
     this.background = background;
     this.privacy = privacy;
+    this.startNew = startNew;
     final now = DateTime.utc(2026, 6, 15, 12);
     return Story(
       id: 'story-created',

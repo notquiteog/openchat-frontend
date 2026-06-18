@@ -4,6 +4,11 @@ import 'user.dart';
 class Story {
   final String id;
   final String userId;
+
+  /// Ties a user's story posts into one "story" reel — posts sharing a groupId
+  /// belong to the same story. Empty only for legacy/locally-built stories; use
+  /// [groupKey] to read it with a safe fallback to [id].
+  final String groupId;
   final String? conversationId;
   final String caption;
   final List<dynamic> entities;
@@ -38,6 +43,7 @@ class Story {
   const Story({
     required this.id,
     required this.userId,
+    this.groupId = '',
     this.conversationId,
     this.caption = '',
     this.entities = const [],
@@ -68,6 +74,7 @@ class Story {
   factory Story.fromJson(Map<String, dynamic> json) => Story(
     id: json['id'] as String,
     userId: json['user_id'] as String,
+    groupId: json['group_id'] as String? ?? (json['id'] as String),
     conversationId: json['conversation_id'] as String?,
     caption: json['caption'] as String? ?? '',
     entities: (json['entities'] as List?) ?? const [],
@@ -111,6 +118,7 @@ class Story {
   Story withDecryptedMeta(Map<String, dynamic> meta) => Story(
     id: id,
     userId: userId,
+    groupId: groupId,
     conversationId: conversationId,
     caption: meta['caption'] as String? ?? caption,
     entities: (meta['entities'] as List?) ?? entities,
@@ -137,6 +145,10 @@ class Story {
     user: user,
     conversation: conversation,
   );
+
+  /// The story reel this post belongs to, falling back to [id] for legacy rows
+  /// that predate grouping.
+  String get groupKey => groupId.isNotEmpty ? groupId : id;
 
   bool get isVideo =>
       mediaType == 'video' || (mimeType?.startsWith('video/') ?? false);

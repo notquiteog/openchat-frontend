@@ -2286,10 +2286,14 @@ class ApiService {
     String caption = '',
     String privacy = 'contacts',
     List<String> allowUserIds = const [],
+    List<String> blockUserIds = const [],
     String? conversationId,
     int expiresInSeconds = 24 * 60 * 60,
     bool pinned = false,
     bool noForwards = false,
+    // When true, post a fresh story reel instead of appending to the user's
+    // current active story (the server-side default for personal stories).
+    bool startNew = false,
     List<Map<String, dynamic>> entities = const [],
   }) async {
     final resp = await _post('/api/v1/stories', {
@@ -2306,10 +2310,28 @@ class ApiService {
       'entities': entities,
       'privacy': privacy,
       if (allowUserIds.isNotEmpty) 'allow_user_ids': allowUserIds,
+      if (blockUserIds.isNotEmpty) 'block_user_ids': blockUserIds,
       'conversation_id': ?conversationId,
       'expires_in_seconds': expiresInSeconds,
       if (pinned) 'pinned': true,
       if (noForwards) 'no_forwards': true,
+      if (startNew) 'start_new': true,
+    });
+    return Story.fromJson(resp['data'] as Map<String, dynamic>);
+  }
+
+  /// Updates who can see a story after posting (owner-only). Applies to the
+  /// whole story reel. [privacy] is 'public' | 'contacts' | 'selected'.
+  Future<Story> updateStoryAudience(
+    String storyId, {
+    required String privacy,
+    List<String> allowUserIds = const [],
+    List<String> blockUserIds = const [],
+  }) async {
+    final resp = await _put('/api/v1/stories/$storyId/audience', {
+      'privacy': privacy,
+      'allow_user_ids': allowUserIds,
+      'block_user_ids': blockUserIds,
     });
     return Story.fromJson(resp['data'] as Map<String, dynamic>);
   }

@@ -714,10 +714,15 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                               ),
                               if (isOwner) ...[
                                 const SizedBox(height: 8),
-                                GlassButtonWidget.icon(
-                                  icon: const Icon(Icons.add),
-                                  label: const Text('Add sticker'),
-                                  onPressed: _addSticker,
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 24,
+                                  ),
+                                  child: GlassButtonWidget.icon(
+                                    icon: const Icon(Icons.add),
+                                    label: const Text('Add sticker'),
+                                    onPressed: _addSticker,
+                                  ),
                                 ),
                               ],
                             ],
@@ -804,11 +809,18 @@ class _PackDetailScreenState extends State<_PackDetailScreen> {
                 ),
               ],
             ),
-      floatingActionButton: isOwner && count < 50
-          ? GlassButtonWidget.icon(
-              onPressed: _addSticker,
-              icon: const Icon(Icons.add_photo_alternate),
-              label: const Text('Add Sticker'),
+      // A centered, side-padded add action (the empty pack already shows its
+      // own centered CTA, so only surface this once the pack has stickers).
+      bottomBar: isOwner && count > 0 && count < 50
+          ? Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+              child: Center(
+                child: GlassButtonWidget.icon(
+                  onPressed: _addSticker,
+                  icon: const Icon(Icons.add_photo_alternate),
+                  label: const Text('Add Sticker'),
+                ),
+              ),
             )
           : null,
     );

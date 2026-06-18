@@ -1,21 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../config/api_config.dart';
 import '../../models/story.dart';
+import '../../models/story_viewer.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/api_service.dart';
+import '../../widgets/custom_emoji_image.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/story_manage_sheet.dart';
 import 'story_viewer_screen.dart';
 
-/// "My Stories" hub — the missing place to *see and manage* your own stories.
+/// "My Stories" hub — the single place to see and manage your own stories.
 ///
-/// Story viewing + per-viewer reactions already exist inside the viewer; this
-/// screen adds the management surface the app was missing: every active and
-/// archived/expired personal story with its view and reaction counts, aggregate
-/// totals, and long-press / overflow access to pin/archive/delete. Tapping a
-/// row opens the viewer, where the author can already see exactly who viewed and
-/// how they reacted.
+/// Posts are grouped into stories (a "story" is a reel of posts sharing a
+/// group), shown active vs archived/expired with aggregate view/reaction
+/// totals. Each story expands to its individual posts, and "Who viewed" pulls
+/// the per-story viewer list (merged across the story's posts) with each
+/// viewer's reaction — so stories, posts, viewers, and reactions all live here.
+/// Channel stories the user posted get their own section.
 class MyStoriesScreen extends StatefulWidget {
   const MyStoriesScreen({super.key});
 
@@ -26,8 +29,8 @@ class MyStoriesScreen extends StatefulWidget {
 class _MyStoriesScreenState extends State<MyStoriesScreen> {
   bool _loading = true;
   Object? _error;
-  List<Story> _active = const [];
-  List<Story> _archived = const [];
+  List<Story> _personal = const [];
+  List<Story> _channel = const [];
 
   @override
   void initState() {
@@ -43,16 +46,15 @@ class _MyStoriesScreenState extends State<MyStoriesScreen> {
     try {
       final userId = context.read<AuthProvider>().currentUser?.id;
       // archive=true returns the full set (active + archived + expired) for the
-      // user; partition client-side. Personal stories only (no conversation).
+      // user; split personal vs channel client-side.
       final all = await context.read<ApiService>().getStories(
         archive: true,
         userId: userId,
       );
-      final mine = all.where((s) => s.conversationId == null).toList();
       if (!mounted) return;
       setState(() {
-        _active = mine.where((s) => !_isArchivedOrExpired(s)).toList();
-        _archived = mine.where(_isArchivedOrExpired).toList();
+        _personal = all.where((s) => s.conversationId == null).toList();
+        _channel = all.where((s) => s.conversationId != null).toList();
         _loading = false;
       });
     } catch (e) {
@@ -64,18 +66,42 @@ class _MyStoriesScreenState extends State<MyStoriesScreen> {
     }
   }
 
-  /// A story falls into the Archived section when explicitly archived or once it
-  /// has expired — except a pinned story, which survives expiry and stays active.
+  /// A post is archived when explicitly archived or expired — except a pinned
+  /// post, which survives expiry and stays active.
   bool _isArchivedOrExpired(Story s) =>
       s.archivedAt != null ||
       (!s.pinned && s.expiresAt.isBefore(DateTime.now()));
 
-  Future<void> _openViewer(List<Story> list, int index) async {
+  /// A whole story is archived only when every one of its posts is.
+  bool _isGroupArchived(List<Story> g) => g.every(_isArchivedOrExpired);
+
+  /// Collapses posts into stories by group, posts oldest-first within a story,
+  /// stories most-recent-first.
+  List<List<Story>> _group(List<Story> stories) {
+    final byKey = <String, List<Story>>{};
+    final order = <String>[];
+    for (final s in stories) {
+      byKey
+          .putIfAbsent(s.groupKey, () {
+            order.add(s.groupKey);
+            return <Story>[];
+          })
+          .add(s);
+    }
+    final groups = [
+      for (final k in order)
+        byKey[k]!..sort((a, b) => a.createdAt.compareTo(b.createdAt)),
+    ];
+    groups.sort((a, b) => b.last.createdAt.compareTo(a.last.createdAt));
+    return groups;
+  }
+
+  Future<void> _openViewer(List<Story> reel, int index) async {
     await Navigator.push(
       context,
       MaterialPageRoute(
         fullscreenDialog: true,
-        builder: (_) => StoryViewerScreen(stories: list, initialIndex: index),
+        builder: (_) => StoryViewerScreen(stories: reel, initialIndex: index),
       ),
     );
     if (mounted) _load();
@@ -86,10 +112,81 @@ class _MyStoriesScreenState extends State<MyStoriesScreen> {
     if (outcome.result != StoryManageResult.unchanged && mounted) _load();
   }
 
+  /// Loads who viewed a story — merged across all its posts — with each
+  /// viewer's reaction, and shows them in a sheet.
+  Future<void> _showGroupViewers(List<Story> group) async {
+    final api = context.read<ApiService>();
+    List<StoryViewer> merged;
+    try {
+      final lists = await Future.wait(
+        group.map((s) => api.getStoryViewers(s.id)),
+      );
+      final byUser = <String, StoryViewer>{};
+      for (final list in lists) {
+        for (final v in list) {
+          final existing = byUser[v.userId];
+          if (existing == null) {
+            byUser[v.userId] = v;
+          } else {
+            byUser[v.userId] = StoryViewer(
+              userId: v.userId,
+              username: v.username.isNotEmpty ? v.username : existing.username,
+              displayName: v.displayName ?? existing.displayName,
+              avatarUrl: v.avatarUrl ?? existing.avatarUrl,
+              reaction: v.reaction ?? existing.reaction,
+              viewedAt: v.viewedAt.isAfter(existing.viewedAt)
+                  ? v.viewedAt
+                  : existing.viewedAt,
+            );
+          }
+        }
+      }
+      merged = byUser.values.toList()
+        ..sort((a, b) => b.viewedAt.compareTo(a.viewedAt));
+    } catch (_) {
+      if (mounted) {
+        showAppToast(context, 'Could not load viewers', isError: true);
+      }
+      return;
+    }
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => GlassBottomSheetFrame(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const GlassSheetGrabber(),
+            const GlassSheetHeader(
+              icon: Icons.visibility_outlined,
+              title: 'Viewers',
+              subtitle: 'People who viewed this story',
+            ),
+            if (merged.isEmpty)
+              const Padding(
+                padding: EdgeInsets.fromLTRB(18, 8, 18, 24),
+                child: Text('No views yet'),
+              )
+            else
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [for (final v in merged) _ViewerTile(viewer: v)],
+                ),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
   int get _totalViews =>
-      [..._active, ..._archived].fold(0, (sum, s) => sum + s.viewCount);
+      [..._personal, ..._channel].fold(0, (sum, s) => sum + s.viewCount);
   int get _totalReactions =>
-      [..._active, ..._archived].fold(0, (sum, s) => sum + s.reactionCount);
+      [..._personal, ..._channel].fold(0, (sum, s) => sum + s.reactionCount);
 
   @override
   Widget build(BuildContext context) {
@@ -111,38 +208,253 @@ class _MyStoriesScreenState extends State<MyStoriesScreen> {
         onAction: _load,
       );
     }
-    if (_active.isEmpty && _archived.isEmpty) {
+    if (_personal.isEmpty && _channel.isEmpty) {
       return const _CenteredMessage(
         icon: Icons.auto_stories_outlined,
         text: "You haven't posted any stories yet.",
       );
     }
+
+    final personalGroups = _group(_personal);
+    final active = personalGroups.where((g) => !_isGroupArchived(g)).toList();
+    final archived = personalGroups.where(_isGroupArchived).toList();
+    final channelGroups = _group(_channel);
+
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 28),
         children: [
           _AggregateHeader(views: _totalViews, reactions: _totalReactions),
-          if (_active.isNotEmpty) ...[
+          if (active.isNotEmpty) ...[
             const _SectionLabel('Active'),
-            for (var i = 0; i < _active.length; i++)
-              _StoryRow(
-                story: _active[i],
-                onTap: () => _openViewer(_active, i),
-                onManage: () => _manage(_active[i]),
-              ),
+            for (final g in active) _storyCard(g),
           ],
-          if (_archived.isNotEmpty) ...[
+          if (archived.isNotEmpty) ...[
             const _SectionLabel('Archived & expired'),
-            for (var i = 0; i < _archived.length; i++)
-              _StoryRow(
-                story: _archived[i],
-                onTap: () => _openViewer(_archived, i),
-                onManage: () => _manage(_archived[i]),
-              ),
+            for (final g in archived) _storyCard(g),
+          ],
+          if (channelGroups.isNotEmpty) ...[
+            const _SectionLabel('Channel stories'),
+            for (final g in channelGroups) _storyCard(g),
           ],
         ],
       ),
+    );
+  }
+
+  Widget _storyCard(List<Story> group) => _StoryGroupCard(
+    group: group,
+    onOpen: (index) => _openViewer(group, index),
+    // Story-level manage acts on the most recent post in the reel.
+    onManage: () => _manage(group.last),
+    onViewers: () => _showGroupViewers(group),
+  );
+}
+
+/// One story (a reel of posts) with its aggregate stats, a manage action, an
+/// expandable list of its posts, and a "who viewed" shortcut.
+class _StoryGroupCard extends StatelessWidget {
+  final List<Story> group;
+  final ValueChanged<int> onOpen;
+  final VoidCallback onManage;
+  final VoidCallback onViewers;
+
+  const _StoryGroupCard({
+    required this.group,
+    required this.onOpen,
+    required this.onManage,
+    required this.onViewers,
+  });
+
+  int get _views => group.fold(0, (s, e) => s + e.viewCount);
+  int get _reactions => group.fold(0, (s, e) => s + e.reactionCount);
+  bool get _pinned => group.any((s) => s.pinned);
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final rep = group.last;
+    final caption = rep.caption.trim();
+    final title = caption.isNotEmpty
+        ? caption
+        : group.length > 1
+        ? '${group.length} posts'
+        : _kindLabel(rep);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GlassContainer(
+        shape: const LiquidRoundedSuperellipse(borderRadius: 20),
+        allowElevation: true,
+        glowIntensity: 0.05,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                _PostThumb(story: rep),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => onOpen(0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            if (group.length > 1) ...[
+                              Icon(
+                                Icons.collections_outlined,
+                                size: 13,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                              const SizedBox(width: 4),
+                              Text('${group.length}'),
+                              const SizedBox(width: 12),
+                            ],
+                            Icon(
+                              Icons.visibility_outlined,
+                              size: 13,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                            const SizedBox(width: 4),
+                            Text('$_views'),
+                            const SizedBox(width: 12),
+                            Icon(
+                              Icons.favorite_border_rounded,
+                              size: 13,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                            const SizedBox(width: 4),
+                            Text('$_reactions'),
+                            if (_pinned) ...[
+                              const SizedBox(width: 12),
+                              Icon(
+                                Icons.push_pin,
+                                size: 13,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                GlassCircleIconButton(
+                  key: const Key('story-row-manage'),
+                  tooltip: 'Manage',
+                  size: 36,
+                  glowIntensity: 0.04,
+                  onPressed: onManage,
+                  icon: const Icon(Icons.more_vert_rounded, size: 18),
+                ),
+              ],
+            ),
+            // The individual posts, so the author can jump to any one of them.
+            if (group.length > 1) ...[
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 56,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: group.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 8),
+                  itemBuilder: (_, i) => GestureDetector(
+                    onTap: () => onOpen(i),
+                    child: _PostThumb(story: group[i], size: 56),
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: onViewers,
+                icon: const Icon(Icons.visibility_outlined, size: 16),
+                label: const Text('Who viewed'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _kindLabel(Story s) => s.isVideo
+      ? 'Video story'
+      : s.isText
+      ? 'Text story'
+      : 'Photo story';
+}
+
+class _PostThumb extends StatelessWidget {
+  final Story story;
+  final double size;
+
+  const _PostThumb({required this.story, this.size = 44});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final icon = story.isVideo
+        ? Icons.videocam_outlined
+        : story.isText
+        ? Icons.text_fields_rounded
+        : Icons.image_outlined;
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Icon(icon, color: scheme.onSurfaceVariant, size: size * 0.5),
+    );
+  }
+}
+
+class _ViewerTile extends StatelessWidget {
+  final StoryViewer viewer;
+
+  const _ViewerTile({required this.viewer});
+
+  @override
+  Widget build(BuildContext context) {
+    final display = viewer.displayName?.trim();
+    final username = viewer.username.trim();
+    final title = display != null && display.isNotEmpty
+        ? display
+        : username.isNotEmpty
+        ? '@$username'
+        : 'Unknown viewer';
+    final avatar = viewer.avatarUrl;
+    final reaction = viewer.reaction;
+    return GlassListTile(
+      leading: CircleAvatar(
+        backgroundImage: avatar != null && avatar.isNotEmpty
+            ? NetworkImage(ApiConfig.resolveMedia(avatar))
+            : null,
+        child: avatar == null || avatar.isEmpty
+            ? Text(title.isNotEmpty ? title[0].toUpperCase() : '?')
+            : null,
+      ),
+      title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing: reaction == null || reaction.isEmpty
+          ? null
+          : ReactionGlyph(reaction, size: 24),
     );
   }
 }
@@ -231,85 +543,6 @@ class _SectionLabel extends StatelessWidget {
           fontSize: 13,
           fontWeight: FontWeight.w700,
           color: scheme.onSurface.withValues(alpha: 0.6),
-        ),
-      ),
-    );
-  }
-}
-
-class _StoryRow extends StatelessWidget {
-  final Story story;
-  final VoidCallback onTap;
-  final VoidCallback onManage;
-
-  const _StoryRow({
-    required this.story,
-    required this.onTap,
-    required this.onManage,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final icon = story.isVideo
-        ? Icons.videocam_outlined
-        : story.isText
-        ? Icons.text_fields_rounded
-        : Icons.image_outlined;
-    final caption = story.caption.trim();
-    final title = caption.isNotEmpty
-        ? caption
-        : story.isVideo
-        ? 'Video story'
-        : story.isText
-        ? 'Text story'
-        : 'Photo story';
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      onLongPress: onManage,
-      child: GlassListTile(
-        leading: Container(
-          width: 44,
-          height: 44,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: scheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Icon(icon, color: scheme.onSurfaceVariant, size: 22),
-        ),
-        title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
-        subtitle: Row(
-          children: [
-            Icon(
-              Icons.visibility_outlined,
-              size: 13,
-              color: scheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 4),
-            Text('${story.viewCount}'),
-            const SizedBox(width: 12),
-            Icon(
-              Icons.favorite_border_rounded,
-              size: 13,
-              color: scheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 4),
-            Text('${story.reactionCount}'),
-            if (story.pinned) ...[
-              const SizedBox(width: 12),
-              Icon(Icons.push_pin, size: 13, color: scheme.onSurfaceVariant),
-            ],
-          ],
-        ),
-        trailing: GlassCircleIconButton(
-          key: const Key('story-row-manage'),
-          tooltip: 'Manage',
-          size: 36,
-          glowIntensity: 0.04,
-          onPressed: onManage,
-          icon: const Icon(Icons.more_vert_rounded, size: 18),
         ),
       ),
     );

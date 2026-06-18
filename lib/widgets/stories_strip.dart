@@ -8,7 +8,6 @@ import '../services/api_service.dart';
 import '../screens/stories/create_story_screen.dart';
 import '../screens/stories/my_stories_screen.dart';
 import '../screens/stories/story_viewer_screen.dart';
-import 'story_manage_sheet.dart';
 
 /// A compact, Instagram-style row of story circles shown at the top of the
 /// chats list. The avatars are deliberately small (much smaller than the iOS
@@ -61,16 +60,45 @@ class _StoriesStripState extends State<StoriesStrip> {
     if (created == true) _refresh();
   }
 
-  Future<void> _openStories(List<Story> stories, int index) async {
+  /// Opens a single reel (all of one author's / channel's active posts),
+  /// starting at the first unseen post so multi-post stories play in order.
+  Future<void> _openReel(List<Story> reel, String currentUserId) async {
+    var initial = reel.indexWhere(
+      (s) => !s.viewerHasViewed && s.userId != currentUserId,
+    );
+    if (initial < 0) initial = 0;
     await Navigator.push(
       context,
       MaterialPageRoute(
         fullscreenDialog: true,
-        builder: (_) =>
-            StoryViewerScreen(stories: stories, initialIndex: index),
+        builder: (_) => StoryViewerScreen(stories: reel, initialIndex: initial),
       ),
     );
     _refresh();
+  }
+
+  /// Collapses the flat feed into one reel per author (or per channel), so a
+  /// user who posted several times shows as a single ring rather than one tile
+  /// per post. Reels keep the feed's recency order; posts within a reel play
+  /// oldest-first.
+  static List<List<Story>> _groupIntoReels(List<Story> stories) {
+    final byKey = <String, List<Story>>{};
+    final order = <String>[];
+    for (final s in stories) {
+      final key = s.conversationId != null
+          ? 'c:${s.conversationId}'
+          : 'u:${s.userId}';
+      byKey
+          .putIfAbsent(key, () {
+            order.add(key);
+            return <Story>[];
+          })
+          .add(s);
+    }
+    return [
+      for (final key in order)
+        byKey[key]!..sort((a, b) => a.createdAt.compareTo(b.createdAt)),
+    ];
   }
 
   /// Long-press on the "Your story" tile opens the My Stories management hub.
@@ -82,12 +110,6 @@ class _StoriesStripState extends State<StoriesStrip> {
     _refresh();
   }
 
-  /// Long-press on one of your own story tiles offers pin/archive/delete.
-  Future<void> _manageStory(Story story) async {
-    final outcome = await showStoryManageSheet(context, story);
-    if (outcome.result != StoryManageResult.unchanged) _refresh();
-  }
-
   @override
   Widget build(BuildContext context) {
     final currentUserId = context.watch<AuthProvider>().currentUser?.id ?? '';
@@ -96,11 +118,11 @@ class _StoriesStripState extends State<StoriesStrip> {
       child: FutureBuilder<List<Story>>(
         future: _future,
         builder: (context, snap) {
-          final stories = snap.data ?? const <Story>[];
+          final reels = _groupIntoReels(snap.data ?? const <Story>[]);
           return ListView.separated(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
-            itemCount: stories.length + 1,
+            itemCount: reels.length + 1,
             separatorBuilder: (_, _) => const SizedBox(width: 12),
             itemBuilder: (context, index) {
               if (index == 0) {
@@ -109,15 +131,23 @@ class _StoriesStripState extends State<StoriesStrip> {
                   onLongPress: _openMyStories,
                 );
               }
-              final storyIndex = index - 1;
-              final story = stories[storyIndex];
+              final reel = reels[index - 1];
+              // The most recent post represents the reel (avatar/title); the
+              // ring is "unseen" if any post in it is unviewed.
+              final rep = reel.last;
               final isOwn =
-                  story.userId == currentUserId && story.conversationId == null;
+                  rep.userId == currentUserId && rep.conversationId == null;
+              final unread =
+                  !isOwn &&
+                  reel.any(
+                    (s) => !s.viewerHasViewed && s.userId != currentUserId,
+                  );
               return _StoryTile(
-                story: story,
+                story: rep,
                 currentUserId: currentUserId,
-                onTap: () => _openStories(stories, storyIndex),
-                onLongPress: isOwn ? () => _manageStory(story) : null,
+                unread: unread,
+                onTap: () => _openReel(reel, currentUserId),
+                onLongPress: isOwn ? _openMyStories : null,
               );
             },
           );
@@ -251,12 +281,14 @@ class _StoryAddTile extends StatelessWidget {
 class _StoryTile extends StatelessWidget {
   final Story story;
   final String currentUserId;
+  final bool unread;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
 
   const _StoryTile({
     required this.story,
     required this.currentUserId,
+    required this.unread,
     required this.onTap,
     this.onLongPress,
   });
@@ -267,7 +299,6 @@ class _StoryTile extends StatelessWidget {
     final bg = Theme.of(context).scaffoldBackgroundColor;
     final avatar = story.displayAvatar(currentUserId);
     final title = story.displayTitle(currentUserId);
-    final unread = !story.viewerHasViewed && story.userId != currentUserId;
 
     return SizedBox(
       width: _kTile,

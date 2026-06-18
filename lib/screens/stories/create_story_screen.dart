@@ -35,6 +35,12 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
   PendingAttachment? _pending;
   VideoPlayerController? _videoPreview;
   String _privacy = 'contacts';
+  // Custom audience: 'only' = visible to the selection, 'except' = all contacts
+  // minus the selection. Persisted into allow/block lists at publish time.
+  String _customMode = 'only';
+  final Set<String> _customSelection = <String>{};
+  // When true, post a fresh story reel instead of appending to the current one.
+  bool _startNew = false;
   String _textBackground = defaultStoryBackground;
   int _durationSeconds = 24 * 60 * 60;
   bool _posting = false;
@@ -150,11 +156,47 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
         });
         return;
       }
+      if (_privacy == 'custom' && _customSelection.isEmpty) {
+        setState(() {
+          _posting = false;
+          _error = 'Choose who can see this story.';
+        });
+        return;
+      }
       final api = context.read<ApiService>();
-      final privacy = _privacy == 'close_friends' ? 'selected' : _privacy;
-      final allowUserIds = _privacy == 'close_friends'
-          ? closeFriends
-          : const <String>[];
+
+      // Resolve the chosen audience into a privacy tier, the allow/deny lists
+      // the server enforces, and the concrete set of PGP recipients the media
+      // key is sealed to (null = all DM contacts).
+      String privacy;
+      List<String> allowUserIds = const [];
+      List<String> blockUserIds = const [];
+      List<String>? encryptAudience;
+      switch (_privacy) {
+        case 'public':
+          privacy = 'public';
+        case 'close_friends':
+          privacy = 'selected';
+          allowUserIds = closeFriends;
+          encryptAudience = closeFriends;
+        case 'custom':
+          final selection = _customSelection.toList();
+          if (_customMode == 'only') {
+            privacy = 'selected';
+            allowUserIds = selection;
+            encryptAudience = selection;
+          } else {
+            // "Everyone except" — stays a contacts story, but the excluded
+            // people are denied server-side and dropped from the recipients.
+            privacy = 'contacts';
+            blockUserIds = selection;
+            encryptAudience = _allContactIds()
+                .where((id) => !_customSelection.contains(id))
+                .toList();
+          }
+        default:
+          privacy = 'contacts';
+      }
       final background = isTextStory ? _textBackground : null;
 
       if (privacy == 'public') {
@@ -172,6 +214,7 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
           background: background,
           privacy: privacy,
           expiresInSeconds: _durationSeconds,
+          startNew: _startNew,
         );
       } else {
         // Private audience: the media key, nonce, caption, filename, and MIME
@@ -185,7 +228,7 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
           mimeType: pending?.mimeType,
           caption: caption,
           background: background,
-          audienceUserIds: privacy == 'selected' ? allowUserIds : null,
+          audienceUserIds: encryptAudience,
         );
         await api.createStory(
           attachmentId: pending?.attachmentId,
@@ -194,7 +237,9 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
           encryptedPayload: encryptedMeta,
           privacy: privacy,
           allowUserIds: allowUserIds,
+          blockUserIds: blockUserIds,
           expiresInSeconds: _durationSeconds,
+          startNew: _startNew,
         );
       }
       if (mounted) Navigator.pop(context, true);
@@ -365,14 +410,127 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
   int get _privacyIndex => switch (_privacy) {
     'close_friends' => 1,
     'public' => 2,
+    'custom' => 3,
     _ => 0,
   };
 
   void _onPrivacy(int index) {
     if (_posting) return;
-    final v = const ['contacts', 'close_friends', 'public'][index];
+    final v = const ['contacts', 'close_friends', 'public', 'custom'][index];
     setState(() => _privacy = v);
     if (v == 'close_friends') _pickCloseFriends();
+    if (v == 'custom') _pickCustomAudience();
+  }
+
+  /// All DM contacts of the current user (deduped), used to seal "everyone
+  /// except" stories to everyone but the excluded people.
+  List<String> _allContactIds() {
+    final me = context.read<AuthProvider>().currentUser?.id ?? '';
+    final chat = context.read<ChatProvider>();
+    final seen = <String>{};
+    final out = <String>[];
+    for (final c in chat.conversations.where((c) => c.isDM)) {
+      final u = c.otherUser(me);
+      if (u != null && seen.add(u.id)) out.add(u.id);
+    }
+    return out;
+  }
+
+  String _customSummary() {
+    final n = _customSelection.length;
+    if (n == 0) return 'Choose who can see this';
+    final who = '$n ${n == 1 ? 'person' : 'people'}';
+    return _customMode == 'only' ? 'Only $who' : 'Everyone except $who';
+  }
+
+  /// Per-story custom audience: pick specific people to show to ("Only
+  /// selected") or to hide from ("All except"). Selection is kept on the
+  /// composer (not saved like close friends) so it's scoped to this story.
+  Future<void> _pickCustomAudience() async {
+    final me = context.read<AuthProvider>().currentUser?.id ?? '';
+    final chat = context.read<ChatProvider>();
+    final contacts = <User>[];
+    final seen = <String>{};
+    for (final c in chat.conversations.where((c) => c.isDM)) {
+      final u = c.otherUser(me);
+      if (u != null && seen.add(u.id)) contacts.add(u);
+    }
+    var mode = _customMode;
+    final selected = <String>{..._customSelection};
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (sheetCtx, setSheet) => GlassBottomSheetFrame(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const GlassSheetGrabber(),
+              const Padding(
+                padding: EdgeInsets.all(12),
+                child: Text(
+                  'Custom audience',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: GlassSegmentedControl(
+                  segments: const ['Only selected', 'All except'],
+                  selectedIndex: mode == 'only' ? 0 : 1,
+                  onSegmentSelected: (i) =>
+                      setSheet(() => mode = i == 0 ? 'only' : 'except'),
+                ),
+              ),
+              if (contacts.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text('Start a DM with someone first to add them.'),
+                )
+              else
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final u in contacts)
+                        GlassListTile(
+                          title: Text(u.displayName),
+                          subtitle: Text('@${u.username}'),
+                          trailing: GlassSwitch(
+                            value: selected.contains(u.id),
+                            onChanged: (v) => setSheet(() {
+                              if (v) {
+                                selected.add(u.id);
+                              } else {
+                                selected.remove(u.id);
+                              }
+                            }),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: GlassButtonWidget(
+                  onPressed: () => Navigator.pop(sheetCtx),
+                  child: const Text('Done'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    setState(() {
+      _customMode = mode;
+      _customSelection
+        ..clear()
+        ..addAll(selected);
+    });
   }
 
   Future<void> _showReplaceSheet() async {
@@ -574,7 +732,7 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
               _label('Who can see this'),
               const SizedBox(height: 8),
               GlassSegmentedControl(
-                segments: const ['Contacts', 'Close', 'Public'],
+                segments: const ['Contacts', 'Close', 'Public', 'Custom'],
                 selectedIndex: _privacyIndex,
                 onSegmentSelected: _onPrivacy,
               ),
@@ -596,6 +754,54 @@ class _CreateStoryScreenState extends State<CreateStoryScreen> {
                     ],
                   ),
                 ),
+              if (_privacy == 'custom')
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _customSummary(),
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                      ),
+                      GlassButtonWidget(
+                        onPressed: _pickCustomAudience,
+                        child: const Text('Edit'),
+                      ),
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Start a new story',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          'Off: add to your current story',
+                          style: TextStyle(color: Colors.white60, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                  GlassSwitch(
+                    value: _startNew,
+                    onChanged: (v) {
+                      if (_posting) return;
+                      setState(() => _startNew = v);
+                    },
+                  ),
+                ],
+              ),
               const SizedBox(height: 14),
               _label('Disappears after'),
               const SizedBox(height: 8),
@@ -733,9 +939,7 @@ class _BackgroundSwatches extends StatelessWidget {
                       boxShadow: t > 0
                           ? [
                               BoxShadow(
-                                color: Colors.white.withValues(
-                                  alpha: 0.24 * t,
-                                ),
+                                color: Colors.white.withValues(alpha: 0.24 * t),
                                 blurRadius: 14,
                                 spreadRadius: -2,
                               ),
