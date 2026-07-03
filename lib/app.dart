@@ -132,10 +132,7 @@ class OpenChatApp extends StatelessWidget {
         // The bar itself is hidden in that state (see _LocationBarOverlay) to
         // prevent its GlassContainer's BackdropFilter from rendering above the
         // RTCVideoView platform texture, which causes white tiles on desktop.
-        final isFullScreenVideoCall = context.select<CallProvider, bool>(
-          (cp) =>
-              cp.isInCall && cp.session?.isVideo == true && !cp.isCallMinimized,
-        );
+        final isFullScreenVideoCall = _liveVideoTextureActive(context);
         final rawLocExtra = context.select<ChatProvider, double>(
           (chat) => chat.liveLocationTopInset,
         );
@@ -232,6 +229,25 @@ class OpenChatApp extends StatelessWidget {
               style: const TextStyle(decoration: TextDecoration.none),
               child: const _LiveConnectionBanner(),
             ),
+            // Toast fallback overlay — see showAppToast in glass.dart. The
+            // call UI in this Stack has no Overlay ancestor (it sits above the
+            // Navigator), so GlassToast.show would throw; its toasts are routed
+            // here instead. Topmost so they render above a full-screen call.
+            // Overlay's render object is a plain theatre (like Stack) — unlike
+            // Material it adds no _InkFeatures/PhysicalShape, so the sibling
+            // liquid-glass BackdropFilter chain is unaffected. The zero-size
+            // anchor entry exists only to provide a descendant context.
+            DefaultTextStyle.merge(
+              style: const TextStyle(decoration: TextDecoration.none),
+              child: Overlay(
+                key: appToastOverlayKey,
+                initialEntries: [
+                  OverlayEntry(
+                    builder: (_) => SizedBox.shrink(key: appToastAnchorKey),
+                  ),
+                ],
+              ),
+            ),
           ],
         );
 
@@ -257,7 +273,7 @@ class OpenChatApp extends StatelessWidget {
 
         if (reduceTransparency) {
           appChrome = GlassTheme(
-            data: _reducedTransparencyGlassTheme(context),
+            data: reducedTransparencyGlassTheme(context),
             child: appChrome,
           );
         }
@@ -271,24 +287,6 @@ class OpenChatApp extends StatelessWidget {
       },
     );
   }
-}
-
-GlassThemeData _reducedTransparencyGlassTheme(BuildContext context) {
-  final fill = reducedGlassSurfaceColor(context);
-  final settings = GlassThemeSettings(
-    glassColor: fill,
-    thickness: 0,
-    blur: 0,
-    chromaticAberration: 0,
-    lightIntensity: 0,
-    ambientStrength: 0,
-    saturation: 1,
-  );
-  final variant = GlassThemeVariant(
-    settings: settings,
-    quality: GlassQuality.minimal,
-  );
-  return GlassThemeData(light: variant, dark: variant);
 }
 
 // ── Global live-location bar ──────────────────────────────────────────────────
@@ -340,8 +338,7 @@ class _LocationBarOverlayState extends State<_LocationBarOverlay> {
     // confuses desktop compositors and produces white tiles + broken hit tests.
     // Hide the bar until the call ends or is minimised; the inset is also
     // suppressed in the builder above so the call chrome layout is unaffected.
-    final cp = context.watch<CallProvider>();
-    if (cp.isInCall && cp.session?.isVideo == true && !cp.isCallMinimized) {
+    if (_liveVideoTextureActive(context)) {
       return const SizedBox.shrink();
     }
 
@@ -478,6 +475,22 @@ class _LocationBarOverlayState extends State<_LocationBarOverlay> {
   }
 }
 
+/// True while call video is rendering as a live platform texture — the
+/// full-screen P2P call UI (CallOverlay) or an active SFU group video call
+/// (a pushed route). Glass chrome overlays above them (location bar,
+/// connection banner) must hide in this state: a BackdropFilter cannot read
+/// back a native texture and paints white tiles + breaks hit testing
+/// (desktop call rule 1).
+bool _liveVideoTextureActive(BuildContext context) {
+  final p2p = context.select<CallProvider, bool>(
+    (cp) => cp.isInCall && cp.session?.isVideo == true && !cp.isCallMinimized,
+  );
+  if (p2p) return true;
+  return context.select<SfuCallController, bool>(
+    (sfu) => sfu.isActive && sfu.isVideo,
+  );
+}
+
 class _LiveConnectionBanner extends StatelessWidget {
   const _LiveConnectionBanner();
 
@@ -489,7 +502,11 @@ class _LiveConnectionBanner extends StatelessWidget {
     final monitoring = context.select<WebSocketService, bool>(
       (ws) => ws.isMonitoring,
     );
-    final show = authenticated && !monitoring;
+    // Rule 1 guard: never float this GlassContainer over a live call video
+    // texture (see _liveVideoTextureActive). The WS can drop mid-call, which
+    // previously slid the glass pill straight over the RTCVideoView.
+    final show =
+        authenticated && !monitoring && !_liveVideoTextureActive(context);
     final scheme = Theme.of(context).colorScheme;
 
     return Positioned(

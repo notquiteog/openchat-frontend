@@ -52,6 +52,7 @@ class SfuCallScreen extends StatefulWidget {
 
 class _SfuCallScreenState extends State<SfuCallScreen> {
   bool _chromeVisible = true;
+  bool _popScheduled = false;
   StreamSubscription<SfuCallReaction>? _reactionSub;
   SfuCallController? _subscribedSfu;
   final Map<String, List<SfuCallReaction>> _tileReactions = {};
@@ -174,52 +175,7 @@ class _SfuCallScreenState extends State<SfuCallScreen> {
       context: context,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withValues(alpha: 0.42),
-      builder: (sheetContext) {
-        return SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
-            child: Center(
-              heightFactor: 1,
-              child: GlassContainer(
-                shape: const LiquidRoundedSuperellipse(borderRadius: 34),
-                useOwnLayer: true,
-                quality: GlassQuality.standard,
-                padding: const EdgeInsets.all(14),
-                child: AdaptiveLiquidGlassLayer(
-                  child: Wrap(
-                    alignment: WrapAlignment.center,
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      for (final emoji in sfuCallReactionEmojiAllowlist)
-                        GlassButton.custom(
-                          onTap: () {
-                            Navigator.of(sheetContext).pop();
-                            unawaited(sfu.sendReaction(emoji));
-                          },
-                          width: 52,
-                          height: 52,
-                          shape: const LiquidOval(),
-                          // Group into the sheet's shared glass layer rather than
-                          // one backdrop capture per emoji (8 < 16-shape ceiling).
-                          useOwnLayer: false,
-                          quality: GlassQuality.standard,
-                          child: Center(
-                            child: Text(
-                              emoji,
-                              style: const TextStyle(fontSize: 26),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
+      builder: (_) => const _ReactionPickerSheet(),
     );
   }
 
@@ -227,10 +183,18 @@ class _SfuCallScreenState extends State<SfuCallScreen> {
   Widget build(BuildContext context) {
     final sfu = context.watch<SfuCallController>();
     if (!sfu.isActive) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final nav = Navigator.of(context);
-        if (nav.canPop()) nav.pop();
-      });
+      // One-shot + mounted guard: build can run several times before the
+      // post-frame callback fires (each rebuild would queue another pop →
+      // double-pop), and by post-frame time this element can already be
+      // defunct (Navigator.of on it throws).
+      if (!_popScheduled) {
+        _popScheduled = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          final nav = Navigator.of(context);
+          if (nav.canPop()) nav.pop();
+        });
+      }
       return const SizedBox.shrink();
     }
 
@@ -890,6 +854,74 @@ class _FocusBadge extends StatelessWidget {
             : Icons.push_pin_rounded,
         color: Colors.white,
         size: 17,
+      ),
+    );
+  }
+}
+
+/// Body of the reaction-picker bottom sheet.
+///
+/// Watches the SFU controller so the glass treatment tracks live video in
+/// real time: while any participant's video texture is live, the sheet is
+/// forced into the opaque reduced-transparency style — its glass would
+/// otherwise BackdropFilter straight over the RTCVideoView platform texture,
+/// which desktop compositors can't read back (white tiles, broken hit
+/// testing; desktop call rule 1). Audio-only calls keep the full glass look.
+class _ReactionPickerSheet extends StatelessWidget {
+  const _ReactionPickerSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    final sfu = context.watch<SfuCallController>();
+    final videoLive =
+        sfu.isVideo &&
+        sfu.participants.any(_SfuCallScreenState._participantHasLiveVideo);
+
+    return ForcedOpaqueGlass(
+      enabled: videoLive,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+          child: Center(
+            heightFactor: 1,
+            child: GlassContainer(
+              shape: const LiquidRoundedSuperellipse(borderRadius: 34),
+              useOwnLayer: true,
+              quality: GlassQuality.standard,
+              padding: const EdgeInsets.all(14),
+              child: AdaptiveLiquidGlassLayer(
+                child: Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    for (final emoji in sfuCallReactionEmojiAllowlist)
+                      GlassButton.custom(
+                        onTap: () {
+                          Navigator.of(context).pop();
+                          unawaited(sfu.sendReaction(emoji));
+                        },
+                        width: 52,
+                        height: 52,
+                        shape: const LiquidOval(),
+                        // Group into the sheet's shared glass layer rather than
+                        // one backdrop capture per emoji (8 < 16-shape ceiling).
+                        useOwnLayer: false,
+                        quality: GlassQuality.standard,
+                        child: Center(
+                          child: Text(
+                            emoji,
+                            style: const TextStyle(fontSize: 26),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

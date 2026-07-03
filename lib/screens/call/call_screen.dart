@@ -413,8 +413,12 @@ class _CallScreenState extends State<CallScreen> {
                                   ),
                                   if (session.sealed) ...[
                                     const SizedBox(width: 8),
-                                    Tooltip(
-                                      message: 'End-to-end encrypted',
+                                    // Semantics, not Tooltip: this UI lives in
+                                    // CallOverlay above the Navigator, so there
+                                    // is no Overlay ancestor — hovering a
+                                    // Tooltip throws "No Overlay widget found".
+                                    Semantics(
+                                      label: 'End-to-end encrypted',
                                       child: Icon(
                                         Icons.lock_rounded,
                                         key: const Key('call-e2ee-lock'),
@@ -1702,8 +1706,11 @@ class _KindBadge extends StatelessWidget {
           ),
           if (sealed) ...[
             const SizedBox(width: 8),
-            Tooltip(
-              message: 'End-to-end encrypted',
+            // Semantics, not Tooltip: IncomingCallModal renders above the
+            // Navigator (no Overlay ancestor) — a Tooltip would throw
+            // "No Overlay widget found" on hover.
+            Semantics(
+              label: 'End-to-end encrypted',
               child: Icon(
                 Icons.lock_rounded,
                 key: const Key('incoming-call-e2ee-lock'),

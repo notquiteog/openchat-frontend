@@ -83,6 +83,17 @@ export 'package:liquid_glass_widgets/liquid_glass_widgets.dart'
 bool glassReduceTransparency(BuildContext context) =>
     GlassAccessibilityData.of(context).reduceTransparency;
 
+/// Root-level Overlay mounted topmost in the app chrome Stack (app.dart).
+/// [showAppToast] falls back to it for callers that live ABOVE the Navigator
+/// (CallScreen, IncomingCallModal, the minimized-call pill) and therefore have
+/// no Overlay ancestor of their own.
+final GlobalKey<OverlayState> appToastOverlayKey = GlobalKey<OverlayState>();
+
+/// Permanent zero-size entry inside [appToastOverlayKey]'s overlay. Its
+/// context is a *descendant* of that overlay, which is what
+/// `GlassToast.show` needs (it resolves the target via `Overlay.of`).
+final GlobalKey appToastAnchorKey = GlobalKey();
+
 /// Shows an iOS 26 liquid-glass toast — the app-wide replacement for
 /// `ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(...)))`.
 ///
@@ -91,14 +102,24 @@ bool glassReduceTransparency(BuildContext context) =>
 /// a SnackBar was previously shown. Callers that fire after an `await` must
 /// still guard with `context.mounted` (this helper also bails out defensively
 /// if the context has been unmounted).
+///
+/// Contexts without an Overlay ancestor (the call UI lives above the
+/// Navigator in the root chrome Stack) are routed to the app-level
+/// [appToastOverlayKey] overlay instead of throwing "No Overlay widget found".
 void showAppToast(
   BuildContext context,
   String message, {
   bool isError = false,
 }) {
   if (!context.mounted) return;
+  var target = context;
+  if (Overlay.maybeOf(context) == null) {
+    final anchor = appToastAnchorKey.currentContext;
+    if (anchor == null) return; // app chrome not built yet — drop the toast
+    target = anchor;
+  }
   GlassToast.show(
-    context,
+    target,
     message: message,
     type: isError ? GlassToastType.error : GlassToastType.info,
   );
@@ -113,6 +134,63 @@ Color reducedGlassSurfaceColor(BuildContext context) {
       : scheme.surfaceContainerLow;
   final tint = scheme.primary.withValues(alpha: isDark ? 0.08 : 0.025);
   return Color.alphaBlend(tint, base).withValues(alpha: 1);
+}
+
+/// The zeroed-out glass theme used whenever glass must render opaque: no
+/// blur, no thickness, minimal quality. Paired with
+/// [GlassAccessibilityScope]`(reduceTransparency: true)` this makes BOTH the
+/// app wrappers (GlassContainer, GlassSurface — they branch on
+/// [glassReduceTransparency]) and raw package widgets (GlassButton,
+/// AdaptiveLiquidGlassLayer) drop every backdrop-reading pass: the package's
+/// accessibility fallback still blurs when `blur > 0`, so the theme override
+/// is load-bearing, not cosmetic.
+GlassThemeData reducedTransparencyGlassTheme(BuildContext context) {
+  final fill = reducedGlassSurfaceColor(context);
+  final settings = GlassThemeSettings(
+    glassColor: fill,
+    thickness: 0,
+    blur: 0,
+    chromaticAberration: 0,
+    lightIntensity: 0,
+    ambientStrength: 0,
+    saturation: 1,
+  );
+  final variant = GlassThemeVariant(
+    settings: settings,
+    quality: GlassQuality.minimal,
+  );
+  return GlassThemeData(light: variant, dark: variant);
+}
+
+/// Forces the reduced-transparency (opaque) glass style on a subtree,
+/// regardless of the user's accessibility setting.
+///
+/// Use this over live RTCVideoView platform textures (desktop call rule 1):
+/// a BackdropFilter cannot read back a native texture and paints white
+/// tiles + breaks hit testing. Setting [enabled] to false renders the child
+/// unwrapped, so callers can toggle per-frame (e.g. only while call video is
+/// live).
+class ForcedOpaqueGlass extends StatelessWidget {
+  final bool enabled;
+  final Widget child;
+
+  const ForcedOpaqueGlass({
+    super.key,
+    this.enabled = true,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (!enabled) return child;
+    return GlassTheme(
+      data: reducedTransparencyGlassTheme(context),
+      child: GlassAccessibilityScope(
+        reduceTransparency: true,
+        child: child,
+      ),
+    );
+  }
 }
 
 Color _reducedGlassOutlineColor(BuildContext context) {

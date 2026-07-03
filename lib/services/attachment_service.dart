@@ -981,6 +981,9 @@ class AttachmentService {
     return bytes;
   }
 
+  @visibleForTesting
+  Future<Uint8List> debugDownloadBytes(String url) => _downloadBytes(url);
+
   Future<Uint8List> _downloadBytes(String url) async {
     final httpClient = HttpClient()
       ..connectionTimeout = _downloadConnectTimeout;
@@ -989,7 +992,9 @@ class AttachmentService {
           .getUrl(Uri.parse(url))
           .timeout(_downloadConnectTimeout);
       final response = await request.close().timeout(_downloadTimeout);
-      return _readResponse(response).timeout(_downloadTimeout);
+      // Must await here: without it the finally force-closes the client while
+      // the response body is still streaming, aborting every download.
+      return await _readResponse(response).timeout(_downloadTimeout);
     } finally {
       httpClient.close(force: true);
     }

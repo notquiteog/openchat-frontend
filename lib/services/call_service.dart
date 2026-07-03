@@ -560,24 +560,63 @@ class CallService {
       throw Exception('Call offer is missing its conversation.');
     }
 
+    // Every await below is a window in which a remote hangup, cancel, or a
+    // lost first-answer-wins race can fire _cleanup() (which nulls _session).
+    // Resources created after that point are invisible to that cleanup —
+    // without these checks the resumed continuation leaves a hot microphone
+    // and a ghost RTCPeerConnection whose state callbacks later tear down the
+    // user's next call. Identity (not equality): a new call is a new object.
+    bool aborted() => !identical(_session, session);
+
     try {
       await _initLocalRenderer();
+      if (aborted()) return;
       _iceServers = await _api.getIceServers();
+      if (aborted()) return;
       debugPrint(
         'CallService: ICE servers loaded: ${_iceServers.length} -> ${_iceServers.map((s) => s.url).toList()}',
       );
-      _localStream = await _getUserMedia(isVideo: session.isVideo);
-      _localRenderer.srcObject = _localStream;
+      final stream = await _getUserMedia(isVideo: session.isVideo);
+      if (aborted()) {
+        for (final track in stream.getTracks()) {
+          try {
+            await track.stop();
+          } catch (_) {}
+        }
+        try {
+          await stream.dispose();
+        } catch (_) {}
+        return;
+      }
+      _localStream = stream;
+      _localRenderer.srcObject = stream;
 
       final renderer = RTCVideoRenderer();
       await renderer.initialize();
+      if (aborted()) {
+        try {
+          await renderer.dispose();
+        } catch (_) {}
+        return;
+      }
 
       final pc = await _createPeerConnection();
+      if (aborted()) {
+        try {
+          await pc.close();
+        } catch (_) {}
+        try {
+          await renderer.dispose();
+        } catch (_) {}
+        return;
+      }
       final peerState = _PeerState(
         userId: session.remoteUserId,
         pc: pc,
         renderer: renderer,
       );
+      // From here on the peer is registered — any later _cleanup() sees and
+      // disposes it, so no more per-await teardown is needed.
       _peers[session.remoteUserId] = peerState;
 
       // Apply ICE candidates that trickled in during ringing. They're queued
@@ -598,11 +637,8 @@ class CallService {
         conversationId,
       );
 
-      final stream = _localStream;
-      if (stream != null) {
-        for (final track in stream.getTracks()) {
-          await pc.addTrack(track, stream);
-        }
+      for (final track in stream.getTracks()) {
+        await pc.addTrack(track, stream);
       }
       await _applySenderCaps(pc);
 
@@ -632,6 +668,7 @@ class CallService {
           sdp: answer.sdp,
         ),
       );
+      if (aborted()) return; // don't answer a call that ended mid-setup
       _ws.sendCallAnswer(answerData);
       debugPrint(
         'CallService: answer sent for ${session.callId}, awaiting connection',
@@ -640,6 +677,15 @@ class CallService {
       // answer time the caller is already past the ringing state.)
       _startConnectTimer();
     } catch (e, st) {
+      if (aborted()) {
+        // The call ended (remote cancel / lost the answer race) while setup
+        // was in flight — this exception is fallout from that teardown, e.g.
+        // an operation on the already-closed peer connection. The session is
+        // gone and the UI already dismissed; don't surface a bogus
+        // "Could not answer call" error.
+        debugPrint('CallService.acceptIncomingCall aborted mid-setup: $e');
+        return;
+      }
       debugPrint('CallService.acceptIncomingCall failed: $e\n$st');
       _cleanup(emitEndedEvent: false);
       rethrow;
