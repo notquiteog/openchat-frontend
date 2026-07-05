@@ -17,6 +17,7 @@ import 'package:uuid/uuid.dart';
 import '../../config/api_config.dart';
 import '../../models/bot_command.dart';
 import '../../models/channel_pinned_message.dart';
+import '../channels/moderation_screen.dart';
 import '../../models/conversation.dart';
 import '../../models/conversation_topic.dart';
 import '../../models/key_trust_pin.dart';
@@ -151,6 +152,15 @@ class _ChatScreenState extends State<ChatScreen> {
   ActiveMentionQuery? _activeMentionQuery;
   ActiveCommandQuery? _activeCommandQuery;
   List<BotCommand> _botCommands = const [];
+  // Bot inline mode (Telegram `@bot <query>`): the active whole-input query, the
+  // id the send returned (to correlate the WS answer), the latest results, and a
+  // debounce so we don't hit the bot on every keystroke.
+  ActiveInlineQuery? _activeInlineQuery;
+  String? _activeInlineQueryId;
+  List<Map<String, dynamic>>? _inlineResults;
+  bool _inlineLoading = false;
+  Timer? _inlineDebounce;
+  StreamSubscription<Map<String, dynamic>>? _inlineSub;
   // Multi-select mode (#1).
   bool _selectionMode = false;
   final Set<String> _selectedIds = {};
@@ -216,6 +226,20 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     _scrollCtrl.addListener(_onScroll);
     _inputCtrl.addListener(_onInputTextChanged);
+    // Bot inline-mode answers arrive out-of-band over WS; correlate them to the
+    // active query by inline_query_id + conversation_id.
+    _inlineSub = context.read<ChatProvider>().inlineAnswers.listen((event) {
+      if (!mounted) return;
+      if (event['inline_query_id'] != _activeInlineQueryId) return;
+      if (event['conversation_id'] != widget.conversation.id) return;
+      final results = (event['results'] as List?)
+          ?.whereType<Map<String, dynamic>>()
+          .toList();
+      setState(() {
+        _inlineResults = results ?? const [];
+        _inlineLoading = false;
+      });
+    });
   }
 
   String? _dmPeerId() {
@@ -265,12 +289,22 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _updateMentionQuery(TextEditingValue value) {
+    // Whole-input inline mode (`@bot <query>`) takes precedence: while it's
+    // active the member-mention and `/command` panels are suppressed so only one
+    // autocomplete shows at a time.
+    final nextInline = findActiveInlineQuery(
+      value.text,
+      value.selection.baseOffset,
+    );
+    _updateInlineQuery(nextInline);
+
     final collapsed = value.selection.isValid && value.selection.isCollapsed;
-    final nextMention = collapsed
+    final nextMention = collapsed && nextInline == null
         ? findActiveMentionQuery(value.text, value.selection.baseOffset)
         : null;
     // `/command` only autocompletes in a bot DM with a known command list.
-    final nextCommand = collapsed && _botCommands.isNotEmpty
+    final nextCommand =
+        collapsed && nextInline == null && _botCommands.isNotEmpty
         ? findActiveCommandQuery(value.text, value.selection.baseOffset)
         : null;
     final m = _activeMentionQuery;
@@ -293,6 +327,100 @@ class _ChatScreenState extends State<ChatScreen> {
       _activeMentionQuery = nextMention;
       _activeCommandQuery = nextCommand;
     }
+  }
+
+  /// Drives bot inline mode from the composer text. Debounces a
+  /// [ApiService.sendInlineQuery] whenever the active `@bot <query>` changes, and
+  /// clears all inline state when the trigger disappears. Results themselves
+  /// arrive asynchronously via the WS [ChatProvider.inlineAnswers] stream.
+  void _updateInlineQuery(ActiveInlineQuery? next) {
+    if (next == null) {
+      if (_activeInlineQuery == null) return;
+      _inlineDebounce?.cancel();
+      setState(() {
+        _activeInlineQuery = null;
+        _activeInlineQueryId = null;
+        _inlineResults = null;
+        _inlineLoading = false;
+      });
+      return;
+    }
+
+    final prev = _activeInlineQuery;
+    final same =
+        prev?.botUsername == next.botUsername && prev?.query == next.query;
+    if (same) return;
+
+    setState(() {
+      _activeInlineQuery = next;
+      _inlineLoading = true;
+      // Drop stale results/id so a late answer for the previous query is ignored.
+      _inlineResults = null;
+      _activeInlineQueryId = null;
+    });
+
+    _inlineDebounce?.cancel();
+    _inlineDebounce = Timer(const Duration(milliseconds: 350), () {
+      unawaited(_sendInlineQuery(next));
+    });
+  }
+
+  Future<void> _sendInlineQuery(ActiveInlineQuery query) async {
+    final api = context.read<ApiService>();
+    final convId = widget.conversation.id;
+    try {
+      final id = await api.sendInlineQuery(
+        convID: convId,
+        botUsername: query.botUsername,
+        query: query.query,
+      );
+      if (!mounted) return;
+      // Only apply if this is still the query the user is composing.
+      if (_activeInlineQuery?.botUsername != query.botUsername ||
+          _activeInlineQuery?.query != query.query) {
+        return;
+      }
+      setState(() {
+        _activeInlineQueryId = id;
+        if (id == null) _inlineLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      if (_activeInlineQuery?.botUsername != query.botUsername ||
+          _activeInlineQuery?.query != query.query) {
+        return;
+      }
+      // Bot unreachable / query rejected — stop spinning, show empty state.
+      setState(() {
+        _inlineLoading = false;
+        _inlineResults = const [];
+      });
+    }
+  }
+
+  /// Sends a tapped inline result as a normal message, then tears down inline
+  /// state. Reuses the exact [_sendMessage] send path by filling the composer.
+  void _onInlinePick(Map<String, dynamic> result) {
+    final content = result['input_message_content'];
+    final text = (content is Map && content['message_text'] is String)
+        ? content['message_text'] as String
+        : (result['message_text'] as String?) ?? '';
+    if (text.isEmpty) return;
+
+    _inlineDebounce?.cancel();
+    setState(() {
+      _activeInlineQuery = null;
+      _activeInlineQueryId = null;
+      _inlineResults = null;
+      _inlineLoading = false;
+    });
+    _setComposerValue(
+      TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: text.length),
+      ),
+    );
+    unawaited(_sendMessage());
   }
 
   Future<void> _loadBotCommands() async {
@@ -381,6 +509,8 @@ class _ChatScreenState extends State<ChatScreen> {
     NotificationService.setActiveConversation(null);
     _inputCtrl.removeListener(_onInputTextChanged);
     _draftSaveTimer?.cancel();
+    _inlineDebounce?.cancel();
+    unawaited(_inlineSub?.cancel());
     _flushDraftSave();
     _inputCtrl.dispose();
     _chatSearchCtrl.dispose();
@@ -2577,10 +2707,12 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  /// Groups let the user pick the call backend: P2P (a star topology — the
-  /// caller's device holds one peer connection per participant and relays
-  /// everyone's media), or the premium SFU. 1:1 chats are always P2P (no
-  /// chooser).
+  /// Groups let the user pick the call backend: P2P or the premium SFU. 1:1
+  /// chats are always P2P (no chooser). IMPORTANT: P2P group calls are a star
+  /// where each invitee connects only to the CALLER — the caller does not relay
+  /// media between invitees, so with 3+ people the invitees hear/see only the
+  /// caller, not each other. Use the SFU for a full everyone-hears-everyone
+  /// group call. The copy below must not claim otherwise.
   void _onCallPressed({required bool isVideo}) {
     // Calls use UDP media that can't be tunnelled through a TCP SOCKS proxy;
     // with the strict toggle on, refuse rather than leak the real IP.
@@ -2613,14 +2745,15 @@ class _ChatScreenState extends State<ChatScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (sheetCtx) {
+        final isTrueGroup = conv.members.length > 2;
         final p2pTile = GlassActionTile(
           icon: Icons.lan_outlined,
           label: 'Call with P2P',
-          subtitle: preferSfu
-              ? 'Direct peer-to-peer — your device relays media for '
-                    'everyone; may struggle at this group size'
-              : 'Direct peer-to-peer — media flows through your device, '
-                    'no server access. Best for 2–3 people',
+          subtitle: isTrueGroup
+              ? 'Direct peer-to-peer — everyone connects to you only, so '
+                    'others won’t hear each other. Use SFU for a full '
+                    'group call'
+              : 'Direct peer-to-peer — no server sees your media',
           onTap: () {
             Navigator.pop(sheetCtx);
             _startCall(isVideo: isVideo);
@@ -3915,6 +4048,22 @@ class _ChatScreenState extends State<ChatScreen> {
                   onTap: () =>
                       runAfterClose(() => _showInviteLinks(context, conv)),
                 ),
+              if (conv.isGroup &&
+                  ((currentMember?.hasPermission(
+                            AdminPermission.manageModeration,
+                          ) ??
+                          false) ||
+                      (currentMember?.hasPermission(
+                            AdminPermission.manageRoles,
+                          ) ??
+                          false)))
+                _MenuTile(
+                  icon: Icons.shield_outlined,
+                  label: 'Moderation',
+                  onTap: () => runAfterClose(
+                    () => _openGroupModeration(context, currentUserID),
+                  ),
+                ),
               _MenuTile(
                 icon: Icons.palette_outlined,
                 label: 'Chat appearance',
@@ -4012,6 +4161,15 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // Bot inline mode (`@bot <query>`) — shown while searching or
+                  // once the bot has answered. Suppresses the other panels.
+                  if (_activeInlineQuery != null &&
+                      (_inlineLoading || _inlineResults != null))
+                    InlineResultsPanel(
+                      results: _inlineResults ?? const [],
+                      loading: _inlineLoading,
+                      onPick: _onInlinePick,
+                    ),
                   if (commandSuggestionList.isNotEmpty)
                     CommandAutocompletePanel(
                       commands: commandSuggestionList,
@@ -5605,6 +5763,48 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
     );
+  }
+
+  /// Opens the moderation surface (mutes, anti-spam, reports queue, audit log,
+  /// admins-only posting, ring-all toggle) for a GROUP. Channels reach the same
+  /// screen from channel_screen; groups had no entry point at all, so group
+  /// admins could not moderate despite full backend support.
+  Future<void> _openGroupModeration(
+    BuildContext context,
+    String currentUserID,
+  ) async {
+    final member = _currentMember(currentUserID);
+    final auth = context.read<AuthProvider>();
+    final navigator = Navigator.of(context);
+    final canManageLifecycle =
+        conv.createdBy == currentUserID ||
+        (auth.currentUser?.isSystemAdmin ?? false);
+    final result = await navigator.push<ChannelModerationResult>(
+      MaterialPageRoute(
+        builder: (_) => ModerationScreen(
+          conversation: conv,
+          canManageModeration:
+              member?.hasPermission(AdminPermission.manageModeration) ?? false,
+          canManageRoles:
+              member?.hasPermission(AdminPermission.manageRoles) ?? false,
+          canManageSettings:
+              member?.hasPermission(AdminPermission.manageSettings) ?? false,
+          canManageInfo:
+              member?.hasPermission(AdminPermission.manageInfo) ?? false,
+          canManageEncryption:
+              member?.hasPermission(AdminPermission.manageEncryption) ?? false,
+          onEditSettings: () => _editGroup(context, currentUserID),
+          onSetEncryption: () => _setEncryption(context),
+          canManageLifecycle: canManageLifecycle,
+          isArchived: conv.isArchived,
+        ),
+      ),
+    );
+    if (!mounted || result == null) return;
+    // The group was deleted from the moderation screen — leave the chat.
+    if (result == ChannelModerationResult.deleted) {
+      navigator.pop();
+    }
   }
 
   void _editGroup(BuildContext context, String currentUserID) {

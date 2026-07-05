@@ -649,6 +649,18 @@ class AttachmentService {
     Future<Uint8List?> Function(File file, Uint8List bytes)? webpEncoder,
   }) async {
     final originalBytes = await file.readAsBytes();
+    // Animated GIFs must NOT be re-encoded to single-frame WebP — that freezes
+    // them to the first frame. Preserve the original bytes (the File path
+    // already does this), so the image bubble's Image.memory animates them.
+    if (_isAnimatedGif(originalBytes)) {
+      return PreparedAttachmentInput(
+        bytes: originalBytes,
+        fileName: '${p.basenameWithoutExtension(file.path)}.gif',
+        mimeType: 'image/gif',
+        messageType: MessageType.image,
+        originalFileSize: originalBytes.length,
+      );
+    }
     final encoded = await (webpEncoder ?? _compressToWebp)(file, originalBytes);
     final webpBytes = _isWebP(encoded)
         ? encoded
@@ -842,6 +854,20 @@ class AttachmentService {
     if (decoded == null) return null;
     final webp = img.encodeWebP(decoded);
     return _isWebP(webp) ? webp : null;
+  }
+
+  /// True for a GIF with more than one frame (i.e. an animation worth
+  /// preserving). Checks the GIF magic first so non-GIFs never pay the decode.
+  static bool _isAnimatedGif(Uint8List bytes) {
+    if (bytes.length < 6) return false;
+    // 'GIF87a' / 'GIF89a'
+    if (bytes[0] != 0x47 || bytes[1] != 0x49 || bytes[2] != 0x46) return false;
+    try {
+      final decoded = img.decodeGif(bytes);
+      return decoded != null && decoded.numFrames > 1;
+    } catch (_) {
+      return false;
+    }
   }
 
   static bool _isWebP(Uint8List? bytes) {

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -32,16 +34,31 @@ class LocalWipeService {
     } catch (error) {
       debugPrint('LocalWipeService: prefs wipe failed: $error');
     }
-    // Best-effort per entry: one locked file must not stop the rest.
+    // Wipe every directory that can hold plaintext. The temp dir is critical:
+    // the video player, voice-note player and story viewer write DECRYPTED
+    // bytes there for playback (message_bubble.dart, story_viewer_screen.dart).
+    // The whole point of a wipe is device seizure, so leaving decrypted media
+    // readable in the OS temp dir defeats it.
+    await _wipeDirContents(getApplicationSupportDirectory, 'app-support');
+    await _wipeDirContents(getTemporaryDirectory, 'temp');
+    await _wipeDirContents(getApplicationCacheDirectory, 'cache');
+  }
+
+  /// Best-effort per entry: one locked file must not stop the rest.
+  Future<void> _wipeDirContents(
+    Future<Directory> Function() resolve,
+    String label,
+  ) async {
     try {
-      final dir = await getApplicationSupportDirectory();
+      final dir = await resolve();
+      if (!await dir.exists()) return;
       await for (final entry in dir.list()) {
         try {
           await entry.delete(recursive: true);
         } catch (_) {}
       }
     } catch (error) {
-      debugPrint('LocalWipeService: app-data wipe failed: $error');
+      debugPrint('LocalWipeService: $label wipe failed: $error');
     }
   }
 }

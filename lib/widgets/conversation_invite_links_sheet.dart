@@ -55,8 +55,6 @@ class _ConversationInviteLinksSheetState
   bool _loading = true;
   bool _busy = false;
 
-  ConversationInviteLink? get _activeLink =>
-      _links.isEmpty ? null : _links.first;
   StreamSubscription<Map<String, dynamic>>? _joinRequestSub;
 
   @override
@@ -138,23 +136,8 @@ class _ConversationInviteLinksSheetState
         required,
         channel: widget.channel,
       );
-      ConversationInviteLink? rotatedLink;
-      final active = _activeLink;
-      if (active != null && active.approvalRequired != required) {
-        rotatedLink = await api.createConversationInviteLink(
-          widget.conversation.id,
-          channel: widget.channel,
-          approvalRequired: required,
-          revokeExisting: true,
-          expiresInSeconds: _expiresInSeconds,
-          usageLimit: _usageLimit == 0 ? null : _usageLimit,
-        );
-      }
       if (!mounted) return;
-      setState(() {
-        if (rotatedLink != null) _links = [rotatedLink];
-        _busy = false;
-      });
+      setState(() => _busy = false);
       widget.onJoinApprovalChanged?.call(required);
     } catch (e) {
       if (!mounted) return;
@@ -185,7 +168,7 @@ class _ConversationInviteLinksSheetState
         _links = rotate ? [link] : [link, ..._links];
         _busy = false;
       });
-      _showSnack(rotate ? 'Invite link regenerated' : 'Invite link created');
+      _showSnack(rotate ? 'Invite links reset' : 'Invite link created');
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
@@ -193,17 +176,13 @@ class _ConversationInviteLinksSheetState
     }
   }
 
-  Future<void> _copyActiveLink() async {
-    final link = _activeLink;
-    if (link == null) return;
+  Future<void> _copyLink(ConversationInviteLink link) async {
     await Clipboard.setData(ClipboardData(text: link.inviteUri));
     if (!mounted) return;
     _showSnack('Invite link copied');
   }
 
-  Future<void> _revokeActiveLink() async {
-    final link = _activeLink;
-    if (link == null) return;
+  Future<void> _revokeLink(ConversationInviteLink link) async {
     setState(() => _busy = true);
     try {
       await context.read<ApiService>().revokeConversationInviteLink(
@@ -329,13 +308,11 @@ class _ConversationInviteLinksSheetState
               onChanged: _setApprovalRequired,
             ),
             const SizedBox(height: 12),
-            _LinkSection(
-              link: _activeLink,
+            _CreateSection(
               busy: _busy,
+              hasLinks: _links.isNotEmpty,
               onCreate: () => _createLink(rotate: false),
-              onCopy: _copyActiveLink,
-              onRegenerate: () => _createLink(rotate: true),
-              onRevoke: _revokeActiveLink,
+              onReset: () => _createLink(rotate: true),
               expiresInSeconds: _expiresInSeconds,
               usageLimit: _usageLimit,
               onExpiresChanged: (value) =>
@@ -343,6 +320,19 @@ class _ConversationInviteLinksSheetState
               onUsageLimitChanged: (value) =>
                   setState(() => _usageLimit = value),
             ),
+            const SizedBox(height: 12),
+            if (_links.isEmpty)
+              const _EmptyLinksSection()
+            else
+              for (final link in _links) ...[
+                _LinkSection(
+                  link: link,
+                  busy: _busy,
+                  onCopy: () => _copyLink(link),
+                  onRevoke: () => _revokeLink(link),
+                ),
+                if (link != _links.last) const SizedBox(height: 12),
+              ],
             const SizedBox(height: 12),
             _RequestsSection(
               requests: _requests,
@@ -411,25 +401,21 @@ class _ApprovalSection extends StatelessWidget {
   }
 }
 
-class _LinkSection extends StatelessWidget {
-  final ConversationInviteLink? link;
+class _CreateSection extends StatelessWidget {
   final bool busy;
+  final bool hasLinks;
   final VoidCallback onCreate;
-  final VoidCallback onCopy;
-  final VoidCallback onRegenerate;
-  final VoidCallback onRevoke;
+  final VoidCallback onReset;
   final int expiresInSeconds;
   final int usageLimit;
   final ValueChanged<int> onExpiresChanged;
   final ValueChanged<int> onUsageLimitChanged;
 
-  const _LinkSection({
-    required this.link,
+  const _CreateSection({
     required this.busy,
+    required this.hasLinks,
     required this.onCreate,
-    required this.onCopy,
-    required this.onRegenerate,
-    required this.onRevoke,
+    required this.onReset,
     required this.expiresInSeconds,
     required this.usageLimit,
     required this.onExpiresChanged,
@@ -439,20 +425,17 @@ class _LinkSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final active = link;
-    final linkAvailable =
-        active != null && !active.isExpired && !active.isUsageLimitReached;
     return _InvitePanel(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              Icon(Icons.ios_share_rounded, color: scheme.primary),
+              Icon(Icons.add_link_rounded, color: scheme.primary),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  'Active invite',
+                  'Create invite link',
                   style: Theme.of(
                     context,
                   ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
@@ -460,36 +443,6 @@ class _LinkSection extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          if (active == null)
-            Text(
-              'No active link',
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
-            )
-          else ...[
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                color: scheme.surface.withValues(alpha: 0.26),
-                border: Border.all(
-                  color: scheme.outlineVariant.withValues(alpha: 0.28),
-                ),
-              ),
-              child: Text(
-                active.inviteUri,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
-              ),
-            ),
-            const SizedBox(height: 10),
-            _InviteStats(link: active),
-          ],
           const SizedBox(height: 12),
           Row(
             children: [
@@ -529,46 +482,148 @@ class _LinkSection extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: [
-              if (active == null)
-                GlassButtonWidget.icon(
-                  onPressed: busy ? null : onCreate,
-                  icon: const Icon(Icons.add_link_rounded),
-                  label: const Text('Create'),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                )
-              else ...[
-                GlassButtonWidget.icon(
-                  onPressed: busy || !linkAvailable ? null : onCopy,
-                  icon: const Icon(Icons.copy_rounded),
-                  label: const Text('Copy'),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
+              GlassButtonWidget.icon(
+                onPressed: busy ? null : onCreate,
+                icon: const Icon(Icons.add_link_rounded),
+                label: const Text('Create'),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
                 ),
+              ),
+              if (hasLinks)
                 GlassButtonWidget.icon(
-                  onPressed: busy ? null : onRegenerate,
+                  onPressed: busy ? null : onReset,
                   icon: const Icon(Icons.autorenew_rounded),
-                  label: const Text('Regenerate'),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                ),
-                GlassButtonWidget.icon(
-                  onPressed: busy ? null : onRevoke,
-                  icon: const Icon(Icons.link_off_rounded),
-                  label: const Text('Revoke'),
+                  label: const Text('Reset links'),
                   foregroundColor: scheme.error,
                   padding: const EdgeInsets.symmetric(
                     horizontal: 16,
                     vertical: 12,
                   ),
                 ),
-              ],
+            ],
+          ),
+          if (hasLinks) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Reset revokes all links and creates one fresh link.',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptyLinksSection extends StatelessWidget {
+  const _EmptyLinksSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return _InvitePanel(
+      child: Row(
+        children: [
+          Icon(Icons.link_off_rounded, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'No active invite links — create one above.',
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LinkSection extends StatelessWidget {
+  final ConversationInviteLink link;
+  final bool busy;
+  final VoidCallback onCopy;
+  final VoidCallback onRevoke;
+
+  const _LinkSection({
+    required this.link,
+    required this.busy,
+    required this.onCopy,
+    required this.onRevoke,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final linkAvailable = !link.isExpired && !link.isUsageLimitReached;
+    return _InvitePanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.ios_share_rounded, color: scheme.primary),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  link.approvalRequired ? 'Invite (approval)' : 'Invite link',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              color: scheme.surface.withValues(alpha: 0.26),
+              border: Border.all(
+                color: scheme.outlineVariant.withValues(alpha: 0.28),
+              ),
+            ),
+            child: Text(
+              link.inviteUri,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+            ),
+          ),
+          const SizedBox(height: 10),
+          _InviteStats(link: link),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              GlassButtonWidget.icon(
+                onPressed: busy || !linkAvailable ? null : onCopy,
+                icon: const Icon(Icons.copy_rounded),
+                label: const Text('Copy'),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+              ),
+              GlassButtonWidget.icon(
+                onPressed: busy ? null : onRevoke,
+                icon: const Icon(Icons.link_off_rounded),
+                label: const Text('Revoke'),
+                foregroundColor: scheme.error,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+              ),
             ],
           ),
         ],

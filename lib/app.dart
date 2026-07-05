@@ -22,7 +22,7 @@ import 'screens/auth/login_screen.dart';
 import 'screens/bots/bot_chats_screen.dart';
 import 'screens/call/call_screen.dart';
 import 'screens/call/sfu_call_screen.dart';
-import 'services/call_service.dart' show EscalatedCall;
+import 'services/call_service.dart' show EscalatedCall, CallEndReason;
 import 'services/sfu_call_controller.dart';
 import 'screens/channels/channel_screen.dart';
 import 'screens/chat/chat_screen.dart';
@@ -1429,9 +1429,15 @@ class _AppRootState extends State<_AppRoot> {
     final ended = call.lastEndedCall;
     if (ended != null) {
       call.clearEndedCall();
+      final outcome = switch (ended.reason) {
+        CallEndReason.completed => 'answered',
+        CallEndReason.missed => 'missed',
+        CallEndReason.declined => 'declined',
+        CallEndReason.busy => 'busy',
+      };
       context.read<ChatProvider>().postCallEvent(
         convID: ended.conversationId,
-        answered: ended.answered,
+        outcome: outcome,
         isVideo: ended.isVideo,
         durationSecs: ended.durationSecs,
       );

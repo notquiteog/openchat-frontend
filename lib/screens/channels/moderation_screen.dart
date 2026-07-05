@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/conversation.dart';
 import '../../models/moderation_report.dart';
+import '../../providers/chat_provider.dart';
 import '../../services/api_service.dart';
 import '../../widgets/glass.dart';
 import 'admin_audit_log_screen.dart';
@@ -78,15 +79,24 @@ class _ModerationScreenState extends State<ModerationScreen> {
   late bool _archived;
 
   List<Map<String, dynamic>> _mutes = [];
+  List<Map<String, dynamic>> _bans = [];
   List<ModerationReport> _reports = [];
   int _memberCount = 0;
   bool _loading = true;
   bool _savingAntiSpam = false;
 
+  /// The linked discussion group id, tracked locally so unlinking (setting it
+  /// back to null) isn't swallowed by [Conversation.copyWith]'s `?? this.`
+  /// null-coalescing pattern.
+  String? _discussionGroupId;
+
   /// The lifecycle change to report back to the channel screen on pop.
   ChannelModerationResult? _pendingResult;
 
-  Conversation get _conv => widget.conversation;
+  /// Mutable local copy so optimistic toggles (e.g. sign-messages) can rebuild
+  /// via [Conversation.copyWith] without waiting on a full reload. Seeded from
+  /// the passed-in conversation in [initState].
+  late Conversation _conv;
   bool get _canMod => widget.canManageModeration;
   bool get _canRoles => widget.canManageRoles;
   bool get _canManageMembers => _canMod || (_canRoles && _conv.isChannel);
@@ -105,6 +115,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
   @override
   void initState() {
     super.initState();
+    _conv = widget.conversation;
     _ownerOnly = _conv.ownerOnlyPost;
     _ringAll = _conv.ringAllOnCallStart;
     _newMemberCooldownSeconds = _conv.newMemberCooldownSeconds;
@@ -112,6 +123,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
     _blockMedia = _conv.antiSpamBlockMedia;
     _mentionLimit = _conv.antiSpamMentionLimit;
     _archived = widget.isArchived;
+    _discussionGroupId = _conv.discussionGroupId;
     _load();
   }
 
@@ -122,6 +134,15 @@ class _ModerationScreenState extends State<ModerationScreen> {
       final reports = _canMod
           ? await api.listModerationReports(_conv.id, channel: _conv.isChannel)
           : <ModerationReport>[];
+      // Bans are channel-only; a failure here shouldn't sink the whole load.
+      var bans = _bans;
+      if (_canMod && _conv.isChannel) {
+        try {
+          bans = (await api.listBans(_conv.id)).cast<Map<String, dynamic>>();
+        } catch (_) {
+          bans = <Map<String, dynamic>>[];
+        }
+      }
       // One cheap count instead of pulling the whole membership.
       var memberCount = _memberCount;
       if (_canManageMembers) {
@@ -131,6 +152,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
       if (!mounted) return;
       setState(() {
         _mutes = mutes.cast<Map<String, dynamic>>();
+        _bans = bans;
         _reports = reports;
         _memberCount = memberCount;
         _loading = false;
@@ -299,6 +321,94 @@ class _ModerationScreenState extends State<ModerationScreen> {
       if (!mounted) return;
       showAppToast(context, 'Failed to unmute: $e', isError: true);
     }
+  }
+
+  Future<void> _unban(String userID) async {
+    try {
+      await context.read<ApiService>().unbanChannelUser(_conv.id, userID);
+      if (!mounted) return;
+      setState(() {
+        _bans = _bans.where((b) => b['user_id'] != userID).toList();
+      });
+    } catch (e) {
+      if (!mounted) return;
+      showAppToast(context, 'Failed to unban: $e', isError: true);
+    }
+  }
+
+  Future<void> _toggleSignMessages(bool value) async {
+    final api = context.read<ApiService>();
+    final previous = _conv.signMessages;
+    setState(() => _conv = _conv.copyWith(signMessages: value));
+    try {
+      await api.setSignMessages(_conv.id, value);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _conv = _conv.copyWith(signMessages: previous));
+      showAppToast(context, 'Failed: $e', isError: true);
+    }
+  }
+
+  // ---- Discussion group -----------------------------------------------------
+
+  /// Name of the currently-linked discussion group, looked up from the user's
+  /// conversation list; falls back to a generic label if it isn't loaded.
+  String _discussionGroupName() {
+    final id = _discussionGroupId;
+    if (id == null) return 'Linked group';
+    final groups = context.read<ChatProvider>().conversations;
+    for (final c in groups) {
+      if (c.id == id) return c.name ?? 'Linked group';
+    }
+    return 'Linked group';
+  }
+
+  Future<void> _unlinkDiscussionGroup() async {
+    final api = context.read<ApiService>();
+    final previous = _discussionGroupId;
+    setState(() => _discussionGroupId = null);
+    try {
+      await api.setDiscussionGroup(_conv.id, null);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _discussionGroupId = previous);
+      showAppToast(context, 'Failed: $e', isError: true);
+    }
+  }
+
+  Future<void> _pickDiscussionGroup() async {
+    final api = context.read<ApiService>();
+    final groups = context
+        .read<ChatProvider>()
+        .conversations
+        .where((c) => c.type == ConversationType.group)
+        .toList();
+    if (groups.isEmpty) {
+      showAppToast(context, 'You have no groups to link', isError: true);
+      return;
+    }
+    await showGlassActionSheet<void>(
+      context: context,
+      title: 'Link a discussion group',
+      actions: [
+        for (final group in groups)
+          GlassActionSheetAction(
+            icon: const Icon(Icons.forum_outlined),
+            label: group.name ?? 'Group',
+            onPressed: () async {
+              final previous = _discussionGroupId;
+              setState(() => _discussionGroupId = group.id);
+              try {
+                await api.setDiscussionGroup(_conv.id, group.id);
+              } catch (e) {
+                if (!mounted) return;
+                setState(() => _discussionGroupId = previous);
+                showAppToast(context, 'Failed: $e', isError: true);
+              }
+            },
+          ),
+      ],
+    );
   }
 
   Future<void> _openMembers() async {
@@ -546,7 +656,8 @@ class _ModerationScreenState extends State<ModerationScreen> {
                       if (_canMod)
                         GlassListTile(
                           showDivider:
-                              widget.canManageSettings && _conv.isGroup,
+                              _conv.isChannel ||
+                              (widget.canManageSettings && _conv.isGroup),
                           leading: _LeadingIcon(
                             Icons.campaign_outlined,
                             color: scheme.primary,
@@ -566,6 +677,65 @@ class _ModerationScreenState extends State<ModerationScreen> {
                           ),
                           onTap: () => _toggleOwnerOnly(!_ownerOnly),
                         ),
+                      if (_conv.isChannel)
+                        GlassListTile(
+                          showDivider: true,
+                          leading: _LeadingIcon(
+                            Icons.draw_outlined,
+                            color: scheme.primary,
+                          ),
+                          title: const Text(
+                            'Sign messages',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          subtitle: const Text(
+                            'Show the author\'s name on posts.',
+                          ),
+                          trailing: GlassSwitch(
+                            value: _conv.signMessages,
+                            onChanged: _toggleSignMessages,
+                            activeColor: scheme.primary,
+                            enableHaptics: true,
+                          ),
+                          onTap: () => _toggleSignMessages(!_conv.signMessages),
+                        ),
+                      if (_conv.isChannel)
+                        _discussionGroupId != null
+                            ? GlassListTile(
+                                showDivider: false,
+                                leading: _LeadingIcon(
+                                  Icons.forum_rounded,
+                                  color: scheme.primary,
+                                ),
+                                title: const Text(
+                                  'Discussion group',
+                                  style: TextStyle(fontWeight: FontWeight.w600),
+                                ),
+                                subtitle: Text(_discussionGroupName()),
+                                trailing: TextButton(
+                                  onPressed: _unlinkDiscussionGroup,
+                                  child: const Text('Unlink'),
+                                ),
+                              )
+                            : GlassListTile(
+                                showDivider: false,
+                                leading: _LeadingIcon(
+                                  Icons.forum_outlined,
+                                  color: scheme.primary,
+                                ),
+                                title: const Text(
+                                  'Discussion group',
+                                  style: TextStyle(fontWeight: FontWeight.w600),
+                                ),
+                                subtitle: const Text(
+                                  'Link a group where subscribers can discuss '
+                                  'posts.',
+                                ),
+                                trailing: const Icon(
+                                  Icons.chevron_right_rounded,
+                                ),
+                                onTap: _pickDiscussionGroup,
+                              ),
                       if (widget.canManageSettings && _conv.isGroup)
                         GlassListTile(
                           showDivider: false,
@@ -770,6 +940,35 @@ class _ModerationScreenState extends State<ModerationScreen> {
                     ]),
                   ],
 
+                  // Banned ------------------------------------------------
+                  if (_canMod && _conv.isChannel) ...[
+                    const SizedBox(height: 20),
+                    _SectionHeader('Banned members (${_bans.length})'),
+                    _Card([
+                      if (_bans.isEmpty)
+                        const _EmptyRow(
+                          icon: Icons.verified_user_outlined,
+                          text: 'No one is banned',
+                        )
+                      else
+                        for (var i = 0; i < _bans.length; i++)
+                          GlassListTile(
+                            showDivider: i != _bans.length - 1,
+                            leading: _LeadingIcon(
+                              Icons.block_rounded,
+                              color: scheme.error,
+                            ),
+                            title: Text(_banName(_bans[i])),
+                            subtitle: Text(_banSubtitle(_bans[i])),
+                            trailing: TextButton(
+                              onPressed: () =>
+                                  _unban(_bans[i]['user_id'] as String),
+                              child: const Text('Unban'),
+                            ),
+                          ),
+                    ]),
+                  ],
+
                   // Audit log ---------------------------------------------
                   if (_canMod || _canRoles) ...[
                     const SizedBox(height: 20),
@@ -883,6 +1082,27 @@ class _ModerationScreenState extends State<ModerationScreen> {
     ];
     if (reason != null && reason.isNotEmpty) parts.add(reason);
     return parts.join(' · ');
+  }
+
+  String _banName(Map<String, dynamic> ban) {
+    final display = ban['display_name'] as String?;
+    if (display != null && display.isNotEmpty) return display;
+    final username = ban['username'] as String?;
+    if (username != null && username.isNotEmpty) return '@$username';
+    final id = ban['user_id'] as String? ?? '';
+    return id.length >= 8 ? id.substring(0, 8) : id;
+  }
+
+  String _banSubtitle(Map<String, dynamic> ban) {
+    final reason = ban['reason'] as String?;
+    if (reason != null && reason.trim().isNotEmpty) return reason.trim();
+    final createdAt = ban['created_at'] as String?;
+    if (createdAt != null && createdAt.isNotEmpty) {
+      final parsed = DateTime.tryParse(createdAt);
+      if (parsed != null) return 'Banned ${_formatLocal(parsed)}';
+      return 'Banned $createdAt';
+    }
+    return 'Banned';
   }
 
   String _reportTitle(ModerationReport report) {

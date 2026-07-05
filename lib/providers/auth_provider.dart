@@ -10,6 +10,7 @@ import '../services/api_service.dart';
 import '../services/call_history_service.dart';
 import '../services/key_cache_service.dart';
 import '../services/local_private_state_service.dart';
+import '../services/push_notification_service.dart';
 import '../services/secure_storage_service.dart';
 
 enum AuthState { unknown, unauthenticated, authenticated }
@@ -259,6 +260,16 @@ class AuthProvider extends ChangeNotifier {
   /// change lands — wipes the remaining stores it owns: decrypted-message
   /// cache (+ its at-rest key), search index, and offline outbox.
   Future<void> logout() async {
+    // Revoke the session server-side and deregister THIS device's push token
+    // while the access token is still valid — otherwise sign-out is local-only:
+    // the session stays usable and the device keeps receiving push. Best-effort
+    // so a network failure still completes the local wipe below.
+    try {
+      await PushNotificationService.disable(api: _api);
+    } catch (_) {}
+    try {
+      await _api.logout();
+    } catch (_) {}
     await _storage.clearSession();
     // Clear the public-key cache so stale entries from this session can't
     // affect the next login (different user, or same user with a new key).

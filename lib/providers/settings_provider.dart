@@ -397,6 +397,32 @@ class SettingsProvider extends ChangeNotifier {
     activeMutedConversationIds(_conversationNotificationPreferences),
   );
 
+  Timer? _muteExpiryTimer;
+
+  /// Schedules a notifyListeners() at the earliest pending timed-mute expiry so
+  /// listeners (e.g. the server push-mute route sync) re-run and drop the
+  /// expired route. Without this, an expired "mute for 1h" kept suppressing FCM
+  /// pushes server-side until the next app launch or unrelated settings change.
+  void _scheduleMuteExpiryTick() {
+    _muteExpiryTimer?.cancel();
+    _muteExpiryTimer = null;
+    final now = DateTime.now();
+    DateTime? earliest;
+    for (final pref in _conversationNotificationPreferences.values) {
+      final until = pref.mutedUntil;
+      if (until != null && until.isAfter(now)) {
+        if (earliest == null || until.isBefore(earliest)) earliest = until;
+      }
+    }
+    if (earliest == null) return;
+    // +1s guard so the mute is definitively past when we re-sync.
+    final delay = earliest.difference(now) + const Duration(seconds: 1);
+    _muteExpiryTimer = Timer(delay, () {
+      notifyListeners();
+      _scheduleMuteExpiryTick();
+    });
+  }
+
   /// When true the app replaces shader-backed glass with solid frosted panels
   /// throughout, reducing visual complexity for users who prefer it.
   bool get reduceTransparency => _reduceTransparency;
@@ -650,6 +676,7 @@ class SettingsProvider extends ChangeNotifier {
           privateState[privateStateConversationNotificationPreferencesKey],
         ),
       );
+    _scheduleMuteExpiryTick();
     _conversationPrivacyPreferences
       ..clear()
       ..addAll(
@@ -1148,6 +1175,7 @@ class SettingsProvider extends ChangeNotifier {
     } else {
       _conversationNotificationPreferences[convID] = normalized;
     }
+    _scheduleMuteExpiryTick();
     notifyListeners();
     await _persistConversationNotificationPreferences();
   }

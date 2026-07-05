@@ -252,7 +252,9 @@ class _ProxySettingsScreenState extends State<ProxySettingsScreen> {
               ),
             ),
           ),
-          if (_mode == ProxyMode.socks5 || _mode == ProxyMode.tor) ...[
+          if (_mode == ProxyMode.http ||
+              _mode == ProxyMode.socks5 ||
+              _mode == ProxyMode.tor) ...[
             const SizedBox(height: 14),
             GlassCard(
               padding: EdgeInsets.zero,

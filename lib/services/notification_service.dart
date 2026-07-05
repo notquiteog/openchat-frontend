@@ -234,6 +234,10 @@ class NotificationService {
         ),
       );
 
+  /// The conversation currently open on screen (null if none). Used to decide
+  /// whether an incoming message should bump the unread badge.
+  static String? get activeConversationId => _activeConversationId;
+
   static void setActiveConversation(String? id) {
     _activeConversationId = id;
     // Opening a chat clears its tray notification — without this, the entry

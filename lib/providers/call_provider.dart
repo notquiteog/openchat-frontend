@@ -169,6 +169,8 @@ class CallProvider extends ChangeNotifier {
   // Pending incoming call waiting for user accept/reject
   CallSession? _incomingCall;
   CallSession? get incomingCall => _incomingCall;
+  // Guards acceptIncomingCall against the UI-tap + notification-answer race.
+  bool _accepting = false;
 
   // Most recent missed call, consumed by the UI to show an in-app banner.
   CallSession? _lastMissedCall;
@@ -465,19 +467,28 @@ class CallProvider extends ChangeNotifier {
 
   Future<void> acceptIncomingCall() async {
     final incoming = _incomingCall;
-    if (incoming == null) return;
-    final effectiveVideo =
-        incoming.isVideo && !_resolvedQualityPolicy().forceAudioOnly;
-    await _mediaPermissionGate(isVideo: effectiveVideo);
-    incoming.isVideo = effectiveVideo;
+    // Re-entry guard: the in-app "Accept" tap and the OS-notification "Answer"
+    // action can both fire nearly simultaneously. Without this both would pass
+    // the null check, both await the permission gate, and both build a peer for
+    // the same call. _accepting is set synchronously so the second caller bails.
+    if (incoming == null || _accepting) return;
+    _accepting = true;
+    try {
+      final effectiveVideo =
+          incoming.isVideo && !_resolvedQualityPolicy().forceAudioOnly;
+      await _mediaPermissionGate(isVideo: effectiveVideo);
+      incoming.isVideo = effectiveVideo;
 
-    _incomingCall = null;
-    unawaited(NotificationService.cancelIncomingCall());
-    _syncAudio();
-    notifyListeners();
+      _incomingCall = null;
+      unawaited(NotificationService.cancelIncomingCall());
+      _syncAudio();
+      notifyListeners();
 
-    await _callService.acceptIncomingCall(incoming);
-    notifyListeners();
+      await _callService.acceptIncomingCall(incoming);
+      notifyListeners();
+    } finally {
+      _accepting = false;
+    }
   }
 
   void rejectIncomingCall() {

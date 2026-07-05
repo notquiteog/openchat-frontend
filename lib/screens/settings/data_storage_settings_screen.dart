@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../../providers/chat_provider.dart';
 import '../../providers/settings_provider.dart';
+import '../../services/data_export_service.dart';
 import '../../widgets/glass.dart';
 import 'on_device_ai_screen.dart';
 import 'outbox_screen.dart';
@@ -132,9 +133,82 @@ class DataStorageSettingsScreen extends StatelessWidget {
                 MaterialPageRoute<void>(builder: (_) => const OutboxScreen()),
               ),
             ),
+            if (!kIsWeb)
+              SettingsTile(
+                icon: Icons.ios_share_rounded,
+                title: 'Export my data',
+                subtitle: 'Save a plaintext copy of your chats',
+                onTap: () => _exportData(context),
+              ),
           ],
         ),
       ],
     );
+  }
+
+  /// Dumps every locally-decrypted conversation to a plaintext JSON file the
+  /// user saves (desktop) or shares (mobile). Warns first — the file is NOT
+  /// encrypted.
+  Future<void> _exportData(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => GlassAlertDialog(
+        title: const Text('Export my data'),
+        content: const Text(
+          'This saves an UNENCRYPTED, plaintext copy of your chats to a JSON '
+          'file.\n\n'
+          'Anyone who opens the file can read your messages. Store it '
+          'somewhere safe and delete it when you no longer need it.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Export'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    // Capture the provider and navigator before any await so we don't reach
+    // across an async gap with a possibly-unmounted BuildContext.
+    final chatProvider = context.read<ChatProvider>();
+    final navigator = Navigator.of(context, rootNavigator: true);
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: GlassProgressIndicator.circular()),
+    );
+
+    DataExportOutcome outcome;
+    Object? error;
+    try {
+      outcome = await DataExportService().exportAndSave(chatProvider);
+    } catch (e) {
+      outcome = DataExportOutcome.saved; // unused; error path handled below
+      error = e;
+    }
+
+    // Dismiss the progress dialog.
+    navigator.pop();
+    if (!context.mounted) return;
+
+    if (error != null) {
+      showAppToast(context, 'Export failed: $error', isError: true);
+      return;
+    }
+    switch (outcome) {
+      case DataExportOutcome.saved:
+        showAppToast(context, 'Data exported');
+      case DataExportOutcome.cancelled:
+        break;
+      case DataExportOutcome.empty:
+        showAppToast(context, 'No conversations to export', isError: true);
+    }
   }
 }

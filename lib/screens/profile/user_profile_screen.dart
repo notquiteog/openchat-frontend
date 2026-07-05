@@ -17,6 +17,7 @@ import '../../services/websocket_service.dart';
 import '../../utils/identity_qr.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/key_verification_badge.dart';
+import '../chat/chat_screen.dart';
 import '../settings/identity_qr_scanner_screen.dart';
 
 /// Public profile screen — shown when tapping a user's name/avatar anywhere in the app.
@@ -38,6 +39,27 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   bool _isBlocked = false;
   bool _blockStatusLoaded = false;
   bool _blockBusy = false;
+  bool _messageBusy = false;
+
+  /// Opens (or creates) the DM with this user and pushes the chat screen.
+  Future<void> _openDirectMessage() async {
+    final api = context.read<ApiService>();
+    final navigator = Navigator.of(context);
+    setState(() => _messageBusy = true);
+    try {
+      final conv = await api.openDM(_user.id);
+      if (!mounted) return;
+      await navigator.push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => ChatScreen(conversation: conv),
+        ),
+      );
+    } catch (e) {
+      if (mounted) _snack('Could not open chat: $e');
+    } finally {
+      if (mounted) setState(() => _messageBusy = false);
+    }
+  }
 
   @override
   void initState() {
@@ -65,7 +87,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         _user.username,
       );
       if (mounted) {
-        setState(() => _user = fresh);
+        // getUserByUsername returns a PublicProfile with no last_seen, so keep
+        // any presence a WS user_online/offline event already established —
+        // otherwise the fetch clobbers a correct "Online" back to "Offline".
+        setState(() => _user = fresh.copyWith(lastSeen: _user.lastSeen));
         unawaited(_loadKeyTrustPin());
       }
     } catch (_) {}
@@ -965,53 +990,57 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                             ),
                         ],
                       ),
-                      // Online status pill
-                      const SizedBox(height: 8),
-                      GlassContainer(
-                        shape: LiquidRoundedSuperellipse(borderRadius: 999),
-                        allowElevation: true,
-                        glowIntensity: 0.06,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 5,
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                width: 7,
-                                height: 7,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: _user.isOnline
-                                      ? const Color(0xFF34C759)
-                                      : cs.onSurface.withValues(alpha: 0.35),
-                                  boxShadow: _user.isOnline
-                                      ? [
-                                          BoxShadow(
-                                            color: const Color(
-                                              0xFF34C759,
-                                            ).withValues(alpha: 0.60),
-                                            blurRadius: 6,
-                                          ),
-                                        ]
-                                      : null,
+                      // Online status pill — only shown once a presence event
+                      // has established the user's state, so we never assert a
+                      // false "Offline" before any user_online/offline arrives.
+                      if (_user.lastSeen != null) ...[
+                        const SizedBox(height: 8),
+                        GlassContainer(
+                          shape: LiquidRoundedSuperellipse(borderRadius: 999),
+                          allowElevation: true,
+                          glowIntensity: 0.06,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 5,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: 7,
+                                  height: 7,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: _user.isOnline
+                                        ? const Color(0xFF34C759)
+                                        : cs.onSurface.withValues(alpha: 0.35),
+                                    boxShadow: _user.isOnline
+                                        ? [
+                                            BoxShadow(
+                                              color: const Color(
+                                                0xFF34C759,
+                                              ).withValues(alpha: 0.60),
+                                              blurRadius: 6,
+                                            ),
+                                          ]
+                                        : null,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                _user.isOnline ? 'Online' : 'Offline',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: cs.onSurface.withValues(alpha: 0.75),
+                                const SizedBox(width: 6),
+                                Text(
+                                  _user.isOnline ? 'Online' : 'Offline',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: cs.onSurface.withValues(alpha: 0.75),
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
-                      ),
+                      ],
                       // Bio
                       if (_user.bio != null && _user.bio!.isNotEmpty) ...[
                         const SizedBox(height: 10),
@@ -1025,13 +1054,37 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                           textAlign: TextAlign.center,
                         ),
                       ],
-                      // Pay button
+                      // Message + Pay actions
                       if (!_isOwnProfile) ...[
                         const SizedBox(height: 18),
-                        GlassButtonWidget.icon(
-                          onPressed: _showPaymentSheet,
-                          icon: const Icon(Icons.payments_outlined, size: 18),
-                          label: const Text('Pay or request'),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            GlassButtonWidget.icon(
+                              onPressed: _messageBusy
+                                  ? null
+                                  : _openDirectMessage,
+                              icon: _messageBusy
+                                  ? const GlassProgressIndicator.circular(
+                                      size: 16,
+                                      strokeWidth: 2,
+                                    )
+                                  : const Icon(
+                                      Icons.chat_bubble_outline_rounded,
+                                      size: 18,
+                                    ),
+                              label: const Text('Message'),
+                            ),
+                            const SizedBox(width: 10),
+                            GlassButtonWidget.icon(
+                              onPressed: _showPaymentSheet,
+                              icon: const Icon(
+                                Icons.payments_outlined,
+                                size: 18,
+                              ),
+                              label: const Text('Pay'),
+                            ),
+                          ],
                         ),
                       ],
                     ],

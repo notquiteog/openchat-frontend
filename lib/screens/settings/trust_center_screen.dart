@@ -436,6 +436,51 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
     }
   }
 
+  /// Logs out every OTHER device in one action — the "someone may have my
+  /// password" button. The current session is kept.
+  Future<void> _revokeOtherSessions() async {
+    final api = context.read<ApiService>();
+    final messenger = ScaffoldMessenger.of(context);
+    var confirmed = false;
+    await GlassDialog.show<void>(
+      context: context,
+      title: 'Sign out all other devices?',
+      message:
+          'Every device except this one is signed out immediately. Use this if '
+          'you think someone else may have access to your account.',
+      actions: [
+        GlassDialogAction(
+          label: 'Cancel',
+          onPressed: () => Navigator.pop(context),
+        ),
+        GlassDialogAction(
+          label: 'Sign out others',
+          isDestructive: true,
+          onPressed: () {
+            confirmed = true;
+            Navigator.pop(context);
+          },
+        ),
+      ],
+    );
+    if (!confirmed || !mounted) return;
+    try {
+      final count = await api.revokeOtherSessions();
+      await _load();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            count == 0
+                ? 'No other sessions to sign out'
+                : 'Signed out $count other device${count == 1 ? '' : 's'}',
+          ),
+        ),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
+    }
+  }
+
   /// Confirms, signs, and sends a remote-wipe command for [session]. The
   /// signature binds the session id and timestamp so the server can only
   /// relay the command — never forge one.
@@ -510,6 +555,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
     final api = context.read<ApiService>();
     final messenger = ScaffoldMessenger.of(context);
     final twoFactorCtrl = TextEditingController();
+    final currentCtrl = TextEditingController();
     final twoFactorEnabled = _security['two_factor_enabled'] as bool? ?? false;
     var submitting = false;
 
@@ -519,14 +565,30 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
         builder: (ctx) => StatefulBuilder(
           builder: (ctx, setDlg) => GlassAlertDialog(
             title: const Text('2FA password'),
-            content: TextField(
-              controller: twoFactorCtrl,
-              obscureText: true,
-              decoration: InputDecoration(
-                labelText: twoFactorEnabled
-                    ? 'New 2FA password'
-                    : 'Enable 2FA password',
-              ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Re-auth: changing or disabling an existing second factor
+                // requires proving the current one. The server rejects the
+                // change otherwise.
+                if (twoFactorEnabled)
+                  TextField(
+                    controller: currentCtrl,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Current 2FA password',
+                    ),
+                  ),
+                TextField(
+                  controller: twoFactorCtrl,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    labelText: twoFactorEnabled
+                        ? 'New 2FA password'
+                        : 'Enable 2FA password',
+                  ),
+                ),
+              ],
             ),
             actions: [
               if (twoFactorEnabled)
@@ -534,10 +596,22 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                   onPressed: submitting
                       ? null
                       : () async {
+                          final current = currentCtrl.text.trim();
+                          if (current.isEmpty) {
+                            messenger.showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Enter your current 2FA password to disable it',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
                           setDlg(() => submitting = true);
                           try {
                             final next = await api.updateSecuritySettings(
                               disableTwoFactor: true,
+                              currentTwoFactorPassword: current,
                             );
                             if (mounted) setState(() => _security = next);
                             if (ctx.mounted) Navigator.pop(ctx);
@@ -570,10 +644,23 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                           );
                           return;
                         }
+                        final current = currentCtrl.text.trim();
+                        if (twoFactorEnabled && current.isEmpty) {
+                          messenger.showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Enter your current 2FA password to change it',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
                         setDlg(() => submitting = true);
                         try {
                           final next = await api.updateSecuritySettings(
                             twoFactorPassword: password,
+                            currentTwoFactorPassword:
+                                twoFactorEnabled ? current : null,
                           );
                           if (mounted) setState(() => _security = next);
                           if (ctx.mounted) Navigator.pop(ctx);
@@ -606,6 +693,7 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
       );
     } finally {
       twoFactorCtrl.dispose();
+      currentCtrl.dispose();
     }
   }
 
@@ -2002,6 +2090,13 @@ class _TrustCenterScreenState extends State<TrustCenterScreen> {
                             ),
                         ],
                       ),
+                    ),
+                  if (_sessions.length > 1)
+                    _TrustRow(
+                      icon: Icons.logout_outlined,
+                      title: 'Sign out all other devices',
+                      subtitle: 'Keep this device, revoke every other session',
+                      onTap: _revokeOtherSessions,
                     ),
                   if (!kIsWeb)
                     _TrustRow(

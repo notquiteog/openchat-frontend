@@ -182,30 +182,49 @@ class ProxyService {
 
   /// Applies [config] to an existing [HttpClient].
   ///
-  /// Fail-closed invariant: when a proxy is active but cannot be applied, this
-  /// installs a deny-all [connectionFactory] (it never returns a plain direct
-  /// client). It must never *throw* — `_ProxyHttpOverrides.createHttpClient`
-  /// runs for ALL app traffic, so a throw here would crash unrelated requests
-  /// at client construction. Only actual connection attempts may fail.
+  /// [ProxyConfig.failClosed] decides what happens when the proxy is active but
+  /// cannot be reached/applied. Fail-closed (the default) refuses to fall back
+  /// to a direct route — a direct fallback would leak the real IP, the entire
+  /// thing the proxy exists to prevent. Fail-open permits a direct fallback,
+  /// trading that privacy guarantee for connectivity when the proxy dies. Tor
+  /// is ALWAYS treated as fail-closed regardless of the flag: Tor must never
+  /// leak the real IP.
+  ///
+  /// This must never *throw* — `_ProxyHttpOverrides.createHttpClient` runs for
+  /// ALL app traffic, so a throw here would crash unrelated requests at client
+  /// construction. When failing closed, the deny happens at connect time via a
+  /// deny-all [connectionFactory] / a fallback-free `PROXY` directive. Only
+  /// actual connection attempts may fail.
   static void configureClient(HttpClient client, ProxyConfig config) {
+    // Tor must never leak: force fail-closed even if the stored config says
+    // otherwise (the UI keeps the toggle on for Tor, but defend in depth here).
+    final failClosed = config.failClosed || config.mode == ProxyMode.tor;
     switch (config.mode) {
       case ProxyMode.off:
         return;
       case ProxyMode.http:
-        // An HTTP PROXY directive fails closed on its own: if the proxy is
+        // A bare HTTP PROXY directive fails closed on its own: if the proxy is
         // unreachable the request errors, it does not fall back to direct.
-        client.findProxy = (uri) =>
-            'PROXY ${config.effectiveHost}:${config.effectivePort}';
+        // Fail-open appends `; DIRECT` so the request retries directly when the
+        // proxy can't be used — this leaks the real IP if the proxy dies, which
+        // is why it is opt-in.
+        client.findProxy = (uri) => failClosed
+            ? 'PROXY ${config.effectiveHost}:${config.effectivePort}'
+            : 'PROXY ${config.effectiveHost}:${config.effectivePort}; DIRECT';
       case ProxyMode.socks5:
       case ProxyMode.tor:
         final addr = InternetAddress.tryParse(config.effectiveHost);
         if (addr == null) {
           // Active proxy whose host is not a literal IP: it cannot be applied.
-          // Refuse every connection instead of silently going direct — a
-          // direct fallback would leak the real IP, which is the entire thing
-          // the proxy exists to prevent. This is enforced regardless of
-          // [ProxyConfig.failClosed]; there is no toggle that re-opens the leak.
-          _installDenyAll(client);
+          if (failClosed) {
+            // Refuse every connection instead of silently going direct — a
+            // direct fallback would leak the real IP, which is the entire
+            // thing the proxy exists to prevent.
+            _installDenyAll(client);
+          }
+          // Fail-open: leave the client on its default (direct) route rather
+          // than refusing. This leaks the real IP if the proxy is down, which
+          // is why it is opt-in and never reachable for Tor.
           return;
         }
         SocksTCPClient.assignToHttpClient(client, [

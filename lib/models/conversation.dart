@@ -61,6 +61,13 @@ class Conversation {
   /// incoming 1:1 call instead of only showing a "Join" banner (#9).
   final bool ringAllOnCallStart;
 
+  /// When true, channel posts show the posting admin's name (Telegram parity).
+  final bool signMessages;
+
+  /// Linked discussion group id for a channel (null when unlinked). Channel
+  /// posts can be discussed/commented in this group.
+  final String? discussionGroupId;
+
   /// Join policy: 'open' or 'web_of_trust' (a current member must vouch for the
   /// candidate's key before they can join).
   final String membershipPolicy;
@@ -99,6 +106,8 @@ class Conversation {
     this.topicsEnabled = false,
     this.businessSuiteEnabled = false,
     this.ringAllOnCallStart = false,
+    this.signMessages = false,
+    this.discussionGroupId,
     this.membershipPolicy = 'open',
     this.expiresAt,
     this.locked = false,
@@ -138,6 +147,8 @@ class Conversation {
     topicsEnabled: json['topics_enabled'] as bool? ?? false,
     businessSuiteEnabled: json['business_suite_enabled'] as bool? ?? false,
     ringAllOnCallStart: json['ring_all_on_call_start'] as bool? ?? false,
+    signMessages: json['sign_messages'] as bool? ?? false,
+    discussionGroupId: json['discussion_group_id'] as String?,
     membershipPolicy: json['membership_policy'] as String? ?? 'open',
     expiresAt: json['expires_at'] != null
         ? DateTime.parse(json['expires_at'] as String)
@@ -241,6 +252,8 @@ class Conversation {
     bool? topicsEnabled,
     bool? businessSuiteEnabled,
     bool? ringAllOnCallStart,
+    bool? signMessages,
+    String? discussionGroupId,
     String? backgroundUrl,
     DateTime? expiresAt,
     bool? locked,
@@ -268,6 +281,8 @@ class Conversation {
     topicsEnabled: topicsEnabled ?? this.topicsEnabled,
     businessSuiteEnabled: businessSuiteEnabled ?? this.businessSuiteEnabled,
     ringAllOnCallStart: ringAllOnCallStart ?? this.ringAllOnCallStart,
+    signMessages: signMessages ?? this.signMessages,
+    discussionGroupId: discussionGroupId ?? this.discussionGroupId,
     membershipPolicy: membershipPolicy ?? this.membershipPolicy,
     expiresAt: expiresAt ?? this.expiresAt,
     locked: locked ?? this.locked,

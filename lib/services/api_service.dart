@@ -1973,6 +1973,24 @@ class ApiService {
         as String?;
   }
 
+  /// Relay a user's `@bot <query>` (inline mode) to the bot. Returns the
+  /// inline_query_id so the caller can correlate the bot's later
+  /// answerInlineQuery (delivered as a WS inlineAnswer), or null.
+  Future<String?> sendInlineQuery({
+    required String convID,
+    required String botUsername,
+    required String query,
+    String? offset,
+  }) async {
+    final resp = await _post('/api/v1/conversations/$convID/inline-query', {
+      'bot_username': botUsername,
+      'query': query,
+      'offset': ?offset,
+    });
+    return (resp['data'] as Map<String, dynamic>?)?['inline_query_id']
+        as String?;
+  }
+
   Future<Conversation> getSavedMessages() async {
     final resp = await _get('/api/v1/conversations/saved-messages');
     return Conversation.fromJson(resp['data'] as Map<String, dynamic>);
@@ -2238,9 +2256,17 @@ class ApiService {
     return Message.fromJson(resp['data'] as Map<String, dynamic>);
   }
 
-  Future<void> markRead(String convID, String messageID) async {
+  /// Persist the caller's read marker so their own unread count clears. When
+  /// [private] is true (read-receipt sharing off) the server records the marker
+  /// but does not broadcast the receipt to other members.
+  Future<void> markRead(
+    String convID,
+    String messageID, {
+    bool private = false,
+  }) async {
     await _post('/api/v1/conversations/$convID/read', {
       'message_id': messageID,
+      if (private) 'private': true,
     });
   }
 
@@ -2652,11 +2678,15 @@ class ApiService {
 
   Future<Map<String, dynamic>> updateSecuritySettings({
     String? twoFactorPassword,
+    String? currentTwoFactorPassword,
     bool disableTwoFactor = false,
     int? accountSelfDestructDays,
   }) async {
     final resp = await _put('/api/v1/me/security', {
       'two_factor_password': ?twoFactorPassword,
+      // Required by the server to change or disable an already-enabled second
+      // factor (re-auth). Ignored when 2FA is not yet enabled.
+      'current_two_factor_password': ?currentTwoFactorPassword,
       if (disableTwoFactor) 'disable_two_factor': true,
       'account_self_destruct_days': ?accountSelfDestructDays,
     });
@@ -2679,6 +2709,20 @@ class ApiService {
 
   Future<void> revokeSession(String sessionId) async {
     await _delete('/api/v1/me/sessions/$sessionId');
+  }
+
+  /// Revokes the caller's current session server-side (sign-out). Best-effort:
+  /// must be called while the access token is still valid.
+  Future<void> logout() async {
+    await _post('/api/v1/me/logout', const {});
+  }
+
+  /// Logs the account out of every device except this one. Returns how many
+  /// sessions were revoked.
+  Future<int> revokeOtherSessions() async {
+    final resp = await _post('/api/v1/me/sessions/revoke-others', const {});
+    final data = resp['data'] as Map<String, dynamic>?;
+    return (data?['revoked_count'] as int?) ?? 0;
   }
 
   // ---- Key-transparency Merkle log (public, unauthenticated) ----
@@ -3549,6 +3593,42 @@ class ApiService {
     });
   }
 
+  /// The channel's banned members (with usernames), for the moderation UI.
+  Future<List<dynamic>> listBans(String channelID) async {
+    final resp = await _get('/api/v1/channels/$channelID/bans');
+    return (resp['data'] as List?) ?? const [];
+  }
+
+  /// Toggle channel author signatures (channels only). When on, posts show the
+  /// posting admin's name.
+  Future<void> setSignMessages(String channelID, bool enabled) async {
+    await _put('/api/v1/channels/$channelID/sign-messages', {
+      'enabled': enabled,
+    });
+  }
+
+  /// Link (groupID != null) or unlink (groupID == null) a channel's discussion
+  /// group so its posts can be commented on there.
+  Future<void> setDiscussionGroup(String channelID, String? groupID) async {
+    await _put('/api/v1/channels/$channelID/discussion-group', {
+      'group_id': groupID,
+    });
+  }
+
+  /// Record that the current user has viewed the given channel posts. Deduped
+  /// per-viewer server-side. Returns messageID -> updated view count.
+  Future<Map<String, int>> recordPostViews(
+    String channelID,
+    List<String> messageIDs,
+  ) async {
+    if (messageIDs.isEmpty) return const {};
+    final resp = await _post('/api/v1/channels/$channelID/posts/views', {
+      'message_ids': messageIDs,
+    });
+    final views = (resp['data']?['views'] as Map?) ?? const {};
+    return views.map((k, v) => MapEntry(k as String, (v as num).toInt()));
+  }
+
   // ---- Device tokens (push notifications) ----
 
   Future<void> registerDeviceToken({
@@ -3563,8 +3643,15 @@ class ApiService {
     });
   }
 
-  Future<void> removeDeviceToken() async {
-    await _delete('/api/v1/users/me/device-token');
+  /// Remove push registration. Pass [token] to deregister only THIS device;
+  /// the backend deletes every token for the account when no token is given
+  /// (kept for a deliberate "sign out everywhere" flow only). Omitting the
+  /// token here would silently kill push on the user's other devices.
+  Future<void> removeDeviceToken({String? token}) async {
+    final query = (token != null && token.isNotEmpty)
+        ? '?token=${Uri.encodeQueryComponent(token)}'
+        : '';
+    await _delete('/api/v1/users/me/device-token$query');
   }
 
   /// Returns the caller's opaque push routing map: each entry is

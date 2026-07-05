@@ -263,8 +263,17 @@ class PushNotificationService {
           // A foreground FCM push carries only {type, route} (no content), so
           // intent.title/body are already generic; gate per the receiver's
           // toggles for parity with the other paths.
+          final resolvedConvId = conversationIdForData(msg.data);
+          if (resolvedConvId == null) {
+            // Unresolvable route (e.g. a brand-new conversation before the
+            // route map refreshes). Don't show a notification with a fake
+            // 'push' id — its tap dead-ends and all such notifications would
+            // collide in one slot. The app is foregrounded here, so the
+            // message still arrives over the WebSocket and appears in-app.
+            break;
+          }
           NotificationService.showMessage(
-            conversationId: conversationIdForData(msg.data) ?? 'push',
+            conversationId: resolvedConvId,
             title: intent.title,
             body: intent.body,
             showSender: visibility.showSender,
@@ -332,7 +341,15 @@ class PushNotificationService {
     _tokenRefreshSub = null;
     if (!_registered) return;
     try {
-      await api.removeDeviceToken();
+      // Deregister ONLY this device's token. Fetch it before deleteToken()
+      // invalidates it; passing no token makes the backend wipe every device's
+      // registration, so turning push off here would kill push on the user's
+      // phone, tablet, etc. too.
+      String? token;
+      try {
+        token = await FirebaseMessaging.instance.getToken();
+      } catch (_) {}
+      await api.removeDeviceToken(token: token);
     } catch (_) {}
     try {
       await FirebaseMessaging.instance.deleteToken();

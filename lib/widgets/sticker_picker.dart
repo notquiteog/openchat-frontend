@@ -40,15 +40,10 @@ class _StickerPickerState extends State<StickerPicker>
     try {
       final api = context.read<ApiService>();
       final raw = await api.getStickerPacks();
-      final packs = <Map<String, dynamic>>[];
-      for (final p in raw.cast<Map<String, dynamic>>()) {
-        try {
-          final full = await api.getStickerPack(p['id'] as String);
-          packs.add(full);
-        } catch (_) {
-          packs.add(p);
-        }
-      }
+      // The list endpoint now hydrates each pack with its `stickers` array,
+      // so we build the pack list directly from `raw` without an extra
+      // getStickerPack() request per pack.
+      final packs = raw.cast<Map<String, dynamic>>().toList();
       if (!mounted) return;
       setState(() {
         _packs = packs;

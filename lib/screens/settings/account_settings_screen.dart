@@ -192,19 +192,25 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                         }
                         final displayName = displayNameCtrl.text.trim();
                         final bio = bioCtrl.text.trim();
-                        Navigator.pop(ctx);
+                        // Keep the dialog open until the save succeeds — if it
+                        // fails (e.g. username taken) the user keeps their edits
+                        // and can fix them instead of losing everything.
                         try {
                           await api.updateProfile(
                             username: username,
                             displayName: displayName,
-                            bio: bio.isEmpty ? null : bio,
+                            // Send the empty string (not null) so an emptied bio
+                            // actually clears server-side; null omits the field
+                            // and the old bio would persist.
+                            bio: bio,
                             avatarUrl: pendingAvatarUrl,
                           );
                           await auth.refreshCurrentUser();
+                          if (ctx.mounted) Navigator.pop(ctx);
                         } catch (e) {
-                          if (mounted) {
+                          if (ctx.mounted) {
                             showAppToast(
-                              context,
+                              ctx,
                               'Failed to update: $e',
                               isError: true,
                             );

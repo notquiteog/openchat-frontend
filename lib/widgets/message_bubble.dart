@@ -70,6 +70,11 @@ class MessageBubble extends StatelessWidget {
   // game card) route their API calls to the /channels surface.
   final bool isChannel;
 
+  /// When true, show the post author's name above the bubble — a "signed"
+  /// channel (Telegram parity). Off by default; broadcast channels stay
+  /// author-less unless the admin enables message signing.
+  final bool showAuthor;
+
   /// When [message] anchors a media album (consecutive same-sender images
   /// sharing a media_group_id), the full chronological run — rendered as one
   /// grouped grid instead of a lone image. See utils/message_albums.dart.
@@ -94,8 +99,19 @@ class MessageBubble extends StatelessWidget {
     this.meBubbleColor,
     this.bubbleRadius = 18,
     this.isChannel = false,
+    this.showAuthor = false,
     this.albumMessages,
   });
+
+  /// The post author's display name for a signed channel, or null when it can't
+  /// be resolved (unknown sealed sender).
+  String? get _authorName {
+    if (!showAuthor || isMe) return null;
+    final sender = message.sender;
+    if (sender == null) return null;
+    final display = sender.displayName.trim();
+    return display.isEmpty ? null : display;
+  }
 
   /// Resolved background color for this bubble.
   Color _bubbleColor(BuildContext context) {
@@ -198,6 +214,18 @@ class MessageBubble extends StatelessWidget {
                   : CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (_authorName != null)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4, bottom: 2),
+                    child: Text(
+                      _authorName!,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                  ),
                 if (message.effectiveReplyTo != null)
                   _ReplyContextPreview(
                     message: replyPreview,
@@ -228,6 +256,12 @@ class MessageBubble extends StatelessWidget {
                   const Padding(
                     padding: EdgeInsets.only(top: 3, right: 4),
                     child: _ReadReceiptLabel(),
+                  ),
+                // Distinct-viewer count on channel posts (0 for DMs/groups).
+                if (message.viewCount > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3, right: 4),
+                    child: _ViewCountLabel(count: message.viewCount),
                   ),
               ],
             ),
@@ -466,6 +500,39 @@ class MessageBubble extends StatelessWidget {
   }
 }
 
+class _ViewCountLabel extends StatelessWidget {
+  final int count;
+  const _ViewCountLabel({required this.count});
+
+  static String _fmt(int n) {
+    if (n >= 1000000) {
+      return '${(n / 1000000).toStringAsFixed(n % 1000000 == 0 ? 0 : 1)}M';
+    }
+    if (n >= 1000) {
+      return '${(n / 1000).toStringAsFixed(n % 1000 == 0 ? 0 : 1)}K';
+    }
+    return '$n';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(
+      context,
+    ).colorScheme.onSurfaceVariant.withValues(alpha: 0.7);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.visibility_outlined, size: 12, color: color),
+        const SizedBox(width: 3),
+        Text(
+          _fmt(count),
+          style: TextStyle(color: color, fontSize: 10),
+        ),
+      ],
+    );
+  }
+}
+
 class _ReadReceiptLabel extends StatelessWidget {
   const _ReadReceiptLabel();
 
@@ -587,11 +654,20 @@ class _CallEventChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final missed = event.outcome == CallOutcome.missed;
-    final color = missed ? cs.error : cs.onSurfaceVariant;
-    final icon = event.isVideo
-        ? (missed ? Icons.videocam_off : Icons.videocam)
-        : (missed ? Icons.phone_missed : Icons.call);
+    final o = event.outcome;
+    // Missed and declined read as "negative" outcomes (red); busy and a normal
+    // answered/ended call are neutral.
+    final color = (o == CallOutcome.missed || o == CallOutcome.declined)
+        ? cs.error
+        : cs.onSurfaceVariant;
+    final icon = switch (o) {
+      CallOutcome.missed => event.isVideo
+          ? Icons.videocam_off
+          : Icons.phone_missed,
+      CallOutcome.declined => Icons.phone_disabled,
+      CallOutcome.busy => Icons.phone_paused,
+      CallOutcome.answered => event.isVideo ? Icons.videocam : Icons.call,
+    };
 
     return Center(
       child: GestureDetector(
@@ -2595,6 +2671,7 @@ List<InlineSpan> _formatMessageText(
     final markers = <String, int>{
       '**': text.indexOf('**', i),
       '__': text.indexOf('__', i),
+      '~~': text.indexOf('~~', i),
       '`': text.indexOf('`', i),
       '||': text.indexOf('||', i),
     }..removeWhere((_, value) => value < 0);
@@ -2648,6 +2725,15 @@ List<InlineSpan> _formatMessageText(
           TextSpan(
             text: inner,
             style: const TextStyle(fontStyle: FontStyle.italic),
+          ),
+        );
+      case '~~':
+        spans.add(
+          TextSpan(
+            text: inner,
+            style: const TextStyle(
+              decoration: TextDecoration.lineThrough,
+            ),
           ),
         );
       case '`':

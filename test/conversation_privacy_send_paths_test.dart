@@ -64,16 +64,22 @@ void main() {
     expect(ws.typingConversationIds, ['conv-1']);
   });
 
-  test('hidden read receipts still clear local unread mentions', () async {
-    await buildChat();
-    await settings.setUnreadMentionMessage('conv-1', 'mention-1');
-    await settings.setConversationShareReadReceipts('conv-1', false);
+  test(
+    'hidden read receipts clear local mentions and persist privately',
+    () async {
+      await buildChat();
+      await settings.setUnreadMentionMessage('conv-1', 'mention-1');
+      await settings.setConversationShareReadReceipts('conv-1', false);
 
-    await chat.sendReadReceipt('conv-1', 'msg-1');
+      await chat.sendReadReceipt('conv-1', 'msg-1');
 
-    expect(settings.unreadMentionMessageIdFor('conv-1'), isNull);
-    expect(api.markReadCalls, isEmpty);
-  });
+      expect(settings.unreadMentionMessageIdFor('conv-1'), isNull);
+      // The marker is still persisted so the caller's own unread count clears,
+      // but as `private` so no receipt is broadcast to other members.
+      expect(api.markReadCalls, hasLength(1));
+      expect(api.markReadPrivateFlags.single, isTrue);
+    },
+  );
 
   test(
     'per-chat read receipt override can share with global strict on',
@@ -86,6 +92,8 @@ void main() {
       expect(api.markReadCalls, hasLength(1));
       expect(api.markReadCalls.single.key, 'conv-1');
       expect(api.markReadCalls.single.value, 'msg-1');
+      // Sharing on → receipt broadcast (not private).
+      expect(api.markReadPrivateFlags.single, isFalse);
     },
   );
 }
@@ -95,9 +103,16 @@ class _RecordingApi extends ApiService {
 
   final List<MapEntry<String, String>> markReadCalls = [];
 
+  final List<bool> markReadPrivateFlags = [];
+
   @override
-  Future<void> markRead(String convID, String messageID) async {
+  Future<void> markRead(
+    String convID,
+    String messageID, {
+    bool private = false,
+  }) async {
     markReadCalls.add(MapEntry(convID, messageID));
+    markReadPrivateFlags.add(private);
   }
 }
 

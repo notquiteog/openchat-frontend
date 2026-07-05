@@ -202,6 +202,39 @@ List<BotCommand> commandSuggestions({
   return filtered.take(limit).toList();
 }
 
+// ── Bot inline mode (Telegram `@bot <query>`) ────────────────────────────────
+
+/// Whole-input inline query: the composer holds `@<botname> <query...>` and
+/// nothing else. [botUsername] is the token after `@`; [query] is the free-text
+/// remainder (may be empty).
+class ActiveInlineQuery {
+  final String botUsername;
+  final String query;
+
+  const ActiveInlineQuery({required this.botUsername, required this.query});
+}
+
+/// Matches the WHOLE input as `@<botname> <query...>`: a leading `@`, a valid
+/// username token ([A-Za-z0-9_]{3,32}, matching the mention grammar), a single
+/// separating space, then the rest as the query (may be empty — e.g. `@bot `).
+/// Distinct from [findActiveMentionQuery] — this is only for whole-input inline
+/// mode and never fires for a mid-text member mention. Only leading whitespace
+/// is ignored so a lone trailing separator space still triggers an empty query.
+/// Returns null when the shape doesn't fit.
+final _inlineQueryPattern = RegExp(
+  r'^@([A-Za-z0-9_]{3,32}) (.*)$',
+  dotAll: true,
+);
+
+ActiveInlineQuery? findActiveInlineQuery(String text, int cursor) {
+  final match = _inlineQueryPattern.firstMatch(text.trimLeft());
+  if (match == null) return null;
+  return ActiveInlineQuery(
+    botUsername: match.group(1)!,
+    query: match.group(2) ?? '',
+  );
+}
+
 List<ConversationMember> mentionSuggestionsForMembers({
   required Iterable<ConversationMember> members,
   required ActiveMentionQuery? active,

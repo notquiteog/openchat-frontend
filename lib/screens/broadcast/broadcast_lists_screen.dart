@@ -148,8 +148,9 @@ class BroadcastListsScreen extends StatelessWidget {
         ),
       ),
     );
-    if (saved != true || !context.mounted) return;
     final name = nameCtrl.text.trim();
+    nameCtrl.dispose();
+    if (saved != true || !context.mounted) return;
     if (name.isEmpty || selected.isEmpty) {
       showAppToast(
         context,
@@ -193,6 +194,7 @@ class BroadcastListsScreen extends StatelessWidget {
     );
     if (send != true || !context.mounted) return;
     final text = textCtrl.text.trim();
+    textCtrl.dispose();
     if (text.isEmpty) return;
     final chat = context.read<ChatProvider>();
     var ok = 0;

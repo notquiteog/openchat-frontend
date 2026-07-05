@@ -25,6 +25,9 @@ enum WsEventType {
   // A bot answered an inline-button tap (answerCallbackQuery); delivered only
   // to the user who tapped, carries {callback_query_id, text, show_alert, url}.
   callbackAnswer,
+  // A bot answered an inline query (answerInlineQuery); delivered only to the
+  // user composing, carries {inline_query_id, conversation_id, results}.
+  inlineAnswer,
   pollUpdated,
   paymentRequestUpdated,
   // User-scoped on-chain deposit confirmation progress (owner only).
@@ -647,6 +650,7 @@ class WebSocketService extends ChangeNotifier {
     'message_reaction' => WsEventType.messageReaction,
     'message_tipped' => WsEventType.messageTipped,
     'callback_answer' => WsEventType.callbackAnswer,
+    'inline_answer' => WsEventType.inlineAnswer,
     'poll_updated' => WsEventType.pollUpdated,
     'payment_request_updated' => WsEventType.paymentRequestUpdated,
     'deposit_progress' => WsEventType.depositProgress,

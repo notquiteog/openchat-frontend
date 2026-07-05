@@ -68,11 +68,20 @@ class CallSession {
   bool get isGroupCall => participantUserIds.length > 1;
 }
 
+/// Why a call ended, so the DM call chip can distinguish a missed ring from an
+/// active decline or a busy line (Telegram parity) instead of collapsing every
+/// unanswered call into "missed".
+enum CallEndReason { completed, missed, declined, busy }
+
 class CallEndedEvent {
   final String conversationId;
   final bool answered;
   final bool isVideo;
   final int durationSecs;
+
+  /// Fine-grained outcome. [answered] stays for the local history log; [reason]
+  /// drives the DM chip text.
+  final CallEndReason reason;
 
   /// Direction of the ended call. Incoming endings are recorded in the local
   /// call history but must NOT post a DM call event — the caller's side owns
@@ -84,6 +93,7 @@ class CallEndedEvent {
     required this.answered,
     required this.isVideo,
     required this.durationSecs,
+    this.reason = CallEndReason.completed,
     this.isIncoming = false,
   });
 }
@@ -221,8 +231,18 @@ class CallService {
   // this buffer they are dropped and ICE has no remote candidates to check.
   final List<RTCIceCandidate> _pendingRemoteCandidates = [];
 
+  // Mesh offers from fellow group-call participants that arrived before our
+  // local media was ready (still ringing, or mid-accept). Keyed by the sender's
+  // user id; replayed and answered once acceptIncomingCall finishes so every
+  // participant hears every other participant over P2P — not just the caller.
+  final Map<String, String> _bufferedMeshOffers = {};
+
   // Active call state.
   CallSession? _session;
+  // Set just before _cleanup() when the ending has a specific outcome (a remote
+  // decline/busy reject); consumed once when the CallEndedEvent is built, then
+  // cleared. Null means "infer from wasConnected" (completed vs missed).
+  CallEndReason? _pendingEndReason;
   bool _usingFrontCamera = true;
   bool _isScreenSharing = false;
   String? _selectedAudioOutputId;
@@ -475,6 +495,137 @@ class CallService {
     _ws.sendCallOfferPayload(offerData);
   }
 
+  /// After accepting a group call, dial the OTHER participants (besides the
+  /// caller, who already dialed us) so the call becomes a full P2P mesh — every
+  /// participant hears every other, not just the caller. Glare-free: for each
+  /// pair only the lower user-id initiates; the higher id answers the incoming
+  /// offer via [_answerMeshOffer]. Best-effort per peer.
+  Future<void> _connectMeshPeers() async {
+    final s = _session;
+    if (s == null || !s.isGroupCall) return;
+    final self = _selfUserId?.trim() ?? '';
+    if (self.isEmpty) return;
+    final caller = s.remoteUserId.trim();
+    for (final raw in s.participantUserIds) {
+      final p = raw.trim();
+      if (p.isEmpty || p == self || p == caller || _peers.containsKey(p)) {
+        continue;
+      }
+      // Deterministic tiebreak: only the lower id dials; the higher id answers.
+      if (self.compareTo(p) >= 0) continue;
+      try {
+        await _createOutgoingPeer(
+          userId: p,
+          callId: s.callId,
+          conversationId: s.conversationId ?? '',
+          isVideo: s.isVideo,
+        );
+      } catch (e) {
+        debugPrint('CallService: mesh dial to $p failed: $e');
+        _removePeer(p);
+      }
+      // The call may have ended between dials.
+      if (_session == null || _session!.callId != s.callId) return;
+    }
+  }
+
+  /// Answer a mesh offer from a fellow group-call participant [fromUserId],
+  /// building an ADDITIONAL peer connection so we exchange media with them
+  /// directly. No ring, no new session — the call is already active. Best-effort:
+  /// any failure just drops that one peer, leaving the rest of the call intact.
+  Future<void> _answerMeshOffer(
+    String fromUserId,
+    String sdp,
+    String conversationId, {
+    required bool isVideo,
+  }) async {
+    final s = _session;
+    final stream = _localStream;
+    if (s == null ||
+        !s.isGroupCall ||
+        stream == null ||
+        fromUserId.isEmpty ||
+        fromUserId == (_selfUserId?.trim() ?? '') ||
+        _peers.containsKey(fromUserId)) {
+      return;
+    }
+    final callId = s.callId;
+    bool ended() => _session == null || _session!.callId != callId;
+    try {
+      final renderer = RTCVideoRenderer();
+      await renderer.initialize();
+      if (ended()) {
+        await renderer.dispose();
+        return;
+      }
+      final pc = await _createPeerConnection();
+      if (ended()) {
+        await pc.close();
+        await renderer.dispose();
+        return;
+      }
+      final peerState = _PeerState(
+        userId: fromUserId,
+        pc: pc,
+        renderer: renderer,
+      );
+      _peers[fromUserId] = peerState;
+      _setupPcCallbacks(pc, peerState, fromUserId, callId, conversationId);
+      for (final track in stream.getTracks()) {
+        await pc.addTrack(track, stream);
+      }
+      await _applySenderCaps(pc);
+      await pc.setRemoteDescription(
+        RTCSessionDescription(_ensureSdpTerminator(sdp), 'offer'),
+      );
+      peerState.remoteDescriptionSet = true;
+      for (final candidate in peerState.pendingCandidates) {
+        try {
+          await pc.addCandidate(candidate);
+        } catch (_) {}
+      }
+      peerState.pendingCandidates.clear();
+      final answer = await pc.createAnswer({});
+      await pc.setLocalDescription(answer);
+      final answerData = await _signalCodec.encode(
+        CallSignalPayload(
+          kind: 'answer',
+          targetUserId: fromUserId,
+          callId: callId,
+          conversationId: conversationId,
+          isVideo: isVideo,
+          sdp: answer.sdp,
+        ),
+      );
+      _ws.sendCallAnswer(answerData);
+      debugPrint('CallService: answered mesh offer from $fromUserId');
+    } catch (e) {
+      debugPrint('CallService: _answerMeshOffer($fromUserId) failed: $e');
+      _removePeer(fromUserId);
+    }
+  }
+
+  /// Answer any mesh offers that arrived (and were buffered) while we were still
+  /// ringing / bringing up local media. Called once from acceptIncomingCall.
+  Future<void> _drainBufferedMeshOffers(
+    String conversationId,
+    bool isVideo,
+  ) async {
+    if (_bufferedMeshOffers.isEmpty) return;
+    final buffered = Map<String, String>.from(_bufferedMeshOffers);
+    _bufferedMeshOffers.clear();
+    for (final entry in buffered.entries) {
+      if (_peers.containsKey(entry.key)) continue;
+      await _answerMeshOffer(
+        entry.key,
+        entry.value,
+        conversationId,
+        isVideo: isVideo,
+      );
+      if (_session == null) return;
+    }
+  }
+
   /// Add an existing conversation member to a connected GROUP call by dialing a
   /// fresh outgoing peer to them, reusing the offer/answer + caller-relay star
   /// topology. v1 is group-only: 1:1→group escalation needs a server-side group
@@ -676,6 +827,15 @@ class CallService {
       // (call_ringing is sent when the offer first arrives, not here — by
       // answer time the caller is already past the ringing state.)
       _startConnectTimer();
+
+      // Group call: form a full P2P mesh with the other participants (besides
+      // the caller, who dialed us) so everyone hears everyone — not just the
+      // caller. Replays offers buffered while we rang, then dials the peers this
+      // side is responsible for (lower-id-initiates tiebreak).
+      if (session.isGroupCall && !aborted()) {
+        await _drainBufferedMeshOffers(conversationId, session.isVideo);
+        if (!aborted()) await _connectMeshPeers();
+      }
     } catch (e, st) {
       if (aborted()) {
         // The call ended (remote cancel / lost the answer race) while setup
@@ -858,6 +1018,16 @@ class CallService {
           // call continues for everyone else.
           _removePeer(event.data['caller_id']?.toString() ?? '');
         } else if (s != null) {
+          // 1:1 reject: the callee actively declined (or was busy). The wire
+          // reason is 'busy' vs absent (= declined); thread it into the DM chip
+          // so the caller sees "Declined"/"Busy" rather than a generic "Missed".
+          // Only meaningful pre-connect — a post-connect reject is a normal end.
+          if (!s.wasConnected) {
+            _pendingEndReason =
+                event.data['reason']?.toString() == 'busy'
+                ? CallEndReason.busy
+                : CallEndReason.declined;
+          }
           debugPrint('CallService: remote reject signal -> cleanup');
           _cleanup();
         }
@@ -1074,12 +1244,20 @@ class CallService {
     if (await _signalCodec.isConversationEncrypted(convId)) {
       e2eeKey = createSfuKey(convId);
     }
-    for (final peer in _peers.values) {
+    // Send the escalate signal (with the SFU e2ee key) to every participant we
+    // know, not just our direct peers. In a P2P star a non-caller holds only
+    // one peer (the caller), so keying off _peers alone left the other invitees
+    // without the key; the participant list is the full set.
+    final targets = <String>{
+      for (final peer in _peers.values) peer.userId,
+      ...s.participantUserIds,
+    }..removeWhere((id) => id.isEmpty || id == _selfUserId);
+    for (final targetId in targets) {
       try {
         final data = await _signalCodec.encode(
           CallSignalPayload(
             kind: 'escalate',
-            targetUserId: peer.userId,
+            targetUserId: targetId,
             callId: s.callId,
             conversationId: convId,
             e2eeKey: e2eeKey,
@@ -1087,7 +1265,7 @@ class CallService {
         );
         _ws.sendCallEscalate(data);
       } catch (e) {
-        debugPrint('CallService: escalate signal to ${peer.userId} failed: $e');
+        debugPrint('CallService: escalate signal to $targetId failed: $e');
       }
     }
     final escalated = EscalatedCall(
@@ -1265,13 +1443,50 @@ class CallService {
     // The backend delivers each offer over BOTH the WebSocket and FCM. A
     // second copy of an offer we already know about must be ignored — busy-
     // rejecting it would tear down our own pending/active call.
-    if (callId == _pendingIncoming?.callId) return false;
+    final pending = _pendingIncoming;
+    if (pending != null && callId == pending.callId) {
+      // A fellow invitee dialing us (see _connectMeshPeers) for a group call we
+      // are still ringing for: buffer their offer and answer it once we accept,
+      // so mesh peers that dial before we pick up aren't lost. The caller's own
+      // duplicate offer (same remote id) is just an ignored re-delivery.
+      if (callerId.isNotEmpty &&
+          callerId != pending.remoteUserId &&
+          sdp != null &&
+          pending.participantUserIds.contains(callerId)) {
+        _bufferedMeshOffers[callerId] = sdp;
+      }
+      return false;
+    }
     final active = _session;
     if (active != null && callId == active.callId) {
-      // Same call id on the active session: either a duplicate delivery of
-      // the original offer, or (when connected) a renegotiation offer from
-      // the peer — e.g. an ICE restart after a network change.
-      if (active.state == CallState.connected &&
+      // Same call id on the active session. In a GROUP call, an offer from a
+      // participant we have no peer for yet is a NEW mesh peer connecting us —
+      // answer it as an additional peer (no ring) so every participant hears
+      // every other over P2P, not just the caller. Everything else at this call
+      // id is a renegotiation (ICE restart / video upgrade) from an existing
+      // peer, or a duplicate re-delivery.
+      final meshPeer =
+          active.isGroupCall &&
+          callerId.isNotEmpty &&
+          !_peers.containsKey(callerId) &&
+          active.participantUserIds.contains(callerId) &&
+          sdp != null;
+      if (meshPeer) {
+        if (_localStream != null) {
+          unawaited(
+            _answerMeshOffer(
+              callerId,
+              sdp,
+              conversationId ?? '',
+              isVideo: isVideo,
+            ),
+          );
+        } else {
+          // Local media isn't up yet (mid-accept) — buffer; acceptIncomingCall
+          // replays it once media is ready.
+          _bufferedMeshOffers[callerId] = sdp;
+        }
+      } else if (active.state == CallState.connected &&
           sdp != null &&
           callerId.isNotEmpty) {
         unawaited(
@@ -2119,16 +2334,23 @@ class CallService {
       final dur = ending.wasConnected && ending.connectedAt != null
           ? DateTime.now().difference(ending.connectedAt!).inSeconds
           : 0;
+      final reason =
+          _pendingEndReason ??
+          (ending.wasConnected
+              ? CallEndReason.completed
+              : CallEndReason.missed);
       _callEndedController.add(
         CallEndedEvent(
           conversationId: ending.conversationId!,
           answered: ending.wasConnected,
           isVideo: ending.isVideo,
           durationSecs: dur,
+          reason: reason,
           isIncoming: ending.isIncoming,
         ),
       );
     }
+    _pendingEndReason = null;
 
     // Clear renderer sources immediately so the UI stops rendering.
     if (_localRendererInitialized) _localRenderer.srcObject = null;
@@ -2139,6 +2361,7 @@ class CallService {
     _session = null;
     _pendingRemoteSdp = null;
     _pendingRemoteCandidates.clear();
+    _bufferedMeshOffers.clear();
     _usingFrontCamera = true;
     _isScreenSharing = false;
     unawaited(_platformControls.stopMediaProjection());

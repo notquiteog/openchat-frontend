@@ -29,6 +29,7 @@ import '../channels/channel_screen.dart';
 import '../broadcast/broadcast_lists_screen.dart';
 import '../call/call_history_screen.dart';
 import '../chat/chat_screen.dart';
+import '../settings/contacts_screen.dart';
 import '../settings/settings_screen.dart';
 
 class ConversationsScreen extends StatefulWidget {
@@ -241,6 +242,74 @@ class ConversationsScreenState extends State<ConversationsScreen> {
     );
   }
 
+  Future<void> _markAllRead() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final count = await context.read<ChatProvider>().markAllConversationsRead();
+    if (!mounted) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          count == 0 ? 'No unread chats' : 'Marked $count chats as read',
+        ),
+      ),
+    );
+  }
+
+  /// Wraps a conversation row so swiping right pins/unpins it and swiping left
+  /// archives/unarchives it — the standard Telegram inbox gestures. The action
+  /// runs on swipe threshold; the row never fully dismisses (returns false) so
+  /// the list rebuild reflects the new state cleanly.
+  Widget _wrapSwipeActions(
+    BuildContext context,
+    Conversation conv,
+    Widget child,
+  ) {
+    final settings = context.read<SettingsProvider>();
+    final isPinned = settings.isConversationPinned(conv.id);
+    final isArchived = settings.isConversationArchived(conv.id);
+    final cs = Theme.of(context).colorScheme;
+    Widget bg(Alignment alignment, IconData icon, String label, Color color) {
+      return Container(
+        color: color.withValues(alpha: 0.18),
+        alignment: alignment,
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: 22),
+            const SizedBox(width: 8),
+            Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      );
+    }
+
+    return Dismissible(
+      key: ValueKey('swipe-${conv.id}'),
+      background: bg(
+        Alignment.centerLeft,
+        isPinned ? Icons.push_pin_outlined : Icons.push_pin,
+        isPinned ? 'Unpin' : 'Pin',
+        cs.primary,
+      ),
+      secondaryBackground: bg(
+        Alignment.centerRight,
+        isArchived ? Icons.unarchive_outlined : Icons.archive_outlined,
+        isArchived ? 'Unarchive' : 'Archive',
+        cs.tertiary,
+      ),
+      confirmDismiss: (direction) async {
+        if (direction == DismissDirection.startToEnd) {
+          await settings.toggleConversationPinned(conv.id);
+        } else {
+          await settings.toggleConversationArchived(conv.id);
+        }
+        return false; // keep the element; the list rebuild reflects the change
+      },
+      child: child,
+    );
+  }
+
   void archiveSelectedConversation() {
     final conv = _selectedConversationForShortcut();
     if (conv == null) return;
@@ -441,8 +510,11 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                       _AnimatedConversationTile(
                         key: ValueKey(conversations[index].id),
                         index: index,
-                        child: _ConversationTile(
-                          conversation: conversations[index],
+                        child: _wrapSwipeActions(
+                          context,
+                          conversations[index],
+                          _ConversationTile(
+                            conversation: conversations[index],
                           showDivider: index < conversations.length - 1,
                           draft: drafts[conversations[index].id],
                           isSelected:
@@ -478,6 +550,7 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                                 conversations[index],
                                 anchor: position,
                               ),
+                          ),
                         ),
                       ),
                 ],
@@ -599,6 +672,25 @@ class ConversationsScreenState extends State<ConversationsScreen> {
                 label: 'New chat',
                 subtitle: 'Message a person, or start a group or channel',
                 onTap: () => runAfterClose(() => showNewConversation()),
+              ),
+              GlassActionTile(
+                icon: Icons.mark_chat_read_outlined,
+                label: 'Mark all as read',
+                subtitle: 'Clear every unread badge',
+                onTap: () => runAfterClose(_markAllRead),
+              ),
+              GlassActionTile(
+                icon: Icons.contacts_outlined,
+                label: 'Contacts',
+                subtitle: 'Saved contacts and your shareable contact QR',
+                onTap: () => runAfterClose(
+                  () => Navigator.push(
+                    context,
+                    MaterialPageRoute<void>(
+                      builder: (_) => const ContactsScreen(),
+                    ),
+                  ),
+                ),
               ),
               GlassActionTile(
                 icon: Icons.folder_outlined,

@@ -453,6 +453,15 @@ class ChatProvider extends ChangeNotifier {
   Stream<Map<String, dynamic>> get callbackAnswers =>
       _callbackAnswerController.stream;
 
+  /// A bot's answer to an inline query (answerInlineQuery). Payload keys:
+  /// inline_query_id, conversation_id, results (a list of inline result maps).
+  /// The compose box that sent the query listens for the entry whose
+  /// inline_query_id matches the id its send returned.
+  final StreamController<Map<String, dynamic>> _inlineAnswerController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get inlineAnswers =>
+      _inlineAnswerController.stream;
+
   /// Pending join requests, delivered only to members who can approve them.
   /// Payload keys: conversation_id, user_id (the requester). The join-request
   /// review UI listens to live-refresh its list while open.
@@ -2931,12 +2940,13 @@ class ChatProvider extends ChangeNotifier {
   /// (red for missed). Posted only by the caller's client to avoid duplicates.
   Future<void> postCallEvent({
     required String convID,
-    required bool answered,
+    required String outcome,
     required bool isVideo,
     int durationSecs = 0,
   }) async {
     final payload = jsonEncode({
-      'call_event': answered ? 'answered' : 'missed',
+      // 'answered' | 'missed' | 'declined' | 'busy' — see CallEventInfo.
+      'call_event': outcome,
       'video': isVideo,
       'duration': durationSecs,
     });
@@ -4636,19 +4646,43 @@ class ChatProvider extends ChangeNotifier {
     _ws.sendTyping(convID);
   }
 
+  /// Marks every conversation with unread messages as read. Returns the number
+  /// of conversations that were cleared.
+  Future<int> markAllConversationsRead() async {
+    final targets = _conversations.values
+        .where((c) => c.unreadCount > 0 && c.lastMessage != null)
+        .toList();
+    for (final c in targets) {
+      await sendReadReceipt(c.id, c.lastMessage!.id);
+    }
+    return targets.length;
+  }
+
   Future<void> sendReadReceipt(String convID, String messageID) async {
     await _settings.clearUnreadMention(convID);
-    if (!_settings.shareReadReceiptsForConversation(convID)) return;
+    // Locally zero the unread badge immediately so the chat-list count clears
+    // without waiting for a server refetch.
+    final conv = _conversations[convID];
+    if (conv != null && conv.unreadCount != 0) {
+      _conversations[convID] = conv.copyWith(unreadCount: 0);
+      notifyListeners();
+    }
     final userID = _selfId ?? await _storage.getUserID() ?? '';
     if (userID.isEmpty) return;
-    _rememberReadReceipt(
-      convID: convID,
-      userID: userID,
-      messageID: messageID,
-      notify: false,
-    );
+    // Always persist the read marker so the caller's OWN unread count clears
+    // server-side. When read-receipt sharing is off for this chat we send it as
+    // `private`: the server records the marker but never tells other members.
+    final share = _settings.shareReadReceiptsForConversation(convID);
+    if (share) {
+      _rememberReadReceipt(
+        convID: convID,
+        userID: userID,
+        messageID: messageID,
+        notify: false,
+      );
+    }
     try {
-      await _api.markRead(convID, messageID);
+      await _api.markRead(convID, messageID, private: !share);
     } catch (_) {
       // Read receipts are best-effort metadata. Never surface failures in chat.
     }
@@ -4844,6 +4878,13 @@ class ChatProvider extends ChangeNotifier {
         // is awaiting an answer for this callback_query_id.
         if (!_callbackAnswerController.isClosed) {
           _callbackAnswerController.add(event.data);
+        }
+
+      case WsEventType.inlineAnswer:
+        // A bot's inline-query results; consumed by the compose box that is
+        // awaiting results for this inline_query_id.
+        if (!_inlineAnswerController.isClosed) {
+          _inlineAnswerController.add(event.data);
         }
 
       case WsEventType.conversationUpdated:
@@ -5290,6 +5331,18 @@ class ChatProvider extends ChangeNotifier {
         list = List<Message>.from(list)..removeAt(meshIdx);
         _messages[msg.conversationId] = list;
       }
+      // Our own optimistic bubble (id 'pending-…', same encrypted payload) is
+      // superseded by the server's echo — replace it rather than showing a
+      // duplicate when the WS broadcast beats the HTTP send response.
+      final pendingIdx = list.indexWhere(
+        (m) =>
+            m.id.startsWith('pending-') &&
+            m.encryptedPayload == msg.encryptedPayload,
+      );
+      if (pendingIdx != -1) {
+        list = List<Message>.from(list)..removeAt(pendingIdx);
+        _messages[msg.conversationId] = list;
+      }
     }
     final idx = list.indexWhere((m) => m.id == msg.id);
     if (idx == -1) {
@@ -5302,8 +5355,26 @@ class ChatProvider extends ChangeNotifier {
 
     final conv = _conversations[msg.conversationId];
     if (conv != null) {
+      // Bump the unread badge for messages from someone else that land in a
+      // chat the user isn't currently looking at. Own messages, system
+      // messages, and the open conversation never count (the open chat zeroes
+      // via sendReadReceipt). Keeps the badge live without a refetch; the
+      // server-computed count reconciles on the next list load.
+      // Require a POSITIVELY-known other sender. A sealed-sender message whose
+      // signature hasn't verified yet has a null senderId; treating null as
+      // "not me" made the sender's OWN message notify + bump unread on their
+      // other device. The server-computed count reconciles later either way.
+      final countsAsUnread =
+          _selfId != null &&
+          msg.senderId.isNotEmpty &&
+          msg.senderId != _selfId &&
+          msg.type != MessageType.system &&
+          NotificationService.activeConversationId != msg.conversationId;
       _conversations[msg.conversationId] = conv.copyWith(
         lastMessage: displayMsg,
+        unreadCount: countsAsUnread
+            ? conv.unreadCount + 1
+            : conv.unreadCount,
       );
     } else if (!_isLoading) {
       // Message from a conversation we haven't seen yet (new DM or group) —
@@ -5315,6 +5386,7 @@ class ChatProvider extends ChangeNotifier {
     final mentionedForCurrentUser = await _recordLocalUnreadMention(displayMsg);
 
     if (_selfId != null &&
+        msg.senderId.isNotEmpty &&
         msg.senderId != _selfId &&
         msg.type != MessageType.system &&
         // Decoy sessions: a hidden conversation must not buzz or banner.
@@ -6016,6 +6088,7 @@ class ChatProvider extends ChangeNotifier {
     vaultModeListenable.removeListener(_onVaultModeChanged);
     _depositProgressController.close();
     _callbackAnswerController.close();
+    _inlineAnswerController.close();
     _joinRequestController.close();
     _recoveryEventsController.close();
     _smpController.close();

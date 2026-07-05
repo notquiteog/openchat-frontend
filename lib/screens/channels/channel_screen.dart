@@ -52,6 +52,7 @@ import '../../widgets/message_bubble.dart';
 import '../../widgets/scheduled_messages_sheet.dart';
 import '../../widgets/sticker_picker.dart';
 import '../../widgets/voice_note_recorder.dart';
+import '../chat/chat_screen.dart';
 import '../profile/user_profile_screen.dart';
 import 'channel_action_policy.dart';
 import 'channel_analytics_screen.dart';
@@ -458,6 +459,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   final _scrollCtrl = ScrollController();
   final Map<String, GlobalKey> _postKeys = {};
   List<Message> _posts = [];
+  // Ids that have appeared in the live store; used to detect deletions (an id
+  // that was live-known and then vanished was deleted, so drop it from _posts).
+  final Set<String> _liveKnownIds = {};
   bool _isSubscribed = false;
   bool _isAdmin = false;
   ConversationMember? _currentMember;
@@ -478,6 +482,17 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   bool _suppressInputEntityShift = false;
   String? _highlightedPostId;
   Timer? _highlightTimer;
+
+  // Per-post view tracking. A post is treated as "viewed" once its row is built
+  // by the ListView.builder itemBuilder (ListView only materialises rows in/near
+  // the viewport, so a build is a good proxy for the post being on screen).
+  // _viewedPostIds holds ids already recorded (or in-flight); _pendingViewIds
+  // holds ids seen this batch but not yet flushed to the server. Flushing is
+  // debounced so a fast scroll coalesces into a single request.
+  final Set<String> _viewedPostIds = {};
+  final Set<String> _pendingViewIds = {};
+  Timer? _viewFlushTimer;
+
   Timer? _draftSaveTimer;
   bool _draftRestored = false;
   bool _hasPendingDraftSave = false;
@@ -563,6 +578,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   @override
   void dispose() {
     _highlightTimer?.cancel();
+    _viewFlushTimer?.cancel();
     _inputCtrl.removeListener(_onInputTextChanged);
     _ws.removeListener(_onWsConnectionChanged);
     _chat.removeListener(_onChatLiveUpdate);
@@ -571,6 +587,81 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
+  }
+
+  /// Called from the ListView.builder itemBuilder for every post that gets
+  /// built (i.e. is on/near screen). Queues a not-yet-recorded post id for a
+  /// debounced view flush. Must NOT call setState — itemBuilder runs during
+  /// build. Pending/optimistic posts (id starts with 'pending-') are skipped
+  /// since they have no server id yet.
+  void _markPostViewed(String messageId) {
+    if (messageId.startsWith('pending-')) return;
+    if (_viewedPostIds.contains(messageId)) return;
+    if (!_pendingViewIds.add(messageId)) return;
+    _viewFlushTimer?.cancel();
+    _viewFlushTimer = Timer(const Duration(milliseconds: 800), _flushPostViews);
+  }
+
+  /// Records queued post views with the server (deduped per-viewer server-side)
+  /// and folds the returned distinct-viewer counts back into the model so the
+  /// bubbles re-render. On failure the ids are returned to the un-recorded pool
+  /// so a later scroll retries them.
+  Future<void> _flushPostViews() async {
+    if (!mounted) return;
+    if (_pendingViewIds.isEmpty) return;
+    final ids = _pendingViewIds.take(100).toList();
+    _pendingViewIds.removeAll(ids);
+    _viewedPostIds.addAll(ids);
+    try {
+      final api = context.read<ApiService>();
+      final counts = await api.recordPostViews(channel.id, ids);
+      if (!mounted) return;
+      if (counts.isEmpty) return;
+      var changed = false;
+      for (var i = 0; i < _posts.length; i++) {
+        final updated = counts[_posts[i].id];
+        if (updated != null) {
+          _posts[i].viewCount = updated;
+          changed = true;
+        }
+      }
+      if (changed) setState(() {});
+    } catch (_) {
+      // Roll the failed ids back so a subsequent scroll re-queues them.
+      _viewedPostIds.removeAll(ids);
+    } finally {
+      // More rows may have queued while this batch was in flight; drain them.
+      if (mounted && _pendingViewIds.isNotEmpty) {
+        _viewFlushTimer?.cancel();
+        _viewFlushTimer = Timer(
+          const Duration(milliseconds: 800),
+          _flushPostViews,
+        );
+      }
+    }
+  }
+
+  /// Opens the channel's linked discussion group so users can comment on posts.
+  /// Uses the already-loaded conversation when available and otherwise fetches
+  /// it by id; shows a toast if the group can't be resolved.
+  Future<void> _openDiscussionGroup() async {
+    final groupId = channel.discussionGroupId;
+    if (groupId == null) return;
+    // Capture navigator/messenger context before awaiting to avoid using a
+    // possibly-unmounted BuildContext across the async gap.
+    final navigator = Navigator.of(context);
+    final chat = context.read<ChatProvider>();
+    final group =
+        chat.conversationById(groupId) ??
+        await chat.ensureConversationLoaded(groupId);
+    if (!mounted) return;
+    if (group == null) {
+      showAppToast(context, 'Discussion group unavailable', isError: true);
+      return;
+    }
+    navigator.push(
+      MaterialPageRoute(builder: (_) => ChatScreen(conversation: group)),
+    );
   }
 
   Future<void> _load() async {
@@ -647,19 +738,44 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
   void _onChatLiveUpdate() {
     if (!mounted) return;
     final live = _chat.messagesFor(channel.id);
-    if (live.isEmpty) return;
+    final liveIds = {for (final m in live) m.id};
     final known = {for (final p in _posts) p.id};
     final additions = [
       for (final m in live)
         if (!known.contains(m.id) && (m.isDecrypted || !m.isEncrypted)) m,
     ];
-    if (additions.isEmpty) return;
+    // A post that was in the live store and has now vanished was deleted
+    // (ChatProvider drops it on the messageDeleted event). Remove it here too so
+    // a delete by another admin disappears from an open viewer's feed. Only
+    // touch confirmed posts that we saw live — never history-only or pending
+    // (outbox) posts, which never entered the live store. When the live store is
+    // empty we treat it as "not loaded", not "everything deleted".
+    final deletedIds = live.isEmpty
+        ? const <String>{}
+        : _liveKnownIds.difference(liveIds);
+    if (additions.isEmpty && deletedIds.isEmpty) {
+      _liveKnownIds.addAll(liveIds);
+      return;
+    }
     setState(() {
+      if (deletedIds.isNotEmpty) {
+        _posts.removeWhere(
+          (p) => p is! PendingMessage && deletedIds.contains(p.id),
+        );
+      }
       for (final m in additions) {
         ChatProvider.hydrateMessageSenderFromConversation(m, channel);
         _posts.add(m);
       }
+      if (additions.isNotEmpty) {
+        // Keep the feed in chronological order — a live post can arrive out of
+        // order relative to a just-loaded history page.
+        _posts.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      }
     });
+    _liveKnownIds
+      ..removeAll(deletedIds)
+      ..addAll(liveIds);
   }
 
   Future<void> _loadOutbox() {
@@ -4270,6 +4386,12 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
           ),
         ),
         actions: [
+          if (channel.discussionGroupId != null)
+            IconButton(
+              icon: const Icon(Icons.forum_rounded),
+              tooltip: 'Discussion',
+              onPressed: _openDiscussionGroup,
+            ),
           if (actionPlacement.topBar.contains(ChannelTopBarAction.moderation))
             IconButton(
               icon: const Icon(Icons.shield_outlined),
@@ -4412,6 +4534,9 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                             itemCount: _posts.length,
                             itemBuilder: (context, i) {
                               final msg = _posts[i];
+                              // Building a row means the post is on/near screen;
+                              // queue it for a debounced view record.
+                              _markPostViewed(msg.id);
                               final isMe = msg.senderId == currentUserId;
                               final isPinned = settings.isChannelMessagePinned(
                                 channel.id,
@@ -4445,6 +4570,7 @@ class _ChannelFeedScreenState extends State<ChannelFeedScreen> {
                                       message: msg,
                                       isMe: isMe,
                                       isChannel: true,
+                                      showAuthor: channel.signMessages,
                                       showAvatar: showAvatar,
                                       meBubbleColor: meBubbleColor,
                                       onTapUp: (details) => _showReactionBar(

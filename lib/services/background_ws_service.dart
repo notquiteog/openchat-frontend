@@ -632,6 +632,15 @@ class BackgroundWsService {
           id: intent.notificationId,
           title: intent.title,
           body: intent.body,
+          // Encode the conversation id so tapping the notification opens the
+          // chat, matching NotificationService.showMessage. Without a payload
+          // the tap handler found no id and dumped the user on the inbox.
+          payload: intent.conversationId == null
+              ? null
+              : jsonEncode({
+                  'type': 'message',
+                  'conversation_id': intent.conversationId,
+                }),
           notificationDetails: const NotificationDetails(
             android: AndroidNotificationDetails(
               'bg_messages',

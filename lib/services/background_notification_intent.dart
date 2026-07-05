@@ -38,11 +38,16 @@ class NotificationIntent {
   final String title;
   final String body;
 
+  /// Conversation this notification belongs to (message intents), so the tap
+  /// payload can route to the chat. Null for non-conversation intents.
+  final String? conversationId;
+
   const NotificationIntent({
     required this.kind,
     required this.notificationId,
     required this.title,
     required this.body,
+    this.conversationId,
   });
 }
 
@@ -133,6 +138,7 @@ NotificationIntent? notificationIntentFromEvent({
       notificationId: convId.hashCode,
       title: _messageTitle(visibility, conversationTitle, sender),
       body: _messageBody(visibility, conversationTitle, sender, previewText),
+      conversationId: convId,
     );
   }
 

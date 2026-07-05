@@ -12,10 +12,42 @@ import 'package:shared_preferences/shared_preferences.dart';
 class _PickerApi extends ApiService {
   _PickerApi() : super(SecureStorageService());
 
+  // The list endpoint now hydrates each pack's `stickers` inline (one batched
+  // query server-side), so the picker no longer fetches per-pack.
   @override
   Future<List<dynamic>> getStickerPacks() async => [
-    <String, dynamic>{'id': 'stickers-animals', 'name': 'Animals'},
-    <String, dynamic>{'id': 'stickers-space', 'name': 'Space'},
+    <String, dynamic>{
+      'id': 'stickers-animals',
+      'name': 'Animals',
+      'stickers': [
+        <String, dynamic>{
+          'id': 'sticker-party',
+          'name': 'Party Cat',
+          'emoji': '🎉',
+        },
+        <String, dynamic>{
+          'id': 'sticker-bread',
+          'name': 'Toast Wave',
+          'emoji': '🍞',
+        },
+      ],
+    },
+    <String, dynamic>{
+      'id': 'stickers-space',
+      'name': 'Space',
+      'stickers': [
+        <String, dynamic>{
+          'id': 'sticker-rocket',
+          'name': 'Solar Rocket',
+          'emoji': '🚀',
+        },
+        <String, dynamic>{
+          'id': 'sticker-planet',
+          'name': 'Planet Mood',
+          'emoji': '🪐',
+        },
+      ],
+    },
   ];
 
   @override

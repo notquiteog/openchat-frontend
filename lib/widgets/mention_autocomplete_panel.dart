@@ -129,6 +129,191 @@ class CommandAutocompletePanel extends StatelessWidget {
   }
 }
 
+/// Bot inline-mode results panel (Telegram `@bot <query>`) — same glass styling
+/// as [CommandAutocompletePanel]. Shows a compact "Searching…" state while the
+/// bot answers, an empty state when it returns nothing, and one glass row per
+/// result (title, description, optional network thumbnail).
+class InlineResultsPanel extends StatelessWidget {
+  final List<Map<String, dynamic>> results;
+  final ValueChanged<Map<String, dynamic>> onPick;
+  final bool loading;
+
+  const InlineResultsPanel({
+    super.key,
+    required this.results,
+    required this.onPick,
+    this.loading = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final hasResults = results.isNotEmpty;
+    final height = hasResults
+        ? math.min(218.0, 10.0 + results.length * 52.0)
+        : 56.0;
+
+    Widget body;
+    if (hasResults) {
+      body = ListView.separated(
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 6),
+        itemCount: results.length,
+        separatorBuilder: (_, _) => const SizedBox(height: 2),
+        itemBuilder: (context, index) => _InlineResultTile(
+          result: results[index],
+          onTap: () => onPick(results[index]),
+        ),
+      );
+    } else {
+      body = Center(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (loading) ...[
+              SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: scheme.primary,
+                ),
+              ),
+              const SizedBox(width: 10),
+            ],
+            Text(
+              loading ? 'Searching…' : 'No results',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: scheme.onSurface.withValues(alpha: 0.55),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 160),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, child) => Opacity(
+        opacity: value,
+        child: Transform.translate(
+          offset: Offset(0, 8 * (1 - value)),
+          child: child,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(4, 2, 4, 6),
+        child: GlassContainer(
+          shape: const LiquidRoundedSuperellipse(borderRadius: 24),
+          allowElevation: true,
+          glowIntensity: 0.05,
+          padding: const EdgeInsets.symmetric(vertical: 5),
+          child: SizedBox(height: height, child: body),
+        ),
+      ),
+    );
+  }
+}
+
+class _InlineResultTile extends StatelessWidget {
+  final Map<String, dynamic> result;
+  final VoidCallback onTap;
+
+  const _InlineResultTile({required this.result, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final title = (result['title'] as String?)?.trim();
+    final description = (result['description'] as String?)?.trim();
+    final thumbnailUrl = (result['thumbnail_url'] as String?)?.trim();
+
+    Widget leading;
+    if (thumbnailUrl != null && thumbnailUrl.isNotEmpty) {
+      leading = ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: CachedNetworkImage(
+          imageUrl: ApiConfig.resolveMedia(thumbnailUrl),
+          width: 32,
+          height: 32,
+          fit: BoxFit.cover,
+          placeholder: (_, _) => Container(
+            width: 32,
+            height: 32,
+            color: scheme.surfaceContainerHighest,
+          ),
+          errorWidget: (_, _, _) => Container(
+            width: 32,
+            height: 32,
+            color: scheme.surfaceContainerHighest,
+            child: Icon(
+              Icons.image_not_supported_outlined,
+              size: 16,
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      );
+    } else {
+      leading = CircleAvatar(
+        radius: 16,
+        backgroundColor: scheme.primary.withValues(alpha: 0.18),
+        child: Icon(Icons.article_outlined, size: 18, color: scheme.primary),
+      );
+    }
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 48),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.18),
+        ),
+        child: Row(
+          children: [
+            leading,
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    (title == null || title.isEmpty) ? 'Result' : title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  if (description != null && description.isNotEmpty)
+                    Text(
+                      description,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: scheme.onSurface.withValues(alpha: 0.55),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _CommandSuggestionTile extends StatelessWidget {
   final BotCommand command;
   final VoidCallback onTap;

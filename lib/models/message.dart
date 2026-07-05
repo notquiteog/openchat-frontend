@@ -648,7 +648,7 @@ class DiceContent {
 /// Outcome of a call, surfaced in a DM as a deletable `system` message.
 /// Encoded as JSON inside the (E2E-encrypted) payload by the caller's client
 /// when a call ends — see [ChatProvider.postCallEvent].
-enum CallOutcome { missed, answered }
+enum CallOutcome { missed, answered, declined, busy }
 
 class CallEventInfo {
   final CallOutcome outcome;
@@ -670,7 +670,12 @@ class CallEventInfo {
       final ev = json['call_event'] as String?;
       if (ev == null) return null;
       return CallEventInfo(
-        outcome: ev == 'answered' ? CallOutcome.answered : CallOutcome.missed,
+        outcome: switch (ev) {
+          'answered' => CallOutcome.answered,
+          'declined' => CallOutcome.declined,
+          'busy' => CallOutcome.busy,
+          _ => CallOutcome.missed,
+        },
         isVideo: json['video'] as bool? ?? false,
         durationSecs: json['duration'] as int? ?? 0,
       );
@@ -690,10 +695,20 @@ class CallEventInfo {
     final kind = isVideo ? 'video call' : 'voice call';
     return switch (outcome) {
       CallOutcome.missed => 'Missed $kind',
+      CallOutcome.declined => 'Declined $kind',
+      CallOutcome.busy => 'Busy $kind',
       CallOutcome.answered =>
         durationSecs > 0 ? 'Call ended · $_durationLabel' : 'Call ended',
     };
   }
+
+  /// Wire string for the `call_event` payload field. The inverse of [tryParse].
+  String get wireEvent => switch (outcome) {
+    CallOutcome.answered => 'answered',
+    CallOutcome.declined => 'declined',
+    CallOutcome.busy => 'busy',
+    CallOutcome.missed => 'missed',
+  };
 }
 
 class Message {
@@ -728,6 +743,9 @@ class Message {
   // empty list just means "not (yet) hydrated".
   final List<MessageTipTotal> tips;
   Poll? poll;
+  // Distinct-viewer count for channel posts. Mutable: bumped live as the
+  // viewer scrolls posts into view (see ChannelScreen). 0 for DMs/groups.
+  int viewCount;
   final DateTime createdAt;
   final DateTime? editedAt;
   // Not final: realtime new_message events arrive without sender details, so
@@ -764,6 +782,7 @@ class Message {
     this.reactions = const [],
     this.tips = const [],
     this.poll,
+    this.viewCount = 0,
     required this.createdAt,
     this.editedAt,
     this.sender,
@@ -797,6 +816,7 @@ class Message {
     poll: json['poll'] != null
         ? Poll.fromJson(json['poll'] as Map<String, dynamic>)
         : null,
+    viewCount: (json['view_count'] as num?)?.toInt() ?? 0,
     createdAt: DateTime.parse(json['created_at'] as String),
     editedAt: json['edited_at'] != null
         ? DateTime.parse(json['edited_at'] as String)

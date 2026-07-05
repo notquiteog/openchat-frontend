@@ -47,7 +47,8 @@ class StoryViewerScreen extends StatefulWidget {
   State<StoryViewerScreen> createState() => _StoryViewerScreenState();
 }
 
-class _StoryViewerScreenState extends State<StoryViewerScreen> {
+class _StoryViewerScreenState extends State<StoryViewerScreen>
+    with SingleTickerProviderStateMixin {
   late final List<Story> _stories = List<Story>.from(widget.stories);
   late int _index = _stories.isEmpty
       ? 0
@@ -59,6 +60,16 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
   String? _error;
   bool _errorCanUnlock = false;
 
+  // Auto-advance: photos get a fixed dwell, videos advance at end. A generation
+  // counter guards against a slow load finishing after the user already moved
+  // on (the stale-media / wrong-view-receipt race).
+  late final AnimationController _progress = AnimationController(vsync: this)
+    ..addStatusListener((status) {
+      if (status == AnimationStatus.completed && mounted) _next();
+    });
+  int _loadGeneration = 0;
+  static const _photoDuration = Duration(seconds: 5);
+
   Story get _story => _stories[_index];
 
   @override
@@ -69,8 +80,20 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
 
   @override
   void dispose() {
+    _progress.dispose();
     _disposeMedia();
     super.dispose();
+  }
+
+  void _pauseProgress() {
+    _progress.stop();
+    _video?.pause();
+  }
+
+  void _resumeProgress() {
+    if (_state != _StoryLoadState.done) return;
+    _video?.play();
+    _progress.forward();
   }
 
   void _disposeMedia() {
@@ -82,7 +105,13 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
   }
 
   Future<void> _loadCurrent() async {
+    // Bump the generation so a slow load that finishes after the user advances
+    // is discarded instead of clobbering the now-current story.
+    final gen = ++_loadGeneration;
     _disposeMedia();
+    _progress
+      ..stop()
+      ..value = 0;
     setState(() {
       _state = _StoryLoadState.loading;
       _error = null;
@@ -178,9 +207,10 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
           file.delete().ignore();
           throw const _StoryLoadException("This video format isn't supported.");
         }
-        await controller.setLooping(true);
+        // No looping — advance to the next story when the clip ends.
+        await controller.setLooping(false);
         await controller.play();
-        if (!mounted) {
+        if (!mounted || gen != _loadGeneration) {
           await controller.dispose();
           file.delete().ignore();
           return;
@@ -190,12 +220,20 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
           _video = controller;
           _state = _StoryLoadState.done;
         });
+        _progress
+          ..duration = controller.value.duration == Duration.zero
+              ? _photoDuration
+              : controller.value.duration
+          ..forward(from: 0);
       } else {
-        if (!mounted) return;
+        if (!mounted || gen != _loadGeneration) return;
         setState(() {
           _bytes = bytes;
           _state = _StoryLoadState.done;
         });
+        _progress
+          ..duration = _photoDuration
+          ..forward(from: 0);
       }
     } on _StoryLoadException catch (e) {
       if (!mounted) return;
@@ -396,19 +434,28 @@ class _StoryViewerScreenState extends State<StoryViewerScreen> {
             // Suppress the full-screen tap zones while showing the error state
             // so its action buttons (unlock / retry) actually receive taps.
             if (_state != _StoryLoadState.error)
-              _TapZones(onPrevious: _previous, onNext: _next),
+              _TapZones(
+                onPrevious: _previous,
+                onNext: _next,
+                onHold: _pauseProgress,
+                onRelease: _resumeProgress,
+              ),
             Positioned(
               left: 12,
               right: 12,
               top: 8,
-              child: _StoryHeader(
-                story: _story,
-                currentUserId: currentUserId,
-                index: _index,
-                total: _stories.length,
-                onShowViewers: _showViewers,
-                onManage: _manage,
-                onClose: () => Navigator.pop(context),
+              child: AnimatedBuilder(
+                animation: _progress,
+                builder: (context, _) => _StoryHeader(
+                  story: _story,
+                  currentUserId: currentUserId,
+                  index: _index,
+                  total: _stories.length,
+                  progress: _progress.value,
+                  onShowViewers: _showViewers,
+                  onManage: _manage,
+                  onClose: () => Navigator.pop(context),
+                ),
               ),
             ),
             Positioned(
@@ -526,17 +573,29 @@ class _TextStoryMedia extends StatelessWidget {
 class _TapZones extends StatelessWidget {
   final VoidCallback onPrevious;
   final VoidCallback onNext;
+  final VoidCallback onHold;
+  final VoidCallback onRelease;
 
-  const _TapZones({required this.onPrevious, required this.onNext});
+  const _TapZones({
+    required this.onPrevious,
+    required this.onNext,
+    required this.onHold,
+    required this.onRelease,
+  });
 
   @override
   Widget build(BuildContext context) {
+    // Press-and-hold anywhere pauses playback (Instagram/Telegram behaviour);
+    // a tap on the left/right third steps back/forward.
     return Row(
       children: [
         Expanded(
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
             onTap: onPrevious,
+            onLongPressStart: (_) => onHold(),
+            onLongPressUp: onRelease,
+            onLongPressCancel: onRelease,
             child: const SizedBox.expand(),
           ),
         ),
@@ -544,6 +603,9 @@ class _TapZones extends StatelessWidget {
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
             onTap: onNext,
+            onLongPressStart: (_) => onHold(),
+            onLongPressUp: onRelease,
+            onLongPressCancel: onRelease,
             child: const SizedBox.expand(),
           ),
         ),
@@ -557,6 +619,7 @@ class _StoryHeader extends StatelessWidget {
   final String currentUserId;
   final int index;
   final int total;
+  final double progress;
   final VoidCallback onShowViewers;
   final VoidCallback? onManage;
   final VoidCallback onClose;
@@ -566,6 +629,7 @@ class _StoryHeader extends StatelessWidget {
     required this.currentUserId,
     required this.index,
     required this.total,
+    required this.progress,
     required this.onShowViewers,
     this.onManage,
     required this.onClose,
@@ -581,13 +645,30 @@ class _StoryHeader extends StatelessWidget {
       children: [
         Row(
           children: List.generate(total, (i) {
+            // Past segments full, future segments dim, the current one fills
+            // with the live playback progress.
+            final fill = i < index
+                ? 1.0
+                : i > index
+                ? 0.0
+                : progress.clamp(0.0, 1.0);
             return Expanded(
               child: Container(
                 height: 2.5,
                 margin: EdgeInsets.only(right: i == total - 1 ? 0 : 4),
                 decoration: BoxDecoration(
-                  color: i <= index ? Colors.white : Colors.white30,
+                  color: Colors.white30,
                   borderRadius: BorderRadius.circular(2),
+                ),
+                child: FractionallySizedBox(
+                  alignment: Alignment.centerLeft,
+                  widthFactor: fill,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
                 ),
               ),
             );

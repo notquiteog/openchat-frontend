@@ -67,9 +67,11 @@ class GroupRingProvider extends ChangeNotifier {
   }
 
   void _ring(GroupCallRing ring) {
+    // Already ringing for this conversation: a duplicate group_call_ring must
+    // NOT reset the timeout, or repeated events would extend the ring forever.
+    if (_active?.conversationId == ring.conversationId) return;
     _timeout?.cancel();
     _timeout = Timer(ringTimeout, () => _clear(ring.conversationId));
-    if (_active?.conversationId == ring.conversationId) return;
     _active = ring;
     notifyListeners();
   }
